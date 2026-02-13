@@ -10,7 +10,6 @@ import { MainPage } from "./components/MainPage";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { PlatformSync } from "./components/PlatformSync";
 import { DangerZone } from "./components/DangerZone";
-import { createOrUpdateCollections } from "./utils/collections";
 import { initSyncManager } from "./utils/syncManager";
 
 type Page = "main" | "connection" | "platforms" | "danger";
@@ -35,7 +34,7 @@ export default definePlugin(() => {
     platform_app_ids: Record<string, number[]>;
     total_games: number;
   }) => {
-    createOrUpdateCollections(data.platform_app_ids);
+    console.log("[RomM] sync_complete received:", data.total_games, "games");
     toaster.toast({
       title: "RomM Library",
       body: `Sync complete! ${data.total_games} games added.`,

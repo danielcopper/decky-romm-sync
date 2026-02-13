@@ -73,8 +73,14 @@ export async function addShortcut(data: SyncAddItem): Promise<number | null> {
     SteamClient.Apps.SetShortcutStartDir(appId, data.start_dir);
     SteamClient.Apps.SetAppLaunchOptions(appId, data.launch_options);
 
-    // Artwork is set via file-based grid by the backend (grid/{appId}p.png).
-    // SetCustomArtworkForApp requires base64 — will be added in a later phase.
+    if (data.cover_base64) {
+      try {
+        await SteamClient.Apps.SetCustomArtworkForApp(appId, data.cover_base64, "png", 0);
+        console.log(`[RomM] Set cover artwork for ${data.name} (appId=${appId})`);
+      } catch (artErr) {
+        console.error(`[RomM] Failed to set artwork for ${data.name}:`, artErr);
+      }
+    }
 
     return appId;
   } catch (e) {

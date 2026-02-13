@@ -460,9 +460,16 @@ class Plugin:
                 self._finish_sync("Sync cancelled")
                 return
 
-            # Update shortcuts_data with cover paths
+            # Update shortcuts_data with cover paths and base64 artwork
             for sd in shortcuts_data:
-                sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
+                path = cover_paths.get(sd["rom_id"], "")
+                sd["cover_path"] = path
+                if path and os.path.exists(path):
+                    try:
+                        with open(path, "rb") as f:
+                            sd["cover_base64"] = base64.b64encode(f.read()).decode("ascii")
+                    except Exception as e:
+                        decky.logger.warning(f"Failed to base64-encode artwork for {sd['name']}: {e}")
 
             # Determine stale rom_ids by comparing current sync with registry
             current_rom_ids = {r["id"] for r in all_roms}

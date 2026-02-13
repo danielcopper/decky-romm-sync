@@ -28,6 +28,14 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           SteamClient.Apps.SetShortcutExe(existingAppId, item.exe);
           SteamClient.Apps.SetShortcutStartDir(existingAppId, item.start_dir);
           SteamClient.Apps.SetAppLaunchOptions(existingAppId, item.launch_options);
+          if (item.cover_base64) {
+            try {
+              await SteamClient.Apps.SetCustomArtworkForApp(existingAppId, item.cover_base64, "png", 0);
+              console.log(`[RomM] Updated cover artwork for ${item.name} (appId=${existingAppId})`);
+            } catch (artErr) {
+              console.error(`[RomM] Failed to set artwork for ${item.name}:`, artErr);
+            }
+          }
           romIdToAppId[String(item.rom_id)] = existingAppId;
         } else {
           // New — create shortcut (addShortcut already has internal 300ms delay)

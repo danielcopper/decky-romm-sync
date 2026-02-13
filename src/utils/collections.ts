@@ -27,6 +27,9 @@ export function createOrUpdateCollections(
       return;
     }
 
+    console.log("[RomM] collectionStore available, userCollections count:", collectionStore.userCollections.length);
+    console.log("[RomM] Creating/updating collections for platforms:", Object.keys(platformAppIds));
+
     for (const [platformName, appIds] of Object.entries(platformAppIds)) {
       const collectionName = `RomM: ${platformName}`;
 
@@ -35,9 +38,21 @@ export function createOrUpdateCollections(
       );
 
       if (existing) {
-        collectionStore.SetAppsInCollection(existing.id, appIds);
+        console.log(`[RomM] Updating existing collection "${collectionName}" (id=${existing.id}) with ${appIds.length} apps`);
+        try {
+          collectionStore.SetAppsInCollection(existing.id, appIds);
+          console.log(`[RomM] Successfully updated collection "${collectionName}"`);
+        } catch (setErr) {
+          console.error(`[RomM] SetAppsInCollection failed for "${collectionName}":`, setErr);
+        }
       } else {
-        collectionStore.CreateCollection(collectionName, appIds);
+        console.log(`[RomM] Creating new collection "${collectionName}" with ${appIds.length} apps:`, appIds);
+        try {
+          collectionStore.CreateCollection(collectionName, appIds);
+          console.log(`[RomM] Successfully created collection "${collectionName}"`);
+        } catch (createErr) {
+          console.error(`[RomM] CreateCollection failed for "${collectionName}":`, createErr);
+        }
       }
     }
   } catch (e) {
@@ -47,13 +62,19 @@ export function createOrUpdateCollections(
 
 export function clearPlatformCollection(platformName: string): void {
   try {
-    if (typeof collectionStore === "undefined") return;
+    if (typeof collectionStore === "undefined") {
+      console.warn("[RomM] collectionStore not available, cannot clear platform collection");
+      return;
+    }
     const collectionName = `RomM: ${platformName}`;
     const existing = collectionStore.userCollections.find(
       (c) => c.displayName === collectionName
     );
     if (existing) {
+      console.log(`[RomM] Clearing collection "${collectionName}" (id=${existing.id})`);
       collectionStore.SetAppsInCollection(existing.id, []);
+    } else {
+      console.log(`[RomM] Collection "${collectionName}" not found, nothing to clear`);
     }
   } catch (e) {
     console.error("[RomM] Failed to clear platform collection:", e);
@@ -62,11 +83,17 @@ export function clearPlatformCollection(platformName: string): void {
 
 export function clearAllRomMCollections(): void {
   try {
-    if (typeof collectionStore === "undefined") return;
-    for (const c of collectionStore.userCollections) {
-      if (c.displayName.startsWith("RomM: ")) {
-        collectionStore.SetAppsInCollection(c.id, []);
-      }
+    if (typeof collectionStore === "undefined") {
+      console.warn("[RomM] collectionStore not available, cannot clear collections");
+      return;
+    }
+    const rommCollections = collectionStore.userCollections.filter(
+      (c) => c.displayName.startsWith("RomM: ")
+    );
+    console.log(`[RomM] Clearing ${rommCollections.length} RomM collections`);
+    for (const c of rommCollections) {
+      console.log(`[RomM] Clearing collection "${c.displayName}" (id=${c.id})`);
+      collectionStore.SetAppsInCollection(c.id, []);
     }
   } catch (e) {
     console.error("[RomM] Failed to clear collections:", e);
