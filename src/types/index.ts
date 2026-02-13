@@ -50,6 +50,14 @@ export interface DownloadItem {
   error?: string;
 }
 
+export interface PlatformSyncSetting {
+  id: number;
+  name: string;
+  slug: string;
+  rom_count: number;
+  sync_enabled: boolean;
+}
+
 export interface SyncProgress {
   running: boolean;
   phase?: string;

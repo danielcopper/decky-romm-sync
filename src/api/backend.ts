@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncProgress, DownloadItem, InstalledRom } from "../types";
+import type { PluginSettings, SyncProgress, DownloadItem, InstalledRom, PlatformSyncSetting } from "../types";
 
 export const getSettings = callable<[], PluginSettings>("get_settings");
 export const saveSettings = callable<[string, string, string], { success: boolean; message: string }>("save_settings");
@@ -13,3 +13,8 @@ export const getDownloadQueue = callable<[], { downloads: DownloadItem[] }>("get
 export const getInstalledRom = callable<[number], InstalledRom | null>("get_installed_rom");
 export const getRomBySteamAppId = callable<[number], any | null>("get_rom_by_steam_app_id");
 export const removeRom = callable<[number], { success: boolean; message: string }>("remove_rom");
+export const getPlatforms = callable<[], { success: boolean; platforms: PlatformSyncSetting[] }>("get_platforms");
+export const savePlatformSync = callable<[number, boolean], { success: boolean; message: string }>("save_platform_sync");
+export const setAllPlatformsSync = callable<[boolean], { success: boolean; message: string }>("set_all_platforms_sync");
+export const removePlatformShortcuts = callable<[string], { success: boolean; message: string; removed_count: number }>("remove_platform_shortcuts");
+export const removeAllShortcuts = callable<[], { success: boolean; message: string; removed_count: number }>("remove_all_shortcuts");

@@ -59,6 +59,7 @@ class Plugin:
         self.settings.setdefault("romm_url", "")
         self.settings.setdefault("romm_user", "")
         self.settings.setdefault("romm_pass", "")
+        self.settings.setdefault("enabled_platforms", {})
 
     def _save_settings_to_disk(self):
         settings_dir = decky.DECKY_PLUGIN_SETTINGS_DIR
@@ -212,7 +213,9 @@ class Plugin:
     async def save_settings(self, romm_url, romm_user, romm_pass):
         self.settings["romm_url"] = romm_url
         self.settings["romm_user"] = romm_user
-        self.settings["romm_pass"] = romm_pass
+        # Only update password if user entered a new one (not the masked placeholder)
+        if romm_pass and romm_pass != "••••":
+            self.settings["romm_pass"] = romm_pass
         self._save_settings_to_disk()
         return {"success": True, "message": "Settings saved"}
 
@@ -223,9 +226,54 @@ class Plugin:
         return {
             "romm_url": self.settings.get("romm_url", ""),
             "romm_user": self.settings.get("romm_user", ""),
-            "romm_pass": "••••" if self.settings.get("romm_pass") else "",
+            "romm_pass_masked": "••••" if self.settings.get("romm_pass") else "",
             "has_credentials": has_credentials,
         }
+
+    async def get_platforms(self):
+        try:
+            platforms = await self.loop.run_in_executor(
+                None, self._romm_request, "/api/platforms"
+            )
+        except Exception as e:
+            decky.logger.error(f"Failed to fetch platforms: {e}")
+            return {"success": False, "message": f"Failed to fetch platforms: {e}"}
+
+        enabled = self.settings.get("enabled_platforms", {})
+        result = []
+        for p in platforms:
+            pid = str(p["id"])
+            result.append({
+                "id": p["id"],
+                "name": p.get("name", ""),
+                "slug": p.get("slug", ""),
+                "rom_count": p.get("rom_count", 0),
+                "sync_enabled": enabled.get(pid, True),
+            })
+        return {"success": True, "platforms": result}
+
+    async def save_platform_sync(self, platform_id, enabled):
+        pid = str(platform_id)
+        self.settings["enabled_platforms"][pid] = bool(enabled)
+        self._save_settings_to_disk()
+        return {"success": True}
+
+    async def set_all_platforms_sync(self, enabled):
+        enabled = bool(enabled)
+        try:
+            platforms = await self.loop.run_in_executor(
+                None, self._romm_request, "/api/platforms"
+            )
+        except Exception as e:
+            decky.logger.error(f"Failed to fetch platforms: {e}")
+            return {"success": False, "message": f"Failed to fetch platforms: {e}"}
+
+        ep = {}
+        for p in platforms:
+            ep[str(p["id"])] = enabled
+        self.settings["enabled_platforms"] = ep
+        self._save_settings_to_disk()
+        return {"success": True}
 
     async def start_sync(self):
         if self._sync_running:
@@ -274,6 +322,13 @@ class Plugin:
                 self._finish_sync("Sync cancelled")
                 return
 
+            # Filter platforms by enabled_platforms setting
+            enabled = self.settings.get("enabled_platforms", {})
+            platforms = [
+                p for p in platforms
+                if enabled.get(str(p["id"]), True)
+            ]
+
             # Phase 2: Fetch ROMs per platform
             self._sync_progress = {
                 "running": True,
@@ -312,17 +367,23 @@ class Plugin:
                         )
                         break
 
-                    for rom in roms:
+                    # API returns paginated envelope {"items": [...], "total": N}
+                    if isinstance(roms, dict):
+                        rom_list = roms.get("items", [])
+                    else:
+                        rom_list = roms
+
+                    for rom in rom_list:
                         rom["platform_name"] = platform_name
 
-                    all_roms.extend(roms)
+                    all_roms.extend(rom_list)
                     self._sync_progress["current"] = len(all_roms)
                     self._sync_progress["message"] = (
                         f"Fetching ROMs... ({len(all_roms)} found)"
                     )
                     await asyncio.sleep(0)
 
-                    if len(roms) < limit:
+                    if len(rom_list) < limit:
                         break
                     offset += limit
 
@@ -407,7 +468,8 @@ class Plugin:
                 "message": f"Sync complete — {len(all_roms)} ROMs from {len(platforms)} platforms",
             }
         except Exception as e:
-            decky.logger.error(f"Sync failed: {e}")
+            import traceback
+            decky.logger.error(f"Sync failed: {e}\n{traceback.format_exc()}")
             self._sync_progress = {
                 "running": False,
                 "phase": "error",
@@ -547,6 +609,124 @@ class Plugin:
                 decky.logger.warning(
                     f"Failed to download artwork for {rom['name']}: {e}"
                 )
+
+    async def remove_platform_shortcuts(self, platform_slug):
+        """Remove all Steam shortcuts for a specific platform."""
+        try:
+            # Resolve slug to platform name via API
+            platforms = await self.loop.run_in_executor(
+                None, self._romm_request, "/api/platforms"
+            )
+            platform_name = None
+            for p in platforms:
+                if p.get("slug") == platform_slug:
+                    platform_name = p.get("name", "")
+                    break
+            if not platform_name:
+                return {
+                    "success": False,
+                    "message": f"Platform '{platform_slug}' not found",
+                    "removed_count": 0,
+                }
+
+            data = self._read_shortcuts()
+            shortcuts = data.get("shortcuts", {})
+            grid = self._grid_dir()
+
+            keys_to_remove = []
+            rom_ids_to_remove = []
+
+            for key, entry in shortcuts.items():
+                launch_opts = entry.get("LaunchOptions", "")
+                if not (isinstance(launch_opts, str) and launch_opts.startswith("romm:")):
+                    continue
+                tags = entry.get("tags", {})
+                tag_values = tags.values() if isinstance(tags, dict) else []
+                if platform_name in tag_values:
+                    keys_to_remove.append(key)
+                    try:
+                        rom_id = launch_opts.split(":", 1)[1]
+                        rom_ids_to_remove.append(rom_id)
+                    except (IndexError,):
+                        pass
+
+            # Remove shortcuts and clean up artwork
+            for key in keys_to_remove:
+                del shortcuts[key]
+
+            for rom_id in rom_ids_to_remove:
+                reg_entry = self._state["shortcut_registry"].pop(rom_id, None)
+                if reg_entry and grid:
+                    art_path = os.path.join(grid, f"{reg_entry['artwork_id']}p.png")
+                    if os.path.exists(art_path):
+                        os.remove(art_path)
+
+            data["shortcuts"] = shortcuts
+            self._write_shortcuts(data)
+            self._save_state()
+
+            count = len(keys_to_remove)
+            decky.logger.info(
+                f"Removed {count} shortcuts for platform '{platform_name}'"
+            )
+            return {
+                "success": True,
+                "message": f"Removed {count} shortcuts for {platform_name}",
+                "removed_count": count,
+            }
+        except Exception as e:
+            decky.logger.error(f"Failed to remove platform shortcuts: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to remove shortcuts: {e}",
+                "removed_count": 0,
+            }
+
+    async def remove_all_shortcuts(self):
+        """Remove ALL RomM shortcuts from Steam."""
+        try:
+            data = self._read_shortcuts()
+            shortcuts = data.get("shortcuts", {})
+            grid = self._grid_dir()
+
+            keys_to_remove = []
+            for key, entry in shortcuts.items():
+                launch_opts = entry.get("LaunchOptions", "")
+                if isinstance(launch_opts, str) and launch_opts.startswith("romm:"):
+                    keys_to_remove.append(key)
+
+            # Delete artwork for all registry entries
+            if grid:
+                for rom_id, reg_entry in self._state["shortcut_registry"].items():
+                    art_path = os.path.join(grid, f"{reg_entry['artwork_id']}p.png")
+                    if os.path.exists(art_path):
+                        os.remove(art_path)
+
+            # Remove shortcuts
+            for key in keys_to_remove:
+                del shortcuts[key]
+
+            data["shortcuts"] = shortcuts
+            self._write_shortcuts(data)
+
+            # Clear registry
+            self._state["shortcut_registry"] = {}
+            self._save_state()
+
+            count = len(keys_to_remove)
+            decky.logger.info(f"Removed all {count} RomM shortcuts")
+            return {
+                "success": True,
+                "message": f"Removed {count} RomM shortcuts from Steam",
+                "removed_count": count,
+            }
+        except Exception as e:
+            decky.logger.error(f"Failed to remove all shortcuts: {e}")
+            return {
+                "success": False,
+                "message": f"Failed to remove shortcuts: {e}",
+                "removed_count": 0,
+            }
 
     async def start_download(self):
         return {"success": False, "message": "Not implemented yet"}

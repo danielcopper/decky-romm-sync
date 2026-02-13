@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, FC, ChangeEvent } from "react";
-import { PanelSection, PanelSectionRow, TextField, ButtonItem, Field, ProgressBarWithInfo } from "@decky/ui";
-import { getSettings, saveSettings, testConnection, startSync, getSyncProgress, cancelSync } from "../api/backend";
+import { PanelSection, PanelSectionRow, TextField, ButtonItem, Field, ProgressBarWithInfo, showModal, ConfirmModal } from "@decky/ui";
+import { getSettings, saveSettings, testConnection, startSync, getSyncProgress, cancelSync, removeAllShortcuts } from "../api/backend";
+import { PlatformSync } from "./PlatformSync";
 import type { SyncProgress } from "../types";
 
 export const Settings: FC = () => {
@@ -9,6 +10,8 @@ export const Settings: FC = () => {
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [hasCredentials, setHasCredentials] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -18,6 +21,8 @@ export const Settings: FC = () => {
       setUrl(s.romm_url);
       setUsername(s.romm_user);
       setPassword(s.romm_pass_masked);
+      setHasCredentials(s.has_credentials);
+      setSettingsLoaded(true);
     });
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -170,6 +175,26 @@ export const Settings: FC = () => {
           </PanelSectionRow>
         </PanelSection>
       )}
+      {settingsLoaded && hasCredentials && <PlatformSync />}
+      <PanelSection title="Danger Zone">
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={loading} onClick={() => {
+            showModal(
+              <ConfirmModal
+                strTitle="Remove All Shortcuts"
+                strDescription="Remove all RomM games from your Steam Library? Downloaded ROMs will not be deleted."
+                strOKButtonText="Remove All"
+                onOK={async () => {
+                  const result = await removeAllShortcuts();
+                  setStatus(result.message);
+                }}
+              />
+            );
+          }}>
+            Remove All RomM Shortcuts
+          </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
       {status && (
         <PanelSection title="Status">
           <PanelSectionRow>
