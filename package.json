@@ -1,6 +1,6 @@
 {
   "name": "romm-library",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Decky Loader plugin to browse and play your RomM library from Steam Gaming Mode",
   "type": "module",
   "scripts": {
