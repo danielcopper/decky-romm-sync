@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncProgress, DownloadItem, InstalledRom, PlatformSyncSetting } from "../types";
+import type { PluginSettings, SyncProgress, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting } from "../types";
 
 export const getSettings = callable<[], PluginSettings>("get_settings");
 export const saveSettings = callable<[string, string, string], { success: boolean; message: string }>("save_settings");
@@ -7,6 +7,7 @@ export const testConnection = callable<[], { success: boolean; message: string }
 export const startSync = callable<[], { success: boolean; message: string }>("start_sync");
 export const cancelSync = callable<[], { success: boolean; message: string }>("cancel_sync");
 export const getSyncProgress = callable<[], SyncProgress>("get_sync_progress");
+export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
 export const startDownload = callable<[number], { success: boolean; message: string }>("start_download");
 export const cancelDownload = callable<[number], { success: boolean; message: string }>("cancel_download");
 export const getDownloadQueue = callable<[], { downloads: DownloadItem[] }>("get_download_queue");

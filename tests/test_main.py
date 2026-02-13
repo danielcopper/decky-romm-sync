@@ -93,6 +93,28 @@ class TestSettings:
         assert plugin.settings["romm_pass"] == "newpass"
 
 
+class TestRommDownloadUrlEncoding:
+    def test_encodes_spaces_in_cover_path(self, plugin, tmp_path):
+        """Cover paths from RomM contain unencoded spaces in timestamps.
+        _romm_download must URL-encode them so urllib doesn't reject the URL."""
+        import urllib.parse
+
+        # Simulate the path RomM returns
+        path = "/assets/romm/resources/roms/53/4375/cover/big.png?ts=2025-07-28 00:05:03"
+        encoded = urllib.parse.quote(path, safe="/:?=&@")
+        assert " " not in encoded
+        assert "%20" in encoded
+        assert encoded == "/assets/romm/resources/roms/53/4375/cover/big.png?ts=2025-07-28%2000:05:03"
+
+    def test_preserves_clean_paths(self, plugin):
+        """Paths without spaces should pass through unchanged."""
+        import urllib.parse
+
+        path = "/assets/romm/resources/roms/53/4375/cover/big.png"
+        encoded = urllib.parse.quote(path, safe="/:?=&@")
+        assert encoded == path
+
+
 class TestPlatformMap:
     def test_loads_config_json(self, plugin):
         pm = plugin._load_platform_map()

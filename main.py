@@ -6,6 +6,7 @@ import binascii
 import asyncio
 import base64
 import ssl
+import urllib.parse
 import urllib.request
 import urllib.error
 from datetime import datetime
@@ -173,7 +174,10 @@ class Plugin:
             return json.loads(resp.read().decode())
 
     def _romm_download(self, path, dest, progress_callback=None):
-        url = self.settings["romm_url"].rstrip("/") + path
+        # URL-encode the path, preserving already-valid characters (/:?=&)
+        # RomM API returns paths with unencoded spaces in query params
+        encoded_path = urllib.parse.quote(path, safe="/:?=&@")
+        url = self.settings["romm_url"].rstrip("/") + encoded_path
         req = urllib.request.Request(url, method="GET")
         credentials = base64.b64encode(
             f"{self.settings['romm_user']}:{self.settings['romm_pass']}".encode()
@@ -329,10 +333,13 @@ class Plugin:
             # Default: all enabled only if no preferences saved yet
             enabled = self.settings.get("enabled_platforms", {})
             no_prefs = len(enabled) == 0
+            decky.logger.info(f"Platform filter: {len(enabled)} prefs saved, no_prefs={no_prefs}")
+            decky.logger.info(f"Enabled platforms: {[k for k,v in enabled.items() if v]}")
             platforms = [
                 p for p in platforms
                 if enabled.get(str(p["id"]), no_prefs)
             ]
+            decky.logger.info(f"Syncing {len(platforms)} platforms: {[p['name'] for p in platforms]}")
 
             # Phase 2: Fetch ROMs per platform
             self._sync_progress = {
@@ -364,7 +371,7 @@ class Plugin:
                         roms = await self.loop.run_in_executor(
                             None,
                             self._romm_request,
-                            f"/api/roms?platform_id={platform_id}&limit={limit}&offset={offset}",
+                            f"/api/roms?platform_ids={platform_id}&limit={limit}&offset={offset}",
                         )
                     except Exception as e:
                         decky.logger.error(
@@ -456,14 +463,13 @@ class Plugin:
 
             # Emit completion event
             summary = {
-                "platforms": len(platforms),
-                "roms": len(all_roms),
-                "platform_breakdown": {
-                    name: len(ids) for name, ids in platform_apps.items()
+                "platform_app_ids": {
+                    name: ids for name, ids in platform_apps.items()
                 },
+                "total_games": len(all_roms),
             }
             await decky.emit("sync_complete", summary)
-            decky.logger.info(f"Sync complete: {summary}")
+            decky.logger.info(f"Sync complete: {len(all_roms)} games across {len(platforms)} platforms")
 
             self._sync_progress = {
                 "running": False,
@@ -732,6 +738,14 @@ class Plugin:
                 "message": f"Failed to remove shortcuts: {e}",
                 "removed_count": 0,
             }
+
+    async def get_sync_stats(self):
+        return {
+            "last_sync": self._state.get("last_sync"),
+            "platforms": self._state.get("sync_stats", {}).get("platforms", 0),
+            "roms": self._state.get("sync_stats", {}).get("roms", 0),
+            "total_shortcuts": len(self._state.get("shortcut_registry", {})),
+        }
 
     async def start_download(self):
         return {"success": False, "message": "Not implemented yet"}

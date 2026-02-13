@@ -1,9 +1,23 @@
 import { useState, useEffect, FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, ToggleField, Spinner } from "@decky/ui";
-import { getPlatforms, savePlatformSync, setAllPlatformsSync } from "../api/backend";
+import {
+  PanelSection,
+  PanelSectionRow,
+  ButtonItem,
+  ToggleField,
+  Spinner,
+} from "@decky/ui";
+import {
+  getPlatforms,
+  savePlatformSync,
+  setAllPlatformsSync,
+} from "../api/backend";
 import type { PlatformSyncSetting } from "../types";
 
-export const PlatformSync: FC = () => {
+interface PlatformSyncProps {
+  onBack: () => void;
+}
+
+export const PlatformSync: FC<PlatformSyncProps> = ({ onBack }) => {
   const [platforms, setPlatforms] = useState<PlatformSyncSetting[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -44,42 +58,53 @@ export const PlatformSync: FC = () => {
     }
   };
 
-  if (loading) {
-    return (
-      <PanelSection title="Platforms">
+  return (
+    <>
+      <PanelSection>
         <PanelSectionRow>
-          <Spinner />
+          <ButtonItem layout="below" onClick={onBack}>
+            Back
+          </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
-    );
-  }
-
-  if (error || platforms.length === 0) {
-    return null;
-  }
-
-  return (
-    <PanelSection title="Platforms">
-      <PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => handleSetAll(true)}>
-          Enable All
-        </ButtonItem>
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => handleSetAll(false)}>
-          Disable All
-        </ButtonItem>
-      </PanelSectionRow>
-      {platforms.map((platform) => (
-        <PanelSectionRow key={platform.id}>
-          <ToggleField
-            label={platform.name}
-            description={`${platform.rom_count} ROMs`}
-            checked={platform.sync_enabled}
-            onChange={(value: boolean) => handleToggle(platform.id, value)}
-          />
-        </PanelSectionRow>
-      ))}
-    </PanelSection>
+      <PanelSection title="Platforms">
+        {loading ? (
+          <PanelSectionRow>
+            <Spinner />
+          </PanelSectionRow>
+        ) : error ? (
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={onBack}>
+              Failed to load platforms
+            </ButtonItem>
+          </PanelSectionRow>
+        ) : (
+          <>
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => handleSetAll(true)}>
+                Enable All
+              </ButtonItem>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => handleSetAll(false)}>
+                Disable All
+              </ButtonItem>
+            </PanelSectionRow>
+            {platforms.map((platform) => (
+              <PanelSectionRow key={platform.id}>
+                <ToggleField
+                  label={platform.name}
+                  description={`${platform.rom_count} ROMs`}
+                  checked={platform.sync_enabled}
+                  onChange={(value: boolean) =>
+                    handleToggle(platform.id, value)
+                  }
+                />
+              </PanelSectionRow>
+            ))}
+          </>
+        )}
+      </PanelSection>
+    </>
   );
 };

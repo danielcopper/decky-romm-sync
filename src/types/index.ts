@@ -65,3 +65,10 @@ export interface SyncProgress {
   total?: number;
   message?: string;
 }
+
+export interface SyncStats {
+  last_sync: string | null;
+  platforms: number;
+  roms: number;
+  total_shortcuts: number;
+}
