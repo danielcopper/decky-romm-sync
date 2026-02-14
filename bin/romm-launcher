@@ -1,0 +1,104 @@
+#!/bin/bash
+# romm-launcher — Steam shortcut launcher for RomM Library plugin
+# Called by Steam with LaunchOptions as argument: romm:{rom_id}
+
+set -euo pipefail
+
+# Parse rom ID from argument
+if [[ -z "${1:-}" ]]; then
+    echo "Usage: romm-launcher romm:<rom_id>" >&2
+    exit 1
+fi
+
+ROM_ARG="$1"
+if [[ ! "$ROM_ARG" =~ ^romm:([0-9]+)$ ]]; then
+    echo "Invalid argument: $ROM_ARG (expected romm:<rom_id>)" >&2
+    exit 1
+fi
+
+ROM_ID="${BASH_REMATCH[1]}"
+
+# Find plugin runtime directory
+PLUGIN_DIR=""
+for candidate in \
+    "${DECKY_PLUGIN_RUNTIME_DIR:-}" \
+    "$HOME/.local/share/decky/plugins/romm-library" \
+    "$HOME/homebrew/plugins/romm-library"; do
+    if [[ -d "$candidate" ]]; then
+        PLUGIN_DIR="$candidate"
+        break
+    fi
+done
+
+# Runtime dir for state files
+RUNTIME_DIR=""
+for candidate in \
+    "${DECKY_PLUGIN_RUNTIME_DIR:-}" \
+    "$HOME/.local/share/decky/settings/romm-library" \
+    "$HOME/homebrew/settings/romm-library"; do
+    if [[ -d "$candidate" ]]; then
+        RUNTIME_DIR="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$RUNTIME_DIR" ]]; then
+    RUNTIME_DIR="$HOME/.local/share/decky/settings/romm-library"
+    mkdir -p "$RUNTIME_DIR"
+fi
+
+STATE_FILE="$RUNTIME_DIR/state.json"
+
+# Check if ROM is installed by reading state.json
+if [[ -f "$STATE_FILE" ]]; then
+    # Use python3 to parse JSON (always available)
+    ROM_INFO=$(python3 -c "
+import json, sys
+with open('$STATE_FILE') as f:
+    state = json.load(f)
+installed = state.get('installed_roms', {})
+rom = installed.get('$ROM_ID')
+if rom:
+    print(rom.get('system', ''))
+    print(rom.get('file_path', ''))
+else:
+    sys.exit(1)
+" 2>/dev/null) || ROM_INFO=""
+fi
+
+if [[ -n "${ROM_INFO:-}" ]]; then
+    SYSTEM=$(echo "$ROM_INFO" | head -1)
+    ROM_PATH=$(echo "$ROM_INFO" | tail -1)
+
+    if [[ -f "$ROM_PATH" ]]; then
+        # Launch with RetroDECK
+        exec flatpak run net.retrodeck.retrodeck -s "$SYSTEM" "$ROM_PATH"
+    else
+        echo "ROM file missing: $ROM_PATH" >&2
+    fi
+fi
+
+# ROM not installed — request download
+REQUESTS_FILE="$RUNTIME_DIR/download_requests.json"
+
+python3 -c "
+import json, os, fcntl
+path = '$REQUESTS_FILE'
+try:
+    with open(path, 'r') as f:
+        requests = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    requests = []
+requests.append({'rom_id': $ROM_ID, 'timestamp': $(date +%s)})
+with open(path, 'w') as f:
+    fcntl.flock(f, fcntl.LOCK_EX)
+    json.dump(requests, f)
+    fcntl.flock(f, fcntl.LOCK_UN)
+"
+
+# Try to show a notification
+if command -v notify-send &>/dev/null; then
+    notify-send "RomM Library" "Download queued for ROM #$ROM_ID. Play again when complete."
+fi
+
+exit 0

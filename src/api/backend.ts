@@ -1,15 +1,24 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncProgress, DownloadItem, InstalledRom } from "../types";
+import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, RegistryPlatform } from "../types";
 
 export const getSettings = callable<[], PluginSettings>("get_settings");
 export const saveSettings = callable<[string, string, string], { success: boolean; message: string }>("save_settings");
 export const testConnection = callable<[], { success: boolean; message: string }>("test_connection");
 export const startSync = callable<[], { success: boolean; message: string }>("start_sync");
 export const cancelSync = callable<[], { success: boolean; message: string }>("cancel_sync");
-export const getSyncProgress = callable<[], SyncProgress>("get_sync_progress");
+export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
 export const startDownload = callable<[number], { success: boolean; message: string }>("start_download");
 export const cancelDownload = callable<[number], { success: boolean; message: string }>("cancel_download");
 export const getDownloadQueue = callable<[], { downloads: DownloadItem[] }>("get_download_queue");
 export const getInstalledRom = callable<[number], InstalledRom | null>("get_installed_rom");
 export const getRomBySteamAppId = callable<[number], any | null>("get_rom_by_steam_app_id");
 export const removeRom = callable<[number], { success: boolean; message: string }>("remove_rom");
+export const getPlatforms = callable<[], { success: boolean; platforms: PlatformSyncSetting[] }>("get_platforms");
+export const savePlatformSync = callable<[number, boolean], { success: boolean; message: string }>("save_platform_sync");
+export const setAllPlatformsSync = callable<[boolean], { success: boolean; message: string }>("set_all_platforms_sync");
+export const getRegistryPlatforms = callable<[], { platforms: RegistryPlatform[] }>("get_registry_platforms");
+export const removePlatformShortcuts = callable<[string], { success: boolean; app_ids: number[]; rom_ids: (string | number)[]; platform_name: string }>("remove_platform_shortcuts");
+export const removeAllShortcuts = callable<[], { success: boolean; message: string; removed_count: number; app_ids: number[]; rom_ids: (string | number)[] }>("remove_all_shortcuts");
+export const getArtworkBase64 = callable<[number], { base64: string | null }>("get_artwork_base64");
+export const reportSyncResults = callable<[Record<string, number>, number[]], { success: boolean }>("report_sync_results");
+export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>("report_removal_results");

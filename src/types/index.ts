@@ -50,10 +50,46 @@ export interface DownloadItem {
   error?: string;
 }
 
+export interface PlatformSyncSetting {
+  id: number;
+  name: string;
+  slug: string;
+  rom_count: number;
+  sync_enabled: boolean;
+}
+
 export interface SyncProgress {
   running: boolean;
   phase?: string;
   current?: number;
   total?: number;
   message?: string;
+}
+
+export interface SyncStats {
+  last_sync: string | null;
+  platforms: number;
+  roms: number;
+  total_shortcuts: number;
+}
+
+export interface RegistryPlatform {
+  name: string;
+  slug: string;
+  count: number;
+}
+
+export interface SyncAddItem {
+  rom_id: number;
+  name: string;
+  exe: string;
+  start_dir: string;
+  launch_options: string;
+  platform_name: string;
+  cover_path: string;
+}
+
+export interface SyncApplyData {
+  shortcuts: SyncAddItem[];
+  remove_rom_ids: number[];
 }

@@ -1,8 +1,18 @@
 import { useState, useEffect, FC, ChangeEvent } from "react";
-import { PanelSection, PanelSectionRow, TextField, ButtonItem, Field } from "@decky/ui";
-import { getSettings, saveSettings, testConnection, startSync } from "../api/backend";
+import {
+  PanelSection,
+  PanelSectionRow,
+  TextField,
+  ButtonItem,
+  Field,
+} from "@decky/ui";
+import { getSettings, saveSettings, testConnection } from "../api/backend";
 
-export const Settings: FC = () => {
+interface ConnectionSettingsProps {
+  onBack: () => void;
+}
+
+export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
   const [url, setUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -23,7 +33,7 @@ export const Settings: FC = () => {
     try {
       const result = await saveSettings(url, username, password);
       setStatus(result.message);
-    } catch (e) {
+    } catch {
       setStatus("Failed to save settings");
     }
     setLoading(false);
@@ -35,39 +45,38 @@ export const Settings: FC = () => {
     try {
       const result = await testConnection();
       setStatus(result.message);
-    } catch (e) {
+    } catch {
       setStatus("Connection test failed");
-    }
-    setLoading(false);
-  };
-
-  const handleSync = async () => {
-    setLoading(true);
-    setStatus("");
-    try {
-      const result = await startSync();
-      setStatus(result.message);
-    } catch (e) {
-      setStatus("Failed to start sync");
     }
     setLoading(false);
   };
 
   return (
     <>
-      <PanelSection title="RomM Connection">
+      <PanelSection>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={onBack}>
+            Back
+          </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+      <PanelSection title="Connection">
         <PanelSectionRow>
           <TextField
             label="RomM URL"
             value={url}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setUrl(e.target.value)
+            }
           />
         </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             label="Username"
             value={username}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setUsername(e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setUsername(e.target.value)
+            }
           />
         </PanelSectionRow>
         <PanelSectionRow>
@@ -75,11 +84,11 @@ export const Settings: FC = () => {
             label="Password"
             bIsPassword
             value={password}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setPassword(e.target.value)
+            }
           />
         </PanelSectionRow>
-      </PanelSection>
-      <PanelSection title="Actions">
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={handleSave} disabled={loading}>
             Save Settings
@@ -90,19 +99,12 @@ export const Settings: FC = () => {
             Test Connection
           </ButtonItem>
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={handleSync} disabled={loading}>
-            Sync Library
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
-      {status && (
-        <PanelSection title="Status">
+        {status && (
           <PanelSectionRow>
             <Field label={status} />
           </PanelSectionRow>
-        </PanelSection>
-      )}
+        )}
+      </PanelSection>
     </>
   );
 };
