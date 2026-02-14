@@ -2,7 +2,7 @@ import { addEventListener } from "@decky/api";
 import type { SyncApplyData } from "../types";
 import { getArtworkBase64, reportSyncResults } from "../api/backend";
 import { getExistingRomMShortcuts, addShortcut, removeShortcut } from "./steamShortcuts";
-import { createOrUpdateCollections } from "./collections";
+import { createOrUpdateCollections, clearPlatformCollection } from "./collections";
 import { updateSyncProgress } from "./syncProgress";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -115,6 +115,18 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
       await createOrUpdateCollections(platformAppIds, (cur, colTotal, name) => {
         updateSyncProgress({ current: cur, total: colTotal, message: `Collection ${cur}/${colTotal}: ${name}` });
       });
+    }
+
+    // Clean up collections for platforms that are no longer synced
+    if (!cancelled && typeof collectionStore !== "undefined") {
+      const activePlatforms = new Set(Object.keys(platformAppIds));
+      const staleCollections = collectionStore.userCollections.filter(
+        (c) => c.displayName.startsWith("RomM: ") && !activePlatforms.has(c.displayName.slice(6))
+      );
+      for (const c of staleCollections) {
+        console.log(`[RomM] Removing stale collection "${c.displayName}"`);
+        await clearPlatformCollection(c.displayName.slice(6));
+      }
     }
 
     // Report results to backend — always call this so partial progress is saved

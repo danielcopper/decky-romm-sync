@@ -15,6 +15,7 @@ import {
   removePlatformShortcuts,
   removeAllShortcuts,
   reportRemovalResults,
+  uninstallAllRoms,
 } from "../api/backend";
 import { removeShortcut } from "../utils/steamShortcuts";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
@@ -33,6 +34,8 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   const [nonSteamApps, setNonSteamApps] = useState<{ appId: number; name: string }[]>([]);
   const [confirmRemoveAll, setConfirmRemoveAll] = useState(false);
   const [confirmRetrodeck, setConfirmRetrodeck] = useState(false);
+  const [confirmUninstall, setConfirmUninstall] = useState(false);
+  const [uninstallStatus, setUninstallStatus] = useState("");
   const [whitelistSearch, setWhitelistSearch] = useState("");
 
   const refreshPlatforms = async () => {
@@ -206,6 +209,42 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         {status && (
           <PanelSectionRow>
             <Field label={status} />
+          </PanelSectionRow>
+        )}
+      </PanelSection>
+
+      <PanelSection title="Installed ROMs">
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            onClick={async () => {
+              if (!confirmUninstall) {
+                setConfirmUninstall(true);
+                return;
+              }
+              try {
+                setUninstallStatus("Uninstalling...");
+                const result = await uninstallAllRoms();
+                setUninstallStatus(result.message);
+              } catch {
+                setUninstallStatus("Failed to uninstall ROMs");
+              }
+              setConfirmUninstall(false);
+            }}
+          >
+            {confirmUninstall
+              ? <span style={{ color: "#ff8800" }}>Confirm: delete all ROM files?</span>
+              : "Uninstall All Installed ROMs"}
+          </ButtonItem>
+        </PanelSectionRow>
+        {confirmUninstall && (
+          <PanelSectionRow>
+            <Field label={<span style={{ color: "#ff8800" }}>This will delete all downloaded ROM files. Shortcuts remain so you can re-download later.</span>} />
+          </PanelSectionRow>
+        )}
+        {uninstallStatus && (
+          <PanelSectionRow>
+            <Field label={uninstallStatus} />
           </PanelSectionRow>
         )}
       </PanelSection>

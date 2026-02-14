@@ -73,7 +73,7 @@ Both broken items have complete research findings and fix instructions in PLAN.m
 ## Environment
 
 - **Distrobox container `dev`** (Fedora 43) on Bazzite HTPC. Home dir shared with host.
-- **SSH for git push**: `SSH_AUTH_SOCK=/tmp/ssh-XXXXXX7kJjym/agent.61196 git push` — socket path may change between sessions. If push fails, ask Daniel for new socket path.
+- **SSH for git push**: `SSH_AUTH_SOCK=/tmp/ssh-XXXXXXmfc8dP/agent.59410 git push` — socket path may change between sessions. If push fails, find the socket with `find /tmp -name "agent.*" -type s` and ask Daniel to run `ssh-add ~/.ssh/id_ed25519_github`.
 - **RomM server**: http://192.168.178.83:8085/ (creds: romm-library / asdf123) on Unraid NAS
 - **Tests**: `python -m pytest tests/ -q`
 - **Build**: `pnpm build` (Rollup -> dist/index.js)

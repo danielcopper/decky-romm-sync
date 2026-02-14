@@ -93,3 +93,19 @@ export interface SyncApplyData {
   shortcuts: SyncAddItem[];
   remove_rom_ids: number[];
 }
+
+export interface DownloadProgressEvent {
+  rom_id: number;
+  rom_name: string;
+  status: string;
+  progress: number;
+  bytes_downloaded: number;
+  total_bytes: number;
+}
+
+export interface DownloadCompleteEvent {
+  rom_id: number;
+  rom_name: string;
+  platform_name: string;
+  file_path: string;
+}
