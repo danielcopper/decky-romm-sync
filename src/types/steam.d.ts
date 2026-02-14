@@ -28,6 +28,7 @@ declare var SteamClient: {
 interface AppStoreOverview {
   appid: number;
   display_name: string;
+  strDisplayName: string;
 }
 
 interface SteamCollection {
@@ -53,5 +54,5 @@ declare var collectionStore: {
 };
 
 declare var appStore: {
-  getAppOverview(appId: number): AppStoreOverview | null;
+  GetAppOverviewByAppID(appId: number): AppStoreOverview | null;
 };

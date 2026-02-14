@@ -301,17 +301,21 @@ class Plugin:
     async def get_sync_progress(self):
         return self._sync_progress
 
+    async def _emit_progress(self, phase, current=0, total=0, message="", running=True):
+        """Update _sync_progress and emit sync_progress event to frontend."""
+        self._sync_progress = {
+            "running": running,
+            "phase": phase,
+            "current": current,
+            "total": total,
+            "message": message,
+        }
+        await decky.emit("sync_progress", self._sync_progress)
+
     async def _do_sync(self):
         try:
             # Phase 1: Fetch platforms
-            self._sync_progress = {
-                "running": True,
-                "phase": "platforms",
-                "current": 0,
-                "total": 0,
-                "message": "Fetching platforms...",
-            }
-            await asyncio.sleep(0)
+            await self._emit_progress("platforms", message="Fetching platforms...")
 
             try:
                 platforms = await self.loop.run_in_executor(
@@ -319,18 +323,12 @@ class Plugin:
                 )
             except Exception as e:
                 decky.logger.error(f"Failed to fetch platforms: {e}")
-                self._sync_progress = {
-                    "running": False,
-                    "phase": "error",
-                    "current": 0,
-                    "total": 0,
-                    "message": f"Failed to fetch platforms: {e}",
-                }
+                await self._emit_progress("error", message=f"Failed to fetch platforms: {e}", running=False)
                 self._sync_running = False
                 return
 
             if self._sync_cancel:
-                self._finish_sync("Sync cancelled")
+                await self._finish_sync("Sync cancelled")
                 return
 
             # Filter platforms by enabled_platforms setting
@@ -346,19 +344,12 @@ class Plugin:
             decky.logger.info(f"Syncing {len(platforms)} platforms: {[p['name'] for p in platforms]}")
 
             # Phase 2: Fetch ROMs per platform
-            self._sync_progress = {
-                "running": True,
-                "phase": "roms",
-                "current": 0,
-                "total": 0,
-                "message": "Fetching ROMs...",
-            }
-            await asyncio.sleep(0)
+            await self._emit_progress("roms", message="Fetching ROMs...")
 
             all_roms = []
             for platform in platforms:
                 if self._sync_cancel:
-                    self._finish_sync("Sync cancelled")
+                    await self._finish_sync("Sync cancelled")
                     return
 
                 platform_id = platform["id"]
@@ -368,7 +359,7 @@ class Plugin:
 
                 while True:
                     if self._sync_cancel:
-                        self._finish_sync("Sync cancelled")
+                        await self._finish_sync("Sync cancelled")
                         return
 
                     try:
@@ -394,18 +385,14 @@ class Plugin:
                         rom["platform_slug"] = platform.get("slug", "")
 
                     all_roms.extend(rom_list)
-                    self._sync_progress["current"] = len(all_roms)
-                    self._sync_progress["message"] = (
-                        f"Fetching ROMs... ({len(all_roms)} found)"
-                    )
-                    await asyncio.sleep(0)
+                    await self._emit_progress("roms", current=len(all_roms), message=f"Fetching ROMs... ({len(all_roms)} found)")
 
                     if len(rom_list) < limit:
                         break
                     offset += limit
 
             if self._sync_cancel:
-                self._finish_sync("Sync cancelled")
+                await self._finish_sync("Sync cancelled")
                 return
 
             decky.logger.info(
@@ -413,14 +400,7 @@ class Plugin:
             )
 
             # Phase 3: Prepare shortcut data
-            self._sync_progress = {
-                "running": True,
-                "phase": "shortcuts",
-                "current": 0,
-                "total": len(all_roms),
-                "message": "Preparing shortcut data...",
-            }
-            await asyncio.sleep(0)
+            await self._emit_progress("shortcuts", total=len(all_roms), message="Preparing shortcut data...")
 
             exe = os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "romm-launcher")
             start_dir = os.path.join(decky.DECKY_PLUGIN_DIR, "bin")
@@ -437,27 +417,19 @@ class Plugin:
                     "platform_slug": rom.get("platform_slug", ""),
                     "cover_path": "",  # Filled after artwork download
                 })
-                self._sync_progress["current"] = i + 1
-            await asyncio.sleep(0)
+                # No need to emit per-item here, this loop is fast
 
             if self._sync_cancel:
-                self._finish_sync("Sync cancelled")
+                await self._finish_sync("Sync cancelled")
                 return
 
             # Phase 4: Download artwork
-            self._sync_progress = {
-                "running": True,
-                "phase": "artwork",
-                "current": 0,
-                "total": len(all_roms),
-                "message": "Downloading artwork...",
-            }
-            await asyncio.sleep(0)
+            await self._emit_progress("artwork", total=len(all_roms), message="Downloading artwork...")
 
             cover_paths = await self._download_artwork(all_roms)
 
             if self._sync_cancel:
-                self._finish_sync("Sync cancelled")
+                await self._finish_sync("Sync cancelled")
                 return
 
             # Update shortcuts_data with cover paths (artwork fetched on demand via get_artwork_base64)
@@ -472,14 +444,7 @@ class Plugin:
             ]
 
             # Phase 5: Emit sync_apply for frontend to process via SteamClient
-            self._sync_progress = {
-                "running": True,
-                "phase": "applying",
-                "current": 0,
-                "total": len(shortcuts_data),
-                "message": "Applying shortcuts...",
-            }
-            await asyncio.sleep(0)
+            await self._emit_progress("applying", total=len(shortcuts_data), message="Applying shortcuts...")
 
             # Save sync stats (registry updated by report_sync_results)
             self._state["sync_stats"] = {
@@ -507,6 +472,7 @@ class Plugin:
         except Exception as e:
             import traceback
             decky.logger.error(f"Sync failed: {e}\n{traceback.format_exc()}")
+            # Can't await in except, so set directly; finally will not override
             self._sync_progress = {
                 "running": False,
                 "phase": "error",
@@ -514,21 +480,28 @@ class Plugin:
                 "total": 0,
                 "message": f"Sync failed: {e}",
             }
+            # Fire-and-forget emit
+            self.loop.create_task(decky.emit("sync_progress", self._sync_progress))
         finally:
             self._sync_running = False
-            # Ensure progress is marked as not running — serves as a fallback
-            # if report_sync_results was never called (e.g. frontend error).
-            if self._sync_progress.get("running"):
-                stats = self._state.get("sync_stats", {})
-                self._sync_progress = {
-                    "running": False,
-                    "phase": "done",
-                    "current": stats.get("roms", 0),
-                    "total": stats.get("roms", 0),
-                    "message": f"Sync complete: {stats.get('roms', 0)} games from {stats.get('platforms', 0)} platforms",
-                }
+            # If sync completed normally (sync_apply emitted), keep progress.running=True
+            # until report_sync_results() clears it. Only set to False as emergency fallback.
+            if self._sync_progress.get("phase") == "error":
+                pass  # Already handled by except block
+            elif self._sync_progress.get("running"):
+                # Normal completion — frontend is processing. Set a 60s safety timeout.
+                async def _safety_timeout():
+                    await asyncio.sleep(60)
+                    if self._sync_progress.get("running"):
+                        stats = self._state.get("sync_stats", {})
+                        await self._emit_progress("done",
+                            current=stats.get("roms", 0),
+                            total=stats.get("roms", 0),
+                            message=f"Sync complete: {stats.get('roms', 0)} games from {stats.get('platforms', 0)} platforms",
+                            running=False)
+                self.loop.create_task(_safety_timeout())
 
-    def _finish_sync(self, message):
+    async def _finish_sync(self, message):
         self._sync_progress = {
             "running": False,
             "phase": "cancelled",
@@ -536,6 +509,7 @@ class Plugin:
             "total": self._sync_progress.get("total", 0),
             "message": message,
         }
+        await decky.emit("sync_progress", self._sync_progress)
         self._sync_running = False
         decky.logger.info(message)
 
@@ -591,13 +565,9 @@ class Plugin:
             "total_games": total,
         })
 
-        self._sync_progress = {
-            "running": False,
-            "phase": "done",
-            "current": total,
-            "total": total,
-            "message": f"Sync complete: {total} games from {len(platform_app_ids)} platforms",
-        }
+        await self._emit_progress("done", current=total, total=total,
+            message=f"Sync complete: {total} games from {len(platform_app_ids)} platforms",
+            running=False)
         decky.logger.info(f"Sync results reported: {total} games")
         return {"success": True}
 
@@ -701,11 +671,7 @@ class Plugin:
             if self._sync_cancel:
                 return cover_paths
 
-            self._sync_progress["current"] = i + 1
-            self._sync_progress["message"] = (
-                f"Downloading artwork... ({i + 1}/{total})"
-            )
-            await asyncio.sleep(0)
+            await self._emit_progress("artwork", current=i + 1, total=total, message=f"Downloading artwork... ({i + 1}/{total})")
 
             # Determine cover URL from ROM data
             cover_url = rom.get("path_cover_large") or rom.get("path_cover_small")

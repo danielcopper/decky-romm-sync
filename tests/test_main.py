@@ -174,10 +174,11 @@ class TestReportSyncResults:
         }
 
         await plugin.report_sync_results({"1": 100001}, [])
-        decky.emit.assert_called_once()
-        call_args = decky.emit.call_args
-        assert call_args[0][0] == "sync_complete"
-        assert call_args[0][1]["total_games"] == 1
+        # emit called twice: sync_complete then sync_progress (done)
+        assert decky.emit.call_count == 2
+        sync_complete_call = decky.emit.call_args_list[0]
+        assert sync_complete_call[0][0] == "sync_complete"
+        assert sync_complete_call[0][1]["total_games"] == 1
 
     @pytest.mark.asyncio
     async def test_updates_last_sync(self, plugin, tmp_path):

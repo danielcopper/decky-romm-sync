@@ -10,9 +10,9 @@ import {
   testConnection,
   startSync,
   cancelSync,
-  getSyncProgress,
   getSyncStats,
 } from "../api/backend";
+import { getSyncProgress } from "../utils/syncProgress";
 import type { SyncProgress, SyncStats } from "../types";
 
 type Page = "connection" | "platforms" | "danger";
@@ -31,45 +31,56 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const startPolling = () => {
+    stopPolling();
+    pollRef.current = setInterval(() => {
+      // Read directly from module-level store — no async callable, no WebSocket
+      const progress = getSyncProgress();
+      setSyncProgress(progress);
+
+      if (!progress.running) {
+        stopPolling();
+        setSyncing(false);
+        setLoading(false);
+        if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+        setStatus(progress.message || "Sync finished");
+        statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
+        getSyncStats().then(setStats);
+      }
+    }, 250);
+  };
+
   useEffect(() => {
     getSyncStats().then(setStats);
     testConnection().then((r) => setConnected(r.success));
+
+    // Check if a sync is already in progress (handles QAM close/reopen)
+    const progress = getSyncProgress();
+    if (progress.running) {
+      setSyncing(true);
+      setLoading(true);
+      setSyncProgress(progress);
+      startPolling();
+    }
+
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      stopPolling();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
     };
   }, []);
-
-  const startPolling = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const progress = await getSyncProgress();
-        setSyncProgress(progress);
-        if (!progress.running) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          pollRef.current = null;
-          setSyncing(false);
-          setLoading(false);
-          if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-          setStatus(progress.message || "Sync finished");
-          statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
-          getSyncStats().then(setStats);
-        }
-      } catch {
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
-        setSyncing(false);
-        setLoading(false);
-      }
-    }, 2000);
-  };
 
   const handleSync = async () => {
     setLoading(true);
     setSyncing(true);
     setStatus("");
-    setSyncProgress(null);
+    setSyncProgress({ running: true, phase: "starting", message: "Starting sync..." });
     try {
       await startSync();
       startPolling();

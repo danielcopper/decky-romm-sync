@@ -7,20 +7,21 @@ function getOverviews(appIds: number[]): AppStoreOverview[] {
   const overviews: AppStoreOverview[] = [];
   for (const appId of appIds) {
     if (typeof appStore !== "undefined") {
-      const overview = appStore.getAppOverview(appId);
+      const overview = appStore.GetAppOverviewByAppID(appId);
       if (overview) {
         overviews.push(overview);
         continue;
       }
     }
     // Fallback: construct a minimal overview
-    overviews.push({ appid: appId, display_name: "" });
+    overviews.push({ appid: appId, display_name: "", strDisplayName: "" });
   }
   return overviews;
 }
 
 export async function createOrUpdateCollections(
-  platformAppIds: Record<string, number[]>
+  platformAppIds: Record<string, number[]>,
+  onProgress?: (current: number, total: number, name: string) => void,
 ): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {
@@ -30,7 +31,11 @@ export async function createOrUpdateCollections(
 
     console.log("[RomM] Creating/updating collections for platforms:", Object.keys(platformAppIds));
 
-    for (const [platformName, appIds] of Object.entries(platformAppIds)) {
+    const entries = Object.entries(platformAppIds);
+    let idx = 0;
+    for (const [platformName, appIds] of entries) {
+      idx++;
+      onProgress?.(idx, entries.length, platformName);
       const collectionName = `RomM: ${platformName}`;
       const overviews = getOverviews(appIds);
 
@@ -41,11 +46,15 @@ export async function createOrUpdateCollections(
 
         if (existing) {
           console.log(`[RomM] Updating collection "${collectionName}" with ${appIds.length} apps`);
+          const existingApps = existing.allApps;
+          if (existingApps.length > 0) {
+            existing.AsDragDropCollection().RemoveApps(existingApps);
+          }
           existing.AsDragDropCollection().AddApps(overviews);
           await existing.Save();
         } else {
           console.log(`[RomM] Creating collection "${collectionName}" with ${appIds.length} apps`);
-          const collection = collectionStore.NewUnsavedCollection(collectionName);
+          const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
           collection.AsDragDropCollection().AddApps(overviews);
           await collection.Save();
         }

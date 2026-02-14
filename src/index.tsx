@@ -11,6 +11,8 @@ import { ConnectionSettings } from "./components/ConnectionSettings";
 import { PlatformSync } from "./components/PlatformSync";
 import { DangerZone } from "./components/DangerZone";
 import { initSyncManager } from "./utils/syncManager";
+import { setSyncProgress } from "./utils/syncProgress";
+import type { SyncProgress } from "./types";
 
 type Page = "main" | "connection" | "platforms" | "danger";
 
@@ -47,6 +49,14 @@ export default definePlugin(() => {
 
   const syncApplyListener = initSyncManager();
 
+  // Backend emits sync_progress events throughout _do_sync — update the module-level store
+  const syncProgressListener = addEventListener<[SyncProgress]>(
+    "sync_progress",
+    (progress: SyncProgress) => {
+      setSyncProgress(progress);
+    }
+  );
+
   return {
     name: "RomM Library",
     icon: <FaGamepad />,
@@ -54,6 +64,7 @@ export default definePlugin(() => {
     onDismount() {
       removeEventListener("sync_complete", syncCompleteListener);
       removeEventListener("sync_apply", syncApplyListener);
+      removeEventListener("sync_progress", syncProgressListener);
     },
   };
 });
