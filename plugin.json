@@ -1,5 +1,6 @@
 {
   "name": "RomM Sync",
+  "version": "0.1.0",
   "author": "Daniel",
   "flags": [
     "_root"
