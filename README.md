@@ -21,24 +21,33 @@ A [Decky Loader](https://decky.xyz/) plugin that syncs your [RomM](https://githu
 
 ## Installation
 
-1. Download the latest release from the [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
-2. Extract to `~/homebrew/plugins/decky-romm-sync/`
-3. Restart Decky Loader
+### From a release zip
 
-## Setup
+1. Download the latest `decky-romm-sync.zip` from the [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
+2. Open Decky Loader's settings (gear icon in the QAM)
+3. Use **Install Plugin From URL** and paste the direct link to the zip file
+4. Alternatively, extract the zip manually to `~/homebrew/plugins/` on your device (via SSH, file manager, or USB)
+5. Restart Decky Loader — either reboot, or run `sudo systemctl restart plugin_loader` via SSH
 
-1. Open the plugin from the Quick Access Menu (QAM)
-2. Go to **Settings** and enter your RomM server URL and credentials
-3. Test the connection
-4. Go to **Platforms** and enable the platforms you want to sync
-5. Hit **Sync Library** on the main page
-
-## Building from source
+### From source
 
 ```bash
+git clone https://github.com/danielcopper/decky-romm-sync.git
+cd decky-romm-sync
 pnpm install
 pnpm build
 ```
+
+Then copy the entire folder to `~/homebrew/plugins/` on your device and restart Decky Loader.
+
+## Setup
+
+1. Open the Quick Access Menu (QAM) and select **RomM Sync**
+2. Go to **Settings** and enter your RomM server URL and credentials
+3. Hit **Test Connection** to verify
+4. Go to **Platforms** and enable the platforms you want to sync
+5. Go back and hit **Sync Library**
+6. Your ROMs will appear as non-steam shortcuts in your Steam library
 
 ## Running tests
 

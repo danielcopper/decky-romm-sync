@@ -21,3 +21,48 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  build-plugin:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download Decky CLI
+        run: |
+          mkdir -p /tmp/decky-cli
+          curl -L -o /tmp/decky-cli/decky "https://github.com/SteamDeckHomebrew/cli/releases/download/0.0.7/decky-linux-x86_64"
+          chmod +x /tmp/decky-cli/decky
+          echo "/tmp/decky-cli" >> $GITHUB_PATH
+
+      - name: Build plugin
+        run: |
+          sudo $(which decky) plugin build -b -o /tmp/output -s directory $GITHUB_WORKSPACE
+          sudo chown -R $(whoami) .
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Decky CLI names the zip after plugin.json "name" field
+          # Rename to a URL-friendly filename
+          BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
+          cp "$BUILT_ZIP" "/tmp/output/decky-romm-sync.zip"
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
+            /tmp/output/decky-romm-sync.zip \
+            --clobber
