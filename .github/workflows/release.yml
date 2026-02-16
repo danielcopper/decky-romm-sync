@@ -25,7 +25,7 @@ jobs:
 
   build-plugin:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ needs.release-please.outputs.release_created || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -56,6 +56,17 @@ jobs:
           sudo $(which decky) plugin build -b -o /tmp/output -s directory $GITHUB_WORKSPACE
           sudo chown -R $(whoami) .
 
+      - name: Determine tag name
+        id: tag
+        run: |
+          if [ -n "${{ needs.release-please.outputs.tag_name }}" ]; then
+            echo "tag=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=$(gh release list --limit 1 --json tagName -q '.[0].tagName')" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,6 +76,6 @@ jobs:
           if [ "$BUILT_ZIP" != "$DEST" ]; then
             cp "$BUILT_ZIP" "$DEST"
           fi
-          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
+          gh release upload "${{ steps.tag.outputs.tag }}" \
             "$DEST" \
             --clobber
