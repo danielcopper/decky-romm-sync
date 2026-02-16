@@ -264,7 +264,7 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
   return (
     <Focusable style={styles.container}>
       <div style={styles.header}>
-        <span style={styles.title}>RomM Library</span>
+        <span style={styles.title}>RomM Sync</span>
         <span style={styles.statusBadge(statusColor)}>{statusLabel}</span>
       </div>
 

@@ -60,7 +60,7 @@ class Plugin:
         self._load_state()
         self._prune_stale_state()
         self.loop.create_task(self._poll_download_requests())
-        decky.logger.info("RomM Library plugin loaded")
+        decky.logger.info("RomM Sync plugin loaded")
 
     async def _unload(self):
         if self._sync_running:
@@ -69,7 +69,7 @@ class Plugin:
         for rom_id, task in list(self._download_tasks.items()):
             task.cancel()
         self._download_tasks.clear()
-        decky.logger.info("RomM Library plugin unloaded")
+        decky.logger.info("RomM Sync plugin unloaded")
 
     def _load_settings(self):
         settings_path = os.path.join(

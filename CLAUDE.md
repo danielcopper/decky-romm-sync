@@ -1,4 +1,4 @@
-# romm-library — Decky Loader Plugin
+# decky-romm-sync — Decky Loader Plugin
 
 ## What This Is
 
