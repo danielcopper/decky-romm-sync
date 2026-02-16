@@ -20,8 +20,12 @@ import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent } from 
 
 type Page = "main" | "connection" | "platforms" | "danger" | "downloads" | "bios";
 
+// Module-level page state survives QAM remounts (e.g. after modal close)
+let currentPage: Page = "main";
+
 const QAMPanel: FC = () => {
-  const [page, setPage] = useState<Page>("main");
+  const [page, setPageState] = useState<Page>(currentPage);
+  const setPage = (p: Page) => { currentPage = p; setPageState(p); };
 
   switch (page) {
     case "connection":
@@ -107,6 +111,7 @@ export default definePlugin(() => {
     name: "RomM Sync",
     icon: <FaGamepad />,
     content: <QAMPanel />,
+    alwaysRender: true,
     onDismount() {
       unregisterGameDetailPatch();
       removeEventListener("sync_complete", syncCompleteListener);
