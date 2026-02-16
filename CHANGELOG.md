@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.0...decky-romm-sync-v0.1.1) (2026-02-16)
+
+
+### Bug Fixes
+
+* add version field to plugin.json for release-please ([#11](https://github.com/danielcopper/decky-romm-sync/issues/11)) ([20272c9](https://github.com/danielcopper/decky-romm-sync/commit/20272c9c7c400fe8580907143f4368d5a9983135))
+
 ## 0.1.0 (2026-02-16)
 
 
