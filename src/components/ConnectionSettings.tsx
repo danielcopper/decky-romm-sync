@@ -6,8 +6,47 @@ import {
   ButtonItem,
   Field,
   DropdownItem,
+  DialogButton,
+  showModal,
+  ModalRoot,
+  Navigation,
 } from "@decky/ui";
 import { getSettings, saveSettings, testConnection, saveSteamInputSetting, applySteamInputSetting } from "../api/backend";
+
+const TextInputModal: FC<{
+  label: string;
+  value: string;
+  bIsPassword?: boolean;
+  closeModal?: () => void;
+  onSubmit: (value: string) => void;
+}> = ({ label, value: initial, bIsPassword, closeModal, onSubmit }) => {
+  const [value, setValue] = useState(initial);
+  useEffect(() => {
+    Navigation.CloseSideMenus();
+  }, []);
+
+  const submit = () => {
+    onSubmit(value);
+    closeModal?.();
+  };
+
+  return (
+    <ModalRoot closeModal={closeModal} onOK={submit} onEscKeypress={closeModal}>
+      <div style={{ padding: "16px" }}>
+        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "12px", color: "#fff" }}>
+          {label}
+        </div>
+        <TextField
+          focusOnMount={true}
+          label={label}
+          value={value}
+          bIsPassword={bIsPassword}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
+        />
+      </div>
+    </ModalRoot>
+  );
+};
 
 interface ConnectionSettingsProps {
   onBack: () => void;
@@ -32,6 +71,9 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
       if (s.retroarch_input_check) {
         setRetroarchWarning(s.retroarch_input_check);
       }
+    }).catch((e) => {
+      console.error("[RomM] Failed to load settings:", e);
+      setStatus("Failed to load settings");
     });
   }, []);
 
@@ -70,32 +112,31 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
       </PanelSection>
       <PanelSection title="Connection">
         <PanelSectionRow>
-          <TextField
-            label="RomM URL"
-            value={url}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setUrl(e.target.value)
-            }
-          />
+          <Field label="RomM URL" description={url || "(not set)"}>
+            <DialogButton onClick={() => showModal(
+              <TextInputModal label="RomM URL" value={url} onSubmit={setUrl} />
+            )}>
+              Edit
+            </DialogButton>
+          </Field>
         </PanelSectionRow>
         <PanelSectionRow>
-          <TextField
-            label="Username"
-            value={username}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setUsername(e.target.value)
-            }
-          />
+          <Field label="Username" description={username || "(not set)"}>
+            <DialogButton onClick={() => showModal(
+              <TextInputModal label="Username" value={username} onSubmit={setUsername} />
+            )}>
+              Edit
+            </DialogButton>
+          </Field>
         </PanelSectionRow>
         <PanelSectionRow>
-          <TextField
-            label="Password"
-            bIsPassword
-            value={password}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setPassword(e.target.value)
-            }
-          />
+          <Field label="Password" description={password ? "••••" : "(not set)"}>
+            <DialogButton onClick={() => showModal(
+              <TextInputModal label="Password" value="" bIsPassword onSubmit={setPassword} />
+            )}>
+              Edit
+            </DialogButton>
+          </Field>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={handleSave} disabled={loading}>

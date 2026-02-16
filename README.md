@@ -31,14 +31,23 @@ A [Decky Loader](https://decky.xyz/) plugin that syncs your [RomM](https://githu
 
 ### From source
 
+Requires [mise](https://mise.jdx.dev/) (or Node LTS + pnpm manually).
+
 ```bash
 git clone https://github.com/danielcopper/decky-romm-sync.git
 cd decky-romm-sync
+mise install          # installs Node, pnpm, Python
 pnpm install
 pnpm build
 ```
 
-Then copy the entire folder to `~/homebrew/plugins/` on your device and restart Decky Loader.
+Deploy to your device:
+
+```bash
+# Symlink for development (rebuilds take effect immediately after Decky restart)
+sudo ln -sf "$(pwd)" ~/homebrew/plugins/decky-romm-sync
+sudo systemctl restart plugin_loader
+```
 
 ## Setup
 

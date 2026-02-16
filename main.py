@@ -254,12 +254,18 @@ class Plugin:
             raise IOError(f"Download incomplete: got {downloaded} bytes, expected {total}")
 
     async def test_connection(self):
+        if not self.settings.get("romm_url"):
+            return {"success": False, "message": "No server URL configured"}
         try:
-            self._romm_request("/api/heartbeat")
+            await self.loop.run_in_executor(
+                None, self._romm_request, "/api/heartbeat"
+            )
         except Exception as e:
             return {"success": False, "message": f"Cannot reach server: {e}"}
         try:
-            self._romm_request("/api/platforms")
+            await self.loop.run_in_executor(
+                None, self._romm_request, "/api/platforms"
+            )
         except Exception as e:
             return {"success": False, "message": f"Authentication failed: {e}"}
         return {"success": True, "message": "Connected to RomM"}
