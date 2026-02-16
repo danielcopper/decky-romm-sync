@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.3...decky-romm-sync-v0.1.4) (2026-02-16)
+
+
+### Bug Fixes
+
+* OSK focus loss and test connection blocking ([#17](https://github.com/danielcopper/decky-romm-sync/issues/17)) ([0d10d6c](https://github.com/danielcopper/decky-romm-sync/commit/0d10d6ced410728946e9d63600d87b06a84a543b))
+
 ## [0.1.3](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.2...decky-romm-sync-v0.1.3) (2026-02-16)
 
 
