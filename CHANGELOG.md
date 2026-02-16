@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.4...decky-romm-sync-v0.1.5) (2026-02-16)
+
+
+### Bug Fixes
+
+* add requirements.txt for Decky CLI Python dependency bundling ([#19](https://github.com/danielcopper/decky-romm-sync/issues/19)) ([ca0c841](https://github.com/danielcopper/decky-romm-sync/commit/ca0c84152c9de293bedd214f577cf703db1f107d))
+
 ## [0.1.4](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.3...decky-romm-sync-v0.1.4) (2026-02-16)
 
 
