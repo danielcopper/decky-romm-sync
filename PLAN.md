@@ -312,71 +312,117 @@ Two root causes:
 
 ---
 
-## Phase 4: Multi-Emulator Support + Launch Enhancements
+## Phase 4: Artwork, Metadata & Native Steam Integration
 
-**Goal**: Support RetroDECK, EmuDeck, standalone RetroArch, and manual emulator installs. End-to-end play with correct emulator.
+**Goal**: Make ROM shortcuts look like first-class Steam games. Full artwork (hero, logo, wide grid), native metadata (description, genres, developer, release date) via store patching, and on-demand metadata caching.
 
-### Emulator platform presets (new settings UI):
+### 4A: Full Artwork (all 4 types)
 
-**Preset selector** (dropdown in Connection Settings or new "Setup" page):
-- **RetroDECK** (current default): `~/retrodeck/roms/`, `~/retrodeck/bios/`, `~/retrodeck/saves/`, launcher: `flatpak run net.retrodeck.retrodeck`
-- **EmuDeck**: `~/Emulation/roms/`, `~/Emulation/bios/`, `~/Emulation/saves/`, launcher: per-system emulator paths
-- **Manual**: All paths user-configurable
+Currently we only set **portrait grid (assetType 0)** — the cover image in collection/grid views. Three artwork slots are empty, leaving the detail page bare.
 
-When preset changes, auto-populate all paths. User can still override individually.
+**Steam artwork types** (all set via `SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", assetType)`):
 
-### Configurable paths (settings):
-- **ROM directory**: Base path for ROM files (default per preset)
-- **BIOS directory**: Base path for BIOS/firmware (default per preset)
-- **Save directory**: Base path for save files (default per preset, needed for Phase 5)
-- **Emulator launch command**: Per-system or global (default per preset)
-- All paths stored in `settings.json`
-- Update `BIOS_DEST_MAP`, `start_download()`, and launcher to read from settings instead of hardcoded paths
+| Type | assetType | Dimensions | Purpose | Source |
+|------|-----------|------------|---------|--------|
+| Portrait Grid | 0 | 600x900 | Library grid tiles, collections | RomM cover (already done) |
+| Hero Banner | 1 | 1920x620 | Detail page background | SteamGridDB |
+| Logo | 2 | varies (transparent PNG) | Title overlay on hero | SteamGridDB |
+| Wide Grid | 3 | 460x215 / 920x430 | Recent games shelf, list view | SteamGridDB |
 
-### Enhanced launcher (`bin/romm-launcher`):
-- Read emulator platform from settings to determine launch command
-- RetroDECK: `flatpak run net.retrodeck.retrodeck <rom_path>` (current behavior)
-- EmuDeck: per-system emulator command (needs mapping table)
-- Manual: user-configured command per system
-- Verify emulator installed before launch attempt
-- Error handling with zenity dialogs or toast notifications
+**Icon (assetType 4)** cannot be set via `SetCustomArtworkForApp()` — requires `shortcuts.vdf` write + Steam restart. Deferred.
 
-### Emulator/core selection:
+**SteamGridDB integration**:
+- RomM already stores `igdb_id` and `sgdb_id` per ROM — exact match via `GET /games/igdb/{igdb_id}`, no fuzzy name search needed
+- API is free, no paid tiers. Needs API key (user provides their own or we use a project key)
+- Endpoints: `/heroes/game/{sgdb_id}`, `/logos/game/{sgdb_id}`, `/grids/game/{sgdb_id}?dimensions=460x215,920x430`
+- API key stored in `settings.json`
 
-**Per-system defaults** (new QAM sub-page: "Emulators"):
-- List each system with its available emulators
-- For RetroDECK: read from config or hardcode common ones, use `-e emulator` flag
-- For EmuDeck/manual: select which standalone emulator to use per system
-- User selects preferred emulator per system (or "Use default")
-- Stored in plugin settings
+**Implementation**:
+- Backend: New callable `get_steamgriddb_artwork(rom_id, asset_type)` — fetches from SteamGridDB, caches to disk
+- Backend: During sync, for each ROM: look up SGDB game ID via `igdb_id`, fetch hero + logo + wide grid
+- Frontend: After `AddShortcut()`, call `SetCustomArtworkForApp()` for all 4 types (0=RomM cover, 1/2/3=SteamGridDB)
+- After setting logo (type 2), save default logo position to prevent blank logos:
+  ```typescript
+  await window.appDetailsStore.SaveCustomLogoPosition(appOverview, {
+    pinnedPosition: 'BottomLeft', nWidthPct: 50, nHeightPct: 50
+  });
+  ```
+- Artwork cached on disk to avoid re-fetching on re-sync. Cache dir: `~/homebrew/data/decky-romm-sync/artwork/`
+- Graceful fallback: if SteamGridDB has no match, skip that artwork type (Steam shows defaults)
 
-**Per-game override** (optional):
-- On game detail page, option to override emulator for specific game
-- Stored in state.json per rom_id
+**Artwork fetch timing**: During sync alongside the existing cover art download. SteamGridDB lookups add latency but artwork is cached after first sync. For 20k+ games, this may be slow — consider a "skip SteamGridDB" toggle or fetch lazily on first detail page visit.
 
-**Resolution order** when launching:
-1. Check per-game override in state
-2. Check per-system preference in settings
-3. Neither set → use preset default
+### 4B: Native Metadata via Store Patching
+
+No `SteamClient.Apps` APIs exist for setting description, genres, etc. on non-Steam shortcuts. However, **MetaDeck** (EmuDeck) proves that patching Steam's internal store objects works reliably and makes shortcuts look native.
+
+**Store patches** (applied on plugin load for all registered shortcut app IDs):
+
+| Field | Patch Target | Data Shape | RomM Source |
+|-------|-------------|------------|-------------|
+| Description | `appDetailsStore.GetDescriptions()` | `{ strFullDescription, strSnippet }` | `summary` |
+| Developer | `appDetailsStore.GetAssociations()` | `{ rgDevelopers: [{strName, strURL}] }` | `companies` |
+| Publisher | `appDetailsStore.GetAssociations()` | `{ rgPublishers: [{strName, strURL}] }` | `companies` |
+| Genres | `appStore.BHasStoreCategory()` + `m_setStoreCategories` | Steam StoreCategory enum values | `genres` |
+| Release Date | `appStore.GetCanonicalReleaseDate()` | Unix timestamp | `first_release_date` |
+| Controller Support | `appOverview.controller_support` | `2` (full) | Hardcode |
+| Hide "non-Steam" label | `BIsModOrShortcut()` | Return `false` for our app IDs | — |
+
+**Reference implementation**: [MetaDeck](https://github.com/EmuDeck/MetaDeck) — uses `afterPatch` from `@decky/ui`.
+
+**Metadata fetching strategy — on-demand + cache**:
+- Do NOT fetch metadata for all ROMs during sync (too slow for large libraries)
+- Fetch full metadata from RomM API when game detail page is opened: `get_rom_metadata(rom_id)` callable
+- Cache response in `metadata_cache.json` (separate from `state.json` to avoid bloat)
+- Cache TTL: 7 days, re-fetch if expired and network available
+- If offline and cached: show cached data. If offline and not cached: show "metadata unavailable"
+- Store patches read from cache — if metadata not yet cached for an app ID, patches return empty/default (Steam shows nothing, same as now)
+
+**Backend changes**:
+- New callable `get_rom_metadata(rom_id)` — fetches from RomM API `GET /api/roms/{id}`, extracts and returns structured metadata
+- Metadata cache: `metadata_cache.json` keyed by `rom_id`, stores `{ summary, genres, companies, first_release_date, screenshots, cached_at }`
+- Handle ROMs without IGDB match gracefully (return empty metadata)
+
+**Frontend changes**:
+- On plugin load: apply store patches for all registered app IDs
+- Patches check `metadata_cache.json` (loaded into memory) for the requested app ID
+- When `GameDetailPanel` mounts: call `get_rom_metadata(rom_id)`, update cache, re-apply patches for that app ID
+- Loading state while metadata fetches (detail page briefly shows defaults, then fills in)
+
+### 4C: Screenshots
+
+RomM provides `url_screenshots` (IGDB screenshots, 1280x720) and `merged_screenshots` (locally cached paths).
+
+**Options to investigate**:
+- Can we inject screenshots into Steam's native screenshot viewer for non-Steam shortcuts?
+- Can store patching set `nScreenshots` and provide screenshot data?
+- Fallback: display screenshots in our existing `GameDetailPanel` route patch as a scrollable gallery
+- IGDB screenshots could also serve as hero banner fallback (1280x720, not ideal aspect ratio for hero's 1920x620 but better than nothing)
 
 ### Verification:
-- [ ] Games launch correctly with RetroDECK preset
-- [ ] Games launch correctly with EmuDeck preset
-- [ ] Manual preset with custom paths works
-- [ ] Per-system emulator override works
-- [ ] Multi-disc games launch via M3U file
-- [ ] Undownloaded game → triggers download → toast → second launch works
-- [ ] Emulator not installed → clear error message
-- [ ] Switching presets updates all paths correctly
+- [ ] Detail page shows hero banner background image
+- [ ] Detail page shows logo overlay on hero
+- [ ] Wide grid image appears in recent games shelf and list view
+- [ ] Portrait grid still works (regression check)
+- [ ] Games without SteamGridDB match degrade gracefully (no hero/logo, just defaults)
+- [ ] Description shows in native Steam detail page area
+- [ ] Genres displayed natively
+- [ ] Developer/publisher displayed natively
+- [ ] Release date displayed natively
+- [ ] Controller support shows "Full Controller Support"
+- [ ] Metadata loads on first detail page visit, cached for subsequent visits
+- [ ] Cached metadata shown when offline
+- [ ] ROMs without IGDB metadata show graceful fallback
+- [ ] SteamGridDB API key configurable in settings
+- [ ] Store patches survive QAM close/reopen and Steam sleep/wake
 
-## Phase 5: Save File Sync
+---
 
-**Goal**: Bidirectional save file synchronization between emulators and RomM.
+## Phase 5: Save File Sync (RetroDECK)
+
+**Goal**: Bidirectional save file synchronization between RetroDECK and RomM. Hardcoded to RetroDECK paths for now — multi-emulator path abstraction deferred.
 
 **IMPORTANT: RomM account requirement**: Save games in RomM are tied to the authenticated user account. Users MUST use their own RomM account (not a shared/generic one) so saves are correctly attributed. Document this in README and show a warning in settings if the account appears to be shared (e.g. username is "admin" or "romm").
-
-### Complexity notes:
-This is the most complex phase. Save sync requires careful handling of conflicts, timestamps, and emulator-specific save formats. Save file paths depend on the emulator platform preset (Phase 4) — RetroDECK, EmuDeck, and manual installs store saves in different locations.
 
 ### Play session detection:
 Need to reliably detect when a game session starts and ends. Two main options:
@@ -385,13 +431,10 @@ Need to reliably detect when a game session starts and ends. Two main options:
 
 Investigation needed to determine which is more reliable. Polling the process seems more direct; Steam tracking has better integration but may not fire reliably for non-Steam shortcuts.
 
-### Save file locations (depends on Phase 4 preset):
-- **RetroDECK**: `~/retrodeck/saves/{system}/{rom_name}.srm`, `~/retrodeck/states/{system}/`
-- **EmuDeck**: `~/Emulation/saves/{system}/`, varies per standalone emulator
-- **Manual**: User-configured save directory from Phase 4 settings
-- **PCSX2 standalone**: `{saves_dir}/ps2/memcards/` (shared memory cards)
-- **DuckStation standalone**: `{saves_dir}/psx/memcards/`
-- Pattern: `{saves_base}/{system}/` for most systems — base path from settings
+### Save file locations (RetroDECK only):
+- RetroArch saves: `~/retrodeck/saves/{system}/{rom_name}.srm`
+- RetroArch states: `~/retrodeck/states/{system}/`
+- Shared memory cards (PS1/PS2): `~/retrodeck/saves/{system}/` — these systems use shared memory cards rather than per-game saves. Need to determine how to associate uploads with specific ROMs, or handle at a system level.
 
 ### Upload flow (after play session ends):
 1. Detect game session ended (via chosen detection method)
@@ -442,14 +485,13 @@ Investigation needed to determine which is more reliable. Polling the process se
 - [ ] Conflict detected and presented to user
 - [ ] "Newest wins" correctly compares timestamps
 - [ ] Multiple save files for same game handled
-- [ ] Save sync works across different emulators for same system
 - [ ] Save sync status visible on game detail page
 
-## Phase 5.5: Sync Progress & Cancel — Bug Fixes
+---
 
-**Goal**: Fix two non-functional features: the sync progress bar and cancel sync button.
+## Phase 6: Bug Fixes & Stability
 
-**Status**: Not working despite multiple fix attempts. Requires deeper investigation.
+**Goal**: Fix known bugs and improve reliability before adding more features.
 
 ### Bug 1: Sync Progress Bar Not Updating
 
@@ -509,139 +551,70 @@ Investigation needed to determine which is more reliable. Polling the process se
 
 **Fix**: After extraction, validate downloaded M3U files. If an M3U contains only `.bin` entries (plus optionally one `.cue`), it's a bad single-disc M3U — delete it. A proper multi-disc M3U lists `.cue`/`.chd`/`.iso` entries. Alternatively, fix `_detect_launch_file` to prefer CUE over M3U when the M3U only contains `.bin` files.
 
-### Verification:
-- [ ] Progress bar shows real-time progress during sync (e.g. "Applying 5/45: Game Name")
-- [ ] Progress bar shows collection creation progress
-- [ ] Cancel button stops the sync mid-progress
-- [ ] Partial results are saved after cancellation
-- [ ] Progress bar works correctly even if QAM is closed and reopened during sync
-- [ ] Single-disc multi-track game (e.g. Tomb Raider) launches via CUE, not bad M3U
+### Bug 4: State Consistency / Startup Pruning
 
----
-
-## Phase 6: Polish + Advanced Features
-
-**Goal**: Production-ready with good UX and reliability.
-
-### Multi-version / multi-language ROM selector:
-- When multiple versions of the same game exist in RomM (e.g. USA, Europe, Japan), show a version dropdown on the game detail page before downloading
-- RomM groups versions via `siblings` field (matched by shared igdb_id on same platform)
-- **Caveat**: RomM's sibling matching has known bugs — groups numbered sequels as siblings (e.g. Gran Turismo 1+2, Pokemon Black+Black 2). See rommapp/romm#1959.
-- Each ROM has `regions`, `languages`, `revision`, `tags` fields parsed from filename
-- Implementation: on game detail page, if ROM has siblings, show dropdown with region/language info before download
-- Option to "Download all versions" — downloads all siblings, then a second dropdown selects which version gets launched (stored in `installed_roms` per rom_id)
-- Only relevant when user has multiple regional versions in RomM — low priority
-
-### Auto sync interval:
-- Configurable in settings (off / 1h / 6h / 12h / 24h / on plugin load)
-- Background task in `_main()` that triggers `_do_sync()` on interval
-- Toast notification on completion
-- Skip if sync already running or no connection
-
-### Library management improvements:
-- Re-sync preserves installed state and save sync timestamps
-- Detect ROMs removed from RomM → prompt to remove local shortcut + files
-- Detect ROMs updated on RomM → flag for re-download
-- Stale state cleanup on startup (see "State Consistency / Startup Pruning" below)
-
-### State Consistency / Startup Pruning:
-
-**Problem**: We use a flat `state.json` file (with atomic `os.replace()` writes) to track `shortcut_registry` and `installed_roms`. If Steam crashes mid-sync, the plugin crashes mid-download, or the user force-closes during operations, state can drift from reality:
-
+**Problem**: `state.json` can drift from reality after crashes or force-closes:
 - `installed_roms` entry exists but the ROM file is gone from disk
 - `shortcut_registry` entry exists but the Steam shortcut no longer exists
 - ROM file exists on disk but no `installed_roms` entry tracks it (orphaned partial download)
-- Single-file downloads lack `.tmp` atomicity (multi-file ZIP downloads already use `.zip.tmp` → rename)
-
-**Note**: We do NOT use SQLite — just flat JSON with atomic writes via `os.replace()`. This is fine for our scale, but startup healing is essential to prevent state drift from accumulating.
+- Single-file downloads lack `.tmp` atomicity
 
 **Solution — startup state healing in `_main()`**:
-
 1. **Prune `installed_roms`**: Iterate entries, remove any where `file_path` no longer exists on disk.
 2. **Prune `shortcut_registry`**: Frontend checks which Steam shortcuts still exist via `SteamClient` API, reports stale app IDs back to backend. Backend removes orphaned registry entries.
-3. **Download atomicity**: Single-file ROM downloads should write to `{file_path}.tmp` and `os.replace()` to final path on completion (matching the existing multi-file pattern). This prevents partial files from being mistaken for complete downloads.
+3. **Download atomicity**: Single-file ROM downloads should write to `{file_path}.tmp` and `os.replace()` to final path on completion.
 4. **Save state after pruning**: Write the cleaned state back to `state.json` before normal operation begins.
 
-The frontend-to-backend round-trip for step 2 follows the same pattern as `reportSyncResults()` — frontend enumerates existing shortcuts and sends a list back.
+### Verification:
+- [ ] Progress bar shows real-time progress during sync
+- [ ] Cancel button stops the sync mid-progress
+- [ ] Single-disc multi-track game launches via CUE, not bad M3U
+- [ ] Startup pruning removes orphaned state entries
+- [ ] Partial downloads cleaned up on startup
 
-### Rename project to "RomM Deck":
-- Rename GitHub repo from `romm-library` to `romm-deck`
-- Update `package.json`, `plugin.json`, `release-please-config.json`
-- Update all code references: `main.py`, `bin/romm-launcher`, `src/index.tsx`, `src/components/GameDetailPanel.tsx`
-- Update `CLAUDE.md`
-- Update Decky plugin directory paths in launcher (`homebrew/plugins/romm-library` → `romm-deck`)
-- Update git remote URL
-- **Do this before first public release** — breaks existing installs
+---
 
-### Documentation:
-- **README.md**: Setup guide, features, screenshots, requirements
-- **RomM account warning**: Document that users should use their own RomM account (not shared/generic) so save games are correctly attributed per user
-- **BIOS setup guide**: How to upload BIOS files to RomM, then download through the plugin
-- **Emulator preset guide**: Differences between RetroDECK, EmuDeck, and manual setup
+## Phase 7: Multi-Emulator Support (Deferred)
 
-### Offline mode:
-- Cache platform and ROM lists locally
-- Graceful degradation when RomM unreachable
-- Queue operations for when connection returns
+**Goal**: Support EmuDeck, standalone RetroArch, and manual emulator installs beyond RetroDECK.
 
-### Stacked sync progress UI:
-Replace the single progress bar with a stacked phase list. Each phase appears as a new line:
-1. **Fetching platforms** — spinner while running, then checkmark when done (stays visible)
-2. **Fetching ROMs** — appears below, progress bar (e.g. 3/12 platforms), checkmark when done
-3. **Downloading artwork** — appears below, progress bar (e.g. 15/45 ROMs), checkmark when done
-4. **Applying shortcuts** — appears below, progress bar (e.g. 8/45), checkmark when done
-5. **Creating collections** — appears below, progress bar (e.g. 3/7), checkmark when done
-6. **Done** — final checkmark
+### Emulator platform presets:
+- **RetroDECK** (current): `~/retrodeck/roms/`, `~/retrodeck/bios/`, `~/retrodeck/saves/`
+- **EmuDeck**: `~/Emulation/roms/`, `~/Emulation/bios/`, `~/Emulation/saves/`
+- **Manual**: All paths user-configurable
 
-Each completed phase stays visible with a checkmark so the user sees the full pipeline. Requires replacing `ProgressBarWithInfo` with a custom component that accumulates phase state. Backend needs to emit phase transitions (not just overwrite `_sync_progress`). Frontend needs a list of `{ phase, status: "running"|"done", current, total, message }`.
+### Configurable paths:
+- ROM directory, BIOS directory, save directory, emulator launch command
+- All stored in `settings.json`
+- Update `BIOS_DEST_MAP`, `start_download()`, and launcher to read from settings
 
-### Error handling:
-- Comprehensive error handling for all API calls
-- Download retry with exponential backoff
-- Toast notifications for all errors
-- Detailed logging for debugging
+### Enhanced launcher:
+- Per-preset launch commands
+- EmuDeck per-system emulator mapping
+- Verify emulator installed before launch
 
-### CI/CD:
-- Build job in release.yml: pnpm build, vendor py_modules, package ZIP
-- Upload as GitHub release asset via release-please
-- Automated testing in CI
+### Per-system emulator/core selection:
+- New "Emulators" QAM sub-page
+- Per-game override on detail page
+- Resolution order: per-game → per-system → preset default
 
-### Final verification (full smoke test):
-- [ ] Plugin loads in Decky without errors
-- [ ] RomM connection succeeds with valid credentials
-- [ ] Sync populates Steam Library with all RomM games (instant, no restart)
-- [ ] Cover art visible on game tiles
-- [ ] Games in correct platform collections
-- [ ] Download starts from game detail page (single file)
-- [ ] Multi-disc download extracts and creates M3U
-- [ ] Storage space check works
-- [ ] Progress visible in QAM and game detail
-- [ ] Downloaded ROM in correct RetroDECK directory
-- [ ] Play launches RetroDECK with correct system and emulator
-- [ ] Emulator override works per-system and per-game
-- [ ] Save files sync up to RomM after play
-- [ ] Save files sync down from RomM before play
-- [ ] Save conflict resolution works
-- [ ] Uninstall removes ROM and updates status (instant, no restart)
-- [ ] Library cleanup removes only our shortcuts (instant)
-- [ ] Remove All Non-Steam Games respects whitelist
-- [ ] Uninstall All removes ROM files, warns about saves
-- [ ] Manual save sync uploads all local saves to RomM
-- [ ] Re-sync preserves existing state
-- [ ] Auto sync interval works
-- [ ] Plugin survives Steam/Decky restart
-- [ ] Offline mode degrades gracefully
+---
+
+## Phase 8: Polish & Advanced Features (Deferred)
+
+**Goal**: Production-ready with good UX and reliability.
+
+- **Multi-version/language ROM selector**: Dropdown when multiple versions exist in RomM
+- **Auto sync interval**: Configurable background re-sync
+- **Library management**: Detect removed/updated ROMs on RomM, stale state cleanup
+- **Offline mode**: Cache lists locally, queue operations
+- **Stacked sync progress UI**: Replace single progress bar with phased checklist
+- **Error handling**: Retry with backoff, toast notifications, detailed logging
 
 ---
 
 ## Future Improvements (nice-to-have)
 
-- **Concurrent download queue**: Support multiple queued downloads instead of one at a time. Better UX but needs resource management.
-- **RomM native device sync**: When RomM v4.7+ ships device sync features (slots, conflict detection, `device_id` tracking), migrate from our own conflict resolution to RomM's native implementation. Track this in RomM release notes.
-- **Game descriptions/metadata**: Inject ROM summary, genres, screenshots from RomM metadata into Steam game detail page.
+- **Concurrent download queue**: Support multiple queued downloads instead of one at a time.
+- **RomM native device sync**: When RomM v4.7+ ships device sync features, migrate from our own conflict resolution.
 - **Download queue priority/reordering**: Let users reorder queued downloads.
-
-## Known Issues to Investigate
-
-- **Shared memory cards (PS1/PS2)**: These systems use shared memory cards rather than per-game saves. Need to determine how to associate uploads with specific ROMs, or handle at a system level. Will be addressed during Phase 5 implementation.
-- **Play session detection reliability**: Need to compare polling RetroDECK process vs Steam play tracking. Will prototype both during Phase 5.
