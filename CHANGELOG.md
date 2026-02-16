@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.1...decky-romm-sync-v0.1.2) (2026-02-16)
+
+
+### Bug Fixes
+
+* add @rollup/rollup-linux-x64-musl for Decky builder CI ([#13](https://github.com/danielcopper/decky-romm-sync/issues/13)) ([ad5043b](https://github.com/danielcopper/decky-romm-sync/commit/ad5043bb3b9921ca4b3e22330c6fdf3467af791e))
+
 ## [0.1.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.0...decky-romm-sync-v0.1.1) (2026-02-16)
 
 
