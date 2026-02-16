@@ -460,6 +460,34 @@ RomM provides `url_screenshots` (IGDB screenshots, 1280x720) and `merged_screens
 
 ---
 
+## Phase 4.5: Codebase Restructuring
+
+**Goal**: Split oversized files into focused modules before adding more features. Currently `main.py` is 1800+ lines and `tests/test_main.py` is 2400+ lines — both will keep growing with save sync (Phase 5) and metadata (Phase 4B).
+
+**Backend (`main.py` → `backend/` package)**:
+- `backend/__init__.py` — Plugin class, lifecycle (_main, _unload), settings
+- `backend/romm_api.py` — RomM HTTP client (connection, auth, requests)
+- `backend/sgdb.py` — SteamGridDB integration (artwork fetch, verify key, cache)
+- `backend/sync.py` — Sync engine (_do_sync, report_sync_results, registry)
+- `backend/downloads.py` — ROM download manager (start, cancel, progress, multi-file)
+- `backend/firmware.py` — BIOS/firmware management
+- `backend/state.py` — State persistence (state.json, settings.json, save/load)
+
+**Tests (`tests/test_main.py` → split by module)**:
+- `tests/test_sgdb.py` — SGDB artwork and verify tests
+- `tests/test_sync.py` — Sync engine tests
+- `tests/test_downloads.py` — Download manager tests
+- `tests/test_firmware.py` — BIOS tests
+- `tests/test_settings.py` — Settings/state tests
+- `tests/conftest.py` — Shared fixtures (already exists)
+
+**Considerations**:
+- Decky Loader expects a single `main.py` entry point with a `Plugin` class — the Plugin class stays in `main.py` but delegates to modules
+- Need to verify Decky's Python environment supports relative imports from subdirectories
+- All 140+ tests must pass after restructuring (no behavior changes)
+
+---
+
 ## Phase 5: Save File Sync (RetroDECK)
 
 **Goal**: Bidirectional save file synchronization between RetroDECK and RomM. Hardcoded to RetroDECK paths for now — multi-emulator path abstraction deferred.
