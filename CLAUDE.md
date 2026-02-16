@@ -91,6 +91,12 @@ Every backend feature or callable where testing makes sense MUST have unit tests
 
 Tests live in `tests/test_main.py` with mocks in `tests/conftest.py`.
 
+## Security
+
+- NEVER read or use credentials from settings files (`~/homebrew/settings/`) without explicit user permission
+- NEVER pass credentials to agents — if API calls are needed, ask the user to run them and provide output
+- NEVER log secrets (passwords, API keys) — mask them in any log output
+
 ## Working Style
 
 Use team-swarm agents for everything beyond trivial single-file edits — including research, exploration, and implementation. Keep main context clean by delegating to agents. Refer to PLAN.md for the full phase roadmap.
