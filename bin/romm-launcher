@@ -1,5 +1,5 @@
 #!/bin/bash
-# romm-launcher — Steam shortcut launcher for RomM Library plugin
+# romm-launcher — Steam shortcut launcher for RomM Sync plugin
 # Called by Steam with LaunchOptions as argument: romm:{rom_id}
 
 set -euo pipefail
@@ -22,8 +22,8 @@ ROM_ID="${BASH_REMATCH[1]}"
 PLUGIN_DIR=""
 for candidate in \
     "${DECKY_PLUGIN_RUNTIME_DIR:-}" \
-    "$HOME/.local/share/decky/plugins/romm-library" \
-    "$HOME/homebrew/plugins/romm-library"; do
+    "$HOME/.local/share/decky/plugins/decky-romm-sync" \
+    "$HOME/homebrew/plugins/decky-romm-sync"; do
     if [[ -d "$candidate" ]]; then
         PLUGIN_DIR="$candidate"
         break
@@ -34,8 +34,8 @@ done
 DATA_DIR=""
 for candidate in \
     "${DECKY_PLUGIN_RUNTIME_DIR:-}" \
-    "$HOME/homebrew/data/romm-library" \
-    "$HOME/.local/share/decky/data/romm-library"; do
+    "$HOME/homebrew/data/decky-romm-sync" \
+    "$HOME/.local/share/decky/data/decky-romm-sync"; do
     if [[ -d "$candidate" ]]; then
         DATA_DIR="$candidate"
         break
@@ -43,7 +43,7 @@ for candidate in \
 done
 
 if [[ -z "$DATA_DIR" ]]; then
-    DATA_DIR="$HOME/homebrew/data/romm-library"
+    DATA_DIR="$HOME/homebrew/data/decky-romm-sync"
     mkdir -p "$DATA_DIR"
 fi
 
@@ -98,7 +98,7 @@ with open(path, 'w') as f:
 
 # Try to show a notification
 if command -v notify-send &>/dev/null; then
-    notify-send "RomM Library" "Download queued for ROM #$ROM_ID. Play again when complete."
+    notify-send "RomM Sync" "Download queued for ROM #$ROM_ID. Play again when complete."
 fi
 
 exit 0

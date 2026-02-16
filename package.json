@@ -1,7 +1,7 @@
 {
-  "name": "romm-library",
+  "name": "decky-romm-sync",
   "version": "0.0.1",
-  "description": "Decky Loader plugin to browse and play your RomM library from Steam Gaming Mode",
+  "description": "Decky Loader plugin to sync your RomM library to Steam as non-steam shortcuts",
   "type": "module",
   "scripts": {
     "build": "rollup -c"

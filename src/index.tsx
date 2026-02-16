@@ -48,7 +48,7 @@ export default definePlugin(() => {
   }) => {
     console.log("[RomM] sync_complete received:", data.total_games, "games");
     toaster.toast({
-      title: "RomM Library",
+      title: "RomM Sync",
       body: `Sync complete! ${data.total_games} games added.`,
     });
   };
@@ -97,14 +97,14 @@ export default definePlugin(() => {
         total_bytes: 0,
       });
       toaster.toast({
-        title: "RomM Library",
+        title: "RomM Sync",
         body: `Downloaded ${data.rom_name}`,
       });
     }
   );
 
   return {
-    name: "RomM Library",
+    name: "RomM Sync",
     icon: <FaGamepad />,
     content: <QAMPanel />,
     onDismount() {
