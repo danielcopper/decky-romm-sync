@@ -7,9 +7,8 @@ import {
   Field,
   DropdownItem,
   DialogButton,
+  ConfirmModal,
   showModal,
-  ModalRoot,
-  Navigation,
 } from "@decky/ui";
 import { getSettings, saveSettings, testConnection, saveSteamInputSetting, applySteamInputSetting } from "../api/backend";
 
@@ -21,30 +20,20 @@ const TextInputModal: FC<{
   onSubmit: (value: string) => void;
 }> = ({ label, value: initial, bIsPassword, closeModal, onSubmit }) => {
   const [value, setValue] = useState(initial);
-  useEffect(() => {
-    Navigation.CloseSideMenus();
-  }, []);
-
-  const submit = () => {
-    onSubmit(value);
-    closeModal?.();
-  };
-
   return (
-    <ModalRoot closeModal={closeModal} onOK={submit} onEscKeypress={closeModal}>
-      <div style={{ padding: "16px" }}>
-        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "12px", color: "#fff" }}>
-          {label}
-        </div>
-        <TextField
-          focusOnMount={true}
-          label={label}
-          value={value}
-          bIsPassword={bIsPassword}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
-        />
-      </div>
-    </ModalRoot>
+    <ConfirmModal
+      closeModal={closeModal}
+      onOK={() => onSubmit(value)}
+      strTitle={label}
+    >
+      <TextField
+        focusOnMount={true}
+        label={label}
+        value={value}
+        bIsPassword={bIsPassword}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
+      />
+    </ConfirmModal>
   );
 };
 
