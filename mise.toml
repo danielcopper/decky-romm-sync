@@ -2,3 +2,20 @@
 node = "lts"
 pnpm = "latest"
 python = "3.12"
+
+[tasks.setup]
+description = "Install all dependencies (JS + Python)"
+run = """
+pnpm install
+pip install --target=py_modules vdf
+"""
+
+[tasks.build]
+description = "Build frontend"
+run = "pnpm build"
+depends = ["setup"]
+
+[tasks.dev]
+description = "Setup, build, and restart plugin loader"
+run = "sudo systemctl restart plugin_loader"
+depends = ["build"]
