@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.2...decky-romm-sync-v0.1.3) (2026-02-16)
+
+
+### Bug Fixes
+
+* CI upload when zip already named correctly ([#15](https://github.com/danielcopper/decky-romm-sync/issues/15)) ([523a447](https://github.com/danielcopper/decky-romm-sync/commit/523a44759763c0865a55d62ea7120b4b61621b3b))
+
 ## [0.1.2](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.1...decky-romm-sync-v0.1.2) (2026-02-16)
 
 
