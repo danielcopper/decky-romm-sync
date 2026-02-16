@@ -1,6 +1,7 @@
 [tools]
 node = "lts"
 pnpm = "latest"
+python = "3.12"
 
 [tasks.setup]
 description = "Install JS dependencies"
