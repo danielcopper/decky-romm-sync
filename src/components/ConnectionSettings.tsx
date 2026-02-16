@@ -12,19 +12,23 @@ import {
 } from "@decky/ui";
 import { getSettings, saveSettings, testConnection, saveSteamInputSetting, applySteamInputSetting } from "../api/backend";
 
+// Module-level state survives component remounts (modal close can remount QAM)
+const pendingEdits: { url?: string; username?: string; password?: string } = {};
+
 const TextInputModal: FC<{
   label: string;
   value: string;
+  field: "url" | "username" | "password";
   bIsPassword?: boolean;
   closeModal?: () => void;
-  onSubmit: (value: string) => void;
-}> = ({ label, value: initial, bIsPassword, closeModal, onSubmit }) => {
+}> = ({ label, value: initial, field, bIsPassword, closeModal }) => {
   const [value, setValue] = useState(initial);
   return (
     <ConfirmModal
       closeModal={closeModal}
-      onOK={() => onSubmit(value)}
+      onOK={() => { pendingEdits[field] = value; }}
       strTitle={label}
+      bDisableBackgroundDismiss={true}
     >
       <TextField
         focusOnMount={true}
@@ -53,9 +57,10 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
 
   useEffect(() => {
     getSettings().then((s) => {
-      setUrl(s.romm_url);
-      setUsername(s.romm_user);
-      setPassword(s.romm_pass_masked);
+      // Apply any pending edits that survived a remount, fall back to backend values
+      setUrl(pendingEdits.url ?? s.romm_url);
+      setUsername(pendingEdits.username ?? s.romm_user);
+      setPassword(pendingEdits.password ?? s.romm_pass_masked);
       setSteamInputMode(s.steam_input_mode || "default");
       if (s.retroarch_input_check) {
         setRetroarchWarning(s.retroarch_input_check);
@@ -72,6 +77,10 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
     try {
       const result = await saveSettings(url, username, password);
       setStatus(result.message);
+      // Clear pending edits after successful save
+      delete pendingEdits.url;
+      delete pendingEdits.username;
+      delete pendingEdits.password;
     } catch {
       setStatus("Failed to save settings");
     }
@@ -103,7 +112,7 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
         <PanelSectionRow>
           <Field label="RomM URL" description={url || "(not set)"}>
             <DialogButton onClick={() => showModal(
-              <TextInputModal label="RomM URL" value={url} onSubmit={setUrl} />
+              <TextInputModal label="RomM URL" value={url} field="url" />
             )}>
               Edit
             </DialogButton>
@@ -112,7 +121,7 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
         <PanelSectionRow>
           <Field label="Username" description={username || "(not set)"}>
             <DialogButton onClick={() => showModal(
-              <TextInputModal label="Username" value={username} onSubmit={setUsername} />
+              <TextInputModal label="Username" value={username} field="username" />
             )}>
               Edit
             </DialogButton>
@@ -121,7 +130,7 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
         <PanelSectionRow>
           <Field label="Password" description={password ? "••••" : "(not set)"}>
             <DialogButton onClick={() => showModal(
-              <TextInputModal label="Password" value="" bIsPassword onSubmit={setPassword} />
+              <TextInputModal label="Password" value="" field="password" bIsPassword />
             )}>
               Edit
             </DialogButton>
