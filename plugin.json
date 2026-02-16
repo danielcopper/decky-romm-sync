@@ -1,10 +1,17 @@
 {
   "name": "RomM Sync",
   "author": "Daniel",
-  "flags": ["_root"],
+  "flags": [
+    "_root"
+  ],
   "api_version": 1,
   "publish": {
-    "tags": ["romm", "rom-manager", "retrodeck", "emulation"],
+    "tags": [
+      "romm",
+      "rom-manager",
+      "retrodeck",
+      "emulation"
+    ],
     "description": "Sync your RomM library to Steam as non-steam shortcuts",
     "image": ""
   }
