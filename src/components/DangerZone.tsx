@@ -6,8 +6,6 @@ import {
   Field,
   TextField,
   ToggleField,
-  showModal,
-  ConfirmModal,
   Spinner,
 } from "@decky/ui";
 import {
@@ -32,6 +30,8 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   const [showWhitelist, setShowWhitelist] = useState(false);
   const [whitelist, setWhitelist] = useState<Set<number>>(new Set());
   const [nonSteamApps, setNonSteamApps] = useState<{ appId: number; name: string }[]>([]);
+  const [confirmRemoveAllRomm, setConfirmRemoveAllRomm] = useState(false);
+  const [confirmPlatformSlug, setConfirmPlatformSlug] = useState<string | null>(null);
   const [confirmRemoveAll, setConfirmRemoveAll] = useState(false);
   const [confirmRetrodeck, setConfirmRetrodeck] = useState(false);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
@@ -141,33 +141,31 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
             <PanelSectionRow key={p.slug || p.name}>
               <ButtonItem
                 layout="below"
-                onClick={() => {
-                  showModal(
-                    <ConfirmModal
-                      strTitle={`Remove ${p.name}`}
-                      strDescription={`Remove ${p.count} ${p.name} game${p.count !== 1 ? "s" : ""} from Steam? Downloaded ROMs will not be deleted.`}
-                      strOKButtonText="Remove"
-                      onOK={async () => {
-                        setStatus(`Removing ${p.name}...`);
-                        const result = await removePlatformShortcuts(p.slug);
-                        if (result.app_ids) {
-                          for (const appId of result.app_ids) {
-                            removeShortcut(appId);
-                          }
-                        }
-                        if (result.rom_ids?.length) {
-                          await reportRemovalResults(result.rom_ids);
-                        }
-                        await clearPlatformCollection(result.platform_name || p.name);
-                        // TODO: "Also delete installed ROM files?" option (Phase 3 — download manager needed)
-                        setStatus(`Removed ${p.count} ${p.name} game${p.count !== 1 ? "s" : ""}`);
-                        refreshPlatforms();
-                      }}
-                    />
-                  );
+                onClick={async () => {
+                  if (confirmPlatformSlug !== p.slug) {
+                    setConfirmPlatformSlug(p.slug);
+                    return;
+                  }
+                  setConfirmPlatformSlug(null);
+                  setStatus(`Removing ${p.name}...`);
+                  const result = await removePlatformShortcuts(p.slug);
+                  if (result.app_ids) {
+                    for (const appId of result.app_ids) {
+                      removeShortcut(appId);
+                    }
+                  }
+                  if (result.rom_ids?.length) {
+                    await reportRemovalResults(result.rom_ids);
+                  }
+                  await clearPlatformCollection(result.platform_name || p.name);
+                  setStatus(`Removed ${p.count} ${p.name} game${p.count !== 1 ? "s" : ""}`);
+                  await refreshPlatforms();
+                  loadNonSteamApps();
                 }}
               >
-                {p.name} ({p.count})
+                {confirmPlatformSlug === p.slug
+                  ? <span style={{ color: "#ff8800" }}>Confirm: remove {p.count} {p.name} game{p.count !== 1 ? "s" : ""}?</span>
+                  : `${p.name} (${p.count})`}
               </ButtonItem>
             </PanelSectionRow>
           ))
@@ -178,32 +176,31 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={() => {
-              showModal(
-                <ConfirmModal
-                  strTitle="Remove All RomM Shortcuts"
-                  strDescription="Remove all RomM games from your Steam Library? Downloaded ROMs will not be deleted."
-                  strOKButtonText="Remove All"
-                  onOK={async () => {
-                    setStatus("Removing all shortcuts...");
-                    const result = await removeAllShortcuts();
-                    if (result.app_ids) {
-                      for (const appId of result.app_ids) {
-                        removeShortcut(appId);
-                      }
-                    }
-                    if (result.rom_ids?.length) {
-                      await reportRemovalResults(result.rom_ids);
-                    }
-                    await clearAllRomMCollections();
-                    setStatus(result.message);
-                    refreshPlatforms();
-                  }}
-                />
-              );
+            onClick={async () => {
+              if (!confirmRemoveAllRomm) {
+                setConfirmRemoveAllRomm(true);
+                return;
+              }
+              setConfirmRemoveAllRomm(false);
+              setStatus("Removing all shortcuts...");
+              const result = await removeAllShortcuts();
+              if (result.app_ids) {
+                for (const appId of result.app_ids) {
+                  removeShortcut(appId);
+                }
+              }
+              if (result.rom_ids?.length) {
+                await reportRemovalResults(result.rom_ids);
+              }
+              await clearAllRomMCollections();
+              setStatus(result.message);
+              await refreshPlatforms();
+              loadNonSteamApps();
             }}
           >
-            Remove All RomM Shortcuts
+            {confirmRemoveAllRomm
+              ? <span style={{ color: "#ff8800" }}>Confirm: remove all RomM shortcuts?</span>
+              : "Remove All RomM Shortcuts"}
           </ButtonItem>
         </PanelSectionRow>
         {status && (
@@ -230,6 +227,8 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
                 setUninstallStatus("Failed to uninstall ROMs");
               }
               setConfirmUninstall(false);
+              await refreshPlatforms();
+              loadNonSteamApps();
             }}
           >
             {confirmUninstall
