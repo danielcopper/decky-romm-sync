@@ -16,7 +16,7 @@ RomM Server <-HTTP-> Python Backend (main.py)
                      bin/romm-launcher (bash) -> RetroDECK (flatpak)
 ```
 
-- **Backend** (`main.py`): RomM API, SteamGridDB API, ROM/BIOS/artwork downloads, state persistence
+- **Backend** (`main.py` + `lib/`): RomM API, SteamGridDB API, ROM/BIOS/artwork downloads, state persistence
 - **Frontend** (`src/`): SteamClient shortcut CRUD, QAM panel UI, game detail page injection
 - **Communication**: `callable()` for request/response, `decky.emit()` for backend-to-frontend events
 
@@ -32,7 +32,8 @@ RomM Server <-HTTP-> Python Backend (main.py)
 ## File Structure
 
 ```
-main.py                              # Python backend (RomM API, SGDB, downloads, state)
+main.py                              # Plugin entry point, composes mixin classes from lib/
+lib/                                 # Backend mixin modules (state, sync, downloads, etc.)
 src/index.tsx                        # Plugin entry, event listeners, QAM router
 src/components/MainPage.tsx          # Status, sync button, navigation
 src/components/ConnectionSettings.tsx # RomM connection, SGDB API key, controller settings
@@ -52,14 +53,13 @@ src/utils/downloadStore.ts           # Module-level download state store
 src/utils/collections.ts             # Steam collection management
 bin/romm-launcher                    # Bash launcher for RetroDECK
 defaults/config.json                 # 149 platform slug -> RetroDECK system mappings
-tests/test_main.py                   # Backend unit tests (110 tests)
+tests/test_*.py                      # Per-module backend tests (164 tests)
 tests/conftest.py                    # Mock decky module for test isolation
 ```
 
 ## Current State
 
-**Latest release**: v0.1.6 on main
-**Active branch**: `feat/phase-4a-artwork` — SteamGridDB artwork integration
+**Latest release**: v0.2.0 on main
 
 Working:
 - Full sync engine (fetch ROMs, create shortcuts, apply cover art)
@@ -72,7 +72,7 @@ Working:
 - Steam collections
 - Toast notifications
 
-See PLAN.md for the full roadmap (Phases 1-3 done, 4A in progress, 4B-8 planned).
+See PLAN.md for the full roadmap (Phases 1-4B done, 4.5-8 planned).
 
 ## Development
 
@@ -89,7 +89,7 @@ Every backend feature or callable where testing makes sense MUST have unit tests
 - **Bad path**: Invalid input, missing data, API errors, network failures
 - **Edge cases**: Empty strings, None values, masked values ("••••"), boundary conditions
 
-Tests live in `tests/test_main.py` with mocks in `tests/conftest.py`.
+Tests are split per module in `tests/test_*.py` with shared mocks in `tests/conftest.py`.
 
 ## Security
 

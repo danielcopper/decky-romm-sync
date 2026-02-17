@@ -1,16 +1,16 @@
 [importlinter]
 root_packages =
-    backend
+    lib
 
 [importlinter:contract:mixin-independence]
 name = Mixins must not import each other
 type = independence
 modules =
-    backend.state
-    backend.romm_client
-    backend.steam_config
-    backend.firmware
-    backend.metadata
-    backend.sgdb
-    backend.downloads
-    backend.sync
+    lib.state
+    lib.romm_client
+    lib.steam_config
+    lib.firmware
+    lib.metadata
+    lib.sgdb
+    lib.downloads
+    lib.sync

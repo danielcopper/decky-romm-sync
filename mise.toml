@@ -32,12 +32,12 @@ DEST="$HOME/homebrew/plugins/decky-romm-sync"
 if [ -d "$DEST" ] && [ "$(stat -c '%U' "$DEST")" != "$USER" ]; then
   sudo chown -R "$USER:$USER" "$DEST"
 fi
-mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules" "$DEST/backend"
+mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules" "$DEST/lib"
 rsync -a --delete dist/ "$DEST/dist/"
 rsync -a --delete bin/ "$DEST/bin/"
 rsync -a --delete defaults/ "$DEST/defaults/"
 rsync -a --delete py_modules/ "$DEST/py_modules/"
-rsync -a --delete backend/ "$DEST/backend/"
+rsync -a --delete lib/ "$DEST/lib/"
 cp -f main.py plugin.json package.json "$DEST/"
 """
 

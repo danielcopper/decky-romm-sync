@@ -8,14 +8,14 @@ sys.path.insert(0, plugin_dir)
 
 import decky
 
-from backend.state import StateMixin
-from backend.romm_client import RommClientMixin
-from backend.steam_config import SteamConfigMixin
-from backend.firmware import FirmwareMixin, BIOS_DEST_MAP
-from backend.metadata import MetadataMixin
-from backend.sgdb import SgdbMixin
-from backend.downloads import DownloadMixin
-from backend.sync import SyncMixin
+from lib.state import StateMixin
+from lib.romm_client import RommClientMixin
+from lib.steam_config import SteamConfigMixin
+from lib.firmware import FirmwareMixin, BIOS_DEST_MAP
+from lib.metadata import MetadataMixin
+from lib.sgdb import SgdbMixin
+from lib.downloads import DownloadMixin
+from lib.sync import SyncMixin
 
 
 class Plugin(StateMixin, RommClientMixin, SgdbMixin, SteamConfigMixin, FirmwareMixin, MetadataMixin, DownloadMixin, SyncMixin):
