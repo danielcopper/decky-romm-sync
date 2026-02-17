@@ -23,7 +23,17 @@ declare var SteamClient: {
       callback: (details: any) => void,
     ): { unregister: () => void };
   };
+  System: {
+    GetSystemInfo(): Promise<{ sHostname: string; [key: string]: any }>;
+  };
 };
+
+interface SteamPerClientData {
+  clientid: string;
+  client_name: string;
+  installed: boolean;
+  streaming_to_local_client?: boolean;
+}
 
 interface SteamAppOverview {
   appid: number;
@@ -33,6 +43,8 @@ interface SteamAppOverview {
   controller_support?: number;
   metacritic_score?: number;
   m_setStoreCategories?: Set<number>;
+  local_per_client_data?: SteamPerClientData;
+  per_client_data?: SteamPerClientData[];
   GetCanonicalReleaseDate?(): number;
   BHasStoreCategory?(category: number): boolean;
   BIsModOrShortcut?(): boolean;
@@ -56,6 +68,7 @@ interface SteamCollection {
 
 declare var collectionStore: {
   deckDesktopApps: { apps: Map<number, any> };
+  localGamesCollection?: { apps: Map<number, any> };
   userCollections: SteamCollection[];
   GetCollection(id: string): SteamCollection | undefined;
   GetCollectionIDByUserTag(tag: string): string | null;

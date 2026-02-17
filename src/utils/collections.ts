@@ -1,7 +1,24 @@
 /**
  * Steam collection management for RomM platforms.
  * Uses Steam's internal collectionStore API.
+ *
+ * Collection names are machine-scoped to prevent cross-device conflicts
+ * when Steam Cloud syncs collections: "RomM: Platform (hostname)"
  */
+
+let _hostname = "";
+
+async function getHostname(): Promise<string> {
+  if (_hostname) return _hostname;
+  try {
+    const info = await SteamClient.System.GetSystemInfo();
+    const parsed = typeof info === "string" ? JSON.parse(info) : info;
+    _hostname = parsed.sHostname || "unknown";
+  } catch {
+    _hostname = "unknown";
+  }
+  return _hostname;
+}
 
 function getOverviews(appIds: number[]): AppStoreOverview[] {
   const overviews: AppStoreOverview[] = [];
@@ -29,14 +46,15 @@ export async function createOrUpdateCollections(
       return;
     }
 
-    console.log("[RomM] Creating/updating collections for platforms:", Object.keys(platformAppIds));
+    const hostname = await getHostname();
+    console.log("[RomM] Creating/updating collections for platforms:", Object.keys(platformAppIds), `(hostname: ${hostname})`);
 
     const entries = Object.entries(platformAppIds);
     let idx = 0;
     for (const [platformName, appIds] of entries) {
       idx++;
       onProgress?.(idx, entries.length, platformName);
-      const collectionName = `RomM: ${platformName}`;
+      const collectionName = `RomM: ${platformName} (${hostname})`;
       const overviews = getOverviews(appIds);
 
       try {
@@ -74,15 +92,30 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
       console.warn("[RomM] collectionStore not available, cannot clear platform collection");
       return;
     }
-    const collectionName = `RomM: ${platformName}`;
-    const existing = collectionStore.userCollections.find(
-      (c) => c.displayName === collectionName
+    const hostname = await getHostname();
+    const scopedName = `RomM: ${platformName} (${hostname})`;
+    const legacyName = `RomM: ${platformName}`;
+
+    // Delete the machine-scoped collection
+    const scoped = collectionStore.userCollections.find(
+      (c) => c.displayName === scopedName
     );
-    if (existing) {
-      console.log(`[RomM] Deleting collection "${collectionName}" (id=${existing.id})`);
-      await existing.Delete();
-    } else {
-      console.log(`[RomM] Collection "${collectionName}" not found, nothing to clear`);
+    if (scoped) {
+      console.log(`[RomM] Deleting collection "${scopedName}" (id=${scoped.id})`);
+      await scoped.Delete();
+    }
+
+    // Also clean up legacy collection (without hostname suffix) if it exists
+    const legacy = collectionStore.userCollections.find(
+      (c) => c.displayName === legacyName
+    );
+    if (legacy) {
+      console.log(`[RomM] Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
+      await legacy.Delete();
+    }
+
+    if (!scoped && !legacy) {
+      console.log(`[RomM] Collection "${scopedName}" not found, nothing to clear`);
     }
   } catch (e) {
     console.error("[RomM] Failed to clear platform collection:", e);
@@ -95,10 +128,22 @@ export async function clearAllRomMCollections(): Promise<void> {
       console.warn("[RomM] collectionStore not available, cannot clear collections");
       return;
     }
-    const rommCollections = collectionStore.userCollections.filter(
-      (c) => c.displayName.startsWith("RomM: ")
-    );
-    console.log(`[RomM] Deleting ${rommCollections.length} RomM collections`);
+    const hostname = await getHostname();
+    const suffix = ` (${hostname})`;
+
+    // Match collections belonging to this machine OR legacy ones without any hostname suffix.
+    // Legacy collections match "RomM: ..." but do NOT have a parenthesized suffix.
+    // This avoids deleting collections from other devices like "RomM: N64 (othermachine)".
+    const rommCollections = collectionStore.userCollections.filter((c) => {
+      if (!c.displayName.startsWith("RomM: ")) return false;
+      // This machine's scoped collections
+      if (c.displayName.endsWith(suffix)) return true;
+      // Legacy collections: start with "RomM: " but have no " (...)" suffix at all
+      if (!/\s\([^)]+\)$/.test(c.displayName)) return true;
+      return false;
+    });
+
+    console.log(`[RomM] Deleting ${rommCollections.length} RomM collections (hostname: ${hostname})`);
     for (const c of rommCollections) {
       console.log(`[RomM] Deleting collection "${c.displayName}" (id=${c.id})`);
       await c.Delete();

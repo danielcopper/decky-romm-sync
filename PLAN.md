@@ -416,41 +416,54 @@ Steam's screenshot viewer is for user-captured screenshots. Injecting IGDB promo
 
 **Goal**: Fix bugs found during alpha testing before moving to save sync.
 
-### Bug 1: ROM download button does nothing on Steam Deck
+### Bug 1: ROM download button does nothing on Steam Deck — FIXED
 **Symptom**: Clicking the Download button on the game detail page does nothing on Steam Deck. No error, no progress, just nothing happens. BIOS downloads work fine on the same device. Works correctly on Bazzite HTPC.
 
-**Investigation needed**:
-- Check if `start_download(rom_id)` callable is being called at all (frontend console logs)
-- Check if the backend receives the call (Python logs)
-- Compare GameDetailPanel download handler with BiosManager download handler — what's different?
-- Check if it's a permissions issue (ROM download writes to `~/retrodeck/roms/`, BIOS writes to `~/retrodeck/bios/`)
-- Check if the download starts but fails silently (no error propagation to frontend)
-- Test whether the issue is specific to the game detail page button or also affects QAM download queue
+**Root cause**: Investigated and resolved — download handler was not properly triggering on Steam Deck due to event propagation differences.
 
-### Bug 2: Non-Steam shortcuts sync across Steam clients on different machines
-**Symptom**: Non-Steam shortcuts created by the plugin on one machine (e.g. Steam Deck) appear on other machines logged into the same Steam account (e.g. Bazzite HTPC). This is Steam Cloud syncing `shortcuts.vdf` across devices.
+### Bug 2: DangerZone counts not refreshing after removal — FIXED
+**Symptom**: After removing shortcuts via DangerZone (per-platform or remove-all), the game counts displayed next to each platform did not update. User had to close and reopen the QAM to see correct counts.
 
-**Problems this causes**:
-- Shortcuts point to executables/paths that don't exist on the other machine
-- Artwork may not transfer correctly
-- Launching a synced shortcut on a machine without the plugin/RetroDECK installed will fail
-- If both machines run the plugin, they may create duplicate shortcuts or fight over state
+**Root cause**: The `showModal()` confirmation dialog caused the QAM panel to remount when dismissed, creating a race condition where the component re-rendered with stale data before the removal operation completed and state refreshed.
 
-**Investigation needed**:
-- Confirm this is Steam Cloud syncing `shortcuts.vdf` (check Steam Cloud settings, `userdata/` sync behavior)
-- Research how other tools (EmuDeck, BoilR, etc.) handle this — do they have the same problem?
-- Possible solutions:
-  - Disable Steam Cloud sync for `shortcuts.vdf` specifically (may not be possible per-file)
-  - Tag shortcuts with a machine identifier so the plugin only manages its own
-  - Accept it and make the plugin handle multi-machine gracefully (detect missing exe, skip/hide broken shortcuts)
-  - Use `SteamClient.Apps` API properties to mark shortcuts as machine-specific
+**Fix**: Replaced `showModal()` confirmation dialogs with inline confirmation UI (confirm/cancel buttons rendered directly in the DangerZone component). This avoids the QAM remount race entirely. Also added cross-refresh calls so that after any removal operation (per-platform, remove-all-romm, remove-all-non-steam), the component re-fetches counts for all affected sections.
+
+### Bug 3: Non-Steam shortcuts appear on other devices via Steam Remote Play — DOCUMENTED
+**Symptom**: Non-Steam shortcuts created by the plugin on one machine (e.g. Steam Deck) appear on other machines logged into the same Steam account (e.g. Bazzite HTPC). Shortcuts show without artwork, and disappear when the source machine goes offline.
+
+**Root cause — Steam Remote Play discovery protocol (NOT Steam Cloud)**:
+This is NOT `shortcuts.vdf` syncing via Steam Cloud. `shortcuts.vdf` is local-only and never leaves the machine. What users see is Steam's **In-Home Streaming / Remote Play discovery protocol**:
+
+1. **Discovery**: Steam clients on the same LAN broadcast UDP packets on port 27036. When two clients with the same Steam account discover each other, they establish a TCP control connection.
+2. **App advertisement**: The source client sends `CMsgRemoteClientAppStatus` protobuf messages containing `ShortcutInfo` for each non-Steam shortcut. This includes: `name`, `icon`, `categories` (collections), `exepath`, and `launch_options`.
+3. **What's NOT transmitted**: Artwork files (grid, hero, logo) are local filesystem references — they don't transfer over the protocol. This is why remote shortcuts appear without artwork.
+4. **Ephemeral**: These phantom shortcuts exist only while the TCP connection is live. When the source machine goes offline (sleep, shutdown, network disconnect), the shortcuts disappear from the remote client.
+5. **No per-shortcut opt-out**: Steam advertises ALL non-Steam shortcuts to remote clients. There is no API or setting to exclude specific shortcuts from streaming advertisement.
+
+**Detection APIs available**:
+- `collectionStore.localGamesCollection` — contains only locally-created shortcuts (excludes remote phantoms)
+- `SteamAppOverview.per_client_data` — array of `{ clientid, client_name, ... }` entries; remote shortcuts have entries from a different client
+- `SteamAppOverview.local_per_client_data` — only the local machine's entry
+
+**Implementation — DangerZone protection + device labels**:
+- **DangerZone**: Filter removal operations to only include locally-owned shortcuts (using `localGamesCollection` or `per_client_data` checks) to prevent accidentally removing remote phantom entries
+- **Game detail panel**: Show device availability labels (e.g. "Available on: Steam Deck") when `per_client_data` indicates the shortcut originates from another device
+
+**Known Steam bugs**:
+- Steam issue #8791: Name collisions when identical shortcut names exist on source and remote client
+- Steam issue #12315: "Stream" button regression — sometimes remote shortcuts only show "Stream" instead of allowing local launch
+
+**References**: See wiki page "Steam Remote Play and Cross-Device Shortcuts" for full protocol documentation.
 
 ### Verification:
-- [ ] ROM download works on Steam Deck from game detail page
-- [ ] Download progress visible after clicking download
-- [ ] Error shown if download fails
-- [ ] Non-Steam shortcut cross-device sync behavior understood and documented
-- [ ] Solution implemented or workaround documented
+- [x] ROM download works on Steam Deck from game detail page
+- [x] Download progress visible after clicking download
+- [x] Error shown if download fails
+- [x] DangerZone counts refresh immediately after removal operations
+- [x] DangerZone confirmation uses inline UI (no modal remount race)
+- [x] Non-Steam shortcut cross-device behavior documented (Steam Remote Play, not Cloud)
+- [x] DangerZone protected from removing remote streaming phantom shortcuts
+- [ ] Device availability labels shown in game detail panel
 
 ---
 
@@ -728,3 +741,9 @@ This is a security concern — `CERT_NONE` on public APIs allows MITM attacks. L
 - **BIsModOrShortcut bypass counter**: MetaDeck uses a counter system to let `BIsModOrShortcut` return `true` for specific internal Steam calls (GetGameID, GetPrimaryAppID, GetPerClientData, BHasRecentlyLaunched) while returning `false` for UI rendering. Our simple "always false for our apps" approach works for now since ROM shortcuts are cleanly in the non-Steam ID range. Implement if users report: broken play time tracking, missing from Recently Played, or console errors about app ID lookups. ~80 lines, small-medium effort.
 - **RetroAchievements integration**: Show and track RetroAchievements for games. RomM supports adding RA data. Research needed: fetch from RomM's RA data vs. query RetroAchievements API directly vs. leverage an existing Decky plugin (e.g. there may be a dedicated RA Decky plugin). Display options: badge on game detail page, achievement list overlay, progress tracking.
 - **Sync completion notification accuracy**: The post-sync toast always reports "Added X games" using the total count of shortcuts processed. This is misleading — re-syncing an unchanged library shows the same count as a fresh sync. Fix: track which shortcuts are truly new (didn't exist before) vs. updated (already existed, metadata/artwork refreshed) vs. unchanged (skipped entirely). Display an accurate breakdown like "Added 3 new, updated 12, 485 unchanged" or just "Library up to date" when nothing changed. Requires comparing incoming ROM data against `shortcut_registry` before processing and counting each outcome category in `syncManager.ts`.
+- **Playtime sync between RomM and Steam**: Sync playtime data bidirectionally between Steam's per-shortcut playtime and RomM's per-ROM playtime tracking. Challenges: merging playtime across multiple devices (additive — sum deltas, not overwrite), deciding sync direction (Steam → RomM after play sessions, RomM → Steam on sync for display), and displaying it in Steam's native playtime field (research if `SteamClient.Apps` or store patching can set the played-time value). Could also surface RomM's cross-device total playtime in the game detail panel.
+- **UI settings page**: Add a settings sub-page for UI display preferences. Toggleable options with sensible defaults:
+  - **Machine-scoped collections** (default: on): Append hostname to collection names, e.g. "RomM: N64 (steamdeck)". When off, use plain "RomM: N64".
+  - **Device availability labels** (default: on): Show "Also on [device]" / "Streamable from [device]" in game detail panel. When off, hide device info.
+  - **Custom device display name**: Override the hostname shown in collections and labels (e.g. "Deck" instead of "steamdeck-12345").
+  - Future UI toggles (metadata display, artwork preferences, etc.) would live here too.
