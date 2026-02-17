@@ -12,8 +12,7 @@ async function getHostname(): Promise<string> {
   if (_hostname) return _hostname;
   try {
     const info = await SteamClient.System.GetSystemInfo();
-    const parsed = typeof info === "string" ? JSON.parse(info) : info;
-    _hostname = parsed.sHostname || "unknown";
+    _hostname = info.sHostname || "unknown";
   } catch {
     _hostname = "unknown";
   }

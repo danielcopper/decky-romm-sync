@@ -301,26 +301,6 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
     setActionPending(false);
   };
 
-  // Compute remote device label from app overview
-  const deviceLabel = (() => {
-    try {
-      const overview = appStore.GetAppOverviewByAppID(appId);
-      if (!overview?.per_client_data?.length) return null;
-
-      const localClientId = overview.local_per_client_data?.clientid;
-      const isLocal = overview.local_per_client_data?.installed;
-      const remoteDevices = overview.per_client_data
-        .filter((c) => c.installed && c.clientid !== localClientId)
-        .map((c) => c.client_name);
-
-      if (!remoteDevices.length) return null;
-      if (isLocal) return `Also on ${remoteDevices.join(", ")}`;
-      return `Streamable from ${remoteDevices.join(", ")}`;
-    } catch {
-      return null;
-    }
-  })();
-
   // Not a RomM game or still loading
   if (state === "loading" || state === "not_romm") return null;
 
@@ -348,16 +328,6 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
       {romInfo && (
         <div style={styles.info}>
           {romInfo.platform_name}
-        </div>
-      )}
-
-      {deviceLabel && (
-        <div style={{
-          fontSize: "11px",
-          color: "rgba(255, 255, 255, 0.4)",
-          marginBottom: "6px",
-        }}>
-          {deviceLabel}
         </div>
       )}
 

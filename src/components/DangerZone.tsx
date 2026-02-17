@@ -65,13 +65,6 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
       }
       console.log("[RomM] deckDesktopApps.apps size:", deckApps.size);
       let appIds = Array.from(deckApps.keys());
-      // Filter out remote streaming phantoms by intersecting with localGamesCollection
-      const localApps = collectionStore.localGamesCollection?.apps;
-      if (localApps) {
-        const before = appIds.length;
-        appIds = appIds.filter((id) => localApps.has(id));
-        console.log(`[RomM] Filtered to local games: ${before} -> ${appIds.length}`);
-      }
       const autoWhitelist = new Set<number>();
       for (const appId of appIds) {
         let name = `Unknown (${appId})`;

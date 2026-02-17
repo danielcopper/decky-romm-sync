@@ -120,15 +120,23 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
       });
     }
 
-    // Clean up collections for platforms that are no longer synced
+    // Clean up collections for platforms that are no longer synced.
+    // Collection names are "RomM: Platform (hostname)" — extract the platform
+    // portion before the hostname suffix for comparison with activePlatforms.
     if (!cancelled && typeof collectionStore !== "undefined") {
       const activePlatforms = new Set(Object.keys(platformAppIds));
-      const staleCollections = collectionStore.userCollections.filter(
-        (c) => c.displayName.startsWith("RomM: ") && !activePlatforms.has(c.displayName.slice(6))
-      );
+      const staleCollections = collectionStore.userCollections.filter((c) => {
+        if (!c.displayName.startsWith("RomM: ")) return false;
+        const afterPrefix = c.displayName.slice(6); // e.g. "Nintendo 64 (steamdeck)" or legacy "Nintendo 64"
+        // Strip trailing " (hostname)" suffix if present to get the bare platform name
+        const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
+        return !activePlatforms.has(platformName);
+      });
       for (const c of staleCollections) {
+        const afterPrefix = c.displayName.slice(6);
+        const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
         console.log(`[RomM] Removing stale collection "${c.displayName}"`);
-        await clearPlatformCollection(c.displayName.slice(6));
+        await clearPlatformCollection(platformName);
       }
     }
 
