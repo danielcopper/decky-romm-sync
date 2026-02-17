@@ -187,12 +187,24 @@ export function registerMetadataPatches(
   }
 
   // Patches on appStore.allApps[0].__proto__ (SteamAppOverview prototype)
-  if (!appStore.allApps?.length) {
-    console.warn("[RomM] appStore.allApps is empty, skipping prototype patches");
-    return;
-  }
+  // Retry up to 10 times (5 seconds) if allApps is empty at startup
+  const tryRegisterAppProtoPatches = (retriesLeft: number) => {
+    if (!appStore.allApps?.length) {
+      if (retriesLeft > 0) {
+        setTimeout(() => tryRegisterAppProtoPatches(retriesLeft - 1), 500);
+      } else {
+        console.warn("[RomM] appStore.allApps still empty after retries, skipping prototype patches");
+      }
+      return;
+    }
+    registerAppProtoPatches(Object.getPrototypeOf(appStore.allApps[0]));
+  };
+  tryRegisterAppProtoPatches(10);
 
-  const appProto = Object.getPrototypeOf(appStore.allApps[0]);
+  console.log(`[RomM] Registered store patches for ${registeredAppIds.size} apps, awaiting app prototype...`);
+}
+
+function registerAppProtoPatches(appProto: any) {
 
   // --- Patch 3: GetCanonicalReleaseDate ---
   try {

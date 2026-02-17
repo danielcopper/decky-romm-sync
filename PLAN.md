@@ -389,15 +389,9 @@ No `SteamClient.Apps` APIs exist for setting description, genres, etc. on non-St
 - When `GameDetailPanel` mounts: call `get_rom_metadata(rom_id)`, update cache, re-apply patches for that app ID
 - Loading state while metadata fetches (detail page briefly shows defaults, then fills in)
 
-### 4C: Screenshots
+### 4C: Screenshots — DEFERRED to Phase 8
 
-RomM provides `url_screenshots` (IGDB screenshots, 1280x720) and `merged_screenshots` (locally cached paths).
-
-**Options to investigate**:
-- Can we inject screenshots into Steam's native screenshot viewer for non-Steam shortcuts?
-- Can store patching set `nScreenshots` and provide screenshot data?
-- Fallback: display screenshots in our existing `GameDetailPanel` route patch as a scrollable gallery
-- IGDB screenshots could also serve as hero banner fallback (1280x720, not ideal aspect ratio for hero's 1920x620 but better than nothing)
+Steam's screenshot viewer is for user-captured screenshots. Injecting IGDB promotional screenshots there would be misleading. The only option is a custom gallery in GameDetailPanel — cosmetic, low priority.
 
 ### Verification:
 - [ ] Detail page shows hero banner background image
@@ -733,3 +727,4 @@ This is a security concern — `CERT_NONE` on public APIs allows MITM attacks. L
 - **Developer vs Publisher distinction**: RomM's `companies` is a flat list with no role info. Research IGDB's `involved_companies` relationship (has `developer` and `publisher` boolean flags) to properly split companies. May need an extra API call to IGDB or a RomM enhancement.
 - **BIsModOrShortcut bypass counter**: MetaDeck uses a counter system to let `BIsModOrShortcut` return `true` for specific internal Steam calls (GetGameID, GetPrimaryAppID, GetPerClientData, BHasRecentlyLaunched) while returning `false` for UI rendering. Our simple "always false for our apps" approach works for now since ROM shortcuts are cleanly in the non-Steam ID range. Implement if users report: broken play time tracking, missing from Recently Played, or console errors about app ID lookups. ~80 lines, small-medium effort.
 - **RetroAchievements integration**: Show and track RetroAchievements for games. RomM supports adding RA data. Research needed: fetch from RomM's RA data vs. query RetroAchievements API directly vs. leverage an existing Decky plugin (e.g. there may be a dedicated RA Decky plugin). Display options: badge on game detail page, achievement list overlay, progress tracking.
+- **Sync completion notification accuracy**: The post-sync toast always reports "Added X games" using the total count of shortcuts processed. This is misleading — re-syncing an unchanged library shows the same count as a fresh sync. Fix: track which shortcuts are truly new (didn't exist before) vs. updated (already existed, metadata/artwork refreshed) vs. unchanged (skipped entirely). Display an accurate breakdown like "Added 3 new, updated 12, 485 unchanged" or just "Library up to date" when nothing changed. Requires comparing incoming ROM data against `shortcut_registry` before processing and counting each outcome category in `syncManager.ts`.

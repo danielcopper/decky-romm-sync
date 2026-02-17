@@ -9,9 +9,8 @@ import {
   DialogButton,
   ConfirmModal,
   showModal,
-  ToggleField,
 } from "@decky/ui";
-import { getSettings, saveSettings, testConnection, saveSgdbApiKey, verifySgdbApiKey, saveSteamInputSetting, applySteamInputSetting, saveDebugLogging } from "../api/backend";
+import { getSettings, saveSettings, testConnection, saveSgdbApiKey, verifySgdbApiKey, saveSteamInputSetting, applySteamInputSetting } from "../api/backend";
 
 // Module-level state survives component remounts (modal close can remount QAM)
 const pendingEdits: { url?: string; username?: string; password?: string } = {};
@@ -58,9 +57,6 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
   const [sgdbVerifying, setSgdbVerifying] = useState(false);
   const [steamInputMode, setSteamInputMode] = useState("default");
   const [steamInputStatus, setSteamInputStatus] = useState("");
-  const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string; config_path?: string } | null>(null);
-  const [debugLogging, setDebugLogging] = useState(false);
-
   useEffect(() => {
     getSettings().then((s) => {
       // Apply any pending edits that survived a remount, fall back to backend values
@@ -69,10 +65,6 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
       setPassword(pendingEdits.password ?? s.romm_pass_masked);
       setSgdbApiKey(s.sgdb_api_key_masked);
       setSteamInputMode(s.steam_input_mode || "default");
-      setDebugLogging(s.debug_logging ?? false);
-      if (s.retroarch_input_check) {
-        setRetroarchWarning(s.retroarch_input_check);
-      }
     }).catch((e) => {
       console.error("[RomM] Failed to load settings:", e);
       setStatus("Failed to load settings");
@@ -249,31 +241,6 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
             <Field label={steamInputStatus} />
           </PanelSectionRow>
         )}
-        {retroarchWarning && (
-          <PanelSectionRow>
-            <Field
-              label={retroarchWarning.warning
-                ? `RetroArch input_driver: "${retroarchWarning.current}" (not recommended)`
-                : `RetroArch input_driver: "${retroarchWarning.current}"`}
-              description={retroarchWarning.warning
-                ? `Controller navigation in RetroArch menus may not work. Change input_driver to "sdl2" in: ${retroarchWarning.config_path}`
-                : "Controller navigation in RetroArch menus should work correctly"}
-            />
-          </PanelSectionRow>
-        )}
-      </PanelSection>
-      <PanelSection title="Troubleshooting">
-        <PanelSectionRow>
-          <ToggleField
-            label="Debug Logging"
-            description="Log additional details for troubleshooting"
-            checked={debugLogging}
-            onChange={(value) => {
-              setDebugLogging(value);
-              saveDebugLogging(value);
-            }}
-          />
-        </PanelSectionRow>
       </PanelSection>
     </>
   );

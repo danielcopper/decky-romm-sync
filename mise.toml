@@ -8,7 +8,7 @@ _.python.venv = { path = ".venv", create = true }
 
 [tasks.setup]
 description = "Install JS and Python dependencies"
-run = ["pnpm install", "pip install pytest pytest-asyncio"]
+run = ["pnpm install", "pip install pytest pytest-asyncio import-linter"]
 
 [tasks.build]
 description = "Build frontend"
@@ -19,7 +19,33 @@ depends = ["setup"]
 description = "Run Python tests"
 run = "python -m pytest tests/ -q"
 
-[tasks.dev]
-description = "Setup, build, and restart plugin loader"
-run = "sudo systemctl restart plugin_loader"
+[tasks.lint]
+description = "Check mixin import independence"
+run = "lint-imports"
+
+[tasks.deploy]
+description = "Deploy plugin files to Decky plugin directory"
 depends = ["build"]
+raw = true
+run = """
+DEST="$HOME/homebrew/plugins/decky-romm-sync"
+if [ -d "$DEST" ] && [ "$(stat -c '%U' "$DEST")" != "$USER" ]; then
+  sudo chown -R "$USER:$USER" "$DEST"
+fi
+mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules" "$DEST/backend"
+rsync -a --delete dist/ "$DEST/dist/"
+rsync -a --delete bin/ "$DEST/bin/"
+rsync -a --delete defaults/ "$DEST/defaults/"
+rsync -a --delete py_modules/ "$DEST/py_modules/"
+rsync -a --delete backend/ "$DEST/backend/"
+cp -f main.py plugin.json package.json "$DEST/"
+"""
+
+[tasks.dev]
+description = "Build, deploy, and restart plugin loader"
+raw = true
+run = """
+sudo -v
+mise run deploy
+sudo systemctl restart plugin_loader
+"""

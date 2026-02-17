@@ -5,12 +5,16 @@ import {
   ButtonItem,
   Field,
   ProgressBarWithInfo,
+  ToggleField,
 } from "@decky/ui";
 import {
   testConnection,
   startSync,
   cancelSync,
   getSyncStats,
+  getSettings,
+  saveDebugLogging,
+  fixRetroarchInputDriver,
 } from "../api/backend";
 import { getSyncProgress } from "../utils/syncProgress";
 import type { SyncProgress, SyncStats } from "../types";
@@ -28,6 +32,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [debugLogging, setDebugLogging] = useState(false);
+  const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
+  const [retroarchFixStatus, setRetroarchFixStatus] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -60,6 +67,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   useEffect(() => {
     getSyncStats().then(setStats);
     testConnection().then((r) => setConnected(r.success));
+    getSettings().then((s) => {
+      setDebugLogging(s.debug_logging ?? false);
+      if (s.retroarch_input_check) {
+        setRetroarchWarning(s.retroarch_input_check);
+      }
+    });
 
     // Check if a sync is already in progress (handles QAM close/reopen)
     const progress = getSyncProgress();
@@ -155,6 +168,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             )}
           </>
         )}
+        {retroarchWarning && retroarchWarning.warning && (
+          <PanelSectionRow>
+            <Field
+              label="RetroArch: input_driver issue"
+              description={`Using "${retroarchWarning.current}" — controllers may not work in menus. See Warning section below.`}
+            />
+          </PanelSectionRow>
+        )}
       </PanelSection>
 
       <PanelSection title="Sync">
@@ -223,6 +244,61 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <ButtonItem layout="below" onClick={() => onNavigate("danger")}>
             Danger Zone
           </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+
+      {retroarchWarning && retroarchWarning.warning && (
+        <PanelSection title="Warning">
+          <PanelSectionRow>
+            <Field
+              label={`RetroArch input_driver: "${retroarchWarning.current}"`}
+              description="Controller navigation in RetroArch menus may not work with this setting."
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={async () => {
+                setRetroarchFixStatus("Applying...");
+                try {
+                  const result = await fixRetroarchInputDriver();
+                  setRetroarchFixStatus(result.message);
+                  if (result.success) {
+                    setRetroarchWarning(null);
+                  }
+                } catch {
+                  setRetroarchFixStatus("Failed to apply fix");
+                }
+              }}
+            >
+              Change to sdl2
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <Field
+              label=""
+              description="This modifies your RetroArch config. Use with caution — if controllers stop working, revert manually."
+            />
+          </PanelSectionRow>
+          {retroarchFixStatus && (
+            <PanelSectionRow>
+              <Field label={retroarchFixStatus} />
+            </PanelSectionRow>
+          )}
+        </PanelSection>
+      )}
+
+      <PanelSection title="Advanced">
+        <PanelSectionRow>
+          <ToggleField
+            label="Debug Logging"
+            description="Log additional details for troubleshooting"
+            checked={debugLogging}
+            onChange={(value) => {
+              setDebugLogging(value);
+              saveDebugLogging(value);
+            }}
+          />
         </PanelSectionRow>
       </PanelSection>
     </>

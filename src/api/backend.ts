@@ -33,6 +33,7 @@ export const downloadFirmware = callable<[number], FirmwareDownloadResult>("down
 export const downloadAllFirmware = callable<[string], FirmwareDownloadResult>("download_all_firmware");
 export const checkPlatformBios = callable<[string], BiosStatus>("check_platform_bios");
 export const saveDebugLogging = callable<[boolean], { success: boolean }>("save_debug_logging");
+export const fixRetroarchInputDriver = callable<[], { success: boolean; message: string }>("fix_retroarch_input_driver");
 export const getRomMetadata = callable<[number], RomMetadata>("get_rom_metadata");
 export const getAllMetadataCache = callable<[], Record<string, RomMetadata>>("get_all_metadata_cache");
 export const getAppIdRomIdMap = callable<[], Record<string, number>>("get_app_id_rom_id_map");
