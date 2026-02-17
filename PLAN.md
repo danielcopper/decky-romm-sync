@@ -389,15 +389,9 @@ No `SteamClient.Apps` APIs exist for setting description, genres, etc. on non-St
 - When `GameDetailPanel` mounts: call `get_rom_metadata(rom_id)`, update cache, re-apply patches for that app ID
 - Loading state while metadata fetches (detail page briefly shows defaults, then fills in)
 
-### 4C: Screenshots
+### 4C: Screenshots — DEFERRED to Phase 8
 
-RomM provides `url_screenshots` (IGDB screenshots, 1280x720) and `merged_screenshots` (locally cached paths).
-
-**Options to investigate**:
-- Can we inject screenshots into Steam's native screenshot viewer for non-Steam shortcuts?
-- Can store patching set `nScreenshots` and provide screenshot data?
-- Fallback: display screenshots in our existing `GameDetailPanel` route patch as a scrollable gallery
-- IGDB screenshots could also serve as hero banner fallback (1280x720, not ideal aspect ratio for hero's 1920x620 but better than nothing)
+Steam's screenshot viewer is for user-captured screenshots. Injecting IGDB promotional screenshots there would be misleading. The only option is a custom gallery in GameDetailPanel — cosmetic, low priority.
 
 ### Verification:
 - [ ] Detail page shows hero banner background image
