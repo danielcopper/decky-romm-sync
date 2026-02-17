@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Python backend (`main.py` + `backend/`) uses a **mixin-based** architecture. A single `Plugin` class inherits from 8 mixin classes, each owning a distinct domain. At runtime, Python's MRO (Method Resolution Order) composes them into one object — all methods are accessible on `self`, and Decky's `callable()` discovery works transparently.
+The Python lib (`main.py` + `lib/`) uses a **mixin-based** architecture. A single `Plugin` class inherits from 8 mixin classes, each owning a distinct domain. At runtime, Python's MRO (Method Resolution Order) composes them into one object — all methods are accessible on `self`, and Decky's `callable()` discovery works transparently.
 
 ```python
 class Plugin(StateMixin, RommClientMixin, SgdbMixin, SteamConfigMixin,
@@ -144,8 +144,8 @@ The `.importlinter` config enforces an **independence contract**: no mixin modul
 name = Mixins must not import each other
 type = independence
 modules =
-    backend.state
-    backend.romm_client
+    lib.state
+    lib.romm_client
     ...
 ```
 
@@ -174,7 +174,7 @@ All internal/cross-mixin methods use `_` prefix. Public callables (exposed to fr
 
 The mixin pattern works well at the current scale (~2000 lines across 8 modules, single maintainer). Consider switching to **delegation** (separate service objects injected into Plugin) if:
 
-- The codebase exceeds ~4000 lines of backend logic
+- The codebase exceeds ~4000 lines of lib logic
 - Multiple contributors need to work on modules simultaneously
 - Circular runtime dependencies emerge between mixins
 - Testing requires isolating one mixin from another's side effects
