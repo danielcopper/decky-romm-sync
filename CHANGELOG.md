@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.2.0...decky-romm-sync-v0.2.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* rename backend/ to lib/ to avoid Decky CLI build conflict ([#30](https://github.com/danielcopper/decky-romm-sync/issues/30)) ([fee6176](https://github.com/danielcopper/decky-romm-sync/commit/fee61768f19ddb97464bf8fdf90a2912f1dfda10))
+
 ## [0.2.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.1.6...decky-romm-sync-v0.2.0) (2026-02-17)
 
 
