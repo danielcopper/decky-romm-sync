@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Python backend (`main.py` + `backend/`) uses a **mixin-based** architecture. A single `Plugin` class inherits from 8 mixin classes, each owning a distinct domain. At runtime, Python's MRO (Method Resolution Order) composes them into one object — all methods are accessible on `self`, and Decky's `callable()` discovery works transparently.
+The Python backend (`main.py` + `lib/`) uses a **mixin-based** architecture. A single `Plugin` class inherits from 8 mixin classes, each owning a distinct domain. At runtime, Python's MRO (Method Resolution Order) composes them into one object — all methods are accessible on `self`, and Decky's `callable()` discovery works transparently.
 
 ```python
 class Plugin(StateMixin, RommClientMixin, SgdbMixin, SteamConfigMixin,
@@ -144,8 +144,8 @@ The `.importlinter` config enforces an **independence contract**: no mixin modul
 name = Mixins must not import each other
 type = independence
 modules =
-    backend.state
-    backend.romm_client
+    lib.state
+    lib.romm_client
     ...
 ```
 
