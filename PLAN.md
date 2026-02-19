@@ -878,12 +878,50 @@ This is a security concern — `CERT_NONE` on public APIs allows MITM attacks. L
 - Consider showing "X required / Y optional" instead of just "X/Y downloaded"
 - Consider only warning when actually required BIOS files are missing
 
+### Bug 8: VDF-Created Shortcut Icons Not Displaying
+
+**Symptom**: Shortcut icons set via VDF/shortcut creation don't display properly in Steam. The icon path is set but Steam doesn't render it.
+
+**Investigation needed**:
+- Check how the icon path is set during shortcut creation
+- Verify the icon file exists and is in a format Steam accepts (ICO, PNG, TGA)
+- Check if `SteamClient.Apps.SetShortcutIcon()` or equivalent is needed after shortcut creation
+- Compare with how other plugins (e.g. BoilR, MoonDeck) handle shortcut icons
+
+### Bug 9: Play Button Intermittently Fails on First Click
+
+**Symptom**: Clicking "Play" on a RomM shortcut sometimes does nothing on the first click but works on retry. This is an intermittent timing/race condition in the BIsModOrShortcut bypass counter mechanism (adapted from MetaDeck).
+
+**How the bypass counter works** (`src/patches/metadataPatches.ts`):
+- Steam's `BIsModOrShortcut()` controls two things: metadata display (returns false → shows full game details) and launch path (returns true → uses shortcut exe/launch options)
+- We need false for rendering (game detail page) but true for launching — these conflict
+- Two module-level counters manage the toggle:
+  - `bypassCounter`: Set to `-1` (indefinite true) by `GetGameID`/`GetPrimaryAppID` hooks during launch, set to `4` by `BHasRecentlyLaunched`/`GetPerClientData` hooks
+  - `bypassBypass`: Set to `11` by `gameDetailPatch.tsx` when navigating to game detail page, forces false for rendering
+- `bypassBypass` is checked FIRST (highest priority) — if > 0, always returns false regardless of bypassCounter
+
+**Likely root causes** (in order of probability):
+1. **bypassBypass collision with launch**: User clicks Play while game detail page is still rendering. `bypassBypass` is still > 0, takes priority over the launch counter, returns false → Steam skips the shortcut launch path. On retry, bypassBypass has exhausted to 0, launch counter works normally.
+2. **Counter exhaustion**: `bypassCounter = 4` but Steam makes > 4 calls to `BIsModOrShortcut` during launch → counter exhausts, returns false on the final check, breaking the launch.
+3. **Shared global counter state**: All shortcuts share the same `bypassCounter`. If Steam evaluates multiple shortcuts concurrently, one app's counter reset can interfere with another's launch check.
+
+**Why retry works**: First click fails because counters are in a bad state. Failure resets everything to idle (both counters = 0). Second click starts fresh — `GetGameID` fires, sets `bypassCounter = -1` (indefinite true), launch succeeds.
+
+**Fix options to investigate**:
+- Make `bypassBypass` aware of launch state (don't override if launch is in progress)
+- Use per-app counters instead of shared global state
+- Increase `bypassBypass` exhaustion or clear it when Play is clicked
+- Add a small delay between game detail page render and Play button becoming active
+- Study how MetaDeck handles this (our implementation was adapted from theirs)
+
 ### Verification:
 - [ ] Progress bar shows real-time progress during sync
 - [ ] Cancel button stops the sync mid-progress
 - [ ] Single-disc multi-track game launches via CUE, not bad M3U
 - [ ] Startup pruning removes orphaned state entries
 - [ ] Partial downloads cleaned up on startup
+- [ ] Shortcut icons display correctly in Steam
+- [ ] Play button works reliably on first click
 
 ---
 
