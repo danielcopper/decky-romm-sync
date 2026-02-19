@@ -6,6 +6,7 @@ import time
 import uuid
 import base64
 import ssl
+import tempfile
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -129,15 +130,18 @@ class SaveSyncMixin:
     # ── Playtime Notes API Helpers ────────────────────────────────
 
     PLAYTIME_NOTE_TITLE = "romm-sync:playtime"
-    PLAYTIME_NOTE_TAG = "romm-sync"
 
     def _romm_get_playtime_note(self, rom_id):
-        """Fetch the playtime note for a ROM from the Notes API.
+        """Fetch the playtime note for a ROM.
 
+        Uses GET /api/roms/{rom_id} and filters all_user_notes by title,
+        because GET /api/roms/{rom_id}/notes returns 500 when notes exist (RomM bug).
         Returns note dict (with id, content, etc.) or None if not found.
         """
-        tag = urllib.parse.quote(self.PLAYTIME_NOTE_TAG)
-        notes = self._romm_request(f"/api/roms/{rom_id}/notes?tags={tag}")
+        rom_detail = self._romm_request(f"/api/roms/{rom_id}")
+        if not isinstance(rom_detail, dict):
+            return None
+        notes = rom_detail.get("all_user_notes", [])
         if not isinstance(notes, list):
             return None
         for note in notes:
@@ -146,13 +150,23 @@ class SaveSyncMixin:
         return None
 
     def _romm_create_playtime_note(self, rom_id, playtime_data):
-        """Create a new playtime note for a ROM."""
-        return self._romm_post_json(f"/api/roms/{rom_id}/notes", {
+        """Create a new playtime note for a ROM.
+
+        Don't send tags — they cause GET /api/roms/{id}/notes to return 500.
+        """
+        result = self._romm_post_json(f"/api/roms/{rom_id}/notes", {
             "title": self.PLAYTIME_NOTE_TITLE,
             "content": json.dumps(playtime_data),
             "is_public": False,
-            "tags": [self.PLAYTIME_NOTE_TAG],
         })
+        # Store note_id in state for future updates
+        if isinstance(result, dict) and result.get("id"):
+            rom_id_str = str(int(rom_id))
+            entry = self._save_sync_state.get("playtime", {}).get(rom_id_str)
+            if entry is not None:
+                entry["note_id"] = result["id"]
+                self._save_save_sync_state()
+        return result
 
     def _romm_update_playtime_note(self, rom_id, note_id, playtime_data):
         """Update an existing playtime note."""
@@ -316,14 +330,14 @@ class SaveSyncMixin:
         with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
             return json.loads(resp.read().decode())
 
-    def _romm_upload_save(self, rom_id, file_path, device_id=None, emulator="retroarch", save_id=None):
+    def _romm_upload_save(self, rom_id, file_path, emulator="retroarch", save_id=None):
         """Upload or update a save file on RomM.
 
-        If save_id is given, updates existing (PUT). Otherwise creates new (POST).
+        POST does upsert by filename (same rom_id + filename = update in place).
+        If save_id is given, uses PUT for explicit update.
+        device_id is NOT sent — ignored on RomM 4.6.1.
         """
         params = f"rom_id={rom_id}&emulator={urllib.parse.quote(emulator)}"
-        if device_id:
-            params += f"&device_id={urllib.parse.quote(device_id)}"
 
         if save_id:
             return self._romm_upload_multipart(
@@ -333,23 +347,24 @@ class SaveSyncMixin:
             f"/api/saves?{params}", file_path, method="POST"
         )
 
-    def _romm_download_save(self, save_id, dest_path, device_id=None):
-        """Download a save file binary from RomM."""
-        params = "optimistic=true"
-        if device_id:
-            params += f"&device_id={urllib.parse.quote(device_id)}"
-        self._romm_download(f"/api/saves/{save_id}/content?{params}", dest_path)
+    def _romm_download_save(self, save_id, dest_path):
+        """Download a save file binary from RomM.
 
-    def _romm_list_saves(self, rom_id, device_id=None):
-        """List saves from RomM for a ROM."""
-        params = f"rom_id={rom_id}"
-        if device_id:
-            params += f"&device_id={urllib.parse.quote(device_id)}"
-        result = self._romm_request(f"/api/saves?{params}")
+        GET /api/saves/{id}/content does NOT exist on 4.6.1.
+        Instead: fetch metadata → use download_path → URL-encode and fetch binary.
+        """
+        metadata = self._romm_request(f"/api/saves/{save_id}")
+        download_path = metadata.get("download_path", "")
+        if not download_path:
+            raise ValueError(f"Save {save_id} has no download_path")
+        encoded_path = urllib.parse.quote(download_path, safe="/")
+        self._romm_download(encoded_path, dest_path)
+
+    def _romm_list_saves(self, rom_id):
+        """List saves from RomM for a ROM. Returns plain array."""
+        result = self._romm_request(f"/api/saves?rom_id={rom_id}")
         if isinstance(result, list):
             return result
-        if isinstance(result, dict):
-            return result.get("items", result.get("saves", []))
         return []
 
     # ── File Helpers ──────────────────────────────────────────────
@@ -380,12 +395,42 @@ class SaveSyncMixin:
                 results.append({"path": save_path, "filename": rom_name + ext})
         return results
 
+    # ── Server Save Hash Helper ──────────────────────────────────
+
+    def _get_server_save_hash(self, server_save):
+        """Download a server save to temp and compute its MD5 hash.
+
+        Used for slow-path conflict detection when no content_hash is available.
+        Returns hash string or None on error.
+        """
+        save_id = server_save.get("id")
+        if not save_id:
+            return None
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix=".tmp")
+            os.close(fd)
+            self._romm_download_save(save_id, tmp_path)
+            return self._file_md5(tmp_path)
+        except Exception as e:
+            self._log_debug(f"Failed to hash server save {save_id}: {e}")
+            return None
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
     # ── Conflict Detection ────────────────────────────────────────
 
     def _detect_conflict(self, rom_id, filename, local_hash, server_save):
-        """Three-way conflict detection.
+        """Hybrid conflict detection (no content_hash on RomM 4.6.1).
 
-        Compares local hash, server hash, and last-sync hash to determine action.
+        - Local change: hash local file vs last_sync_hash
+        - Server change FAST PATH: updated_at + file_size_bytes vs stored values
+        - Server change SLOW PATH: download to tmp, hash, compare with last_sync_hash
+
         Returns: "skip", "download", "upload", or "conflict".
         """
         rom_id_str = str(int(rom_id))
@@ -393,32 +438,40 @@ class SaveSyncMixin:
         file_state = save_state.get("files", {}).get(filename, {})
         last_sync_hash = file_state.get("last_sync_hash")
 
-        server_hash = server_save.get("content_hash", "")
-        server_updated_at = server_save.get("updated_at", "")
-        last_sync_at = file_state.get("last_sync_at")
-
-        # Never synced before
+        # Never synced before — state recovery
         if not last_sync_hash:
-            if local_hash and server_hash:
-                return "skip" if local_hash == server_hash else "conflict"
             if local_hash:
-                return "upload"
-            if server_hash:
-                return "download"
-            return "skip"
+                server_hash = self._get_server_save_hash(server_save)
+                if server_hash is None:
+                    return "conflict"  # Can't verify, ask user
+                return "skip" if local_hash == server_hash else "conflict"
+            return "download"
 
         local_changed = local_hash != last_sync_hash
-        server_changed = server_hash != last_sync_hash
 
-        # Fallback: check server timestamp if hash says unchanged
-        if not server_changed and last_sync_at and server_updated_at:
-            try:
-                last_dt = datetime.fromisoformat(last_sync_at.replace("Z", "+00:00"))
-                server_dt = datetime.fromisoformat(server_updated_at.replace("Z", "+00:00"))
-                if server_dt > last_dt:
-                    server_changed = True
-            except (ValueError, TypeError):
-                pass
+        # Server change detection — fast path
+        server_changed = False
+        stored_updated_at = file_state.get("last_sync_server_updated_at")
+        stored_size = file_state.get("last_sync_server_size")
+        server_updated_at = server_save.get("updated_at", "")
+        server_size = server_save.get("file_size_bytes")
+
+        if stored_updated_at and server_updated_at == stored_updated_at:
+            if stored_size is None or server_size == stored_size:
+                server_changed = False  # fast path: unchanged
+            else:
+                server_changed = True  # size changed
+        else:
+            # Timestamp changed or no stored timestamp → slow path
+            server_hash = self._get_server_save_hash(server_save)
+            if server_hash and server_hash != last_sync_hash:
+                server_changed = True
+            else:
+                # False alarm — update stored metadata
+                if file_state:
+                    file_state["last_sync_server_updated_at"] = server_updated_at
+                    if server_size is not None:
+                        file_state["last_sync_server_size"] = server_size
 
         if not local_changed and not server_changed:
             return "skip"
@@ -475,7 +528,6 @@ class SaveSyncMixin:
             ),
             "local_size": os.path.getsize(local_path) if os.path.isfile(local_path) else None,
             "server_save_id": server_save.get("id"),
-            "server_hash": server_save.get("content_hash", ""),
             "server_updated_at": server_save.get("updated_at", ""),
             "server_size": server_save.get("file_size_bytes"),
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -504,18 +556,19 @@ class SaveSyncMixin:
             "last_sync_at": now,
             "last_sync_server_updated_at": server_response.get("updated_at", now),
             "last_sync_server_save_id": server_response.get("id"),
+            "last_sync_server_size": server_response.get("file_size_bytes"),
             "local_mtime_at_last_sync": local_mtime,
         }
 
     # ── Sync Helpers ──────────────────────────────────────────────
 
-    def _do_download_save(self, server_save, saves_dir, filename, rom_id_str, device_id, system):
+    def _do_download_save(self, server_save, saves_dir, filename, rom_id_str, system):
         """Download a save file from server. Backs up existing local file first."""
         local_path = os.path.join(saves_dir, filename)
         os.makedirs(saves_dir, exist_ok=True)
         tmp_path = local_path + ".tmp"
 
-        self._with_retry(self._romm_download_save, server_save["id"], tmp_path, device_id)
+        self._with_retry(self._romm_download_save, server_save["id"], tmp_path)
 
         # Backup existing local save before overwriting
         if os.path.isfile(local_path):
@@ -529,12 +582,12 @@ class SaveSyncMixin:
         self._update_file_sync_state(rom_id_str, filename, server_save, local_path, system)
         self._log_debug(f"Downloaded save: {filename} for rom {rom_id_str}")
 
-    def _do_upload_save(self, rom_id, file_path, filename, rom_id_str, device_id, system, server_save=None):
+    def _do_upload_save(self, rom_id, file_path, filename, rom_id_str, system, server_save=None):
         """Upload a local save file to server."""
         save_id = server_save.get("id") if server_save else None
 
         result = self._with_retry(
-            self._romm_upload_save, int(rom_id), file_path, device_id, "retroarch", save_id
+            self._romm_upload_save, int(rom_id), file_path, "retroarch", save_id
         )
 
         self._update_file_sync_state(rom_id_str, filename, result, file_path, system)
@@ -549,7 +602,6 @@ class SaveSyncMixin:
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
-        device_id = self._save_sync_state.get("device_id")
 
         info = self._get_rom_save_info(rom_id)
         if not info:
@@ -559,7 +611,7 @@ class SaveSyncMixin:
 
         # Fetch server saves (with retry)
         try:
-            server_saves = self._with_retry(self._romm_list_saves, rom_id, device_id)
+            server_saves = self._with_retry(self._romm_list_saves, rom_id)
         except Exception as e:
             decky.logger.error(f"_sync_rom_saves({rom_id}): failed to list saves: {e}")
             return 0, [f"Failed to fetch saves: {e}"]
@@ -625,13 +677,13 @@ class SaveSyncMixin:
             try:
                 if action == "download":
                     self._do_download_save(
-                        server, saves_dir, filename, rom_id_str, device_id, system
+                        server, saves_dir, filename, rom_id_str, system
                     )
                     synced += 1
                 elif action == "upload" and local:
                     self._do_upload_save(
                         rom_id, local["path"], filename, rom_id_str,
-                        device_id, system, server
+                        system, server
                     )
                     synced += 1
             except urllib.error.HTTPError as e:
@@ -706,13 +758,11 @@ class SaveSyncMixin:
         """Get save sync status for a ROM (local files, server saves, conflict state)."""
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
-        device_id = self._save_sync_state.get("device_id", "")
-
         local_files = self._find_save_files(rom_id)
 
         server_saves = []
         try:
-            server_saves = self._romm_list_saves(rom_id, device_id)
+            server_saves = self._romm_list_saves(rom_id)
         except Exception as e:
             self._log_debug(f"Failed to fetch saves for rom {rom_id}: {e}")
 
@@ -746,8 +796,8 @@ class SaveSyncMixin:
                 ).isoformat(),
                 "local_size": os.path.getsize(lf["path"]),
                 "server_save_id": server.get("id") if server else None,
-                "server_hash": server.get("content_hash", "") if server else None,
                 "server_updated_at": server.get("updated_at", "") if server else None,
+                "server_size": server.get("file_size_bytes") if server else None,
                 "last_sync_at": files_state.get(fn, {}).get("last_sync_at"),
                 "status": action,
             })
@@ -762,8 +812,8 @@ class SaveSyncMixin:
                     "local_mtime": None,
                     "local_size": None,
                     "server_save_id": ss.get("id"),
-                    "server_hash": ss.get("content_hash", ""),
                     "server_updated_at": ss.get("updated_at", ""),
+                    "server_size": ss.get("file_size_bytes"),
                     "last_sync_at": None,
                     "status": "download",
                 })
@@ -773,7 +823,7 @@ class SaveSyncMixin:
             "rom_id": rom_id,
             "files": file_statuses,
             "playtime": playtime,
-            "device_id": device_id,
+            "device_id": self._save_sync_state.get("device_id", ""),
         }
 
     async def pre_launch_sync(self, rom_id):
@@ -903,7 +953,6 @@ class SaveSyncMixin:
         if not conflict:
             return {"success": False, "message": "Conflict not found"}
 
-        device_id = self._save_sync_state.get("device_id")
         info = self._get_rom_save_info(rom_id)
         if not info:
             return {"success": False, "message": "ROM not installed"}
@@ -916,7 +965,7 @@ class SaveSyncMixin:
                     return {"success": False, "message": "No server save ID"}
                 server_save = self._romm_request(f"/api/saves/{server_save_id}")
                 self._do_download_save(
-                    server_save, saves_dir, filename, rom_id_str, device_id, system
+                    server_save, saves_dir, filename, rom_id_str, system
                 )
             else:  # upload
                 local_path = conflict.get("local_path")
@@ -932,7 +981,7 @@ class SaveSyncMixin:
                         pass
                 self._do_upload_save(
                     rom_id, local_path, filename, rom_id_str,
-                    device_id, system, server_save
+                    system, server_save
                 )
 
             self._save_save_sync_state()

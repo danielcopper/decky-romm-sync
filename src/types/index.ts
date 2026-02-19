@@ -177,7 +177,6 @@ export interface PendingConflict {
   local_mtime: string | null;
   local_size: number | null;
   server_save_id: number;
-  server_hash: string;
   server_updated_at: string;
   server_size: number | null;
   created_at: string;
@@ -194,19 +193,29 @@ export interface OfflineQueueItem {
 
 export interface SaveFileStatus {
   filename: string;
-  local_exists: boolean;
+  local_path: string | null;
   local_hash: string | null;
   local_mtime: string | null;
+  local_size: number | null;
   server_save_id: number | null;
   server_updated_at: string | null;
-  sync_status: "synced" | "local_newer" | "server_newer" | "conflict" | "not_synced";
+  server_size: number | null;
+  last_sync_at: string | null;
+  status: "skip" | "download" | "upload" | "conflict";
+}
+
+export interface PlaytimeEntry {
+  total_seconds: number;
+  session_count: number;
+  last_session_start: string | null;
+  last_session_duration_sec: number | null;
 }
 
 export interface SaveStatus {
   rom_id: number;
   files: SaveFileStatus[];
-  last_synced_at: string | null;
-  playtime_seconds: number;
+  playtime: PlaytimeEntry;
+  device_id: string;
 }
 
 export interface DownloadProgressEvent {

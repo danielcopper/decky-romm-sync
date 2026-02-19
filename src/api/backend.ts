@@ -42,7 +42,7 @@ export const getAppIdRomIdMap = callable<[], Record<string, number>>("get_app_id
 export const saveShortcutIcon = callable<[number, string], { success: boolean }>("save_shortcut_icon");
 
 // Save sync callables
-export const ensureDeviceRegistered = callable<[], { device_id: string }>("ensure_device_registered");
+export const ensureDeviceRegistered = callable<[], { success: boolean; device_id: string; device_name: string }>("ensure_device_registered");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
 export const preLaunchSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[] }>("pre_launch_sync");
 export const postExitSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[] }>("post_exit_sync");
@@ -51,7 +51,7 @@ export const syncAllSaves = callable<[], { success: boolean; message: string; sy
 export const resolveConflict = callable<[number, string, string], { success: boolean; message: string }>("resolve_conflict");
 export const getPendingConflicts = callable<[], { conflicts: PendingConflict[] }>("get_pending_conflicts");
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
-export const recordSessionEnd = callable<[number], { success: boolean; playtime_delta: number }>("record_session_end");
+export const recordSessionEnd = callable<[number], { success: boolean; duration_sec?: number; total_seconds?: number; session_count?: number; message?: string }>("record_session_end");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");
 export const updateSaveSyncSettings = callable<[SaveSyncSettings], { success: boolean }>("update_save_sync_settings");
 

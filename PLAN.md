@@ -64,10 +64,43 @@ Every shortcut: `exe` → `bin/romm-launcher`, `LaunchOptions` → `romm:{rom_id
 | `/api/romsfiles/{file_id}/content/{file_name}` | GET | Download individual file from multi-file ROM |
 | `/api/saves` | GET/POST | List/upload saves. Filter by `rom_id`, `platform_id`. Upload via multipart form (`saveFile`) |
 | `/api/saves/{id}` | GET/PUT | Get/update specific save |
-| `/api/saves/{id}/content` | GET | Download save file binary |
+| `/api/saves/{id}/content` | GET | Download save file binary (**4.7+ only** — does not exist in 4.6.1; use `download_path` from save metadata instead) |
 | `/api/saves/delete` | POST | Batch delete saves `{"saves": [id, ...]}` |
 | `/api/states` | GET/POST | Same as saves but for emulator save states |
 | `/api/states/{id}/content` | GET | Download state file binary |
+
+### Known RomM API Limitations (v4.6.1)
+
+Verified live against RomM v4.6.1. See `.romm-api-verified.md` for full test results.
+
+| Issue | Workaround |
+|-------|------------|
+| `GET /api/roms/{id}/notes` returns 500 when any note exists | Read `all_user_notes` array from `GET /api/roms/{id}` (ROM detail endpoint) instead |
+| No `content_hash` field in SaveSchema | Hybrid detection: fast path compares `updated_at` + `file_size_bytes`; slow path downloads server save to tmp and computes MD5 |
+| No dedicated playtime API | Store playtime in per-ROM user notes with `title: "romm-sync:playtime"` and JSON content. Do NOT send `tags` field (contributes to GET bug). |
+| `GET /api/saves/{id}/content` does not exist | Use `download_path` URL from save metadata (must URL-encode spaces and parentheses) |
+| `device_id` param on POST /api/saves is accepted but ignored | Client-side device tracking via `save_sync_state.json`; keep device_id for future 4.7.x compatibility |
+| No server-side conflict detection (no 409 responses) | Three-way conflict detection on the client using last-sync snapshot hash |
+| `POST /api/saves` does upsert by filename | Same file_name + rom_id + user_id → updates in place (same ID preserved). No need to delete first. |
+
+### RomM 4.7.0-alpha.1 Future Migration
+
+RomM 4.7.0-alpha.1 was released 2026-02-12 but is not yet deployed on the target server. It adds:
+
+- **Device registration**: `POST /api/devices` — proper server-side device tracking
+- **`content_hash`** in SaveSchema — eliminates need for download-and-hash slow path
+- **`GET /api/saves/{id}/content`** — dedicated binary download endpoint (replaces `download_path` workaround)
+- **Server-side 409 conflict detection** — server tracks per-device sync state, returns HTTP 409 on stale uploads
+- **Save slots** — multiple save versions per ROM
+
+**When the user upgrades to 4.7+**, we can simplify significantly:
+- Switch to `content_hash` for change detection (no more download-and-hash)
+- Use server-side 409 conflicts instead of client-side three-way detection
+- Use `GET /api/saves/{id}/content` instead of `download_path`
+- Register as a device via `POST /api/devices` for proper server tracking
+- Notes GET bug may be fixed (untested)
+
+**Feature request #1225** (dedicated playtime API) is still open. Until it ships, we continue using notes-based playtime storage.
 
 ## SteamClient.Apps API Reference (for shortcut management)
 
@@ -535,9 +568,9 @@ The frontend `sessionManager.ts` maintains a cached `appId -> romId` map (from b
 ### Three-way conflict detection:
 
 Conflict detection uses three data points:
-1. **Local file**: current `.srm` on disk (hash + mtime)
-2. **Last-sync snapshot**: hash of the file at last successful sync (stored in `save_sync_state.json`)
-3. **Server save**: RomM's version (hash + `updated_at` timestamp)
+1. **Local file**: current `.srm` on disk (MD5 hash + mtime)
+2. **Last-sync snapshot**: MD5 hash of the file at last successful sync (stored in `save_sync_state.json`)
+3. **Server save**: RomM's version via hybrid detection — fast path compares `updated_at` + `file_size_bytes` against stored values (both unchanged → skip); slow path downloads server save to tmp and computes MD5 when timestamps differ. RomM 4.6.1 has no `content_hash` field.
 
 This is more reliable than simple two-way timestamp comparison because it can distinguish:
 - Local-only changes (local differs from snapshot, server matches snapshot)
@@ -677,30 +710,30 @@ When a save sync fails (after all backend retries exhausted), the user should ha
 
 The offline queue already persists failed operations — this is about surfacing them to the user and letting them trigger manual retries.
 
-#### 5. Playtime storage via RomM user notes
-RomM has no dedicated playtime field (feature request #1225 open). As a workaround, store playtime in the per-ROM user notes field available via the RomM API. Each ROM's `RomUser` model has a `note_raw_markdown` (or similar) field accessible through `PUT /api/roms/{id}`.
+#### 5. Playtime storage via RomM user notes — IMPLEMENTED
+RomM has no dedicated playtime field (feature request #1225 open). Implemented using the per-ROM Notes API to store playtime as a separate note per ROM.
 
-**Format**: Append a machine-parseable tag to the notes without disturbing user-written content:
-```
-<!-- romm-sync:playtime {"seconds": 18450, "updated": "2026-02-17T10:30:00Z", "device": "steamdeck"} -->
+**Note format** (verified against RomM 4.6.1):
+```json
+{
+  "title": "romm-sync:playtime",
+  "content": "{\"seconds\": 18450, \"updated\": \"2026-02-17T10:30:00Z\", \"device\": \"steamdeck\"}",
+  "is_public": false
+}
 ```
 
-**Flow**:
-1. After each play session (in `record_session_end`), fetch the ROM's current notes from RomM
-2. Parse our playtime tag if present, or start from 0
-3. Add the session delta to the stored total
-4. Update the tag in the notes and PUT back to RomM
-5. On other devices, read the notes to get cross-device playtime totals
+**Important**: Do NOT send `tags` field when creating/updating notes — it contributes to the `GET /api/roms/{id}/notes` 500 bug. Filter notes by `title == "romm-sync:playtime"` instead.
+
+**API flow**:
+1. **Read**: `GET /api/roms/{id}` → filter `all_user_notes` for `title == "romm-sync:playtime"` (bypasses broken GET notes endpoint)
+2. **Create**: `POST /api/roms/{id}/notes` with `title`, `content` (JSON string), `is_public: false`
+3. **Update**: `PUT /api/roms/{id}/notes/{note_id}` with updated JSON content
+4. **Delete**: `DELETE /api/roms/{id}/notes/{note_id}` if needed
 
 **Edge cases**:
-- **User edits the tag manually with a valid value** (e.g. corrects playtime to a different number): Accept it. On next session end, fetch the server value, treat it as the new baseline, and add the session delta to it. If the user-edited value is higher than our local total, update our local total to match (user may have played on another platform we don't track). If the user-edited value is lower than our local total, ask the user which to keep — "Server says 3h, local says 5h — keep local or server?" — since the user may have intentionally reset their playtime.
-- **User deletes the tag entirely**: Treat as "no server playtime". Upload local playtime total on next session end, re-creating the tag.
-- **User wants to set playtime manually**: The game detail panel or save sync settings should allow the user to manually enter a playtime value (hours/minutes input). This overwrites both the local total and the RomM notes tag. Use case: user played on a different platform before using the plugin and wants to set their accumulated playtime, or wants to correct a wrong value.
 - **Multiple devices update simultaneously**: Last write wins. Acceptable for playtime — small deltas mean the worst case is losing one session's worth of time, which is recovered on the next session from that device.
-- **Notes field empty or missing**: Create with just our tag.
-- **Migration**: When RomM adds a real playtime API, stop writing to notes and read from the new field instead. Optionally offer a one-time migration to copy the notes-based playtime into the new field.
-
-**Research needed**: Confirm the exact API endpoint and field name for per-user ROM notes. Check if it's `PUT /api/roms/{id}` with a `note_raw_markdown` body field, or a separate user endpoint.
+- **Note deleted by user**: Treat as "no server playtime". Re-create on next session end.
+- **Migration**: When RomM adds a real playtime API (feature request #1225), stop writing to notes and read from the new field instead.
 
 #### 6. RomM shared account warning
 PLAN.md specifies: "Users MUST use their own RomM account (not a shared/generic one) so saves are correctly attributed." Add a warning in ConnectionSettings when the username looks like a shared account:
@@ -969,6 +1002,7 @@ Card2Path = <saves_path>/psx/duckstation/memcards/shared_card_2.mcd
 - **Error handling**: Retry with backoff, toast notifications, detailed logging
 - **Connection settings: remove save button, save on popup confirm**: Each connection field (URL, username, password) already has an edit button that opens a popup. Change behavior so that confirming the popup immediately persists the new value to settings. Cancelling the popup must discard any changes and restore the original value. Remove the global "Save" button entirely — it is no longer needed since each field saves independently on popup confirmation.
 - **RomM playtime API integration**: When RomM adds a playtime field (feature request #1225), plug in our existing delta-based accumulation to sync playtime bidirectionally. Architecture is already in place — just needs the API endpoint.
+- **Emulator save state sync**: RomM supports "States" (emulator save states / quick saves) separately from "Saves" (SRAM `.srm` files). RetroArch save states live at `<states_path>/{system}/` (path from `retrodeck.json` → `paths.states_path`). These are `.state`, `.state1`, `.state.auto` etc. files. Currently we only sync `.srm` saves — save states are not synced. Challenges: save states are larger (100KB-10MB+), emulator-version-specific (not portable between different RetroArch core versions), and there can be multiple per game (numbered slots + auto). Consider syncing at least the auto-save state for convenience, with a user toggle and size warnings.
 
 ---
 

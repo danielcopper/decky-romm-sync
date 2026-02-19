@@ -486,9 +486,11 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
                   if (result.success) {
                     const updated = await getSaveStatus(romInfo.rom_id);
                     setSaveStatus(updated);
+                  } else {
+                    toaster.toast({ title: "RomM Save Sync", body: result.message || "Sync failed" });
                   }
                 } catch {
-                  // ignore
+                  toaster.toast({ title: "RomM Save Sync", body: "Sync failed" });
                 }
                 setSaveSyncing(false);
               }}
@@ -499,16 +501,22 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
           </div>
           <div>
             <span style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-              {formatSyncTime(saveStatus.last_synced_at)}
+              {formatSyncTime(
+                saveStatus.files.reduce<string | null>((latest, f) => {
+                  if (!f.last_sync_at) return latest;
+                  if (!latest) return f.last_sync_at;
+                  return f.last_sync_at > latest ? f.last_sync_at : latest;
+                }, null)
+              )}
             </span>
-            {saveStatus.files.some((f) => f.sync_status === "conflict") && (
+            {saveStatus.files.some((f) => f.status === "conflict") && (
               <span style={{ color: "#ffb74d", marginLeft: "8px" }}>
-                {saveStatus.files.filter((f) => f.sync_status === "conflict").length} conflict{saveStatus.files.filter((f) => f.sync_status === "conflict").length !== 1 ? "s" : ""}
+                {saveStatus.files.filter((f) => f.status === "conflict").length} conflict{saveStatus.files.filter((f) => f.status === "conflict").length !== 1 ? "s" : ""}
               </span>
             )}
-            {saveStatus.playtime_seconds > 0 && (
+            {saveStatus.playtime?.total_seconds > 0 && (
               <span style={{ color: "rgba(255, 255, 255, 0.4)", marginLeft: "8px" }}>
-                {formatPlaytime(saveStatus.playtime_seconds)}
+                {formatPlaytime(saveStatus.playtime.total_seconds)}
               </span>
             )}
           </div>
@@ -536,7 +544,9 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
               for (const item of failedOps) {
                 await retryFailedSync(item.rom_id, item.filename);
               }
-              setFailedOps([]);
+              // Re-fetch from backend instead of optimistic clear
+              const queueResult = await getOfflineQueue();
+              setFailedOps(queueResult.queue.filter((q) => q.rom_id === romInfo.rom_id));
               const updated = await getSaveStatus(romInfo.rom_id);
               setSaveStatus(updated);
             } catch {
