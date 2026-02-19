@@ -13,9 +13,11 @@ import {
   getRomMetadata,
   getSaveStatus,
   preLaunchSync,
+  getOfflineQueue,
+  retryFailedSync,
 } from "../api/backend";
 import { updateMetadataForApp } from "../patches/metadataPatches";
-import type { InstalledRom, DownloadProgressEvent, DownloadCompleteEvent, BiosStatus, SaveStatus } from "../types";
+import type { InstalledRom, DownloadProgressEvent, DownloadCompleteEvent, BiosStatus, SaveStatus, OfflineQueueItem } from "../types";
 
 interface GameDetailPanelProps {
   appId: number;
@@ -146,6 +148,8 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
   const [artworkLoading, setArtworkLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus | null>(null);
   const [saveSyncing, setSaveSyncing] = useState(false);
+  const [failedOps, setFailedOps] = useState<OfflineQueueItem[]>([]);
+  const [retryingSync, setRetryingSync] = useState(false);
   const romIdRef = useRef<number | null>(null);
 
   const fetchSgdbArtwork = async (romId: number, steamAppId: number, showToast = false) => {
@@ -244,6 +248,16 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
           if (!cancelled) setSaveStatus(saves);
         } catch {
           // non-critical, save sync may not be configured
+        }
+
+        // Check for failed sync operations for this ROM
+        try {
+          const queueResult = await getOfflineQueue();
+          if (!cancelled) {
+            setFailedOps(queueResult.queue.filter((q) => q.rom_id === rom.rom_id));
+          }
+        } catch {
+          // non-critical
         }
 
         // Fetch and apply metadata for native Steam display
@@ -499,6 +513,41 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
             )}
           </div>
         </div>
+      )}
+
+      {failedOps.length > 0 && (
+        <Focusable
+          style={{
+            fontSize: "12px",
+            color: "#ef5350",
+            padding: "4px 8px",
+            marginBottom: "8px",
+            background: "rgba(244, 67, 54, 0.15)",
+            borderRadius: "3px",
+            border: "1px solid rgba(244, 67, 54, 0.3)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+          onActivate={async () => {
+            if (!romInfo || retryingSync) return;
+            setRetryingSync(true);
+            try {
+              for (const item of failedOps) {
+                await retryFailedSync(item.rom_id, item.filename);
+              }
+              setFailedOps([]);
+              const updated = await getSaveStatus(romInfo.rom_id);
+              setSaveStatus(updated);
+            } catch {
+              // ignore
+            }
+            setRetryingSync(false);
+          }}
+        >
+          <span>Sync Failed — {failedOps.length} file{failedOps.length !== 1 ? "s" : ""}</span>
+          <span style={{ fontWeight: "bold" }}>{retryingSync ? "Retrying..." : "Retry"}</span>
+        </Focusable>
       )}
 
       {state === "downloading" && (

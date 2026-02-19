@@ -171,13 +171,25 @@ export interface SaveSyncSettings {
 
 export interface PendingConflict {
   rom_id: number;
-  file_path: string;
-  local_hash: string;
-  local_mtime: string;
+  filename: string;
+  local_path: string | null;
+  local_hash: string | null;
+  local_mtime: string | null;
+  local_size: number | null;
+  server_save_id: number;
   server_hash: string;
   server_updated_at: string;
-  server_save_id: number;
-  detected_at: string;
+  server_size: number | null;
+  created_at: string;
+}
+
+export interface OfflineQueueItem {
+  rom_id: number;
+  filename: string;
+  direction: string;
+  error: string;
+  failed_at: string;
+  retry_count: number;
 }
 
 export interface SaveFileStatus {

@@ -99,9 +99,10 @@ Available from the Decky frontend JS context. Shortcuts appear instantly without
 - All disc-based systems support `.m3u` extension
 
 **Save file locations** (RetroDECK):
-- RetroArch saves: `~/retrodeck/saves/{system}/`
-- RetroArch states: `~/retrodeck/states/{system}/`
-- Standalone emulator saves vary by emulator
+- The canonical saves path comes from `retrodeck.json` at `~/.var/app/net.retrodeck.retrodeck/config/retrodeck/retrodeck.json` → `paths.saves_path`. This varies by install location (internal SSD vs SD card). Do NOT hardcode `~/retrodeck/saves/` — on SD card installs it's `/run/media/deck/Emulation/retrodeck/saves/`.
+- RetroArch saves: `<saves_path>/{system}/{rom_name}.srm` (when `sort_savefiles_by_content_enable = true`, which is the RetroDECK default — subdirs match ROM folder names, NOT core names)
+- RetroArch states: `<states_path>/{system}/`
+- Standalone emulator saves: `<saves_path>/{platform}/{emulator_name}/` — each emulator has its own subdirectory and save format (see Phase 7)
 
 ---
 
@@ -509,7 +510,9 @@ Systems covered (all use RetroArch cores via RetroDECK):
 - PC Engine/TurboGrafx-16, Neo Geo Pocket, WonderSwan, Atari Lynx
 - Any other system using a RetroArch core with `.srm` save files
 
-Save path pattern: `~/retrodeck/saves/{system}/{rom_name}.srm`
+Save path pattern: `<saves_path>/{system}/{rom_name}.srm` where `<saves_path>` is read at runtime from `retrodeck.json` → `paths.saves_path` (e.g. `/run/media/deck/Emulation/retrodeck/saves/` on SD card installs). The `sort_savefiles_by_content_enable = true` default means subdirectories match ROM folder names (e.g. `gba/`), NOT RetroArch core names (e.g. NOT `mGBA/`).
+
+**IMPORTANT**: The hardcoded `~/retrodeck/saves/` fallback in the current code is wrong for SD card installs. The path MUST be read from `retrodeck.json` at runtime. See `_get_retroarch_saves_dir()` in `lib/save_sync.py` — it currently reads from RetroArch config (correct) but falls back to `~/retrodeck/saves/` (wrong on SD card). The fallback should also read `retrodeck.json`.
 
 **Explicitly deferred** (see Phase 7):
 - PS2 via PCSX2 (shared memory cards)
@@ -856,7 +859,7 @@ This is a security concern — `CERT_NONE` on public APIs allows MITM attacks. L
 **Goal**: Support EmuDeck, standalone RetroArch, and manual emulator installs beyond RetroDECK. Also extends save sync to standalone emulators.
 
 ### Emulator platform presets:
-- **RetroDECK** (current): `~/retrodeck/roms/`, `~/retrodeck/bios/`, `~/retrodeck/saves/`
+- **RetroDECK** (current): Paths read from `retrodeck.json` at `~/.var/app/net.retrodeck.retrodeck/config/retrodeck/retrodeck.json` → `paths.roms_path`, `paths.bios_path`, `paths.saves_path`. These vary by install location (internal: `~/retrodeck/`, SD card: `/run/media/deck/Emulation/retrodeck/`).
 - **EmuDeck**: `~/Emulation/roms/`, `~/Emulation/bios/`, `~/Emulation/saves/`
 - **Manual**: All paths user-configurable
 
@@ -879,46 +882,78 @@ This is a security concern — `CERT_NONE` on public APIs allows MITM attacks. L
 
 Phase 5 covers RetroArch `.srm` saves only. This phase adds support for standalone emulator save formats, which use fundamentally different save file structures.
 
+**RetroDECK standalone emulator save directory convention**: All standalone emulators store saves under `<saves_path>/<platform>/<emulator_name>/`. This is distinct from RetroArch saves which go directly into `<saves_path>/<platform>/` as `.srm` files. The `<saves_path>` is read from `retrodeck.json` → `paths.saves_path`.
+
+**Observed save directory structure** (confirmed on local RetroDECK 0.10.3b install):
+
+| Platform | Emulator | Save Path (relative to saves_path) | Format |
+|----------|----------|-------------------------------------|--------|
+| psx | DuckStation | `psx/duckstation/memcards/` | `.mcd` memory card files (`shared_card_1.mcd`, `shared_card_2.mcd`) |
+| ps2 | PCSX2 | `ps2/pcsx2/memcards/` | `.ps2` memory card files |
+| gc | Dolphin | `gc/dolphin/{US,EU,JP}/` | Per-region memory card files |
+| gc | PrimeHack | `gc/primehack/{US,EU,JP}/` | Per-region memory card files (Dolphin fork) |
+| wii | Dolphin | `wii/dolphin/` | Wii save data + `sd.raw` virtual SD card |
+| wii | PrimeHack | `wii/primehack/` | Same as Dolphin |
+| nds | melonDS | `nds/melonds/` | Per-game `.sav` files |
+| n3ds | Azahar | `n3ds/azahar/` | NAND/SDMC title ID structure |
+| PSP | PPSSPP | `PSP/PPSSPP-SA/` | Title ID directories under `SAVEDATA/` |
+| ps3 | RPCS3 | `ps3/rpcs3/` | Title ID-based save structure |
+| psvita | Vita3K | `psvita/vita3k/` | Title ID-based save structure |
+| switch | Ryubing | `switch/ryubing/{saveMeta,user,system}/` | User profile-based save data |
+| wiiu | Cemu | `wiiu/cemu/` | mlc01 title ID structure |
+| xbox | Xemu | `xbox/xemu/` | Xbox HDD image saves |
+
+**Note**: DuckStation save paths are also confirmed in its config (`settings.ini`):
+```
+Card1Path = <saves_path>/psx/duckstation/memcards/shared_card_1.mcd
+Card2Path = <saves_path>/psx/duckstation/memcards/shared_card_2.mcd
+```
+
 **PS2 via PCSX2**:
-- Shared memory card files: `Mcd001.ps2`, `Mcd002.ps2`
-- Path: `~/retrodeck/saves/ps2/` or PCSX2 `memcards/` directory
+- Shared memory card files in `ps2/pcsx2/memcards/`
 - Challenge: entire memory card must be synced (contains saves for multiple games)
 - Tracking: system-level rather than per-game; upload/download the whole card
 
 **PSX via DuckStation**:
-- Memory card format: `.mcd` files in `duckstation/memcards/`
+- Memory card format: `.mcd` files in `psx/duckstation/memcards/`
 - Per-game or shared cards depending on DuckStation config
 - Same shared-card challenge as PCSX2
 
 **GameCube via Dolphin**:
 - Per-game `.gci` save files in region-specific subfolders
-- Path: `dolphin-emu/GC/{region}/Card A/` (USA, EUR, JAP)
+- Path: `gc/dolphin/{US,EU,JP}/`
 - Region detection needed to find the right subfolder
 
 **PSP via PPSSPP**:
 - Save directories named by title ID (e.g. `ULUS10041/`)
-- Path: `PPSSPP/PSP/SAVEDATA/{title_id}/`
+- Path: `PSP/PPSSPP-SA/SAVEDATA/{title_id}/`
 - Title ID mapping required: ROM filename -> title ID for save discovery
 
 **NDS via melonDS**:
 - Per-game `.sav` files (same name as ROM)
-- Path: `~/retrodeck/saves/nds/` or melonDS save directory
+- Path: `nds/melonds/`
 - Straightforward per-game sync, similar to RetroArch `.srm`
 
 **3DS via Azahar**:
 - NAND/SDMC structure: saves stored by title ID
-- Complex directory hierarchy under `azahar/sdmc/` and `azahar/nand/`
+- Complex directory hierarchy under `n3ds/azahar/`
 - Title ID mapping required
 
 **Wii U via Cemu**:
 - mlc01 directory with title ID structure
-- Path: `cemu/mlc01/usr/save/{title_id_high}/{title_id_low}/`
+- Path: `wiiu/cemu/`
+- Title ID mapping required
+
+**Switch via Ryubing (née Ryujinx)**:
+- User profile-based save data under `switch/ryubing/user/`
+- System-level data under `switch/ryubing/system/`
 - Title ID mapping required
 
 **Shared challenges**:
 - Title ID mapping: need a database or API to map ROM filenames to emulator-specific title IDs
 - Shared memory cards: must sync at system level, not per-game; conflicts affect all games on the card
 - Multiple save slots: some emulators support multiple save slots per game
+- All paths are relative to `saves_path` from `retrodeck.json` — must never be hardcoded
 
 ---
 

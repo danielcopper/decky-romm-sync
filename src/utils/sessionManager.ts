@@ -14,8 +14,9 @@ import {
   recordSessionEnd,
   getAppIdRomIdMap,
   getSaveSyncSettings,
+  getPendingConflicts,
 } from "../api/backend";
-import type { PendingConflict } from "../types";
+import { showConflictResolutionModal } from "../components/ConflictModal";
 
 declare var Router: {
   MainRunningApp: { appid: number; display_name: string } | null;
@@ -71,12 +72,35 @@ async function handleGameStart(appId: number): Promise<void> {
     const settings = await getSaveSyncSettings();
     if (settings.sync_before_launch) {
       const result = await preLaunchSync(romId);
-      if (!result.success) {
+      if (result.success) {
+        if (result.synced && result.synced > 0) {
+          toaster.toast({ title: "RomM Save Sync", body: "Saves downloaded from RomM" });
+        }
+      } else {
         console.warn("[RomM] Pre-launch sync issue:", result.message);
+        toaster.toast({ title: "RomM Save Sync", body: "Failed to sync saves \u2014 playing with local saves" });
+      }
+
+      // Check for pending conflicts (ask_me mode shows modal, others just toast)
+      try {
+        const conflictsResult = await getPendingConflicts();
+        if (conflictsResult.conflicts && conflictsResult.conflicts.length > 0) {
+          if (settings.conflict_mode === "ask_me") {
+            await showConflictResolutionModal(conflictsResult.conflicts);
+          } else {
+            toaster.toast({
+              title: "RomM Save Sync",
+              body: "Save conflict detected \u2014 resolve in Save Sync settings",
+            });
+          }
+        }
+      } catch {
+        // non-critical
       }
     }
   } catch (e) {
     console.error("[RomM] Pre-launch sync failed:", e);
+    toaster.toast({ title: "RomM Save Sync", body: "Failed to sync saves \u2014 playing with local saves" });
   }
 }
 
@@ -104,12 +128,21 @@ async function handleGameStop(): Promise<void> {
     if (settings.sync_after_exit) {
       const result = await postExitSync(romId);
       if (result.success) {
-        toaster.toast({ title: "RomM Save Sync", body: "Saves synced successfully" });
+        if (result.synced && result.synced > 0) {
+          toaster.toast({ title: "RomM Save Sync", body: "Saves uploaded to RomM" });
+        }
       } else {
-        toaster.toast({ title: "RomM Save Sync", body: result.message });
+        toaster.toast({ title: "RomM Save Sync", body: "Failed to sync saves after exit" });
       }
-      if (result.conflicts && result.conflicts.length > 0) {
-        notifyConflicts(result.conflicts);
+
+      // Check for pending conflicts (ask_me mode)
+      try {
+        const conflictsResult = await getPendingConflicts();
+        if (conflictsResult.conflicts && conflictsResult.conflicts.length > 0) {
+          notifyConflicts(conflictsResult.conflicts.length);
+        }
+      } catch {
+        // non-critical
       }
     }
   } catch (e) {
@@ -117,10 +150,10 @@ async function handleGameStop(): Promise<void> {
   }
 }
 
-function notifyConflicts(conflicts: PendingConflict[]): void {
+function notifyConflicts(count: number): void {
   toaster.toast({
     title: "RomM Save Sync",
-    body: `${conflicts.length} save conflict${conflicts.length !== 1 ? "s" : ""} need resolution`,
+    body: `${count} save conflict${count !== 1 ? "s" : ""} need resolution`,
   });
 }
 

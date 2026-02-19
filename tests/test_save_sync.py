@@ -197,55 +197,57 @@ class TestSaveSyncStatePersistence:
 
 
 class TestDeviceRegistration:
-    """Tests for ensure_device_registered."""
+    """Tests for ensure_device_registered (local UUID generation)."""
 
     @pytest.mark.asyncio
-    async def test_registers_new_device(self, plugin, tmp_path):
-        """First call registers with RomM API, returns device_id."""
-        api_response = {"device_id": "new-uuid-1234", "id": 1}
-
-        with patch.object(plugin, "_romm_post_json", return_value=api_response):
-            result = await plugin.ensure_device_registered()
+    async def test_generates_local_uuid(self, plugin, tmp_path):
+        """First call generates a local UUID, no server call needed."""
+        result = await plugin.ensure_device_registered()
 
         assert result["success"] is True
-        assert result["device_id"] == "new-uuid-1234"
-        assert plugin._save_sync_state["device_id"] == "new-uuid-1234"
+        assert result["device_id"]
+        assert len(result["device_id"]) == 36  # UUID format
+        assert plugin._save_sync_state["device_id"] == result["device_id"]
 
         # Persisted to disk
         path = tmp_path / "save_sync_state.json"
         assert path.exists()
         data = json.loads(path.read_text())
-        assert data["device_id"] == "new-uuid-1234"
+        assert data["device_id"] == result["device_id"]
 
     @pytest.mark.asyncio
     async def test_already_registered_returns_cached(self, plugin):
-        """If device_id already set, returns immediately without API call."""
+        """If device_id already set, returns immediately without generating new one."""
         plugin._save_sync_state["device_id"] = "existing-uuid"
         plugin._save_sync_state["device_name"] = "myhost"
 
-        with patch.object(plugin, "_romm_post_json") as mock_post:
-            result = await plugin.ensure_device_registered()
+        result = await plugin.ensure_device_registered()
 
         assert result["success"] is True
         assert result["device_id"] == "existing-uuid"
-        mock_post.assert_not_called()
+        assert result["device_name"] == "myhost"
 
     @pytest.mark.asyncio
-    async def test_api_error_returns_failure(self, plugin):
-        """API error during registration returns failure."""
-        with patch.object(plugin, "_romm_post_json", side_effect=ConnectionError("offline")):
+    async def test_sets_hostname_as_device_name(self, plugin):
+        """Device name is set to the local hostname."""
+        with patch("socket.gethostname", return_value="steamdeck"):
             result = await plugin.ensure_device_registered()
 
-        assert result["success"] is False
-        assert plugin._save_sync_state["device_id"] is None
+        assert result["device_name"] == "steamdeck"
+        assert plugin._save_sync_state["device_name"] == "steamdeck"
 
     @pytest.mark.asyncio
-    async def test_empty_device_id_in_response(self, plugin):
-        """API returns empty device_id."""
-        with patch.object(plugin, "_romm_post_json", return_value={"id": "", "device_id": ""}):
-            result = await plugin.ensure_device_registered()
+    async def test_generates_unique_ids(self, plugin):
+        """Each new registration generates a unique UUID."""
+        result1 = await plugin.ensure_device_registered()
+        id1 = result1["device_id"]
 
-        assert result["success"] is False
+        # Reset state to force new generation
+        plugin._save_sync_state["device_id"] = None
+        result2 = await plugin.ensure_device_registered()
+        id2 = result2["device_id"]
+
+        assert id1 != id2
 
 
 # ============================================================================
@@ -877,6 +879,351 @@ class TestPlaytimeTracking:
 
 
 # ============================================================================
+# Playtime Notes API Helpers
+# ============================================================================
+
+
+class TestPlaytimeNoteHelpers:
+    """Tests for playtime note content parsing."""
+
+    def test_parse_valid_content(self, plugin):
+        """Parses valid JSON content from a note."""
+        result = plugin._parse_playtime_note_content('{"seconds": 3600, "device": "deck"}')
+        assert result["seconds"] == 3600
+        assert result["device"] == "deck"
+
+    def test_parse_empty_content(self, plugin):
+        """Returns None for empty content."""
+        assert plugin._parse_playtime_note_content("") is None
+        assert plugin._parse_playtime_note_content(None) is None
+
+    def test_parse_malformed_json(self, plugin):
+        """Returns None for invalid JSON."""
+        assert plugin._parse_playtime_note_content("{bad json}") is None
+
+    def test_parse_non_dict_json(self, plugin):
+        """Returns None for JSON that is not a dict."""
+        assert plugin._parse_playtime_note_content("[1, 2, 3]") is None
+
+
+class TestSyncPlaytimeToRomm:
+    """Tests for _sync_playtime_to_romm via Notes API."""
+
+    def test_creates_note_when_none_exists(self, plugin):
+        """Creates a new playtime note when no existing note found."""
+        plugin._save_sync_state["device_name"] = "steamdeck"
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 1000,
+            "session_count": 3,
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=None), \
+             patch.object(plugin, "_romm_create_playtime_note") as mock_create, \
+             patch("time.sleep"):
+            plugin._sync_playtime_to_romm(42, 600)
+
+        mock_create.assert_called_once()
+        call_args = mock_create.call_args[0]
+        assert call_args[0] == 42  # rom_id
+        data = call_args[1]
+        assert data["seconds"] >= 1000  # max(local_total, server + session)
+        assert data["device"] == "steamdeck"
+
+    def test_updates_existing_note(self, plugin):
+        """Updates existing playtime note when one is found."""
+        plugin._save_sync_state["device_name"] = "steamdeck"
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 2000,
+            "session_count": 5,
+        }
+        existing_note = {
+            "id": 99,
+            "title": "romm-sync:playtime",
+            "content": '{"seconds": 1500, "device": "other"}',
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=existing_note), \
+             patch.object(plugin, "_romm_update_playtime_note") as mock_update, \
+             patch("time.sleep"):
+            plugin._sync_playtime_to_romm(42, 300)
+
+        mock_update.assert_called_once()
+        call_args = mock_update.call_args[0]
+        assert call_args[0] == 42  # rom_id
+        assert call_args[1] == 99  # note_id
+        data = call_args[2]
+        assert data["seconds"] >= 2000  # max(local 2000, server 1500 + session 300)
+
+    def test_server_higher_merged_with_session(self, plugin):
+        """Server has higher base; merged total = server + session_delta."""
+        plugin._save_sync_state["device_name"] = "deck"
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 1000,
+            "session_count": 2,
+        }
+        existing_note = {
+            "id": 10,
+            "title": "romm-sync:playtime",
+            "content": '{"seconds": 5000}',
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=existing_note), \
+             patch.object(plugin, "_romm_update_playtime_note") as mock_update, \
+             patch("time.sleep"):
+            plugin._sync_playtime_to_romm(42, 120)
+
+        data = mock_update.call_args[0][2]
+        # max(local_total=1000, server_seconds=5000 + session=120) = 5120
+        assert data["seconds"] == 5120
+
+    def test_server_error_does_not_raise(self, plugin):
+        """Network error during sync is logged, not raised."""
+        plugin._save_sync_state["playtime"]["42"] = {"total_seconds": 100}
+
+        with patch.object(plugin, "_romm_get_playtime_note", side_effect=ConnectionError("offline")), \
+             patch("time.sleep"):
+            # Should not raise
+            plugin._sync_playtime_to_romm(42, 60)
+
+    def test_no_playtime_entry_returns_early(self, plugin):
+        """No local playtime entry → returns immediately."""
+        with patch.object(plugin, "_romm_get_playtime_note") as mock_get:
+            plugin._sync_playtime_to_romm(42, 100)
+
+        mock_get.assert_not_called()
+
+
+class TestGetServerPlaytime:
+    """Tests for get_server_playtime callable."""
+
+    @pytest.mark.asyncio
+    async def test_returns_merged_playtime(self, plugin):
+        """Returns max of local and server playtime."""
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 3000,
+            "session_count": 5,
+        }
+        note = {
+            "id": 1,
+            "title": "romm-sync:playtime",
+            "content": '{"seconds": 5000}',
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=note), \
+             patch("time.sleep"):
+            result = await plugin.get_server_playtime(42)
+
+        assert result["local_seconds"] == 3000
+        assert result["server_seconds"] == 5000
+        assert result["total_seconds"] == 5000
+
+    @pytest.mark.asyncio
+    async def test_server_offline_returns_local(self, plugin):
+        """Server unreachable returns local playtime only."""
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 2000,
+            "session_count": 3,
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", side_effect=ConnectionError("offline")), \
+             patch("time.sleep"):
+            result = await plugin.get_server_playtime(42)
+
+        assert result["local_seconds"] == 2000
+        assert result["server_seconds"] == 0
+        assert result["total_seconds"] == 2000
+
+    @pytest.mark.asyncio
+    async def test_no_playtime_anywhere(self, plugin):
+        """No local or server playtime → all zeros."""
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=None), \
+             patch("time.sleep"):
+            result = await plugin.get_server_playtime(42)
+
+        assert result["local_seconds"] == 0
+        assert result["server_seconds"] == 0
+        assert result["total_seconds"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_note_found(self, plugin):
+        """No playtime note on server → server_seconds=0."""
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=None), \
+             patch("time.sleep"):
+            result = await plugin.get_server_playtime(42)
+
+        assert result["server_seconds"] == 0
+
+
+class TestRecordSessionEndWithServerSync:
+    """Tests that record_session_end triggers playtime server sync."""
+
+    @pytest.mark.asyncio
+    async def test_session_end_syncs_to_romm(self, plugin):
+        """record_session_end calls _sync_playtime_to_romm with session duration."""
+        start_time = datetime.now(timezone.utc) - timedelta(seconds=60)
+        plugin._save_sync_state["playtime"] = {
+            "42": {
+                "total_seconds": 1000,
+                "session_count": 2,
+                "last_session_start": start_time.isoformat(),
+                "last_session_duration_sec": None,
+                "offline_deltas": [],
+            }
+        }
+
+        with patch.object(plugin, "_sync_playtime_to_romm") as mock_sync:
+            result = await plugin.record_session_end(42)
+
+        assert result["success"] is True
+        mock_sync.assert_called_once()
+        call_args = mock_sync.call_args[0]
+        assert call_args[0] == 42  # rom_id
+        assert call_args[1] >= 59  # session duration (~60s)
+
+    @pytest.mark.asyncio
+    async def test_session_end_succeeds_even_if_sync_fails(self, plugin):
+        """Server sync failure does not fail the session recording."""
+        start_time = datetime.now(timezone.utc) - timedelta(seconds=10)
+        plugin._save_sync_state["playtime"] = {
+            "42": {
+                "total_seconds": 0,
+                "session_count": 0,
+                "last_session_start": start_time.isoformat(),
+                "last_session_duration_sec": None,
+                "offline_deltas": [],
+            }
+        }
+
+        with patch.object(plugin, "_sync_playtime_to_romm", side_effect=Exception("network")):
+            result = await plugin.record_session_end(42)
+
+        # The local recording still succeeds
+        assert result["success"] is True
+        assert result["duration_sec"] >= 9
+
+    @pytest.mark.asyncio
+    async def test_session_end_passes_duration_not_total(self, plugin):
+        """record_session_end passes session duration (not total) to _sync_playtime_to_romm."""
+        start_time = datetime.now(timezone.utc) - timedelta(seconds=120)
+        plugin._save_sync_state["playtime"] = {
+            "42": {
+                "total_seconds": 5000,
+                "session_count": 10,
+                "last_session_start": start_time.isoformat(),
+                "last_session_duration_sec": None,
+                "offline_deltas": [],
+            }
+        }
+
+        with patch.object(plugin, "_sync_playtime_to_romm") as mock_sync:
+            result = await plugin.record_session_end(42)
+
+        assert result["success"] is True
+        call_args = mock_sync.call_args[0]
+        # Second arg should be the session duration (~120), NOT the total (~5120)
+        assert 115 <= call_args[1] <= 125
+
+
+class TestSyncPlaytimeEdgeCases:
+    """Additional edge cases for playtime Notes API sync."""
+
+    def test_sync_updates_local_total_from_server(self, plugin):
+        """Local total updated to merged value after sync."""
+        plugin._save_sync_state["device_name"] = "deck"
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 600,
+            "session_count": 1,
+            "last_session_start": None,
+            "last_session_duration_sec": 600,
+            "offline_deltas": [],
+        }
+
+        existing_note = {
+            "id": 5,
+            "title": "romm-sync:playtime",
+            "content": '{"seconds": 10000, "device": "desktop"}',
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=existing_note), \
+             patch.object(plugin, "_romm_update_playtime_note"), \
+             patch("time.sleep"):
+            plugin._sync_playtime_to_romm(42, 600)
+
+        # Local total should now be server+session = 10600
+        assert plugin._save_sync_state["playtime"]["42"]["total_seconds"] == 10600
+
+    def test_sync_creates_note_with_correct_api_args(self, plugin):
+        """Verifies _romm_create_playtime_note receives correct structure."""
+        plugin._save_sync_state["device_name"] = "deck"
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 500,
+            "session_count": 1,
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=None), \
+             patch.object(plugin, "_romm_create_playtime_note") as mock_create, \
+             patch("time.sleep"):
+            plugin._sync_playtime_to_romm(42, 500)
+
+        data = mock_create.call_args[0][1]
+        assert "seconds" in data
+        assert "updated" in data
+        assert "device" in data
+        # updated should be a valid ISO timestamp
+        datetime.fromisoformat(data["updated"])
+
+    def test_romm_create_note_calls_post_json(self, plugin):
+        """_romm_create_playtime_note calls _romm_post_json with correct path and body."""
+        with patch.object(plugin, "_romm_post_json") as mock_post:
+            plugin._romm_create_playtime_note(42, {"seconds": 100})
+
+        mock_post.assert_called_once()
+        path = mock_post.call_args[0][0]
+        body = mock_post.call_args[0][1]
+        assert path == "/api/roms/42/notes"
+        assert body["title"] == "romm-sync:playtime"
+        assert body["is_public"] is False
+        assert "romm-sync" in body["tags"]
+        assert '"seconds": 100' in body["content"]
+
+    def test_romm_update_note_calls_put_json(self, plugin):
+        """_romm_update_playtime_note calls _romm_put_json with correct path."""
+        with patch.object(plugin, "_romm_put_json") as mock_put:
+            plugin._romm_update_playtime_note(42, 99, {"seconds": 200})
+
+        mock_put.assert_called_once()
+        path = mock_put.call_args[0][0]
+        body = mock_put.call_args[0][1]
+        assert path == "/api/roms/42/notes/99"
+        assert '"seconds": 200' in body["content"]
+
+    def test_sync_with_zero_session_duration(self, plugin):
+        """Zero-length session still syncs (handles rapid start/stop)."""
+        plugin._save_sync_state["device_name"] = "deck"
+        plugin._save_sync_state["playtime"]["42"] = {
+            "total_seconds": 1000,
+            "session_count": 5,
+        }
+
+        with patch.object(plugin, "_romm_get_playtime_note", return_value=None), \
+             patch.object(plugin, "_romm_create_playtime_note") as mock_create, \
+             patch("time.sleep"):
+            plugin._sync_playtime_to_romm(42, 0)
+
+        data = mock_create.call_args[0][1]
+        assert data["seconds"] == 1000  # max(1000, 0+0) = 1000
+
+    def test_get_playtime_note_url_encodes_tag(self, plugin):
+        """Tag parameter is URL-encoded in the request path."""
+        with patch.object(plugin, "_romm_request", return_value=[]) as mock_req:
+            plugin._romm_get_playtime_note(42)
+
+        call_path = mock_req.call_args[0][0]
+        # Should contain the tag param (already safe, but verify encoding)
+        assert "romm-sync" in call_path
+
+
+# ============================================================================
 # Save Sync Settings
 # ============================================================================
 
@@ -1021,6 +1368,43 @@ class TestSyncAllSaves:
         assert result["roms_checked"] == 2
         assert result["synced"] >= 1
         assert len(result["errors"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_includes_shortcut_registry_roms(self, plugin, tmp_path):
+        """Iterates ROMs from shortcut_registry, not just installed_roms."""
+        # ROM 1 is only in installed_roms
+        _install_rom(plugin, tmp_path, rom_id=1, file_name="game_a.gba")
+        _create_save(tmp_path, rom_name="game_a")
+
+        # ROM 2 is only in shortcut_registry (synced but not downloaded)
+        plugin._state["shortcut_registry"]["2"] = {
+            "rom_id": 2, "app_id": 12345, "name": "Game B",
+        }
+
+        plugin._save_sync_state["device_id"] = "dev-1"
+
+        upload_response = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
+
+        with patch.object(plugin, "_romm_list_saves", return_value=[]), \
+             patch.object(plugin, "_romm_upload_save", return_value=upload_response):
+            result = await plugin.sync_all_saves()
+
+        # Both ROM IDs should be checked
+        assert result["roms_checked"] == 2
+
+    @pytest.mark.asyncio
+    async def test_returns_conflicts_count(self, plugin, tmp_path):
+        """sync_all_saves returns conflicts count from pending_conflicts."""
+        plugin._save_sync_state["device_id"] = "dev-1"
+        plugin._save_sync_state["pending_conflicts"] = [
+            {"rom_id": 1, "filename": "a.srm"},
+            {"rom_id": 2, "filename": "b.srm"},
+        ]
+
+        result = await plugin.sync_all_saves()
+
+        assert "conflicts" in result
+        assert result["conflicts"] == 2
 
 
 # ============================================================================
@@ -1171,6 +1555,107 @@ class TestRommListSaves:
 
 
 # ============================================================================
+# Retry Logic
+# ============================================================================
+
+
+class TestRetryLogic:
+    """Tests for _with_retry and _is_retryable."""
+
+    def test_is_retryable_5xx(self, plugin):
+        """HTTP 500/502/503 are retryable."""
+        import urllib.error
+        for code in (500, 502, 503):
+            exc = urllib.error.HTTPError("url", code, "err", {}, None)
+            assert plugin._is_retryable(exc) is True
+
+    def test_is_not_retryable_4xx(self, plugin):
+        """HTTP 400/401/404/409 are NOT retryable."""
+        import urllib.error
+        for code in (400, 401, 403, 404, 409):
+            exc = urllib.error.HTTPError("url", code, "err", {}, None)
+            assert plugin._is_retryable(exc) is False
+
+    def test_is_retryable_connection_errors(self, plugin):
+        """ConnectionError, TimeoutError, URLError are retryable."""
+        import urllib.error
+        assert plugin._is_retryable(ConnectionError("refused")) is True
+        assert plugin._is_retryable(TimeoutError("timed out")) is True
+        assert plugin._is_retryable(urllib.error.URLError("unreachable")) is True
+        assert plugin._is_retryable(OSError("network down")) is True
+
+    def test_is_not_retryable_other(self, plugin):
+        """ValueError, KeyError etc. are NOT retryable."""
+        assert plugin._is_retryable(ValueError("bad")) is False
+        assert plugin._is_retryable(KeyError("missing")) is False
+
+    def test_retry_succeeds_on_first_try(self, plugin):
+        """No retries needed when call succeeds."""
+        fn = MagicMock(return_value="ok")
+        result = plugin._with_retry(fn, "arg1", key="val")
+        assert result == "ok"
+        fn.assert_called_once_with("arg1", key="val")
+
+    def test_retry_succeeds_after_transient_failure(self, plugin):
+        """Retries on transient error, succeeds on second attempt."""
+        fn = MagicMock(side_effect=[ConnectionError("refused"), "ok"])
+        with patch("time.sleep"):
+            result = plugin._with_retry(fn, max_attempts=3, base_delay=0)
+        assert result == "ok"
+        assert fn.call_count == 2
+
+    def test_retry_exhausted_raises(self, plugin):
+        """All attempts fail → raises last exception."""
+        fn = MagicMock(side_effect=ConnectionError("refused"))
+        with patch("time.sleep"):
+            with pytest.raises(ConnectionError):
+                plugin._with_retry(fn, max_attempts=3, base_delay=0)
+        assert fn.call_count == 3
+
+    def test_retry_no_retry_on_4xx(self, plugin):
+        """4xx errors raise immediately without retry."""
+        import urllib.error
+        err = urllib.error.HTTPError("url", 404, "not found", {}, None)
+        fn = MagicMock(side_effect=err)
+        with pytest.raises(urllib.error.HTTPError):
+            plugin._with_retry(fn, max_attempts=3, base_delay=0)
+        fn.assert_called_once()
+
+    def test_retry_delays_exponential(self, plugin):
+        """Delays follow base_delay * 3^attempt pattern."""
+        fn = MagicMock(side_effect=[
+            ConnectionError("1"), ConnectionError("2"), "ok"
+        ])
+        with patch("time.sleep") as mock_sleep:
+            plugin._with_retry(fn, max_attempts=3, base_delay=1)
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1)   # 1 * 3^0
+        mock_sleep.assert_any_call(3)   # 1 * 3^1
+
+    def test_retry_integrated_in_sync(self, plugin, tmp_path):
+        """_sync_rom_saves retries transient list_saves failures."""
+        _install_rom(plugin, tmp_path)
+        _create_save(tmp_path)
+        plugin._save_sync_state["device_id"] = "dev-1"
+
+        call_count = [0]
+        def flaky_list(rom_id, device_id=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise ConnectionError("transient")
+            return []
+
+        upload_resp = {"id": 1, "updated_at": "2026-02-17T15:00:00Z"}
+        with patch.object(plugin, "_romm_list_saves", side_effect=flaky_list), \
+             patch.object(plugin, "_romm_upload_save", return_value=upload_resp), \
+             patch("time.sleep"):
+            synced, errors = plugin._sync_rom_saves(42)
+
+        assert call_count[0] == 2  # retried once
+        assert synced >= 1
+
+
+# ============================================================================
 # Get Save Status
 # ============================================================================
 
@@ -1285,6 +1770,79 @@ class TestDownloadSaveBackup:
 
 
 # ============================================================================
+# RetroDECK Saves Path
+# ============================================================================
+
+
+class TestGetRetrodeckSavesPath:
+    """Tests for _get_retrodeck_saves_path reading from retrodeck.json."""
+
+    def test_reads_from_retrodeck_json(self, plugin, tmp_path):
+        """Reads saves_path from retrodeck.json config."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True)
+        config = {"paths": {"saves_path": "/run/media/deck/Emulation/retrodeck/saves"}}
+        (config_dir / "retrodeck.json").write_text(json.dumps(config))
+
+        result = plugin._get_retrodeck_saves_path()
+
+        assert result == "/run/media/deck/Emulation/retrodeck/saves"
+
+    def test_fallback_when_file_missing(self, plugin, tmp_path):
+        """Falls back to ~/retrodeck/saves when config file is missing."""
+        result = plugin._get_retrodeck_saves_path()
+
+        expected = os.path.join(str(tmp_path), "retrodeck", "saves")
+        assert result == expected
+
+    def test_fallback_when_json_corrupt(self, plugin, tmp_path):
+        """Falls back when retrodeck.json is corrupt."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True)
+        (config_dir / "retrodeck.json").write_text("{{{invalid!")
+
+        result = plugin._get_retrodeck_saves_path()
+
+        expected = os.path.join(str(tmp_path), "retrodeck", "saves")
+        assert result == expected
+
+    def test_fallback_when_paths_key_missing(self, plugin, tmp_path):
+        """Falls back when retrodeck.json lacks paths.saves_path."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True)
+        (config_dir / "retrodeck.json").write_text(json.dumps({"version": "1.0"}))
+
+        result = plugin._get_retrodeck_saves_path()
+
+        expected = os.path.join(str(tmp_path), "retrodeck", "saves")
+        assert result == expected
+
+    def test_fallback_when_saves_path_empty(self, plugin, tmp_path):
+        """Falls back when saves_path is empty string."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True)
+        config = {"paths": {"saves_path": ""}}
+        (config_dir / "retrodeck.json").write_text(json.dumps(config))
+
+        result = plugin._get_retrodeck_saves_path()
+
+        expected = os.path.join(str(tmp_path), "retrodeck", "saves")
+        assert result == expected
+
+    def test_not_cached(self, plugin, tmp_path):
+        """Reads fresh every call (not cached)."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "retrodeck.json"
+
+        config_file.write_text(json.dumps({"paths": {"saves_path": "/first/path"}}))
+        assert plugin._get_retrodeck_saves_path() == "/first/path"
+
+        config_file.write_text(json.dumps({"paths": {"saves_path": "/second/path"}}))
+        assert plugin._get_retrodeck_saves_path() == "/second/path"
+
+
+# ============================================================================
 # ROM Save Info Helper
 # ============================================================================
 
@@ -1325,6 +1883,21 @@ class TestGetRomSaveInfo:
 
         assert result is None
 
+    def test_uses_retrodeck_config_path(self, plugin, tmp_path):
+        """Uses saves_path from retrodeck.json when available."""
+        _install_rom(plugin, tmp_path)
+
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True)
+        config = {"paths": {"saves_path": "/custom/saves"}}
+        (config_dir / "retrodeck.json").write_text(json.dumps(config))
+
+        result = plugin._get_rom_save_info(42)
+
+        assert result is not None
+        system, rom_name, saves_dir = result
+        assert saves_dir == "/custom/saves/gba"
+
 
 # ============================================================================
 # Edge Cases
@@ -1362,14 +1935,14 @@ class TestEdgeCases:
         _install_rom(plugin, tmp_path)
         _create_save(tmp_path)
 
-        api_response = {"device_id": "auto-reg-uuid"}
-
-        with patch.object(plugin, "_romm_post_json", return_value=api_response), \
-             patch.object(plugin, "_romm_list_saves", return_value=[]), \
+        with patch.object(plugin, "_romm_list_saves", return_value=[]), \
              patch.object(plugin, "_romm_upload_save", return_value={"id": 1, "updated_at": "2026-02-17T15:00:00Z"}):
             result = await plugin.pre_launch_sync(42)
 
-        assert plugin._save_sync_state["device_id"] == "auto-reg-uuid"
+        # Device ID should be auto-generated (UUID format)
+        device_id = plugin._save_sync_state["device_id"]
+        assert device_id is not None
+        assert len(device_id) == 36
 
     def test_file_md5_permission_error(self, plugin, tmp_path):
         """Permission error on file raises (not silently returns None)."""
@@ -1407,3 +1980,103 @@ class TestEdgeCases:
         assert entry["last_sync_hash"] == plugin._file_md5(str(save_file))
         assert entry["last_sync_at"] is not None
         assert entry["last_sync_server_save_id"] == 200
+
+
+# ── Offline Queue Tests ──────────────────────────────────────────────
+
+
+class TestOfflineQueue:
+    """Tests for offline queue management (failed sync retry)."""
+
+    @pytest.mark.asyncio
+    async def test_get_offline_queue_empty(self, plugin):
+        """Returns empty queue by default."""
+        result = await plugin.get_offline_queue()
+        assert result["queue"] == []
+
+    @pytest.mark.asyncio
+    async def test_add_to_offline_queue(self, plugin):
+        """_add_to_offline_queue adds a failed operation."""
+        plugin._add_to_offline_queue(42, "pokemon.srm", "upload", "pokemon.srm: HTTP 500")
+        result = await plugin.get_offline_queue()
+        assert len(result["queue"]) == 1
+        item = result["queue"][0]
+        assert item["rom_id"] == 42
+        assert item["filename"] == "pokemon.srm"
+        assert item["direction"] == "upload"
+        assert item["error"] == "pokemon.srm: HTTP 500"
+        assert item["retry_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_add_to_offline_queue_no_duplicates(self, plugin):
+        """_add_to_offline_queue updates existing entry instead of duplicating."""
+        plugin._add_to_offline_queue(42, "pokemon.srm", "upload", "HTTP 500")
+        plugin._add_to_offline_queue(42, "pokemon.srm", "upload", "HTTP 503")
+        result = await plugin.get_offline_queue()
+        assert len(result["queue"]) == 1
+        assert result["queue"][0]["error"] == "HTTP 503"
+        assert result["queue"][0]["retry_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_add_to_offline_queue_different_files(self, plugin):
+        """Different filenames create separate queue entries."""
+        plugin._add_to_offline_queue(42, "pokemon.srm", "upload", "err1")
+        plugin._add_to_offline_queue(42, "pokemon.rtc", "upload", "err2")
+        result = await plugin.get_offline_queue()
+        assert len(result["queue"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_clear_offline_queue(self, plugin):
+        """clear_offline_queue empties the queue."""
+        plugin._add_to_offline_queue(42, "pokemon.srm", "upload", "error")
+        plugin._add_to_offline_queue(43, "zelda.srm", "download", "error")
+        result = await plugin.clear_offline_queue()
+        assert result["success"] is True
+        queue = await plugin.get_offline_queue()
+        assert queue["queue"] == []
+
+    @pytest.mark.asyncio
+    async def test_retry_failed_sync_not_found(self, plugin):
+        """retry_failed_sync returns failure when item not in queue."""
+        result = await plugin.retry_failed_sync(99, "nonexistent.srm")
+        assert result["success"] is False
+        assert "not found" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_retry_failed_sync_success(self, plugin, tmp_path):
+        """retry_failed_sync removes item from queue and re-syncs."""
+        _install_rom(plugin, tmp_path)
+        _create_save(tmp_path)
+        plugin._save_sync_state["device_id"] = "test-device"
+
+        plugin._add_to_offline_queue(42, "pokemon.srm", "upload", "HTTP 500")
+        assert len(plugin._save_sync_state["offline_queue"]) == 1
+
+        server_response = {"id": 100, "updated_at": "2026-01-01T00:00:00Z"}
+        with patch.object(plugin, "_romm_list_saves", return_value=[]), \
+             patch.object(plugin, "_romm_upload_save", return_value=server_response):
+            result = await plugin.retry_failed_sync(42, "pokemon.srm")
+
+        assert result["success"] is True
+        # Item should be removed from queue
+        queue = await plugin.get_offline_queue()
+        assert len(queue["queue"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_populates_offline_queue_on_error(self, plugin, tmp_path):
+        """_sync_rom_saves populates offline queue when errors occur."""
+        _install_rom(plugin, tmp_path)
+        _create_save(tmp_path)
+        plugin._save_sync_state["device_id"] = "test-device"
+
+        # Mock server to return a save that needs upload, then fail the upload
+        with patch.object(plugin, "_romm_list_saves", return_value=[]), \
+             patch.object(plugin, "_romm_upload_save", side_effect=Exception("Connection refused")):
+            synced, errors = plugin._sync_rom_saves(42, direction="upload")
+
+        assert synced == 0
+        assert len(errors) == 1
+        # Should be added to offline queue
+        queue = plugin._save_sync_state["offline_queue"]
+        assert len(queue) == 1
+        assert queue[0]["filename"] == "pokemon.srm"

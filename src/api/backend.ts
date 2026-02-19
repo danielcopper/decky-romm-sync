@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, RomMetadata, SaveSyncSettings, SaveStatus, PendingConflict } from "../types";
+import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, RomMetadata, SaveSyncSettings, SaveStatus, PendingConflict, OfflineQueueItem } from "../types";
 
 export const getSettings = callable<[], PluginSettings>("get_settings");
 export const saveSettings = callable<[string, string, string], { success: boolean; message: string }>("save_settings");
@@ -44,8 +44,8 @@ export const saveShortcutIcon = callable<[number, string], { success: boolean }>
 // Save sync callables
 export const ensureDeviceRegistered = callable<[], { device_id: string }>("ensure_device_registered");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
-export const preLaunchSync = callable<[number], { success: boolean; message: string }>("pre_launch_sync");
-export const postExitSync = callable<[number], { success: boolean; message: string; conflicts?: PendingConflict[] }>("post_exit_sync");
+export const preLaunchSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[] }>("pre_launch_sync");
+export const postExitSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[] }>("post_exit_sync");
 export const syncAllSaves = callable<[], { success: boolean; message: string; synced: number; conflicts: number }>("sync_all_saves");
 export const resolveConflict = callable<[number, string, string], { success: boolean; message: string }>("resolve_conflict");
 export const getPendingConflicts = callable<[], { conflicts: PendingConflict[] }>("get_pending_conflicts");
@@ -53,3 +53,8 @@ export const recordSessionStart = callable<[number], { success: boolean }>("reco
 export const recordSessionEnd = callable<[number], { success: boolean; playtime_delta: number }>("record_session_end");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");
 export const updateSaveSyncSettings = callable<[SaveSyncSettings], { success: boolean }>("update_save_sync_settings");
+
+// Offline queue (failed sync retry)
+export const getOfflineQueue = callable<[], { queue: OfflineQueueItem[] }>("get_offline_queue");
+export const retryFailedSync = callable<[number, string], { success: boolean; message: string; synced?: number }>("retry_failed_sync");
+export const clearOfflineQueue = callable<[], { success: boolean }>("clear_offline_queue");

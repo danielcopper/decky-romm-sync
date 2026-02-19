@@ -113,4 +113,8 @@ Tests are split per module in `tests/test_*.py` with shared mocks in `tests/conf
 
 ## Working Style
 
-Use team-swarm agents for everything beyond trivial single-file edits — including research, exploration, and implementation. Keep main context clean by delegating to agents. Refer to PLAN.md for the full phase roadmap.
+- **Research before implementing.** When encountering an unknown (e.g. how a third-party tool works, where files are stored, what APIs exist), STOP and research first. Do not start writing code based on assumptions. Present findings to the user and agree on an approach before any implementation.
+- **Discuss architecture decisions.** This is not a vibe coding project. Non-trivial changes require discussion before code is written. When you find a problem, explain it and propose options — don't just start fixing.
+- **Use team-swarm agents** for everything beyond trivial single-file edits — including research, exploration, and implementation. Keep main context clean and focused on architecture and coordination by delegating to agents.
+- **Preserve context.** Avoid back-and-forth code changes in the main conversation. Get alignment first, then implement cleanly in one pass (via agents).
+- Refer to PLAN.md for the full phase roadmap.
