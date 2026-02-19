@@ -276,7 +276,7 @@ class SaveSyncMixin:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
             return json.loads(resp.read().decode())
 
     def _romm_post_json(self, path, data):
@@ -313,7 +313,7 @@ class SaveSyncMixin:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
             return json.loads(resp.read().decode())
 
     def _romm_upload_save(self, rom_id, file_path, device_id=None, emulator="retroarch", save_id=None):
@@ -815,6 +815,26 @@ class SaveSyncMixin:
             "errors": errors,
         }
 
+    async def sync_rom_saves(self, rom_id):
+        """Bidirectional sync for a single ROM (manual trigger from game detail)."""
+        if not self._save_sync_state.get("device_id"):
+            reg = await self.ensure_device_registered()
+            if not reg.get("success"):
+                return {"success": False, "message": "Device not registered"}
+
+        synced, errors = self._sync_rom_saves(int(rom_id), direction="both")
+        self._save_save_sync_state()
+
+        msg = f"Synced {synced} save(s)"
+        if errors:
+            msg += f", {len(errors)} error(s)"
+        return {
+            "success": len(errors) == 0,
+            "message": msg,
+            "synced": synced,
+            "errors": errors,
+        }
+
     async def sync_all_saves(self):
         """Manual full sync of all ROMs with shortcuts (both directions)."""
         if not self._save_sync_state.get("device_id"):
@@ -826,9 +846,8 @@ class SaveSyncMixin:
         total_errors = []
         rom_count = 0
 
-        # Collect all ROM IDs from both installed_roms and shortcut_registry
+        # Only iterate installed ROMs — non-installed ROMs have no save files
         rom_ids = set(self._state["installed_roms"].keys())
-        rom_ids.update(self._state.get("shortcut_registry", {}).keys())
         self._log_debug(f"sync_all_saves: {len(rom_ids)} ROMs to check")
 
         for rom_id_str in sorted(rom_ids):

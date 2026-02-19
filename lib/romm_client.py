@@ -42,7 +42,7 @@ class RommClientMixin:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
             return json.loads(resp.read().decode())
 
     def _romm_download(self, path, dest, progress_callback=None):
@@ -60,7 +60,7 @@ class RommClientMixin:
         ctx.verify_mode = ssl.CERT_NONE
         dest_path = Path(dest)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(req, context=ctx) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
             total = resp.headers.get("Content-Length")
             total = int(total) if total else 0
             downloaded = 0

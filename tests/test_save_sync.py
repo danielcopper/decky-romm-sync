@@ -1370,13 +1370,13 @@ class TestSyncAllSaves:
         assert len(result["errors"]) >= 1
 
     @pytest.mark.asyncio
-    async def test_includes_shortcut_registry_roms(self, plugin, tmp_path):
-        """Iterates ROMs from shortcut_registry, not just installed_roms."""
-        # ROM 1 is only in installed_roms
+    async def test_ignores_shortcut_registry_only_roms(self, plugin, tmp_path):
+        """Only iterates installed_roms, not shortcut_registry-only entries."""
+        # ROM 1 is in installed_roms
         _install_rom(plugin, tmp_path, rom_id=1, file_name="game_a.gba")
         _create_save(tmp_path, rom_name="game_a")
 
-        # ROM 2 is only in shortcut_registry (synced but not downloaded)
+        # ROM 2 is only in shortcut_registry (synced but not downloaded — no save info)
         plugin._state["shortcut_registry"]["2"] = {
             "rom_id": 2, "app_id": 12345, "name": "Game B",
         }
@@ -1389,8 +1389,8 @@ class TestSyncAllSaves:
              patch.object(plugin, "_romm_upload_save", return_value=upload_response):
             result = await plugin.sync_all_saves()
 
-        # Both ROM IDs should be checked
-        assert result["roms_checked"] == 2
+        # Only installed ROM should be checked
+        assert result["roms_checked"] == 1
 
     @pytest.mark.asyncio
     async def test_returns_conflicts_count(self, plugin, tmp_path):
@@ -1405,6 +1405,91 @@ class TestSyncAllSaves:
 
         assert "conflicts" in result
         assert result["conflicts"] == 2
+
+
+# ============================================================================
+# Single ROM Sync (sync_rom_saves)
+# ============================================================================
+
+
+class TestSyncRomSaves:
+    """Tests for sync_rom_saves callable (bidirectional per-ROM sync)."""
+
+    @pytest.mark.asyncio
+    async def test_uploads_local_save_no_server(self, plugin, tmp_path):
+        """Uploads local save when server has none (direction=both)."""
+        _install_rom(plugin, tmp_path)
+        _create_save(tmp_path)
+        plugin._save_sync_state["device_id"] = "dev-1"
+
+        upload_response = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
+
+        with patch.object(plugin, "_romm_list_saves", return_value=[]), \
+             patch.object(plugin, "_romm_upload_save", return_value=upload_response):
+            result = await plugin.sync_rom_saves(42)
+
+        assert result["success"] is True
+        assert result["synced"] == 1
+
+    @pytest.mark.asyncio
+    async def test_downloads_server_save_no_local(self, plugin, tmp_path):
+        """Downloads server save when no local file exists."""
+        _install_rom(plugin, tmp_path)
+        saves_dir = tmp_path / "retrodeck" / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+
+        plugin._save_sync_state["device_id"] = "dev-1"
+        server = _server_save()
+
+        def fake_download(save_id, dest, device_id=None):
+            with open(dest, "wb") as f:
+                f.write(b"\xff" * 1024)
+
+        with patch.object(plugin, "_romm_list_saves", return_value=[server]), \
+             patch.object(plugin, "_romm_download_save", side_effect=fake_download):
+            result = await plugin.sync_rom_saves(42)
+
+        assert result["success"] is True
+        assert result["synced"] == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_registers_device(self, plugin, tmp_path):
+        """Auto-registers device if not yet registered."""
+        _install_rom(plugin, tmp_path)
+        _create_save(tmp_path)
+
+        upload_response = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
+
+        with patch.object(plugin, "_romm_list_saves", return_value=[]), \
+             patch.object(plugin, "_romm_upload_save", return_value=upload_response):
+            result = await plugin.sync_rom_saves(42)
+
+        assert result["success"] is True
+        assert plugin._save_sync_state["device_id"] is not None
+
+    @pytest.mark.asyncio
+    async def test_reports_errors(self, plugin, tmp_path):
+        """Reports upload errors in result."""
+        _install_rom(plugin, tmp_path)
+        _create_save(tmp_path)
+        plugin._save_sync_state["device_id"] = "dev-1"
+
+        with patch.object(plugin, "_romm_list_saves", return_value=[]), \
+             patch.object(plugin, "_romm_upload_save", side_effect=ConnectionError("offline")):
+            result = await plugin.sync_rom_saves(42)
+
+        assert result["success"] is False
+        assert len(result["errors"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_rom_not_installed(self, plugin):
+        """Non-installed ROM returns 0 synced."""
+        plugin._save_sync_state["device_id"] = "dev-1"
+
+        result = await plugin.sync_rom_saves(999)
+
+        assert result["success"] is True
+        assert result["synced"] == 0
 
 
 # ============================================================================

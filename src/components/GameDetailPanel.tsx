@@ -12,7 +12,7 @@ import {
   saveShortcutIcon,
   getRomMetadata,
   getSaveStatus,
-  preLaunchSync,
+  syncRomSaves,
   getOfflineQueue,
   retryFailedSync,
 } from "../api/backend";
@@ -482,7 +482,7 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
                 if (!romInfo || saveSyncing) return;
                 setSaveSyncing(true);
                 try {
-                  const result = await preLaunchSync(romInfo.rom_id);
+                  const result = await syncRomSaves(romInfo.rom_id);
                   if (result.success) {
                     const updated = await getSaveStatus(romInfo.rom_id);
                     setSaveStatus(updated);

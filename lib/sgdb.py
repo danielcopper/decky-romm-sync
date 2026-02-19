@@ -45,7 +45,7 @@ class SgdbMixin:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, context=ctx) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
             return json.loads(resp.read().decode())
 
     def _get_sgdb_game_id(self, igdb_id):
@@ -88,7 +88,7 @@ class SgdbMixin:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             tmp_path = cached + ".tmp"
-            with urllib.request.urlopen(req, context=ctx) as resp:
+            with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
                 with open(tmp_path, "wb") as f:
                     while True:
                         chunk = resp.read(8192)
@@ -206,7 +206,7 @@ class SgdbMixin:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             resp = await self.loop.run_in_executor(
-                None, lambda: urllib.request.urlopen(req, context=ctx)
+                None, lambda: urllib.request.urlopen(req, context=ctx, timeout=30)
             )
             data = json.loads(resp.read().decode())
             if data.get("success"):
