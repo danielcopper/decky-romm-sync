@@ -38,6 +38,9 @@ export const getRomMetadata = callable<[number], RomMetadata>("get_rom_metadata"
 export const getAllMetadataCache = callable<[], Record<string, RomMetadata>>("get_all_metadata_cache");
 export const getAppIdRomIdMap = callable<[], Record<string, number>>("get_app_id_rom_id_map");
 
+// Icon support (VDF-based)
+export const saveShortcutIcon = callable<[number, string], { success: boolean }>("save_shortcut_icon");
+
 // Save sync callables
 export const ensureDeviceRegistered = callable<[], { device_id: string }>("ensure_device_registered");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");

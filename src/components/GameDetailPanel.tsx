@@ -9,6 +9,7 @@ import {
   removeRom,
   checkPlatformBios,
   getSgdbArtworkBase64,
+  saveShortcutIcon,
   getRomMetadata,
   getSaveStatus,
   preLaunchSync,
@@ -164,8 +165,14 @@ export const GameDetailPanel: FC<GameDetailPanelProps> = ({ appId }) => {
           return;
         }
         if (result.base64) {
-          await SteamClient.Apps.SetCustomArtworkForApp(steamAppId, result.base64, "png", assetType);
-          console.log(`[RomM] Set SGDB artwork type ${assetType} for appId=${steamAppId}`);
+          if (assetType === 4) {
+            // Icons require VDF approach — SetCustomArtworkForApp doesn't work for shortcuts
+            await saveShortcutIcon(steamAppId, result.base64);
+            console.log(`[RomM] Saved icon via VDF for appId=${steamAppId}`);
+          } else {
+            await SteamClient.Apps.SetCustomArtworkForApp(steamAppId, result.base64, "png", assetType);
+            console.log(`[RomM] Set SGDB artwork type ${assetType} for appId=${steamAppId}`);
+          }
 
           // Save default logo position after setting logo
           if (assetType === 2) {

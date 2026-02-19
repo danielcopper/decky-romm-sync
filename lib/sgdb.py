@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+import struct
 import ssl
 import urllib.parse
 import urllib.request
@@ -11,7 +12,7 @@ import decky
 
 if TYPE_CHECKING:
     import asyncio
-    from typing import Protocol
+    from typing import Optional, Protocol
 
     class _SgdbDeps(Protocol):
         settings: dict
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
         def _log_debug(self, msg: str) -> None: ...
         def _romm_request(self, path: str) -> Any: ...
         def _save_state(self) -> None: ...
+        def _grid_dir(self) -> Optional[str]: ...
+        def _read_shortcuts(self) -> dict: ...
+        def _write_shortcuts(self, data: dict) -> None: ...
 
 
 class SgdbMixin:
@@ -222,3 +226,57 @@ class SgdbMixin:
             self.settings["steamgriddb_api_key"] = api_key
             self._save_settings_to_disk()
         return {"success": True, "message": "SteamGridDB API key saved"}
+
+    def _save_icon_to_grid(self, app_id, icon_bytes):
+        """Write icon PNG to Steam's grid dir and update shortcuts.vdf icon field."""
+        grid_dir = self._grid_dir()
+        if not grid_dir:
+            decky.logger.warning("Cannot find Steam grid directory for icon save")
+            return False
+
+        # Write icon file to grid dir
+        icon_path = os.path.join(grid_dir, f"{app_id}_icon.png")
+        tmp_path = icon_path + ".tmp"
+        try:
+            with open(tmp_path, "wb") as f:
+                f.write(icon_bytes)
+            os.replace(tmp_path, icon_path)
+        except Exception as e:
+            decky.logger.error(f"Failed to write icon file {icon_path}: {e}")
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            return False
+
+        # Update shortcuts.vdf icon field
+        try:
+            vdf_data = self._read_shortcuts()
+            # Convert unsigned app_id to signed int32 for VDF comparison
+            signed_id = struct.unpack("i", struct.pack("I", app_id & 0xFFFFFFFF))[0]
+            shortcuts = vdf_data.get("shortcuts", {})
+            for entry in shortcuts.values():
+                if entry.get("appid") == signed_id:
+                    entry["icon"] = icon_path
+                    break
+            self._write_shortcuts(vdf_data)
+        except Exception as e:
+            decky.logger.warning(f"Failed to update shortcuts.vdf icon field: {e}")
+            # Icon file is still saved, just VDF field not set — non-fatal
+
+        return True
+
+    async def save_shortcut_icon(self, app_id, icon_base64):
+        """Save icon PNG to Steam grid dir and update VDF. Called from frontend."""
+        app_id = int(app_id)
+        try:
+            icon_bytes = base64.b64decode(icon_base64)
+        except Exception as e:
+            decky.logger.error(f"Failed to decode icon base64: {e}")
+            return {"success": False}
+
+        success = await self.loop.run_in_executor(
+            None, self._save_icon_to_grid, app_id, icon_bytes
+        )
+        return {"success": success}

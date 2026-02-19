@@ -1,6 +1,6 @@
 import { addEventListener } from "@decky/api";
 import type { SyncApplyData } from "../types";
-import { getArtworkBase64, reportSyncResults } from "../api/backend";
+import { getArtworkBase64, getSgdbArtworkBase64, saveShortcutIcon, reportSyncResults } from "../api/backend";
 import { getExistingRomMShortcuts, addShortcut, removeShortcut } from "./steamShortcuts";
 import { createOrUpdateCollections, clearPlatformCollection } from "./collections";
 import { updateSyncProgress } from "./syncProgress";
@@ -65,6 +65,17 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             }
           } catch (artErr) {
             console.error(`[RomM] Failed to fetch/set artwork for ${item.name}:`, artErr);
+          }
+
+          // Fetch SGDB icon during sync (requires VDF write, not SetCustomArtworkForApp)
+          try {
+            const iconResult = await getSgdbArtworkBase64(item.rom_id, 4);
+            if (iconResult.base64) {
+              await saveShortcutIcon(appId, iconResult.base64);
+              console.log(`[RomM] Saved icon for ${item.name} (appId=${appId})`);
+            }
+          } catch (iconErr) {
+            console.error(`[RomM] Failed to fetch/save icon for ${item.name}:`, iconErr);
           }
 
           // SGDB artwork (hero, logo, wide grid) is fetched on-demand

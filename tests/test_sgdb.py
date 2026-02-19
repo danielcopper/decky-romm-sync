@@ -499,3 +499,103 @@ class TestIconSupport:
 
         assert len(requested_paths) == 1
         assert "/icons/game/9999" in requested_paths[0]
+
+
+class TestSaveShortcutIcon:
+    """Tests for VDF-based icon saving (save_shortcut_icon callable)."""
+
+    def test_save_icon_to_grid_writes_file(self, plugin, tmp_path):
+        """Icon PNG should be written to Steam's grid directory."""
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+        plugin._read_shortcuts = lambda: {"shortcuts": {}}
+        plugin._write_shortcuts = lambda data: None
+
+        result = plugin._save_icon_to_grid(12345, b"fake png data")
+
+        assert result is True
+        icon_path = grid_dir / "12345_icon.png"
+        assert icon_path.exists()
+        assert icon_path.read_bytes() == b"fake png data"
+
+    def test_save_icon_to_grid_updates_vdf(self, plugin, tmp_path):
+        """VDF icon field should be updated for the matching shortcut."""
+        import struct
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+
+        # app_id 3000000000 -> signed = -1294967296
+        app_id = 3000000000
+        signed_id = struct.unpack("i", struct.pack("I", app_id & 0xFFFFFFFF))[0]
+
+        written_data = {}
+        def mock_read():
+            return {"shortcuts": {"0": {"appid": signed_id, "AppName": "Test"}}}
+        def mock_write(data):
+            written_data.update(data)
+
+        plugin._read_shortcuts = mock_read
+        plugin._write_shortcuts = mock_write
+
+        result = plugin._save_icon_to_grid(app_id, b"icon data")
+
+        assert result is True
+        shortcut = written_data["shortcuts"]["0"]
+        assert shortcut["icon"].endswith(f"{app_id}_icon.png")
+
+    def test_save_icon_to_grid_no_grid_dir(self, plugin):
+        """Should return False if grid directory cannot be found."""
+        plugin._grid_dir = lambda: None
+
+        result = plugin._save_icon_to_grid(12345, b"data")
+        assert result is False
+
+    def test_save_icon_to_grid_vdf_mismatch_still_writes_file(self, plugin, tmp_path):
+        """If VDF has no matching shortcut, icon file should still be saved."""
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+
+        written_data = {}
+        def mock_read():
+            return {"shortcuts": {"0": {"appid": 999, "AppName": "Other"}}}
+        def mock_write(data):
+            written_data.update(data)
+
+        plugin._read_shortcuts = mock_read
+        plugin._write_shortcuts = mock_write
+
+        result = plugin._save_icon_to_grid(12345, b"icon data")
+
+        assert result is True
+        assert (grid_dir / "12345_icon.png").exists()
+        # VDF was written but icon field not set on any shortcut
+        assert written_data["shortcuts"]["0"].get("icon") is None
+
+    @pytest.mark.asyncio
+    async def test_save_shortcut_icon_callable(self, plugin, tmp_path):
+        """save_shortcut_icon callable should decode base64 and save."""
+        import base64
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+        plugin._read_shortcuts = lambda: {"shortcuts": {}}
+        plugin._write_shortcuts = lambda data: None
+        plugin.loop = asyncio.get_event_loop()
+
+        icon_b64 = base64.b64encode(b"real icon png").decode("ascii")
+        result = await plugin.save_shortcut_icon(12345, icon_b64)
+
+        assert result["success"] is True
+        assert (grid_dir / "12345_icon.png").read_bytes() == b"real icon png"
+
+    @pytest.mark.asyncio
+    async def test_save_shortcut_icon_invalid_base64(self, plugin, tmp_path):
+        """Invalid base64 should return success=False."""
+        plugin.loop = asyncio.get_event_loop()
+
+        result = await plugin.save_shortcut_icon(12345, "not-valid-base64!!!")
+
+        assert result["success"] is False
