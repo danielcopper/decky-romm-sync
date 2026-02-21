@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.2.1...decky-romm-sync-v0.3.0) (2026-02-21)
+
+
+### Features
+
+* Phase 5 — save file sync and custom PlaySection ([#34](https://github.com/danielcopper/decky-romm-sync/issues/34)) ([5c24b79](https://github.com/danielcopper/decky-romm-sync/commit/5c24b7964afab9a9f5eb322bd2bb574effe7b7b2))
+
+
+### Bug Fixes
+
+* Phase 4.5 bug fixes — DangerZone, Remote Play, scoped collections ([#32](https://github.com/danielcopper/decky-romm-sync/issues/32)) ([8f06776](https://github.com/danielcopper/decky-romm-sync/commit/8f067769219a5cf159c956f52315553b3a87115c))
+
 ## [0.2.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.2.0...decky-romm-sync-v0.2.1) (2026-02-17)
 
 
