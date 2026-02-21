@@ -19,7 +19,7 @@ import {
 import { getSyncProgress } from "../utils/syncProgress";
 import type { SyncProgress, SyncStats } from "../types";
 
-type Page = "connection" | "platforms" | "danger" | "downloads" | "bios";
+type Page = "connection" | "platforms" | "danger" | "downloads" | "bios" | "savesync";
 
 interface MainPageProps {
   onNavigate: (page: Page) => void;
@@ -228,6 +228,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => onNavigate("platforms")}>
             Platforms
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => onNavigate("savesync")}>
+            Save Sync
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>

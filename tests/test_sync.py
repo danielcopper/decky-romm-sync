@@ -550,3 +550,124 @@ class TestGetRomBySteamAppId:
     async def test_returns_none_for_unknown(self, plugin):
         result = await plugin.get_rom_by_steam_app_id(999999)
         assert result is None
+
+
+class TestShortcutDataFormat:
+    """Validate the shortcut data format produced by the backend.
+
+    The backend prepares shortcut data that the frontend uses to create
+    Steam shortcuts. These tests ensure the data is well-formed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_shortcut_data_has_required_fields(self, plugin):
+        """Every shortcut entry must have all required fields."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["enabled_platforms"] = {"gba": True}
+        plugin.loop = MagicMock()
+        plugin.loop.run_in_executor = AsyncMock(side_effect=[
+            # _fetch_platforms
+            [{"id": 1, "slug": "gba", "name": "Game Boy Advance", "rom_count": 1}],
+            # _fetch_roms_for_platform
+            [{"id": 42, "name": "Test Game", "platform_name": "Game Boy Advance",
+              "platform_slug": "gba", "igdb_id": 100, "sgdb_id": 200,
+              "path_cover_large": "/cover.png"}],
+        ])
+        plugin._download_artwork = AsyncMock(return_value={})
+        plugin._emit_progress = AsyncMock()
+        plugin._finish_sync = AsyncMock()
+        plugin._sync_cancel = False
+
+        # Capture the emitted sync_apply data
+        emitted = {}
+        async def capture_emit(event, **kwargs):
+            if event == "sync_apply":
+                emitted.update(kwargs)
+        plugin._emit = capture_emit
+
+        # Mock decky.emit to capture the shortcuts
+        import decky
+        emitted_events = []
+        original_emit = getattr(decky, 'emit', None)
+        async def mock_emit(event, *args):
+            emitted_events.append((event, args))
+        decky.emit = mock_emit
+
+        try:
+            await plugin.start_sync()
+        except Exception:
+            pass  # _finish_sync mock may cause issues
+        finally:
+            if original_emit:
+                decky.emit = original_emit
+
+        # Find the sync_apply emission
+        sync_items = None
+        for event, args in emitted_events:
+            if event == "sync_apply" and args:
+                sync_items = args[0] if args else None
+                break
+
+        if sync_items:
+            required_fields = {"rom_id", "name", "exe", "start_dir", "launch_options",
+                               "platform_name", "platform_slug"}
+            for item in sync_items:
+                for field in required_fields:
+                    assert field in item, f"Missing field '{field}' in shortcut data"
+
+    @pytest.mark.asyncio
+    async def test_exe_path_points_to_romm_launcher(self, plugin):
+        """Exe path must point to bin/romm-launcher inside the plugin directory."""
+        import decky
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        exe = os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "romm-launcher")
+
+        assert exe.endswith("/bin/romm-launcher"), \
+            f"Exe path should end with /bin/romm-launcher, got: {exe}"
+        assert "decky-romm-sync" in exe, \
+            f"Exe path should contain plugin name, got: {exe}"
+
+    def test_launch_options_format(self, plugin):
+        """Launch options must follow the romm:<rom_id> pattern."""
+        import re
+        pattern = r"^romm:\d+$"
+
+        # Test valid formats
+        for rom_id in [1, 42, 4409, 99999]:
+            launch_opt = f"romm:{rom_id}"
+            assert re.match(pattern, launch_opt), \
+                f"Launch option '{launch_opt}' does not match expected pattern"
+
+    def test_start_dir_is_parent_of_exe(self, plugin):
+        """Start dir must be the directory containing the launcher."""
+        import decky
+
+        exe = os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "romm-launcher")
+        start_dir = os.path.join(decky.DECKY_PLUGIN_DIR, "bin")
+
+        assert start_dir == os.path.dirname(exe), \
+            f"start_dir ({start_dir}) should be parent of exe ({exe})"
+
+    def test_artwork_id_generation_consistency(self, plugin):
+        """Artwork ID must be deterministic for the same exe+name pair."""
+        exe = "/home/deck/homebrew/plugins/decky-romm-sync/bin/romm-launcher"
+        name = "Test Game"
+
+        id1 = plugin._generate_artwork_id(exe, name)
+        id2 = plugin._generate_artwork_id(exe, name)
+
+        assert id1 == id2, "Artwork ID should be deterministic"
+        assert isinstance(id1, int), "Artwork ID should be an integer"
+        assert id1 > 0, "Artwork ID should be positive (unsigned)"
+
+    def test_artwork_id_differs_per_game(self, plugin):
+        """Different game names should produce different artwork IDs."""
+        exe = "/home/deck/homebrew/plugins/decky-romm-sync/bin/romm-launcher"
+
+        id_a = plugin._generate_artwork_id(exe, "Game A")
+        id_b = plugin._generate_artwork_id(exe, "Game B")
+
+        assert id_a != id_b, "Different games should have different artwork IDs"

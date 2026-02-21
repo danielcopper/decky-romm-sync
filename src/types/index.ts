@@ -160,6 +160,65 @@ export interface RomMetadata {
   cached_at: number;
 }
 
+export type ConflictMode = "newest_wins" | "always_upload" | "always_download" | "ask_me";
+
+export interface SaveSyncSettings {
+  save_sync_enabled: boolean;
+  conflict_mode: ConflictMode;
+  sync_before_launch: boolean;
+  sync_after_exit: boolean;
+  clock_skew_tolerance_sec: number;
+}
+
+export interface PendingConflict {
+  rom_id: number;
+  filename: string;
+  local_path: string | null;
+  local_hash: string | null;
+  local_mtime: string | null;
+  local_size: number | null;
+  server_save_id: number;
+  server_updated_at: string;
+  server_size: number | null;
+  created_at: string;
+}
+
+export interface OfflineQueueItem {
+  rom_id: number;
+  filename: string;
+  direction: string;
+  error: string;
+  failed_at: string;
+  retry_count: number;
+}
+
+export interface SaveFileStatus {
+  filename: string;
+  local_path: string | null;
+  local_hash: string | null;
+  local_mtime: string | null;
+  local_size: number | null;
+  server_save_id: number | null;
+  server_updated_at: string | null;
+  server_size: number | null;
+  last_sync_at: string | null;
+  status: "skip" | "download" | "upload" | "conflict";
+}
+
+export interface PlaytimeEntry {
+  total_seconds: number;
+  session_count: number;
+  last_session_start: string | null;
+  last_session_duration_sec: number | null;
+}
+
+export interface SaveStatus {
+  rom_id: number;
+  files: SaveFileStatus[];
+  playtime: PlaytimeEntry;
+  device_id: string;
+}
+
 export interface DownloadProgressEvent {
   rom_id: number;
   rom_name: string;

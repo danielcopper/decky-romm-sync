@@ -65,7 +65,7 @@ class DownloadMixin:
         except Exception as e:
             self._download_in_progress.discard(rom_id)
             decky.logger.error(f"Failed to fetch ROM {rom_id}: {e}")
-            return {"success": False, "message": f"Failed to fetch ROM details: {e}"}
+            return {"success": False, "message": "Could not connect to RomM server"}
 
         platform_slug = rom_detail.get("platform_slug", "")
         platform_fs_slug = rom_detail.get("platform_fs_slug")
@@ -362,7 +362,7 @@ class DownloadMixin:
             self._delete_rom_files(installed)
         except Exception as e:
             decky.logger.error(f"Failed to delete ROM files: {e}")
-            return {"success": False, "message": f"Failed to delete files: {e}"}
+            return {"success": False, "message": "Failed to delete ROM files"}
 
         del self._state["installed_roms"][rom_id_str]
         self._download_queue.pop(int(rom_id), None)

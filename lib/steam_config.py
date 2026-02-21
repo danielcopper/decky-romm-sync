@@ -152,7 +152,7 @@ class SteamConfigMixin:
             return {"success": True, "message": f"Steam Input set to '{mode}' for {len(app_ids)} shortcuts"}
         except Exception as e:
             decky.logger.error(f"Failed to apply Steam Input setting: {e}")
-            return {"success": False, "message": f"Failed: {e}"}
+            return {"success": False, "message": "Operation failed"}
 
     def _check_retroarch_input_driver(self):
         """Check if RetroArch input_driver is set to a problematic value."""
@@ -197,4 +197,5 @@ class SteamConfigMixin:
                         f.write(line)
             return {"success": True, "message": "Changed input_driver to sdl2"}
         except Exception as e:
-            return {"success": False, "message": f"Failed: {e}"}
+            decky.logger.error(f"Failed to fix RetroArch input_driver: {e}")
+            return {"success": False, "message": "Operation failed"}

@@ -47,7 +47,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           appId = existingAppId;
           romIdToAppId[String(item.rom_id)] = existingAppId;
         } else {
-          // New — create shortcut (addShortcut already has internal 500ms delay)
+          // New — create shortcut with all launch params upfront
           const newAppId = await addShortcut(item);
           if (newAppId) {
             appId = newAppId;
@@ -67,7 +67,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             console.error(`[RomM] Failed to fetch/set artwork for ${item.name}:`, artErr);
           }
 
-          // SGDB artwork (hero, logo, wide grid) is fetched on-demand
+          // SGDB artwork (hero, logo, wide grid, icon) is fetched on-demand
           // when user visits the game detail page — not during sync
         }
       } catch (e) {

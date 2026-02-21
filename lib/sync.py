@@ -44,7 +44,7 @@ class SyncMixin:
             )
         except Exception as e:
             decky.logger.error(f"Failed to fetch platforms: {e}")
-            return {"success": False, "message": f"Failed to fetch platforms: {e}"}
+            return {"success": False, "message": "Could not connect to RomM server"}
 
         enabled = self.settings.get("enabled_platforms", {})
         result = []
@@ -76,7 +76,7 @@ class SyncMixin:
             )
         except Exception as e:
             decky.logger.error(f"Failed to fetch platforms: {e}")
-            return {"success": False, "message": f"Failed to fetch platforms: {e}"}
+            return {"success": False, "message": "Could not connect to RomM server"}
 
         ep = {}
         for p in platforms:
@@ -122,7 +122,7 @@ class SyncMixin:
                 )
             except Exception as e:
                 decky.logger.error(f"Failed to fetch platforms: {e}")
-                await self._emit_progress("error", message=f"Failed to fetch platforms: {e}", running=False)
+                await self._emit_progress("error", message="Could not connect to RomM server", running=False)
                 self._sync_running = False
                 return
 
@@ -286,7 +286,7 @@ class SyncMixin:
                 "phase": "error",
                 "current": 0,
                 "total": 0,
-                "message": f"Sync failed: {e}",
+                "message": "Sync failed — could not connect to RomM server",
             }
             # Fire-and-forget emit
             self.loop.create_task(decky.emit("sync_progress", self._sync_progress))

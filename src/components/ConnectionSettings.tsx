@@ -15,6 +15,12 @@ import { getSettings, saveSettings, testConnection, saveSgdbApiKey, verifySgdbAp
 // Module-level state survives component remounts (modal close can remount QAM)
 const pendingEdits: { url?: string; username?: string; password?: string } = {};
 
+const SHARED_ACCOUNT_NAMES = ["admin", "romm", "user", "guest", "root"];
+
+function isSharedAccount(username: string): boolean {
+  return SHARED_ACCOUNT_NAMES.includes(username.trim().toLowerCase());
+}
+
 const TextInputModal: FC<{
   label: string;
   value: string;
@@ -127,6 +133,14 @@ export const ConnectionSettings: FC<ConnectionSettingsProps> = ({ onBack }) => {
             </DialogButton>
           </Field>
         </PanelSectionRow>
+        {isSharedAccount(username) && (
+          <PanelSectionRow>
+            <Field
+              label="Shared account detected"
+              description={`"${username}" looks like a shared account. Save sync requires a personal RomM account per device to avoid overwriting other users' saves.`}
+            />
+          </PanelSectionRow>
+        )}
         <PanelSectionRow>
           <Field label="Password" description={password ? "••••" : "(not set)"}>
             <DialogButton onClick={() => showModal(

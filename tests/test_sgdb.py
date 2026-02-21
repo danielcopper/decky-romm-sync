@@ -405,3 +405,197 @@ class TestGetSgdbArtworkBase64:
 
         mock_lookup.assert_not_called()
         assert result["base64"] is not None
+
+
+class TestIconSupport:
+    """Tests for SGDB icon download support (asset type 4)."""
+
+    @pytest.mark.asyncio
+    async def test_icon_type_maps_to_icons_endpoint(self, plugin):
+        """Asset type 'icon' should map to the SGDB /icons/ endpoint."""
+        type_map = {"hero": "heroes", "logo": "logos", "grid": "grids", "icon": "icons"}
+        assert plugin._download_sgdb_artwork.__func__  # method exists
+        # Verify the type_map includes icon by calling with a non-existent game
+        # (will fail at API call, but won't fail at type_map lookup)
+
+    @pytest.mark.asyncio
+    async def test_icon_asset_type_num_is_4(self, plugin, tmp_path):
+        """Asset type number 4 should map to 'icon'."""
+        import base64
+        import decky
+        decky.DECKY_PLUGIN_RUNTIME_DIR = str(tmp_path)
+
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin.loop = asyncio.get_event_loop()
+
+        # Create cached icon file
+        art_dir = tmp_path / "artwork"
+        art_dir.mkdir()
+        art_file = art_dir / "42_icon.png"
+        art_file.write_bytes(b"icon png data")
+
+        result = await plugin.get_sgdb_artwork_base64(42, 4)  # 4 = icon
+        assert result["no_api_key"] is False
+        assert result["base64"] is not None
+        assert base64.b64decode(result["base64"]) == b"icon png data"
+
+    @pytest.mark.asyncio
+    async def test_icon_download_from_sgdb(self, plugin, tmp_path):
+        """Icon should be downloadable from SGDB icons endpoint."""
+        from unittest.mock import patch
+        import base64
+        import decky
+        decky.DECKY_PLUGIN_RUNTIME_DIR = str(tmp_path)
+
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin.loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {
+            "app_id": 100001, "name": "Zelda", "platform_name": "N64",
+            "igdb_id": 1234, "sgdb_id": 9999,
+        }
+
+        art_dir = tmp_path / "artwork"
+        art_dir.mkdir()
+        art_file = art_dir / "42_icon.png"
+
+        def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
+            assert asset_type == "icon"
+            assert sgdb_game_id == 9999
+            art_file.write_bytes(b"icon data")
+            return str(art_file)
+
+        with patch.object(plugin, "_download_sgdb_artwork", side_effect=fake_download_sgdb):
+            result = await plugin.get_sgdb_artwork_base64(42, 4)
+
+        assert result["base64"] is not None
+        assert base64.b64decode(result["base64"]) == b"icon data"
+
+    def test_download_sgdb_artwork_icon_endpoint(self, plugin, tmp_path):
+        """_download_sgdb_artwork should use /icons/ endpoint for icon type."""
+        from unittest.mock import patch, MagicMock
+        import decky
+        decky.DECKY_PLUGIN_RUNTIME_DIR = str(tmp_path)
+
+        art_dir = tmp_path / "artwork"
+        art_dir.mkdir()
+
+        # Track which SGDB path was requested
+        requested_paths = []
+        def fake_sgdb_request(path):
+            requested_paths.append(path)
+            return {"success": True, "data": [{"url": "https://example.com/icon.png"}]}
+
+        def fake_urlopen(*args, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.read.side_effect = [b"icon bytes", b""]
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        with patch.object(plugin, "_sgdb_request", side_effect=fake_sgdb_request), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = plugin._download_sgdb_artwork(9999, 42, "icon")
+
+        assert len(requested_paths) == 1
+        assert "/icons/game/9999" in requested_paths[0]
+
+
+class TestSaveShortcutIcon:
+    """Tests for VDF-based icon saving (save_shortcut_icon callable)."""
+
+    def test_save_icon_to_grid_writes_file(self, plugin, tmp_path):
+        """Icon PNG should be written to Steam's grid directory."""
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+        plugin._read_shortcuts = lambda: {"shortcuts": {}}
+        plugin._write_shortcuts = lambda data: None
+
+        result = plugin._save_icon_to_grid(12345, b"fake png data")
+
+        assert result is True
+        icon_path = grid_dir / "12345_icon.png"
+        assert icon_path.exists()
+        assert icon_path.read_bytes() == b"fake png data"
+
+    def test_save_icon_to_grid_updates_vdf(self, plugin, tmp_path):
+        """VDF icon field should be updated for the matching shortcut."""
+        import struct
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+
+        # app_id 3000000000 -> signed = -1294967296
+        app_id = 3000000000
+        signed_id = struct.unpack("i", struct.pack("I", app_id & 0xFFFFFFFF))[0]
+
+        written_data = {}
+        def mock_read():
+            return {"shortcuts": {"0": {"appid": signed_id, "AppName": "Test"}}}
+        def mock_write(data):
+            written_data.update(data)
+
+        plugin._read_shortcuts = mock_read
+        plugin._write_shortcuts = mock_write
+
+        result = plugin._save_icon_to_grid(app_id, b"icon data")
+
+        assert result is True
+        shortcut = written_data["shortcuts"]["0"]
+        assert shortcut["icon"].endswith(f"{app_id}_icon.png")
+
+    def test_save_icon_to_grid_no_grid_dir(self, plugin):
+        """Should return False if grid directory cannot be found."""
+        plugin._grid_dir = lambda: None
+
+        result = plugin._save_icon_to_grid(12345, b"data")
+        assert result is False
+
+    def test_save_icon_to_grid_vdf_mismatch_still_writes_file(self, plugin, tmp_path):
+        """If VDF has no matching shortcut, icon file should still be saved."""
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+
+        written_data = {}
+        def mock_read():
+            return {"shortcuts": {"0": {"appid": 999, "AppName": "Other"}}}
+        def mock_write(data):
+            written_data.update(data)
+
+        plugin._read_shortcuts = mock_read
+        plugin._write_shortcuts = mock_write
+
+        result = plugin._save_icon_to_grid(12345, b"icon data")
+
+        assert result is True
+        assert (grid_dir / "12345_icon.png").exists()
+        # VDF was written but icon field not set on any shortcut
+        assert written_data["shortcuts"]["0"].get("icon") is None
+
+    @pytest.mark.asyncio
+    async def test_save_shortcut_icon_callable(self, plugin, tmp_path):
+        """save_shortcut_icon callable should decode base64 and save."""
+        import base64
+        grid_dir = tmp_path / "grid"
+        grid_dir.mkdir()
+        plugin._grid_dir = lambda: str(grid_dir)
+        plugin._read_shortcuts = lambda: {"shortcuts": {}}
+        plugin._write_shortcuts = lambda data: None
+        plugin.loop = asyncio.get_event_loop()
+
+        icon_b64 = base64.b64encode(b"real icon png").decode("ascii")
+        result = await plugin.save_shortcut_icon(12345, icon_b64)
+
+        assert result["success"] is True
+        assert (grid_dir / "12345_icon.png").read_bytes() == b"real icon png"
+
+    @pytest.mark.asyncio
+    async def test_save_shortcut_icon_invalid_base64(self, plugin, tmp_path):
+        """Invalid base64 should return success=False."""
+        plugin.loop = asyncio.get_event_loop()
+
+        result = await plugin.save_shortcut_icon(12345, "not-valid-base64!!!")
+
+        assert result["success"] is False

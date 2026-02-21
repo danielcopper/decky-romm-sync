@@ -6,8 +6,10 @@ from lib.firmware import FirmwareMixin, BIOS_DEST_MAP
 from lib.metadata import MetadataMixin
 from lib.downloads import DownloadMixin
 from lib.sync import SyncMixin
+from lib.save_sync import SaveSyncMixin
 
 __all__ = [
     "StateMixin", "RommClientMixin", "SgdbMixin", "SteamConfigMixin",
     "FirmwareMixin", "BIOS_DEST_MAP", "MetadataMixin", "DownloadMixin", "SyncMixin",
+    "SaveSyncMixin",
 ]

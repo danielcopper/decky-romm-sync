@@ -8,6 +8,13 @@ let appIdToRomId: Record<number, number> = {};
 let registeredAppIds: Set<number> = new Set();
 let patches: Patch[] = [];
 
+// BIsModOrShortcut bypass counters (MetaDeck pattern).
+// Default state (both 0): BIsModOrShortcut returns false for our apps (metadata shows).
+// bypassCounter > 0 or == -1: temporarily returns true during launch (preserves shortcut launch path).
+// bypassBypass > 0: forces false during game detail page rendering (ensures metadata sections render).
+let bypassCounter = 0;
+let bypassBypass = 0;
+
 // Genre string → Steam StoreCategory ID mapping
 const GENRE_CATEGORY_MAP: Record<string, number> = {
   "Action": 21,
@@ -186,6 +193,19 @@ export function registerMetadataPatches(
     console.error("[RomM] Failed to patch GetAssociations:", e);
   }
 
+  // --- BHasRecentlyLaunched (on appDetailsStore, not app prototype) ---
+  // Fires during recent-games checks — temporarily restore shortcut identity.
+  try {
+    patches.push(
+      afterPatch(detailsProto, "BHasRecentlyLaunched", function (this: any, _args: any[], ret: any) {
+        bypassCounter = 4;
+        return ret;
+      }),
+    );
+  } catch (e) {
+    console.error("[RomM] Failed to patch BHasRecentlyLaunched:", e);
+  }
+
   // Patches on appStore.allApps[0].__proto__ (SteamAppOverview prototype)
   // Retry up to 10 times (5 seconds) if allApps is empty at startup
   const tryRegisterAppProtoPatches = (retriesLeft: number) => {
@@ -242,18 +262,86 @@ function registerAppProtoPatches(appProto: any) {
     console.error("[RomM] Failed to patch BHasStoreCategory:", e);
   }
 
-  // --- Patch 5: BIsModOrShortcut ---
+  // --- Patch 5: BIsModOrShortcut (bypass counter pattern from MetaDeck) ---
+  // Returns false (metadata renders) by default. Temporarily returns true
+  // during launch sequence so Steam uses the shortcut launch path.
   try {
     patches.push(
       afterPatch(appProto, "BIsModOrShortcut", function (this: SteamAppOverview, _args: any[], ret: any) {
-        if (ret === true && registeredAppIds.has(this.appid)) {
+        if (ret !== true || !registeredAppIds.has(this.appid)) return ret;
+
+        // Game detail page render — force false for N calls
+        if (bypassBypass > 0) {
+          bypassBypass--;
           return false;
+        }
+
+        // Library home — always show as real game
+        try {
+          const pathname = (window as any).Router?.WindowStore
+            ?.GamepadUIMainWindowInstance?.m_history?.location?.pathname;
+          if (pathname === "/library/home") return false;
+        } catch { /* ignore */ }
+
+        // Launch sequence — temporarily return true (is a shortcut)
+        if (bypassCounter > 0) {
+          bypassCounter--;
+        }
+        return bypassCounter === -1 || bypassCounter > 0;
+      }),
+    );
+  } catch (e) {
+    console.error("[RomM] Failed to patch BIsModOrShortcut:", e);
+  }
+
+  // --- Patch 6+7: GetGameID (set counter=-1 before, reset to 0 after) ---
+  try {
+    patches.push(
+      replacePatch(appProto, "GetGameID", function (this: SteamAppOverview, _args: any[]) {
+        if (registeredAppIds.has(this.appid)) bypassCounter = -1;
+        return callOriginal;
+      }),
+    );
+    patches.push(
+      afterPatch(appProto, "GetGameID", function (this: SteamAppOverview, _args: any[], ret: any) {
+        if (registeredAppIds.has(this.appid)) bypassCounter = 0;
+        return ret;
+      }),
+    );
+  } catch (e) {
+    console.error("[RomM] Failed to patch GetGameID:", e);
+  }
+
+  // --- Patch 8+9: GetPrimaryAppID (same counter pattern) ---
+  try {
+    patches.push(
+      replacePatch(appProto, "GetPrimaryAppID", function (this: SteamAppOverview, _args: any[]) {
+        if (registeredAppIds.has(this.appid)) bypassCounter = -1;
+        return callOriginal;
+      }),
+    );
+    patches.push(
+      afterPatch(appProto, "GetPrimaryAppID", function (this: SteamAppOverview, _args: any[], ret: any) {
+        if (registeredAppIds.has(this.appid)) bypassCounter = 0;
+        return ret;
+      }),
+    );
+  } catch (e) {
+    console.error("[RomM] Failed to patch GetPrimaryAppID:", e);
+  }
+
+  // --- Patch 10: GetPerClientData (protect shortcut identity) ---
+  try {
+    patches.push(
+      afterPatch(appProto, "GetPerClientData", function (this: SteamAppOverview, _args: any[], ret: any) {
+        if (registeredAppIds.has(this.appid)) {
+          bypassCounter = 4;
         }
         return ret;
       }),
     );
   } catch (e) {
-    console.error("[RomM] Failed to patch BIsModOrShortcut:", e);
+    console.error("[RomM] Failed to patch GetPerClientData:", e);
   }
 
   console.log(`[RomM] Registered metadata patches for ${registeredAppIds.size} apps`);
@@ -278,8 +366,52 @@ export function unregisterMetadataPatches() {
 }
 
 /**
+ * Write tracked playtime to Steam's native UI fields.
+ * Sets minutes_playtime_forever and rt_last_time_played so Steam shows
+ * actual play time instead of "Never Played" for RomM shortcuts.
+ */
+export function updatePlaytimeDisplay(appId: number, totalSeconds: number) {
+  const overview = appStore.GetAppOverviewByAppID(appId);
+  if (!overview) return;
+
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes <= 0) return;
+
+  stateTransaction(() => {
+    overview.minutes_playtime_forever = totalMinutes;
+    // Set rt_last_time_played to now (Unix epoch seconds) so Steam
+    // shows "Last played: today" instead of "Never Played"
+    if (!overview.rt_last_time_played) {
+      overview.rt_last_time_played = Math.floor(Date.now() / 1000);
+    }
+  });
+}
+
+/**
+ * Apply playtime data for all known apps from the bulk playtime map.
+ * Called at plugin load and after sync_complete.
+ */
+export function applyAllPlaytime(
+  playtimeMap: Record<string, { total_seconds: number }>,
+  appIdMap: Record<string, number>,
+) {
+  // Build rom_id -> app_id reverse lookup
+  const romIdToAppId: Record<string, number> = {};
+  for (const [appIdStr, romId] of Object.entries(appIdMap)) {
+    romIdToAppId[String(romId)] = Number(appIdStr);
+  }
+
+  for (const [romIdStr, entry] of Object.entries(playtimeMap)) {
+    const appId = romIdToAppId[romIdStr];
+    if (appId && entry.total_seconds > 0) {
+      updatePlaytimeDisplay(appId, entry.total_seconds);
+    }
+  }
+}
+
+/**
  * Update metadata cache for a single app and apply direct property mutations.
- * Called from GameDetailPanel after fetching fresh metadata.
+ * Called after fetching fresh metadata for a ROM.
  */
 export function updateMetadataForApp(appId: number, romId: number, metadata: RomMetadata) {
   metadataCache[String(romId)] = metadata;
@@ -293,4 +425,23 @@ export function updateMetadataForApp(appId: number, romId: number, metadata: Rom
  */
 export function setRegisteredAppIds(appIds: number[]) {
   registeredAppIds = new Set(appIds);
+}
+
+/**
+ * Set the bypassBypass counter for game detail page rendering.
+ * Call when navigating to /library/app/:appid so BIsModOrShortcut
+ * returns false during the render pass (enabling metadata sections).
+ */
+export function setBypassBypass(count: number) {
+  bypassBypass = count;
+}
+
+/**
+ * Prepare the bypass counter for a shortcut launch.
+ * Sets bypassCounter to -1 so BIsModOrShortcut returns true on every call
+ * until GetGameID/GetPrimaryAppID naturally resets it to 0.
+ * Call this immediately before SteamClient.Apps.RunGame().
+ */
+export function prepareForLaunch() {
+  bypassCounter = -1;
 }

@@ -51,11 +51,11 @@ function getLaunchOptions(appId: number): Promise<string | null> {
 
 /**
  * Add a single Steam shortcut. Returns the new steam app_id, or null on failure.
- * Waits 300ms after AddShortcut for Steam to register the app before setting properties.
- * Artwork is handled via file-based grid by the backend (grid/{id}p.png).
  */
 export async function addShortcut(data: SyncAddItem): Promise<number | null> {
   try {
+    // AddShortcut ignores most params (confirmed by MoonDeck plugin) —
+    // must use Set* calls after creation to apply name, exe, startDir, launchOptions.
     const appId = await SteamClient.Apps.AddShortcut(
       data.name,
       data.exe,
