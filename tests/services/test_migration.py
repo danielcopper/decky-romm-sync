@@ -69,6 +69,9 @@ def plugin():
         get_retrodeck_home=MagicMock(return_value=""),
         get_saves_path=MagicMock(return_value=""),
         get_bios_path=MagicMock(return_value=""),
+        get_retroarch_save_sorting=MagicMock(return_value=(True, False)),
+        get_roms_path=MagicMock(return_value=""),
+        get_active_core=MagicMock(return_value=(None, None)),
     )
     return p
 

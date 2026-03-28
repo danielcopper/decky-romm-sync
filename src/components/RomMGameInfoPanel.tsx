@@ -36,6 +36,7 @@ import {
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, PendingConflict, Achievement, AchievementProgress, EarnedAchievement } from "../types";
 import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
+import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 
 interface RomMGameInfoPanelProps {
@@ -200,10 +201,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   });
   const romIdRef = useRef<number | null>(null);
   const [migrationPending, setMigrationPending] = useState(getMigrationState().pending);
+  const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
 
   useEffect(() => {
     const unsub = onMigrationChange(() => setMigrationPending(getMigrationState().pending));
-    return unsub;
+    const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortPending(getSaveSortMigrationState().pending));
+    return () => { unsub(); unsubSaveSort(); };
   }, []);
 
   useEffect(() => {
@@ -1298,6 +1301,26 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
       )
     : null;
 
+  const saveSortWarning = saveSortPending
+    ? createElement("div", {
+        key: "save-sort-warning",
+        style: {
+          padding: "8px 12px",
+          marginBottom: "12px",
+          backgroundColor: "rgba(212, 167, 44, 0.15)",
+          borderLeft: "3px solid #d4a72c",
+          borderRadius: "4px",
+        },
+      },
+        createElement("div", {
+          style: { fontSize: "13px", fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" },
+        }, "\u26A0\uFE0F RetroArch save sorting changed"),
+        createElement("div", {
+          style: { fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" },
+        }, "Save file paths may be incorrect. Go to Settings to migrate."),
+      )
+    : null;
+
   // --- Determine active tab content ---
   let activeTabContent: ReturnType<typeof createElement> | null = null;
   if (state.activeTab === "info") {
@@ -1330,6 +1353,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
   return createElement("div", { "data-romm": "true" },
     migrationWarning,
+    saveSortWarning,
     tabBar,
     createElement(Focusable as any, {
       noFocusRing: true,

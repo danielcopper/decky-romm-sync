@@ -147,12 +147,23 @@ export interface MigrationStatus {
   saves_count?: number;
 }
 
+export interface ConflictDetail {
+  filename: string;
+  old_path: string;
+  old_size: number;
+  old_mtime: string;
+  new_path: string;
+  new_size: number;
+  new_mtime: string;
+}
+
 export interface MigrationResult {
   success: boolean;
   message: string;
   needs_confirmation?: boolean;
   conflict_count?: number;
-  conflicts?: string[];
+  conflicts?: string[] | ConflictDetail[];
+  conflict_details?: ConflictDetail[];
   roms_moved?: number;
   bios_moved?: number;
   saves_moved?: number;
@@ -161,6 +172,16 @@ export interface MigrationResult {
 
 export const getMigrationStatus = callable<[], MigrationStatus>("get_migration_status");
 export const migrateRetroDeckFiles = callable<[string | null], MigrationResult>("migrate_retrodeck_files");
+
+export interface SaveSortMigrationStatus {
+  pending: boolean;
+  old_settings?: { sort_by_content: boolean; sort_by_core: boolean };
+  new_settings?: { sort_by_content: boolean; sort_by_core: boolean };
+  saves_count?: number;
+}
+
+export const getSaveSortMigrationStatus = callable<[], SaveSortMigrationStatus>("get_save_sort_migration_status");
+export const migrateSaveSortFiles = callable<[string | null], MigrationResult>("migrate_save_sort_files");
 
 // Delete operations
 export const deleteLocalSaves = callable<[number], { success: boolean; deleted_count: number; message: string }>("delete_local_saves");

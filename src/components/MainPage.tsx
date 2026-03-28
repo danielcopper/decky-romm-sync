@@ -26,6 +26,7 @@ import {
 import { getSyncProgress } from "../utils/syncProgress";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
+import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
 import type { MigrationStatus } from "../api/backend";
@@ -75,6 +76,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [loading, setLoading] = useState(false);
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
   const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
+  const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -130,9 +132,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     }, 1000);
 
     const unsubMigration = onMigrationChange(() => setMigration(getMigrationState()));
+    const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
     return () => {
       stopPolling();
       unsubMigration();
+      unsubSaveSort();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
       if (downloadPollRef.current) clearInterval(downloadPollRef.current);
     };
@@ -358,6 +362,31 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 </div>
                 <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" }}>
                   {(migration.roms_count ?? 0) + (migration.bios_count ?? 0) + (migration.saves_count ?? 0)} file(s) need migration ({migration.roms_count ?? 0} ROMs, {migration.bios_count ?? 0} BIOS, {migration.saves_count ?? 0} saves)
+                </div>
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => onNavigate("settings")}>
+                Go to Settings
+              </ButtonItem>
+            </PanelSectionRow>
+          </>
+        )}
+        {saveSortMigration.pending && (
+          <>
+            <PanelSectionRow>
+              <div style={{
+                padding: "8px 12px",
+                backgroundColor: "rgba(212, 167, 44, 0.15)",
+                borderLeft: "3px solid #d4a72c",
+                borderRadius: "4px",
+                fontSize: "12px",
+              }}>
+                <div style={{ fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" }}>
+                  {"\u26A0\uFE0F"} RetroArch save sorting changed
+                </div>
+                <div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+                  {saveSortMigration.saves_count ?? 0} save file(s) to migrate
                 </div>
               </div>
             </PanelSectionRow>

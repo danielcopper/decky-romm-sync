@@ -122,6 +122,7 @@ class Plugin:
             "sync_stats": {"platforms": 0, "roms": 0},
             "downloaded_bios": {},
             "retrodeck_home_path": "",
+            "save_sort_settings": None,
         }
         self._metadata_cache = {}
         self._romm_version = None  # Detected on test_connection
@@ -188,6 +189,7 @@ class Plugin:
 
         # ── 6. Background tasks ─────────────────────────────────────────────
         self._migration_service.detect_retrodeck_path_change()
+        self._migration_service.detect_save_sort_change()
         self.loop.create_task(self._download_service.poll_download_requests())
         decky.logger.info("RomM Sync plugin loaded")
 
@@ -198,6 +200,12 @@ class Plugin:
     async def get_migration_status(self):
         """Delegate to MigrationService."""
         return await self._migration_service.get_migration_status()
+
+    async def get_save_sort_migration_status(self):
+        return await self._migration_service.get_save_sort_migration_status()
+
+    async def migrate_save_sort_files(self, conflict_strategy=None):
+        return await self._migration_service.migrate_save_sort_files(conflict_strategy)
 
     async def _unload(self):  # Decky lifecycle — must be async
         self._sync_service.shutdown()

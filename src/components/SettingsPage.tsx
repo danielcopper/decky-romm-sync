@@ -28,10 +28,13 @@ import {
   saveLogLevel,
   fixRetroarchInputDriver,
   ensureDeviceRegistered,
+  getSaveSortMigrationStatus,
+  migrateSaveSortFiles,
   logError,
 } from "../api/backend";
-import type { MigrationStatus } from "../api/backend";
+import type { MigrationStatus, SaveSortMigrationStatus, ConflictDetail } from "../api/backend";
 import { getMigrationState, setMigrationStatus, clearMigration, onMigrationChange } from "../utils/migrationStore";
+import { getSaveSortMigrationState, setSaveSortMigrationStatus as setStoreSaveSortStatus, clearSaveSortMigration, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import type { SaveSyncSettings as SaveSyncSettingsType, ConflictMode, RetroArchInputCheck } from "../types";
 
 // Module-level state survives component remounts (modal close can remount QAM)
@@ -56,6 +59,59 @@ const MigrationConflictModal: FC<{
         </DialogButton>
         <DialogButton onClick={() => { closeModal?.(); onChoice("skip"); }}>
           Skip
+        </DialogButton>
+        <DialogButton onClick={() => closeModal?.()} style={{ opacity: 0.5 }}>
+          Cancel
+        </DialogButton>
+      </div>
+    </div>
+  </ModalRoot>
+);
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+}
+
+const SaveSortConflictModal: FC<{
+  conflicts: ConflictDetail[];
+  closeModal?: () => void;
+  onChoice: (strategy: "overwrite" | "skip") => void;
+}> = ({ conflicts, closeModal, onChoice }) => (
+  <ModalRoot closeModal={closeModal}>
+    <div style={{ padding: "16px", minWidth: "320px" }}>
+      <div style={{ fontSize: "16px", fontWeight: "bold", color: "#fff", marginBottom: "8px" }}>
+        Save Files Already Exist
+      </div>
+      <div style={{ fontSize: "13px", color: "rgba(255, 255, 255, 0.7)", marginBottom: "12px" }}>
+        {conflicts.length} save file(s) exist at both the old and new location.
+      </div>
+      <div style={{ maxHeight: "240px", overflowY: "auto", marginBottom: "16px" }}>
+        {conflicts.map((c) => (
+          <div key={c.filename} style={{ marginBottom: "12px", padding: "8px", backgroundColor: "rgba(255,255,255,0.05)", borderRadius: "4px" }}>
+            <div style={{ fontSize: "13px", fontWeight: "bold", color: "#fff", marginBottom: "4px" }}>
+              {c.filename}
+            </div>
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)" }}>
+              Old: {formatBytes(c.old_size)}, {formatDate(c.old_mtime)}
+            </div>
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)" }}>
+              New: {formatBytes(c.new_size)}, {formatDate(c.new_mtime)}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        <DialogButton onClick={() => { closeModal?.(); onChoice("overwrite"); }}>
+          Overwrite (use old files)
+        </DialogButton>
+        <DialogButton onClick={() => { closeModal?.(); onChoice("skip"); }}>
+          Skip (keep new files)
         </DialogButton>
         <DialogButton onClick={() => closeModal?.()} style={{ opacity: 0.5 }}>
           Cancel
@@ -142,6 +198,11 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState("");
 
+  // Save sort migration state
+  const [saveSortMigration, setSaveSortMigration] = useState<SaveSortMigrationStatus>(getSaveSortMigrationState());
+  const [saveSortMigrating, setSaveSortMigrating] = useState(false);
+  const [saveSortResult, setSaveSortResult] = useState("");
+
   // Advanced state
   const [logLevel, setLogLevel] = useState("warn");
 
@@ -187,8 +248,16 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       })
       .catch((e) => logError(`Failed to load save sync settings: ${e}`));
 
+    getSaveSortMigrationStatus().then((s) => {
+      if (s.pending) {
+        setStoreSaveSortStatus(s);
+        setSaveSortMigration(s);
+      }
+    }).catch(() => {});
+
     const unsubMigration = onMigrationChange(() => setMigration(getMigrationState()));
-    return () => unsubMigration();
+    const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
+    return () => { unsubMigration(); unsubSaveSort(); };
   }, []);
 
   // Auto-save connection fields when a modal edit is confirmed
@@ -304,6 +373,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     );
   }
 
+  function sortLabel(settings: { sort_by_content: boolean; sort_by_core: boolean }): string {
+    return `Sort by content: ${settings.sort_by_content ? "ON" : "OFF"}, Sort by core: ${settings.sort_by_core ? "ON" : "OFF"}`;
+  }
+
   return (
     <>
       <PanelSection>
@@ -374,6 +447,76 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
           {migrateResult && (
             <PanelSectionRow>
               <Field label={migrateResult} />
+            </PanelSectionRow>
+          )}
+        </PanelSection>
+      )}
+      {saveSortMigration.pending && (
+        <PanelSection title="Save Sort Migration">
+          <PanelSectionRow>
+            <div style={{ padding: "8px 12px", backgroundColor: "rgba(212, 167, 44, 0.15)", borderLeft: "3px solid #d4a72c", borderRadius: "4px" }}>
+              <div style={{ fontSize: "13px", fontWeight: "bold", color: "#d4a72c", marginBottom: "6px" }}>
+                {"\u26A0\uFE0F"} RetroArch save sorting changed
+              </div>
+              {saveSortMigration.old_settings && (
+                <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)", marginBottom: "4px" }}>
+                  From: {sortLabel(saveSortMigration.old_settings)}
+                </div>
+              )}
+              {saveSortMigration.new_settings && (
+                <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)", marginBottom: "4px" }}>
+                  To: {sortLabel(saveSortMigration.new_settings)}
+                </div>
+              )}
+              <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.9)" }}>
+                {saveSortMigration.saves_count ?? 0} save file(s) to migrate
+              </div>
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={saveSortMigrating}
+              onClick={async () => {
+                setSaveSortMigrating(true);
+                setSaveSortResult("");
+                try {
+                  const result = await migrateSaveSortFiles(null);
+                  if (result.needs_confirmation) {
+                    setSaveSortMigrating(false);
+                    const details = (result.conflicts as ConflictDetail[] | undefined) ?? [];
+                    showModal(
+                      <SaveSortConflictModal
+                        conflicts={details}
+                        onChoice={async (strategy) => {
+                          setSaveSortMigrating(true);
+                          try {
+                            const r = await migrateSaveSortFiles(strategy);
+                            setSaveSortResult(r.message);
+                            if (r.success) clearSaveSortMigration();
+                          } catch { setSaveSortResult("Migration failed"); }
+                          setSaveSortMigrating(false);
+                        }}
+                      />
+                    );
+                    return;
+                  }
+                  setSaveSortResult(result.message);
+                  if (result.success) {
+                    clearSaveSortMigration();
+                  }
+                } catch {
+                  setSaveSortResult("Migration failed");
+                }
+                setSaveSortMigrating(false);
+              }}
+            >
+              {saveSortMigrating ? "Migrating..." : "Migrate Save Files"}
+            </ButtonItem>
+          </PanelSectionRow>
+          {saveSortResult && (
+            <PanelSectionRow>
+              <Field label={saveSortResult} />
             </PanelSectionRow>
           )}
         </PanelSection>

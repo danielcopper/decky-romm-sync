@@ -17,9 +17,10 @@ import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
-import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, logError, logInfo } from "./api/backend";
+import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, logError, logInfo } from "./api/backend";
 import { createOrUpdateCollections, createOrUpdateRomMCollections, clearPlatformCollection, getHostname } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
+import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
@@ -126,6 +127,22 @@ export default definePlugin(() => {
       }
     } catch (e) {
       logError(`Failed to check migration status: ${e}`);
+    }
+  })();
+
+  // Check for pending save sort migration on startup
+  (async () => {
+    try {
+      const status = await getSaveSortMigrationStatus();
+      if (status.pending) {
+        setSaveSortMigrationStatus(status);
+        toaster.toast({
+          title: "RomM Sync",
+          body: "RetroArch save sorting changed. Go to Settings to migrate save files.",
+        });
+      }
+    } catch (e) {
+      logError(`Failed to check save sort migration status: ${e}`);
     }
   })();
 
@@ -295,6 +312,20 @@ export default definePlugin(() => {
     });
   });
 
+  const saveSortChangedListener = addEventListener<
+    [{ old_settings: { sort_by_content: boolean; sort_by_core: boolean }; new_settings: { sort_by_content: boolean; sort_by_core: boolean } }]
+  >("save_sort_changed", (data) => {
+    setSaveSortMigrationStatus({
+      pending: true,
+      old_settings: data.old_settings,
+      new_settings: data.new_settings,
+    });
+    toaster.toast({
+      title: "RomM Sync",
+      body: "RetroArch save sorting changed. Go to Settings to migrate save files.",
+    });
+  });
+
   const saveStatusListener = addEventListener<[SaveStatus]>(
     "save_status_updated",
     (data: SaveStatus) => {
@@ -321,6 +352,7 @@ export default definePlugin(() => {
       removeEventListener("download_progress", downloadProgressListener);
       removeEventListener("download_complete", downloadCompleteListener);
       removeEventListener("retrodeck_path_changed", pathChangedListener);
+      removeEventListener("save_sort_changed", saveSortChangedListener);
       removeEventListener("save_status_updated", saveStatusListener);
     },
   };
