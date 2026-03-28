@@ -267,6 +267,17 @@ class SaveService:
             "file_path": file_path,
         }
 
+    def _is_save_sort_changed(self) -> bool:
+        """Check if RetroArch save sorting settings differ from stored state."""
+        if not self._get_retroarch_save_sorting:
+            return False
+        stored = self._state.get("save_sort_settings")
+        if not stored:
+            return False
+        sort_by_content, sort_by_core = self._get_retroarch_save_sorting()
+        current = {"sort_by_content": sort_by_content, "sort_by_core": sort_by_core}
+        return stored != current
+
     # ------------------------------------------------------------------
     # File Helpers
     # ------------------------------------------------------------------
@@ -991,6 +1002,7 @@ class SaveService:
             "device_id": self._save_sync_state.get("device_id", ""),
             "last_sync_check_at": save_entry.get("last_sync_check_at"),
             "conflicts": conflicts,
+            "save_sort_changed": self._is_save_sort_changed(),
         }
 
     def _resolve_conflict_io(
@@ -1110,6 +1122,14 @@ class SaveService:
         """Download newer saves from server before game launch."""
         if not self._is_save_sync_enabled():
             return {"success": True, "message": "Save sync disabled", "synced": 0}
+
+        if self._is_save_sort_changed():
+            return {
+                "success": False,
+                "message": "RetroArch save sorting changed — migrate saves in Settings first",
+                "synced": 0,
+                "save_sort_changed": True,
+            }
 
         settings = self._save_sync_state.get("settings", {})
         if not settings.get("sync_before_launch", True):
