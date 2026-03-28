@@ -440,6 +440,7 @@ class MigrationService:
             return []
         saves_base = self._get_saves_path()
         roms_base = self._get_roms_path()
+        need_core = old_settings.get("sort_by_core") or new_settings.get("sort_by_core")
         items = []
         for entry in self._state.get("installed_roms", {}).values():
             system = entry.get("system", "")
@@ -448,6 +449,12 @@ class MigrationService:
             if not system or not file_path:
                 continue
             rom_name = os.path.splitext(os.path.basename(file_path))[0]
+            rom_filename = os.path.basename(file_path)
+            core_name = None
+            if need_core and self._get_active_core:
+                _core_so, label = self._get_active_core(system, rom_filename)
+                if label:
+                    core_name = label
             old_dir = resolve_save_dir(
                 file_path,
                 saves_base,
@@ -455,6 +462,7 @@ class MigrationService:
                 roms_base=roms_base,
                 sort_by_content=old_settings["sort_by_content"],
                 sort_by_core=old_settings["sort_by_core"],
+                core_name=core_name,
             )
             new_dir = resolve_save_dir(
                 file_path,
@@ -463,6 +471,7 @@ class MigrationService:
                 roms_base=roms_base,
                 sort_by_content=new_settings["sort_by_content"],
                 sort_by_core=new_settings["sort_by_core"],
+                core_name=core_name,
             )
             if old_dir == new_dir:
                 continue
