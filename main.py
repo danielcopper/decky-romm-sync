@@ -207,6 +207,9 @@ class Plugin:
     async def migrate_save_sort_files(self, conflict_strategy=None):
         return await self._migration_service.migrate_save_sort_files(conflict_strategy)
 
+    async def dismiss_save_sort_migration(self):
+        return self._migration_service.dismiss_save_sort_migration()
+
     async def _unload(self):  # Decky lifecycle — must be async
         self._sync_service.shutdown()
         self._download_service.shutdown()

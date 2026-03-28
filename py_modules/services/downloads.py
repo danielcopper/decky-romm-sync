@@ -255,6 +255,20 @@ class DownloadService:
         self._download_tasks[rom_id] = task
         return {"success": True, "message": "Download started"}
 
+    def _decode_url_encoded_names(self, directory: str) -> None:
+        """Rename URL-encoded filenames and directories (e.g. %20 -> space)."""
+        for root, dirs, files in os.walk(directory, topdown=False):
+            for fname in files:
+                decoded = urllib.parse.unquote(fname)
+                if decoded != fname:
+                    os.replace(os.path.join(root, fname), os.path.join(root, decoded))
+                    self._logger.info(f"Renamed URL-encoded file: {fname} -> {decoded}")
+            for dname in dirs:
+                decoded = urllib.parse.unquote(dname)
+                if decoded != dname:
+                    os.replace(os.path.join(root, dname), os.path.join(root, decoded))
+                    self._logger.info(f"Renamed URL-encoded dir: {dname} -> {decoded}")
+
     def _post_download_multi_io(self, rom_id, rom_detail, target_path, file_name, system):
         """Sync helper for _do_download multi-file — extraction + renames in executor."""
         rom_dir_name = os.path.splitext(file_name)[0]
@@ -274,22 +288,7 @@ class DownloadService:
                     raise ValueError(f"ZIP member {member} would extract outside target directory")
             zf.extractall(extract_dir)
         os.remove(tmp_zip)
-        # Fix URL-encoded filenames from RomM (e.g. %20 -> space)
-        for root, dirs, files in os.walk(extract_dir, topdown=False):
-            for fname in files:
-                decoded = urllib.parse.unquote(fname)
-                if decoded != fname:
-                    old_path = os.path.join(root, fname)
-                    new_path = os.path.join(root, decoded)
-                    os.replace(old_path, new_path)
-                    self._logger.info(f"Renamed URL-encoded file: {fname} -> {decoded}")
-            for dname in dirs:
-                decoded = urllib.parse.unquote(dname)
-                if decoded != dname:
-                    old_path = os.path.join(root, dname)
-                    new_path = os.path.join(root, decoded)
-                    os.replace(old_path, new_path)
-                    self._logger.info(f"Renamed URL-encoded dir: {dname} -> {decoded}")
+        self._decode_url_encoded_names(extract_dir)
         # Auto-generate M3U if missing and multiple disc files exist
         self._maybe_generate_m3u_io(extract_dir, rom_detail)
         # Detect launch file: prefer M3U > CUE > largest file

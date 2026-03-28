@@ -434,54 +434,77 @@ class MigrationService:
             )
         )
 
+    def _resolve_core_name(self, system: str, rom_filename: str) -> str | None:
+        """Resolve the RetroArch core directory name for a system/ROM."""
+        if not self._get_active_core:
+            return None
+        _core_so, label = self._get_active_core(system, rom_filename)
+        return label or None
+
     def _collect_save_sorting_items(self, old_settings: dict, new_settings: dict) -> list:
         """Collect save files that need migration due to sort setting change."""
         if not self._get_saves_path or not self._get_roms_path:
             return []
         saves_base = self._get_saves_path()
         roms_base = self._get_roms_path()
-        need_core = old_settings.get("sort_by_core") or new_settings.get("sort_by_core")
-        items = []
+        need_core = bool(old_settings.get("sort_by_core") or new_settings.get("sort_by_core"))
+        items: list[tuple[str, str, str, object, str]] = []
         for entry in self._state.get("installed_roms", {}).values():
-            system = entry.get("system", "")
-            file_path = entry.get("file_path", "")
-            platform_slug = entry.get("platform_slug", "")
-            if not system or not file_path:
-                continue
-            rom_name = os.path.splitext(os.path.basename(file_path))[0]
-            rom_filename = os.path.basename(file_path)
-            core_name = None
-            if need_core and self._get_active_core:
-                _core_so, label = self._get_active_core(system, rom_filename)
-                if label:
-                    core_name = label
-            old_dir = resolve_save_dir(
-                file_path,
+            self._collect_rom_sort_items(
+                entry,
                 saves_base,
-                system,
-                roms_base=roms_base,
-                sort_by_content=old_settings["sort_by_content"],
-                sort_by_core=old_settings["sort_by_core"],
-                core_name=core_name,
+                roms_base,
+                old_settings,
+                new_settings,
+                need_core,
+                items,
             )
-            new_dir = resolve_save_dir(
-                file_path,
-                saves_base,
-                system,
-                roms_base=roms_base,
-                sort_by_content=new_settings["sort_by_content"],
-                sort_by_core=new_settings["sort_by_core"],
-                core_name=core_name,
-            )
-            if old_dir == new_dir:
-                continue
-            for ext in get_save_extensions(platform_slug):
-                filename = rom_name + ext
-                old_file = os.path.join(old_dir, filename)
-                new_file = os.path.join(new_dir, filename)
-                if os.path.exists(old_file):
-                    items.append((filename, old_file, new_file, lambda: None, "save"))
         return items
+
+    def _collect_rom_sort_items(
+        self,
+        entry: dict,
+        saves_base: str,
+        roms_base: str,
+        old_settings: dict,
+        new_settings: dict,
+        need_core: bool,
+        items: list,
+    ) -> None:
+        """Collect migration items for a single ROM's save files."""
+        system = entry.get("system", "")
+        file_path = entry.get("file_path", "")
+        platform_slug = entry.get("platform_slug", "")
+        if not system or not file_path:
+            return
+        core_name = self._resolve_core_name(system, os.path.basename(file_path)) if need_core else None
+        old_dir = resolve_save_dir(
+            file_path,
+            saves_base,
+            system,
+            roms_base=roms_base,
+            sort_by_content=old_settings["sort_by_content"],
+            sort_by_core=old_settings["sort_by_core"],
+            core_name=core_name,
+        )
+        new_dir = resolve_save_dir(
+            file_path,
+            saves_base,
+            system,
+            roms_base=roms_base,
+            sort_by_content=new_settings["sort_by_content"],
+            sort_by_core=new_settings["sort_by_core"],
+            core_name=core_name,
+        )
+        if old_dir == new_dir:
+            return
+        rom_name = os.path.splitext(os.path.basename(file_path))[0]
+        for ext in get_save_extensions(platform_slug):
+            filename = rom_name + ext
+            old_file = os.path.join(old_dir, filename)
+            new_file = os.path.join(new_dir, filename)
+            if os.path.exists(old_file):
+                items.append((filename, old_file, new_file, lambda: None, "save"))
 
     def _get_save_sort_migration_status_io(self, old_settings: dict, new_settings: dict) -> dict:
         items = self._collect_save_sorting_items(old_settings, new_settings)
@@ -491,6 +514,12 @@ class MigrationService:
             "new_settings": new_settings,
             "saves_count": len(items),
         }
+
+    def dismiss_save_sort_migration(self) -> dict:
+        """Dismiss the save sort migration warning without migrating files."""
+        self._state.pop("save_sort_settings_previous", None)
+        self._save_state()
+        return {"success": True}
 
     async def get_save_sort_migration_status(self) -> dict:
         old = self._state.get("save_sort_settings_previous")

@@ -35,7 +35,6 @@ from domain.save_sync import determine_sync_action, match_local_to_server_saves
 from lib.errors import RommApiError, RommConflictError, classify_error
 from services.protocols import (
     CoreResolverFn,
-    RetroArchSaveSortingProvider,
     RetryStrategy,
     RommApiProtocol,
     RomsPathProvider,
@@ -102,7 +101,6 @@ class SaveService:
         get_saves_path: SavesPathProvider,
         get_roms_path: RomsPathProvider,
         get_active_core: CoreResolverFn,
-        get_retroarch_save_sorting: RetroArchSaveSortingProvider | None = None,
         plugin_version: str = "0.0.0",
         emit: EventEmitter | None = None,
     ) -> None:
@@ -117,7 +115,6 @@ class SaveService:
         self._get_saves_path = get_saves_path
         self._get_roms_path = get_roms_path
         self._get_active_core = get_active_core
-        self._get_retroarch_save_sorting = get_retroarch_save_sorting
         self._plugin_version = plugin_version
         self._emit = emit
 
@@ -243,11 +240,13 @@ class SaveService:
         rom_name = os.path.splitext(os.path.basename(file_path))[0]
 
         # Use domain save path resolution.
-        # Read sort settings from retroarch.cfg if callback is available.
+        # Read sort settings from state (populated by MigrationService at startup).
         saves_base = self._get_saves_path()
         roms_base = self._get_roms_path()
-        if self._get_retroarch_save_sorting is not None:
-            sort_by_content, sort_by_core = self._get_retroarch_save_sorting()
+        sort_state = self._state.get("save_sort_settings")
+        if sort_state:
+            sort_by_content = sort_state.get("sort_by_content", True)
+            sort_by_core = sort_state.get("sort_by_core", False)
         else:
             sort_by_content, sort_by_core = True, False  # RetroDECK defaults
         saves_dir = resolve_save_dir(
@@ -268,15 +267,8 @@ class SaveService:
         }
 
     def _is_save_sort_changed(self) -> bool:
-        """Check if RetroArch save sorting settings differ from stored state."""
-        if not self._get_retroarch_save_sorting:
-            return False
-        stored = self._state.get("save_sort_settings")
-        if not stored:
-            return False
-        sort_by_content, sort_by_core = self._get_retroarch_save_sorting()
-        current = {"sort_by_content": sort_by_content, "sort_by_core": sort_by_core}
-        return stored != current
+        """Check if a save sort migration is pending (detected by MigrationService)."""
+        return self._state.get("save_sort_settings_previous") is not None
 
     # ------------------------------------------------------------------
     # File Helpers

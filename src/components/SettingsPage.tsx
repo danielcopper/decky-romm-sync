@@ -30,6 +30,7 @@ import {
   ensureDeviceRegistered,
   getSaveSortMigrationStatus,
   migrateSaveSortFiles,
+  dismissSaveSortMigration,
   logError,
 } from "../api/backend";
 import type { MigrationStatus, SaveSortMigrationStatus, ConflictDetail } from "../api/backend";
@@ -122,6 +123,10 @@ const SaveSortConflictModal: FC<{
 );
 
 const SHARED_ACCOUNT_NAMES = new Set(["admin", "romm", "user", "guest", "root"]);
+
+function sortLabel(settings: { sort_by_content: boolean; sort_by_core: boolean }): string {
+  return `Sort by content: ${settings.sort_by_content ? "ON" : "OFF"}, Sort by core: ${settings.sort_by_core ? "ON" : "OFF"}`;
+}
 
 function isSharedAccount(username: string): boolean {
   return SHARED_ACCOUNT_NAMES.has(username.trim().toLowerCase());
@@ -373,9 +378,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     );
   }
 
-  function sortLabel(settings: { sort_by_content: boolean; sort_by_core: boolean }): string {
-    return `Sort by content: ${settings.sort_by_content ? "ON" : "OFF"}, Sort by core: ${settings.sort_by_core ? "ON" : "OFF"}`;
-  }
 
   return (
     <>
@@ -519,6 +521,20 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
               }}
             >
               {saveSortMigrating ? "Migrating..." : "Migrate Save Files"}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={saveSortMigrating}
+              onClick={async () => {
+                try {
+                  await dismissSaveSortMigration();
+                  clearSaveSortMigration();
+                } catch { /* ignore */ }
+              }}
+            >
+              Dismiss (I migrated manually)
             </ButtonItem>
           </PanelSectionRow>
           {saveSortResult && (

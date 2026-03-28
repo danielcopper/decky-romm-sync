@@ -17,10 +17,11 @@ class RetroDeckConfigAdapter:
 
     _CACHE_TTL = 30  # seconds
 
+    _RA_CFG = "retroarch.cfg"
     _RETROARCH_CFG_SUFFIXES = (
-        os.path.join(".var", "app", "net.retrodeck.retrodeck", "config", "retroarch", "retroarch.cfg"),
-        os.path.join(".var", "app", "org.libretro.RetroArch", "config", "retroarch", "retroarch.cfg"),
-        os.path.join(".config", "retroarch", "retroarch.cfg"),
+        os.path.join(".var", "app", "net.retrodeck.retrodeck", "config", "retroarch", _RA_CFG),
+        os.path.join(".var", "app", "org.libretro.RetroArch", "config", "retroarch", _RA_CFG),
+        os.path.join(".config", "retroarch", _RA_CFG),
     )
 
     def __init__(self, *, user_home: str, logger: logging.Logger) -> None:
