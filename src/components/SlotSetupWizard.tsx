@@ -1,6 +1,7 @@
 import { useState, useEffect, FC, createElement, ChangeEvent } from "react";
-import { DialogButton, ConfirmModal, TextField, showModal } from "@decky/ui";
+import { DialogButton, ConfirmModal, Focusable, TextField, showModal } from "@decky/ui";
 import { getSaveSetupInfo, confirmSlotChoice, logError } from "../api/backend";
+import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import type { SaveSetupInfo } from "../types";
 
 interface SlotSetupWizardProps {
@@ -242,6 +243,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             style={btnStyle}
             disabled={confirming}
             onClick={() => handleConfirm(s.slot ?? defaultSlot)}
+            {...{ onFocus: scrollFocusedToCenter } as any}
           >
             Track
           </DialogButton>
@@ -271,6 +273,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           style={btnPrimaryStyle}
           disabled={confirming}
           onClick={() => handleConfirm(defaultSlot)}
+          {...{ onFocus: scrollFocusedToCenter } as any}
         >
           Use slot &lsquo;{defaultSlot}&rsquo;
         </DialogButton>
@@ -283,6 +286,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       <DialogButton
         style={btnStyle}
         disabled={confirming}
+        {...{ onFocus: scrollFocusedToCenter } as any}
         onClick={() => {
           showModal(
             createElement(ConfirmModal, {

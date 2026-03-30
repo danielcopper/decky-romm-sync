@@ -990,6 +990,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
               : createElement(DialogButton as any, {
                   key: "switch-btn",
                   style: { padding: "2px 8px", minWidth: "auto", fontSize: "11px", width: "auto" },
+                  onFocus: scrollFocusedToCenter,
                   onClick: async () => {
                     try {
                       if (!state.romId) return;
@@ -1021,6 +1022,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
       createElement(DialogButton as any, {
         key: "new-slot-btn",
         style: { padding: "4px 8px", minWidth: "auto", fontSize: "12px", marginTop: "8px" },
+        onFocus: scrollFocusedToCenter,
         onClick: () => {
           const romId = state.romId;
           if (!romId) return;
@@ -1044,7 +1046,13 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
       }, "+ New Slot"),
     );
 
-    saveSyncSection = section("save-sync", null,
+    // Don't wrap in section() — that creates ONE giant focusable element.
+    // Individual slot buttons are DialogButtons, enabling D-Pad navigation.
+    saveSyncSection = createElement("div", {
+      key: "save-sync",
+      className: "romm-panel-section",
+      style: { padding: "12px 0" },
+    },
       createElement("div", {
         key: "saves-columns",
         style: { display: "flex", gap: "24px" },
