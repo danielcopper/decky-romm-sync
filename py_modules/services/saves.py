@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from models.saves import SaveConflict
 
-from domain.emulator_tag import build_emulator_tag
+from domain.emulator_tag import build_emulator_tag, detect_core_change
 from domain.save_conflicts import (
     build_conflict_dict,
     check_local_changes,
@@ -1109,6 +1109,53 @@ class SaveService:
                 await self._emit("save_status_updated", result)
         except Exception as e:
             self._log_debug(f"Background save status check failed for rom {rom_id}: {e}")
+
+    def check_core_change(self, rom_id: int) -> dict:
+        """Check if emulator core changed since last sync for a ROM."""
+        if not self._is_save_sync_enabled():
+            return {"changed": False}
+
+        rom_id_str = str(rom_id)
+        save_entry = self._save_sync_state.get("saves", {}).get(rom_id_str)
+        if not save_entry:
+            return {"changed": False}  # Never synced
+
+        stored_core = save_entry.get("last_synced_core")
+        system = save_entry.get("system")
+        if not stored_core or not system:
+            return {"changed": False}
+
+        # Resolve ROM filename for per-game core detection
+        rom_filename = None
+        installed = self._state.get("installed_roms", {}).get(rom_id_str)
+        if installed:
+            file_path = installed.get("file_path", "")
+            if file_path:
+                rom_filename = os.path.basename(file_path)
+
+        # TODO: Core labels come from ES-DE config which may differ from RetroArch's
+        # corename (e.g. "Snes9x - Current" vs "Snes9x"). Align with RetroArch
+        # core names when #208 is resolved.
+        try:
+            active_core, active_label = self._get_active_core(system, rom_filename)
+        except Exception:
+            return {"changed": False}
+
+        changed = detect_core_change(stored_core, active_core)
+
+        if not changed:
+            return {"changed": False}
+
+        # Strip _libretro suffix for display (stored_core is guaranteed non-None here)
+        old_label = stored_core.replace("_libretro", "")
+
+        return {
+            "changed": True,
+            "old_core": stored_core,
+            "new_core": active_core,
+            "old_label": old_label,
+            "new_label": active_label or (active_core.replace("_libretro", "") if active_core else None),
+        }
 
     async def pre_launch_sync(self, rom_id: int) -> dict:
         """Download newer saves from server before game launch."""

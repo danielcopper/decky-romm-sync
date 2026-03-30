@@ -653,12 +653,15 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
   const handleChangeGameCore = async (coreLabel: string) => {
     if (!info.platformSlug || !info.romFile) return;
     const romPath = `./${info.romFile}`;
+    debugLog(`handleChangeGameCore: slug=${info.platformSlug} romPath=${romPath} coreLabel=${coreLabel}`);
     try {
       const result = await setGameCore(info.platformSlug, romPath, coreLabel);
+      debugLog(`handleChangeGameCore: result=${JSON.stringify(result)}`);
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `Core set to ${coreLabel}` });
         // Use bios_status from the set_game_core response directly (avoids cache staleness)
         const bios = result.bios_status;
+        debugLog(`handleChangeGameCore: bios active_core_label=${bios?.active_core_label}`);
         if (bios) {
           const newLabel = bios.active_core_label ?? null;
           const cores = bios.available_cores ?? info.availableCores;
@@ -686,6 +689,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
   const showCoreMenu = (e: Event) => {
     showContextMenu(
       createElement(Menu, { label: "Emulator Core" },
+        createElement(MenuItem, { key: "core-compat", disabled: true },
+          "Switching cores may affect save compatibility",
+        ),
+        createElement(MenuItem, { key: "core-retrodeck-bug", disabled: true },
+          "\u26a0 Per-game switch not applied (RetroDECK bug) — use QAM for system-wide",
+        ),
+        createElement(MenuSeparator, { key: "core-sep" }),
         ...info.availableCores.map((c) => {
           // Always send the core label — even for the default core.
           // Clearing the override (empty string) would fall back to the platform

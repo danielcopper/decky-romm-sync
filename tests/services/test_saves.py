@@ -3169,3 +3169,138 @@ class TestUpdateFileSyncStateClearsNewerDismissed:
         entry = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert "dismissed_newer_save_id" not in entry
         assert entry.get("tracked_save_id") == 300
+
+
+# ---------------------------------------------------------------------------
+# TestCheckCoreChange
+# ---------------------------------------------------------------------------
+
+
+class TestCheckCoreChange:
+    """Tests for SaveService.check_core_change."""
+
+    def _make_save_entry(
+        self,
+        system="snes",
+        last_synced_core: str | None = "snes9x_libretro",
+        active_slot="default",
+    ):
+        """Return a minimal save state entry for rom_id 42."""
+        return {
+            "system": system,
+            "last_synced_core": last_synced_core,
+            "active_slot": active_slot,
+            "files": {},
+        }
+
+    def test_core_changed(self, tmp_path):
+        """Returns changed=True with core names when active core differs from stored."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
+        )
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+            system="snes",
+            last_synced_core="snes9x_libretro",
+        )
+
+        result = svc.check_core_change(42)
+
+        assert result["changed"] is True
+        assert result["old_core"] == "snes9x_libretro"
+        assert result["new_core"] == "supafaust_libretro"
+        assert result["old_label"] == "snes9x"
+        assert result["new_label"] == "Supafaust"
+
+    def test_core_same(self, tmp_path):
+        """Returns changed=False when active core matches stored core."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
+        )
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+            system="snes",
+            last_synced_core="snes9x_libretro",
+        )
+
+        result = svc.check_core_change(42)
+
+        assert result == {"changed": False}
+
+    def test_never_synced(self, tmp_path):
+        """Returns changed=False when rom_id has no save entry (never synced)."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        # No entry for rom_id 42
+
+        result = svc.check_core_change(42)
+
+        assert result == {"changed": False}
+
+    def test_no_stored_core(self, tmp_path):
+        """Returns changed=False when save entry exists but last_synced_core is None."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
+        )
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+            system="snes",
+            last_synced_core=None,
+        )
+
+        result = svc.check_core_change(42)
+
+        assert result == {"changed": False}
+
+    def test_active_core_resolution_fails(self, tmp_path):
+        """Returns changed=False when get_active_core returns (None, None)."""
+        svc, _ = make_service(
+            tmp_path,
+            # default: get_active_core returns (None, None)
+        )
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+            system="snes",
+            last_synced_core="snes9x_libretro",
+        )
+
+        result = svc.check_core_change(42)
+
+        assert result == {"changed": False}
+
+    def test_save_sync_disabled(self, tmp_path):
+        """Returns changed=False when save sync is disabled regardless of state."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
+        )
+        # save_sync_enabled defaults to False
+        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+            system="snes",
+            last_synced_core="snes9x_libretro",
+        )
+
+        result = svc.check_core_change(42)
+
+        assert result == {"changed": False}
+
+    def test_rom_filename_resolved_for_per_game_core(self, tmp_path):
+        """When installed_roms has file_path, the basename is passed to get_active_core."""
+        received_args: list = []
+
+        def capture_core(system_name, rom_filename=None):
+            received_args.append((system_name, rom_filename))
+            return ("supafaust_libretro", "Supafaust")
+
+        svc, _ = make_service(tmp_path, get_active_core=capture_core)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["saves"]["42"] = self._make_save_entry(system="snes")
+        _install_rom(svc, tmp_path, rom_id=42, system="snes", file_name="mario.sfc")
+
+        svc.check_core_change(42)
+
+        assert len(received_args) == 1
+        assert received_args[0] == ("snes", "mario.sfc")

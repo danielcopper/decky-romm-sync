@@ -133,6 +133,7 @@ export const isSaveTrackingConfigured = callable<[number], { configured: boolean
 export const getSaveSetupInfo = callable<[number], SaveSetupInfo>("get_save_setup_info");
 export const confirmSlotChoice = callable<[number, string, string | null], { success: boolean; needs_conflict_resolution?: boolean; message: string }>("confirm_slot_choice");
 export const resolveNewerInSlot = callable<[number, string, "use_newer" | "keep_current" | "dismiss", number], { success: boolean; message?: string }>("resolve_newer_in_slot");
+export const checkCoreChange = callable<[number], { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string }>("check_core_change");
 
 // Bulk playtime for plugin-load UI update
 export const getAllPlaytime = callable<[], { playtime: Record<string, { total_seconds: number; session_count: number }> }>("get_all_playtime");

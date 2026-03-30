@@ -23,6 +23,7 @@ import {
   downloadAllFirmware,
   downloadRequiredFirmware,
   setSystemCore,
+  debugLog,
 } from "../api/backend";
 import type { PlatformSyncSetting, CollectionSyncSetting, FirmwarePlatformExt } from "../types";
 
@@ -389,7 +390,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
             description={summaryDescription}
           />
         </PanelSectionRow>
-        {platform.available_cores && platform.available_cores.length > 1 && (
+        {platform.available_cores && platform.available_cores.length > 1 && (<>
           <PanelSectionRow>
             <DropdownItem
               label="Active Core"
@@ -403,7 +404,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               onChange={async (option: { data: string }) => {
                 const defaultCore = platform.available_cores?.find((c) => c.is_default);
                 const label = option.data === defaultCore?.label ? "" : option.data;
+                debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`);
                 const result = await setSystemCore(platform.platform_slug, label);
+                debugLog(`setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`);
                 if (result.success) {
                   await refreshBios();
                   globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platform.platform_slug } }));
@@ -411,7 +414,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               }}
             />
           </PanelSectionRow>
-        )}
+        </>)}
         {platform.active_core_label && (!platform.available_cores || platform.available_cores.length <= 1) && (
           <PanelSectionRow>
             <Field
@@ -554,6 +557,11 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
       {activeTab === "bios" && (
         <>
           <PanelSection title="BIOS Files">
+            <PanelSectionRow>
+              <div style={{ fontSize: "11px", color: "#ffb74d", padding: "0 16px 4px" }}>
+                Switching cores may affect save compatibility
+              </div>
+            </PanelSectionRow>
             {biosLoading && (
               <PanelSectionRow>
                 <Field label="Loading firmware status..." />

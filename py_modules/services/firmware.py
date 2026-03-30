@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import time
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -248,7 +249,7 @@ class FirmwareService:
             "required_count": len(required_files),
             "required_downloaded": sum(1 for f in required_files if f.downloaded),
             "unknown_count": sum(1 for f in files if f.classification == "unknown"),
-            "files": files,
+            "files": [asdict(f) for f in files],
             "active_core": active_core_so,
             "active_core_label": active_core_label,
             "available_cores": es_de_config.get_available_cores(platform_slug),
@@ -546,7 +547,7 @@ class FirmwareService:
             "required_count": len(required_files),
             "required_downloaded": sum(1 for f in required_files if f.downloaded),
             "unknown_count": sum(1 for f in files if f.classification == "unknown"),
-            "files": files,
+            "files": [asdict(f) for f in files],
             "active_core": active_core_so,
             "active_core_label": active_core_label,
             "available_cores": es_de_config.get_available_cores(platform_slug),

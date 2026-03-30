@@ -33,10 +33,12 @@ import {
   isSaveTrackingConfigured,
   getSaveSetupInfo,
   confirmSlotChoice,
+  checkCoreChange,
 } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { showConflictResolutionModal } from "./ConflictModal";
+import { showCoreChangeModal } from "./CoreChangeModal";
 import { showNewerInSlotModal } from "./NewerInSlotModal";
 import type { DownloadProgressEvent, DownloadCompleteEvent, PendingConflict, NewerInSlotConflict } from "../types";
 import { isNewerInSlotConflict } from "../types";
@@ -304,6 +306,19 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
             }
           } catch {
             // If check fails, proceed with launch anyway
+          }
+        }
+
+        // Check for core change before syncing
+        const coreCheck = await checkCoreChange(romId).catch((): { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string } => ({ changed: false }));
+        if (coreCheck.changed) {
+          const proceed = await showCoreChangeModal(
+            coreCheck.old_label ?? coreCheck.old_core ?? "Unknown",
+            coreCheck.new_label ?? coreCheck.new_core ?? "Unknown",
+          );
+          if (!proceed) {
+            setState("play");
+            return;
           }
         }
 
