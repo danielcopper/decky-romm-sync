@@ -92,6 +92,10 @@ python -m pytest tests/ -q
 
 This plugin stands on the shoulders of some great projects:
 
+- [RomM](https://github.com/rommapp/romm) — the self-hosted ROM manager at the heart of this plugin. RomM provides
+  the library, metadata, cover art, and save file storage that makes the entire sync experience possible
+- [RetroDECK](https://retrodeck.net/) — the all-in-one emulation solution for Steam Deck that bundles ES-DE,
+  RetroArch, and standalone emulators into a single flatpak. Our entire launch chain runs through RetroDECK
 - [Decky Loader](https://decky.xyz/) — the plugin framework that makes all of this possible
 - [Valve](https://www.valvesoftware.com/) — for the Steam Deck, SteamOS, and an open enough platform to build on
 - [Unifideck](https://github.com/ma3ke/unifideck) — inspiration for game detail page injection techniques and gamepad
