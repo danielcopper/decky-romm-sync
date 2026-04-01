@@ -390,7 +390,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
             description={summaryDescription}
           />
         </PanelSectionRow>
-        {platform.available_cores && platform.available_cores.length > 1 && (<>
+        {platform.available_cores && platform.available_cores.length > 1 && (
           <PanelSectionRow>
             <DropdownItem
               label="Active Core"
@@ -414,7 +414,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               }}
             />
           </PanelSectionRow>
-        </>)}
+        )}
         {platform.active_core_label && (!platform.available_cores || platform.available_cores.length <= 1) && (
           <PanelSectionRow>
             <Field

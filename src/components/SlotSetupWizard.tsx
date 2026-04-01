@@ -1,5 +1,5 @@
 import { useState, useEffect, FC, createElement, ChangeEvent } from "react";
-import { DialogButton, ConfirmModal, Focusable, TextField, showModal } from "@decky/ui";
+import { DialogButton, ConfirmModal, TextField, showModal } from "@decky/ui";
 import { getSaveSetupInfo, confirmSlotChoice, logError } from "../api/backend";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import type { SaveSetupInfo } from "../types";
