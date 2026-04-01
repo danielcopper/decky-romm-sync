@@ -27,6 +27,7 @@ import {
   syncAllSaves,
   saveLogLevel,
   fixRetroarchInputDriver,
+  saveRemoveOnUnsync,
   ensureDeviceRegistered,
   getSaveSortMigrationStatus,
   migrateSaveSortFiles,
@@ -210,6 +211,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
 
   // Advanced state
   const [logLevel, setLogLevel] = useState("warn");
+  const [removeOnUnsync, setRemoveOnUnsync] = useState(true);
 
   useEffect(() => {
     getSettings().then((s) => {
@@ -221,6 +223,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       setSgdbApiKey(s.sgdb_api_key_masked);
       setSteamInputMode(s.steam_input_mode || "default");
       setLogLevel(s.log_level ?? "warn");
+      setRemoveOnUnsync(s.remove_on_unsync ?? true);
       if (s.retroarch_input_check) {
         setRetroarchWarning(s.retroarch_input_check);
       }
@@ -892,6 +895,17 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         )}
       </PanelSection>
       <PanelSection title="Advanced">
+        <PanelSectionRow>
+          <ToggleField
+            label="Remove Shortcuts on Unsync"
+            description="When disabled, unchecking a collection or platform won't remove its shortcuts during sync"
+            checked={removeOnUnsync}
+            onChange={(value) => {
+              setRemoveOnUnsync(value);
+              saveRemoveOnUnsync(value).catch(() => setRemoveOnUnsync(!value));
+            }}
+          />
+        </PanelSectionRow>
         <PanelSectionRow>
           <DropdownItem
             label="Log Level"

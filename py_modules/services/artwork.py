@@ -6,7 +6,10 @@ import asyncio
 import base64
 import os
 import pathlib
+import time
 from typing import TYPE_CHECKING
+
+from lib.perf import AdaptiveSemaphore
 
 if TYPE_CHECKING:
     import logging
@@ -17,6 +20,9 @@ if TYPE_CHECKING:
 
 class ArtworkService:
     """Manages artwork downloading, staging, finalisation, and cleanup."""
+
+    # Default concurrent download limit
+    _ARTWORK_CONCURRENCY: int = 6
 
     def __init__(
         self,
@@ -82,35 +88,87 @@ class ArtworkService:
 
         total = len(all_roms)
 
-        for i, rom in enumerate(all_roms):
-            if is_cancelling():
-                return cover_paths
+        # Shared mutable counter for concurrent progress tracking
+        progress = {"done": 0}
+        sem = AdaptiveSemaphore(
+            initial=self._ARTWORK_CONCURRENCY,
+            min_concurrent=2,
+            max_concurrent=12,
+            low_latency_ms=100.0,
+            high_latency_ms=800.0,
+            window=10,
+            adjust_every=8,
+        )
 
-            await emit_progress(
-                "applying",
-                current=i + 1,
-                total=total,
-                message=f"Downloading artwork {i + 1}/{total}",
-                step=progress_step,
-                total_steps=progress_total_steps,
+        async def _download_one(rom: dict) -> tuple[int, str] | None:
+            """Download artwork for a single ROM, bounded by semaphore."""
+            async with sem:
+                t0 = time.monotonic()
+                if is_cancelling():
+                    return None
+
+                rom_id = rom["id"]
+                cover_url = rom.get("path_cover_large") or rom.get("path_cover_small")
+                if not cover_url:
+                    progress["done"] += 1
+                    await emit_progress(
+                        "applying",
+                        current=progress["done"],
+                        total=total,
+                        message=f"Downloading artwork {progress['done']}/{total}",
+                        step=progress_step,
+                        total_steps=progress_total_steps,
+                    )
+                    return None
+
+                existing = self.existing_cover_path(rom_id, grid)
+                if existing:
+                    progress["done"] += 1
+                    sem.record_latency(time.monotonic() - t0)
+                    await emit_progress(
+                        "applying",
+                        current=progress["done"],
+                        total=total,
+                        message=f"Downloading artwork {progress['done']}/{total}",
+                        step=progress_step,
+                        total_steps=progress_total_steps,
+                    )
+                    return rom_id, existing
+
+                staging = os.path.join(grid, f"romm_{rom_id}_cover.png")
+                try:
+                    await self._loop.run_in_executor(None, self._romm_api.download_cover, cover_url, staging)
+                    result = (rom_id, staging)
+                except Exception as e:
+                    self._logger.warning(f"Failed to download artwork for {rom['name']}: {e}")
+                    result = None
+
+                progress["done"] += 1
+                sem.record_latency(time.monotonic() - t0)
+                await emit_progress(
+                    "applying",
+                    current=progress["done"],
+                    total=total,
+                    message=f"Downloading artwork {progress['done']}/{total}",
+                    step=progress_step,
+                    total_steps=progress_total_steps,
+                )
+                return result
+
+        tasks = [_download_one(rom) for rom in all_roms]
+        results = await asyncio.gather(*tasks)
+
+        # Log adaptive concurrency adjustments
+        if sem.adjustments:
+            self._logger.info(
+                f"Artwork concurrency adapted: {self._ARTWORK_CONCURRENCY} → {sem.limit} "
+                f"({len(sem.adjustments)} adjustment(s))"
             )
 
-            cover_url = rom.get("path_cover_large") or rom.get("path_cover_small")
-            if not cover_url:
-                continue
-
-            rom_id = rom["id"]
-            existing = self.existing_cover_path(rom_id, grid)
-            if existing:
-                cover_paths[rom_id] = existing
-                continue
-
-            staging = os.path.join(grid, f"romm_{rom_id}_cover.png")
-            try:
-                await self._loop.run_in_executor(None, self._romm_api.download_cover, cover_url, staging)
-                cover_paths[rom_id] = staging
-            except Exception as e:
-                self._logger.warning(f"Failed to download artwork for {rom['name']}: {e}")
+        for item in results:
+            if item is not None:
+                rom_id, path = item
+                cover_paths[rom_id] = path
 
         return cover_paths
 

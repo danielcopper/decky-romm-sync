@@ -4,6 +4,8 @@ No dependency on ``decky`` — all external dependencies (settings, plugin_dir,
 logger) are injected via the constructor.
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -16,7 +18,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from lib.certifi_bundle import ca_bundle as _ca_bundle
 from lib.errors import (
@@ -30,6 +32,9 @@ from lib.errors import (
     RommSSLError,
     RommTimeoutError,
 )
+
+if TYPE_CHECKING:
+    from lib.perf import PerfCollector
 
 
 class RommHttpAdapter:
@@ -53,6 +58,11 @@ class RommHttpAdapter:
         self._settings = settings
         self._plugin_dir = plugin_dir
         self._logger = logger
+        self._perf: PerfCollector | None = None
+
+    def set_perf_collector(self, perf: PerfCollector) -> None:
+        """Attach an optional performance collector for HTTP request tracking."""
+        self._perf = perf
 
     # ------------------------------------------------------------------
     # Platform map
@@ -198,13 +208,29 @@ class RommHttpAdapter:
         def _do_request():
             req = urllib.request.Request(url, method="GET")
             req.add_header("Authorization", self.auth_header())
+            req.add_header("Accept-Encoding", "gzip")
+            t0 = time.monotonic()
+            status = 0
+            nbytes = 0
             try:
                 with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
-                    return json.loads(resp.read().decode())
+                    data = resp.read()
+                    # Decompress if server sent gzip
+                    if resp.headers.get("Content-Encoding") == "gzip":
+                        import gzip as _gzip
+
+                        data = _gzip.decompress(data)
+                    status = resp.status
+                    nbytes = len(data)
+                    return json.loads(data.decode())
             except RommApiError:
                 raise
             except Exception as exc:
                 raise self.translate_http_error(exc, url, "GET") from exc
+            finally:
+                elapsed = time.monotonic() - t0
+                if self._perf is not None:
+                    self._perf.record_http_request("GET", path, elapsed, status, nbytes)
 
         return self.with_retry(_do_request)
 
@@ -253,6 +279,8 @@ class RommHttpAdapter:
             req = urllib.request.Request(url, method="GET")
             req.add_header("Authorization", self.auth_header())
             ctx = self.ssl_context()
+            t0 = time.monotonic()
+            downloaded_bytes = 0
             try:
                 with urllib.request.urlopen(req, context=ctx, timeout=self._CONNECT_TIMEOUT) as resp:
                     raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
@@ -262,10 +290,15 @@ class RommHttpAdapter:
                         resp, dest_path, progress_callback, block_size=self._DOWNLOAD_BLOCK_SIZE, url=url
                     )
                 self._validate_download(total, downloaded)
+                downloaded_bytes = downloaded
             except RommApiError:
                 raise
             except Exception as exc:
                 raise self.translate_http_error(exc, url, "GET") from exc
+            finally:
+                elapsed = time.monotonic() - t0
+                if self._perf is not None:
+                    self._perf.record_http_request("GET", path, elapsed, 200, downloaded_bytes)
 
         return self.with_retry(_do_download)
 

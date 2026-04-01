@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from domain.shortcut_data import build_registry_entry, build_shortcuts_data
 from domain.sync_state import SyncState
 from lib.errors import RommUnsupportedError, classify_error
+from lib.perf import AdaptiveSemaphore, ETAEstimator, PerfCollector
 
 if TYPE_CHECKING:
     import logging
@@ -72,6 +73,19 @@ class LibraryService:
         self._log_debug = log_debug
         self._metadata_service = metadata_service
         self._artwork = artwork
+
+        # Performance instrumentation
+        self._perf = PerfCollector()
+        self._eta = ETAEstimator(alpha=0.3, min_samples=5)
+
+        # Collection list cache (avoids redundant HTTP fetches)
+        self._collections_cache: tuple[list[dict], list[dict]] | None = None
+        self._collections_cache_time: float = 0.0
+        self._COLLECTIONS_CACHE_TTL: float = 300.0  # 5 minutes
+
+        # Concurrent fetch settings
+        self._FETCH_CONCURRENCY: int = 4  # max parallel platform fetches
+        self._PAGE_SIZE: int = 250  # ROMs per API page (up from 50)
 
         # Sync-specific state (owned by this service)
         self._sync_state = SyncState.IDLE
@@ -141,9 +155,49 @@ class LibraryService:
         self._save_settings_to_disk()
         return {"success": True}
 
+    # ── Collection list caching ──────────────────────────────
+
+    async def _get_collections_cached(self) -> tuple[list[dict], list[dict]]:
+        """Return (user_collections, franchise_collections) with TTL cache.
+
+        The first call fetches both lists from the RomM API in parallel
+        using ``asyncio.gather``.  Subsequent calls within the TTL window
+        return the cached result without any HTTP traffic.
+
+        Raises ``RommUnsupportedError`` if collections aren't available.
+        """
+        now = time.monotonic()
+        if self._collections_cache is not None and (now - self._collections_cache_time) < self._COLLECTIONS_CACHE_TTL:
+            return self._collections_cache
+
+        async def _fetch_user() -> list[dict]:
+            return await self._loop.run_in_executor(None, self._romm_api.list_collections)
+
+        async def _fetch_franchise() -> list[dict]:
+            try:
+                return await self._loop.run_in_executor(
+                    None, self._romm_api.list_virtual_collections, "franchise"
+                )
+            except Exception as e:
+                self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
+                return []
+
+        user_collections, franchise_collections = await asyncio.gather(
+            _fetch_user(), _fetch_franchise()
+        )
+
+        self._collections_cache = (user_collections, franchise_collections)
+        self._collections_cache_time = time.monotonic()
+        return self._collections_cache
+
+    def _invalidate_collections_cache(self) -> None:
+        """Clear the collection list cache (call at sync start)."""
+        self._collections_cache = None
+        self._collections_cache_time = 0.0
+
     async def get_collections(self):
         try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
+            user_collections, franchise_collections = await self._get_collections_cached()
         except RommUnsupportedError:
             return {
                 "success": False,
@@ -154,13 +208,6 @@ class LibraryService:
             self._logger.error(f"Failed to fetch collections: {e}")
             _code, _msg = classify_error(e)
             return {"success": False, "message": _msg, "error_code": _code}
-        try:
-            franchise_collections = await self._loop.run_in_executor(
-                None, self._romm_api.list_virtual_collections, "franchise"
-            )
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
-            franchise_collections = []
 
         enabled = self._settings.get("enabled_collections", {})
         result = []
@@ -199,7 +246,7 @@ class LibraryService:
     async def set_all_collections_sync(self, enabled, category=None):
         enabled = bool(enabled)
         try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
+            user_collections, franchise_collections = await self._get_collections_cached()
         except RommUnsupportedError:
             return {
                 "success": False,
@@ -210,13 +257,6 @@ class LibraryService:
             self._logger.error(f"Failed to fetch collections: {e}")
             _code, _msg = classify_error(e)
             return {"success": False, "message": _msg, "error_code": _code}
-        try:
-            franchise_collections = await self._loop.run_in_executor(
-                None, self._romm_api.list_virtual_collections, "franchise"
-            )
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
-            franchise_collections = []
 
         all_collections = []
         for c in user_collections:
@@ -364,6 +404,7 @@ class LibraryService:
         # Step: Download artwork
         if has_artwork:
             current_step += 1
+            self._eta.start()
             await self._emit_progress(
                 "applying",
                 total=len(delta_roms),
@@ -429,8 +470,37 @@ class LibraryService:
 
     # ── Progress & safety ────────────────────────────────────
 
-    async def _emit_progress(self, phase, current=0, total=0, message="", running=True, step=0, total_steps=0):
-        """Update _sync_progress and emit sync_progress event to frontend."""
+    async def _emit_progress(
+        self,
+        phase,
+        current=0,
+        total=0,
+        message="",
+        running=True,
+        step=0,
+        total_steps=0,
+        *,
+        sub_phase="",
+    ):
+        """Update _sync_progress and emit sync_progress event to frontend.
+
+        Automatically enriches the payload with ETA/elapsed/speed data from
+        ``self._eta`` when the estimator has been started and has enough samples.
+
+        If *current* and *total* are both > 0 the ETA estimator is updated
+        automatically — callers do **not** need to call ``_eta.update()``
+        manually (though they still may for phase-level granularity).
+        """
+        # Auto-feed the ETA estimator from stepped phases (artwork/apply).
+        # During non-stepped phases (platform fetch) the caller drives
+        # _eta.update() explicitly at platform granularity.
+        if step > 0 and current > 0 and total > 0:
+            self._eta.update(current)
+
+        eta_sec = self._eta.eta_seconds(current, total) if total > 0 else None
+        elapsed_sec = self._eta.elapsed
+        ips = self._eta.items_per_sec
+
         self._sync_progress = {
             "running": running,
             "phase": phase,
@@ -439,6 +509,11 @@ class LibraryService:
             "message": message,
             "step": step,
             "totalSteps": total_steps,
+            # Enhanced fields — always present (frontend ignores 0/None gracefully)
+            "elapsedSec": round(elapsed_sec, 1) if elapsed_sec else 0,
+            "etaSec": round(eta_sec, 1) if eta_sec else None,
+            "itemsPerSec": round(ips, 2) if ips else None,
+            "subPhase": sub_phase,
         }
         await self._emit("sync_progress", self._sync_progress)
 
@@ -492,6 +567,13 @@ class LibraryService:
         # Stale: in registry but not in fetched set
         current_ids = {sd["rom_id"] for sd in shortcuts_data}
         stale = [int(rid) for rid in registry if int(rid) not in current_ids]
+
+        # If removal guard is active, suppress stale list entirely
+        if not self._settings.get("remove_on_unsync", True):
+            disabled_count = sum(
+                1 for rid in stale if registry.get(str(rid), {}).get("platform_name") not in fetched_platform_names
+            )
+            return new, changed, unchanged_ids, [], disabled_count
 
         # Classify stale by disabled platform
         disabled_count = sum(
@@ -628,13 +710,19 @@ class LibraryService:
         return False
 
     async def _full_fetch_platform_roms(self, platform_id, platform_name, platform_slug, all_roms, pi, total_platforms):
-        """Full paginated fetch of ROMs for a single platform."""
+        """Full paginated fetch of ROMs for a single platform.
+
+        Returns the fetched ROM list.  Also appends to *all_roms* in-place for
+        backward-compatible callers that still pass a shared accumulator.
+        """
         offset = 0
-        limit = 50
+        limit = self._PAGE_SIZE
+        platform_roms: list[dict] = []
         await self._emit_progress(
             "roms",
             current=len(all_roms),
             message=f"Fetching {platform_name}... {len(all_roms)} found ({pi}/{total_platforms})",
+            sub_phase=f"platform:{platform_name}",
         )
 
         while True:
@@ -657,15 +745,150 @@ class LibraryService:
                 rom["platform_name"] = platform_name
                 rom["platform_slug"] = platform_slug
 
+            platform_roms.extend(rom_list)
             all_roms.extend(rom_list)
             await self._emit_progress(
                 "roms",
                 current=len(all_roms),
                 message=f"Fetching {platform_name}... {len(all_roms)} found ({pi}/{total_platforms})",
+                sub_phase=f"platform:{platform_name}",
             )
             if len(rom_list) < limit:
                 break
             offset += limit
+
+        return platform_roms
+
+    async def _fetch_one_platform(
+        self,
+        platform: dict,
+        registry: dict,
+        last_sync: str | None,
+        sem: AdaptiveSemaphore,
+        progress: dict,
+    ) -> list[dict]:
+        """Fetch ROMs for a single platform (concurrent-safe).
+
+        Uses *sem* to bound concurrency.  Updates *progress* dict
+        (shared mutable counter) for live progress reporting.
+        Returns the platform's ROM list.
+        """
+        async with sem:
+            t0 = time.monotonic()
+            self._check_cancelling()
+            platform_name = platform.get("name", platform.get("display_name", "Unknown"))
+            platform_slug = platform.get("slug", "")
+
+            # Try incremental skip
+            skipped, roms = await self._try_incremental_skip_isolated(
+                platform, registry, last_sync, platform_name, platform_slug
+            )
+
+            if not skipped:
+                roms = await self._full_fetch_platform_roms_isolated(
+                    platform["id"], platform_name, platform_slug, progress
+                )
+
+            progress["done"] += 1
+            self._perf.increment("platforms_fetched")
+            self._eta.update(progress["done"])
+            sem.record_latency(time.monotonic() - t0)
+            await self._emit_progress(
+                "roms",
+                current=progress["roms_found"],
+                message=f"{platform_name} done ({progress['done']}/{progress['total']})",
+            )
+            return roms
+
+    async def _try_incremental_skip_isolated(
+        self,
+        platform: dict,
+        registry: dict,
+        last_sync: str | None,
+        platform_name: str,
+        platform_slug: str,
+    ) -> tuple[bool, list[dict]]:
+        """Incremental skip check that returns (skipped, roms) without mutating shared state."""
+        if not last_sync:
+            return False, []
+
+        platform_id = platform["id"]
+        registry_count = sum(
+            1 for entry in registry.values() if entry.get("platform_name") == platform_name
+        )
+        if registry_count == 0:
+            return False, []
+
+        try:
+            delta_resp = await self._loop.run_in_executor(
+                None,
+                self._romm_api.list_roms_updated_after,
+                platform_id,
+                last_sync,
+                1,
+                0,
+            )
+            server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
+            platform_total = platform.get("rom_count", 0)
+
+            if server_total == 0 and platform_total == registry_count:
+                self._logger.info(f"Skipping {platform_name}: {registry_count} ROMs unchanged")
+                roms = self._reconstruct_platform_from_registry(registry, platform_name, platform_slug)
+                return True, roms
+
+            self._logger.info(
+                f"{platform_name}: {server_total} updated, "
+                f"server={platform_total} vs registry={registry_count} — full fetch"
+            )
+        except Exception as e:
+            self._logger.warning(f"Incremental check failed for {platform_name}, falling back to full fetch: {e}")
+        return False, []
+
+    async def _full_fetch_platform_roms_isolated(
+        self,
+        platform_id: int,
+        platform_name: str,
+        platform_slug: str,
+        progress: dict,
+    ) -> list[dict]:
+        """Full paginated ROM fetch for one platform (concurrent-safe, no shared list mutation)."""
+        offset = 0
+        limit = self._PAGE_SIZE
+        platform_roms: list[dict] = []
+
+        while True:
+            self._check_cancelling()
+            try:
+                roms = await self._loop.run_in_executor(
+                    None,
+                    self._romm_api.list_roms,
+                    platform_id,
+                    limit,
+                    offset,
+                )
+            except Exception as e:
+                self._logger.error(f"Failed to fetch ROMs for platform {platform_name}: {e}")
+                break
+
+            rom_list = roms.get("items", []) if isinstance(roms, dict) else roms
+            for rom in rom_list:
+                rom.pop("files", None)
+                rom["platform_name"] = platform_name
+                rom["platform_slug"] = platform_slug
+
+            platform_roms.extend(rom_list)
+            progress["roms_found"] += len(rom_list)
+            await self._emit_progress(
+                "roms",
+                current=progress["roms_found"],
+                message=f"Fetching {platform_name}... {progress['roms_found']} total ({progress['done']}/{progress['total']})",
+                sub_phase=f"platform:{platform_name}",
+            )
+            if len(rom_list) < limit:
+                break
+            offset += limit
+
+        return platform_roms
 
     def _check_cancelling(self):
         """Raise CancelledError if sync is being cancelled."""
@@ -689,7 +912,7 @@ class LibraryService:
         coll_rom_ids: list[int] = []
 
         offset = 0
-        limit = 50
+        limit = self._PAGE_SIZE
         while True:
             self._check_cancelling()
             if is_virtual:
@@ -735,14 +958,7 @@ class LibraryService:
             return collection_only_roms, collection_memberships
 
         try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
-            franchise_collections: list[dict] = []
-            try:
-                franchise_collections = await self._loop.run_in_executor(
-                    None, self._romm_api.list_virtual_collections, "franchise"
-                )
-            except Exception as e:
-                self._logger.warning(f"Failed to fetch franchise collections: {e}")
+            user_collections, franchise_collections = await self._get_collections_cached()
 
             self._log_debug(
                 f"Collection metadata: {len(user_collections)} user, {len(franchise_collections)} franchise"
@@ -787,41 +1003,61 @@ class LibraryService:
 
         # Phase 1: Fetch platforms
         await self._emit_progress("platforms", message="Fetching platforms...")
-        platforms = await self._fetch_enabled_platforms()
+        with self._perf.time_phase("fetch_platforms"):
+            platforms = await self._fetch_enabled_platforms()
         self._check_cancelling()
 
-        # Phase 2: Fetch ROMs per platform (incremental if possible)
+        # Phase 2: Fetch ROMs per platform (concurrent, bounded by semaphore)
         await self._emit_progress("roms", message="Fetching ROMs...")
         last_sync = self._state.get("last_sync")
         registry = self._state.get("shortcut_registry", {})
 
-        all_roms: list[dict] = []
         total_platforms = len(platforms)
-        for pi, platform in enumerate(platforms, 1):
-            self._check_cancelling()
-            platform_name = platform.get("name", platform.get("display_name", "Unknown"))
-            platform_slug = platform.get("slug", "")
+        self._eta.start()
 
-            skipped = await self._try_incremental_skip(
-                platform, registry, last_sync, platform_name, platform_slug, all_roms, pi, total_platforms
+        sem = AdaptiveSemaphore(
+            initial=self._FETCH_CONCURRENCY,
+            min_concurrent=1,
+            max_concurrent=8,
+            low_latency_ms=1000.0,
+            high_latency_ms=5000.0,
+            window=5,
+            adjust_every=3,
+        )
+        progress = {"done": 0, "roms_found": 0, "total": total_platforms}
+
+        with self._perf.time_phase("fetch_roms"):
+            tasks = [
+                self._fetch_one_platform(platform, registry, last_sync, sem, progress)
+                for platform in platforms
+            ]
+            results = await asyncio.gather(*tasks)
+
+        # Record adaptive concurrency adjustments
+        if sem.adjustments:
+            self._perf.set_gauge("fetch_final_concurrency", sem.limit)
+            self._logger.info(
+                f"Fetch concurrency adapted: {self._FETCH_CONCURRENCY} → {sem.limit} "
+                f"({len(sem.adjustments)} adjustment(s))"
             )
-            if not skipped:
-                await self._full_fetch_platform_roms(
-                    platform["id"], platform_name, platform_slug, all_roms, pi, total_platforms
-                )
+
+        all_roms: list[dict] = [rom for platform_roms in results for rom in platform_roms]
 
         self._check_cancelling()
+        self._perf.set_gauge("total_roms_fetched", len(all_roms))
         self._logger.info(f"Fetched {len(all_roms)} ROMs from {len(platforms)} platforms")
 
         # Record which rom_ids came from platforms
         platform_rom_ids: set[int] = {r["id"] for r in all_roms}
 
         # Phase 3: Fetch collection ROMs (adds ROMs not already in all_roms)
-        collection_only_roms, collection_memberships = await self._fetch_collection_roms(platform_rom_ids)
+        with self._perf.time_phase("fetch_collections"):
+            collection_only_roms, collection_memberships = await self._fetch_collection_roms(platform_rom_ids)
         all_roms.extend(collection_only_roms)
 
         # Phase 4: Prepare shortcut data
-        shortcuts_data = self._build_shortcuts_data(all_roms)
+        with self._perf.time_phase("prepare_shortcuts"):
+            shortcuts_data = self._build_shortcuts_data(all_roms)
         self._check_cancelling()
 
         # Cache metadata from sync response
@@ -838,6 +1074,8 @@ class LibraryService:
     # ── Full sync ────────────────────────────────────────────
 
     async def _do_sync(self):
+        self._perf.start_sync()
+        self._invalidate_collections_cache()
         try:
             try:
                 fetch_result = await self._fetch_and_prepare()
@@ -865,6 +1103,8 @@ class LibraryService:
 
             if has_artwork:
                 full_current_step += 1
+                # Restart ETA for the artwork phase so estimates are fresh.
+                self._eta.start()
                 await self._emit_progress(
                     "applying",
                     total=len(all_roms),
@@ -872,9 +1112,11 @@ class LibraryService:
                     step=full_current_step,
                     total_steps=full_total_steps,
                 )
-                cover_paths = await self._download_artwork(
-                    all_roms, progress_step=full_current_step, progress_total_steps=full_total_steps
-                )
+                with self._perf.time_phase("download_artwork"):
+                    cover_paths = await self._download_artwork(
+                        all_roms, progress_step=full_current_step, progress_total_steps=full_total_steps
+                    )
+                self._perf.set_gauge("artwork_downloaded", len(cover_paths))
             else:
                 cover_paths = {}
 
@@ -888,6 +1130,10 @@ class LibraryService:
             # Determine stale rom_ids by comparing current sync with registry
             current_rom_ids = {r["id"] for r in all_roms}
             stale_rom_ids = [int(rid) for rid in self._state["shortcut_registry"] if int(rid) not in current_rom_ids]
+
+            # If removal guard is active, suppress stale list entirely
+            if not self._settings.get("remove_on_unsync", True):
+                stale_rom_ids = []
 
             # Emit sync_apply for frontend to process via SteamClient
             next_step = full_current_step + 1
@@ -936,6 +1182,8 @@ class LibraryService:
             }
             self._loop.create_task(self._emit("sync_progress", self._sync_progress))
         finally:
+            self._perf.end_sync()
+            self._logger.info(f"Sync performance:\n{self._perf.format_report()}")
             if self._metadata_service is not None:
                 self._metadata_service.flush_metadata_if_dirty()
             self._sync_state = SyncState.IDLE
@@ -1113,6 +1361,7 @@ class LibraryService:
     def clear_sync_cache(self):
         """Clear last_sync timestamp to force a full re-fetch on next sync."""
         self._state["last_sync"] = None
+        self._invalidate_collections_cache()
         self._save_state()
         self._logger.info("Sync cache cleared — next sync will do a full fetch")
         return {"success": True, "message": "Next sync will do a full fetch"}
@@ -1144,3 +1393,16 @@ class LibraryService:
                     "installed": installed,
                 }
         return None
+
+    def get_perf_report(self) -> dict:
+        """Return the performance report from the most recent sync.
+
+        Safe to call at any time — returns empty report if no sync has run.
+        """
+        if self._perf.wall_time > 0:
+            return {
+                "success": True,
+                "report": self._perf.generate_report(),
+                "formatted": self._perf.format_report(),
+            }
+        return {"success": False, "message": "No performance data available"}

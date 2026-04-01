@@ -61,6 +61,7 @@ export interface PluginSettings {
   romm_allow_insecure_ssl: boolean;
   retroarch_input_check?: RetroArchInputCheck;
   collection_create_platform_groups?: boolean;
+  remove_on_unsync?: boolean;
 }
 
 export interface DownloadItem {
@@ -99,6 +100,11 @@ export interface SyncProgress {
   message?: string;
   step?: number;
   totalSteps?: number;
+  // Enhanced progress fields (PR 3)
+  elapsedSec?: number;
+  etaSec?: number | null;
+  itemsPerSec?: number | null;
+  subPhase?: string;
 }
 
 export interface SyncStats {

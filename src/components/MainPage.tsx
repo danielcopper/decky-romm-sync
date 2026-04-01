@@ -243,16 +243,29 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     ? ((syncProgress.current ?? 0) / syncProgress.total) * 100
     : undefined;
 
+  const formatEta = (seconds: number): string => {
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    return s > 0 ? `${m}m${s}s` : `${m}m`;
+  };
+
   const formatProgressText = (progress: SyncProgress | null): string => {
     if (!progress) return "Syncing...";
     const step = progress.step && progress.totalSteps
       ? `[${progress.step}/${progress.totalSteps}] `
       : "";
     const msg = progress.message || "Syncing...";
+
+    // Append ETA when available
+    const eta = progress.etaSec != null && progress.etaSec > 0
+      ? ` · ${formatEta(progress.etaSec)}`
+      : "";
+
     // Truncate to ~40 chars to prevent multi-line jumping in the QAM panel
-    const maxLen = 40 - step.length;
+    const maxLen = 40 - step.length - eta.length;
     const truncated = msg.length > maxLen ? msg.slice(0, maxLen - 1) + "\u2026" : msg;
-    return step + truncated;
+    return step + truncated + eta;
   };
 
   const formatLastSync = (iso: string | null): string => {
@@ -483,7 +496,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                   label={
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <Spinner width={16} height={16} />
-                      {syncProgress?.message || "Fetching..."}
+                      <span>
+                        {syncProgress?.message || "Fetching..."}
+                        {syncProgress?.etaSec != null && syncProgress.etaSec > 0 && (
+                          <span style={{ opacity: 0.6, fontSize: "11px" }}>
+                            {" · "}{formatEta(syncProgress.etaSec)}
+                          </span>
+                        )}
+                      </span>
                     </div>
                   }
                 />

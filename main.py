@@ -342,6 +342,7 @@ class Plugin:
             "log_level": self.settings.get("log_level", "warn"),
             "romm_allow_insecure_ssl": self.settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self.settings.get("collection_create_platform_groups", False),
+            "remove_on_unsync": self.settings.get("remove_on_unsync", True),
         }
 
     async def get_whitelist_settings(self):
@@ -471,6 +472,11 @@ class Plugin:
         self._save_settings_to_disk()
         return {"success": True}
 
+    async def save_remove_on_unsync(self, enabled):
+        self.settings["remove_on_unsync"] = bool(enabled)
+        self._save_settings_to_disk()
+        return {"success": True}
+
     async def start_sync(self):
         return self._sync_service.start_sync()
 
@@ -515,6 +521,9 @@ class Plugin:
 
     async def get_sync_stats(self):
         return self._sync_service.get_sync_stats()
+
+    async def get_sync_perf_report(self):
+        return self._sync_service.get_perf_report()
 
     async def get_rom_by_steam_app_id(self, app_id):
         return self._sync_service.get_rom_by_steam_app_id(app_id)
