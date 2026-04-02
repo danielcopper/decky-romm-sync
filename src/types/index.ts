@@ -98,19 +98,15 @@ export interface SyncProgress {
   current?: number;
   total?: number;
   message?: string;
-  step?: number;
-  totalSteps?: number;
   // Enhanced progress fields (PR 3)
   elapsedSec?: number;
   etaSec?: number | null;
   itemsPerSec?: number | null;
   subPhase?: string;
   subMessage?: string;
-  // Dual-bar fields — overall vs current-unit progress
-  stepLabel?: string;       // Human-readable step description ("Fetching ROMs")
-  platformCurrent?: number; // Current unit progress numerator
-  platformTotal?: number;   // Current unit progress denominator
-  platformLabel?: string;   // Current unit label ("GameCube (3/14 platforms)")
+  // Fetch-phase progress (shown in header during State 2)
+  platformsFetched?: number;
+  platformsTotal?: number;
 }
 
 export interface SyncStats {
@@ -189,14 +185,32 @@ export interface SyncApplyPlatformData {
   shortcuts_before: number;
   shortcuts: SyncAddItem[];
   changed_shortcuts?: SyncChangedItem[];
-  collection_memberships?: Record<string, number[]>;
-  step: number;
-  total_steps: number;
+  rom_count: number;
 }
 
 /** Stale ROM removals, emitted after all per-platform events. */
 export interface SyncApplyRemovalsData {
   remove_rom_ids: number[];
+}
+
+/** Emitted once at the start of sync with the ordered list of platforms. */
+export interface SyncPlanData {
+  platforms: SyncPlanPlatform[];
+  has_collections: boolean;
+  estimated_total_roms: number;
+}
+
+export interface SyncPlanPlatform {
+  name: string;
+  slug: string;
+  rom_count: number;
+}
+
+/** Emitted after all platforms are done — collections to build. */
+export interface SyncApplyCollectionsData {
+  platform_app_ids: Record<string, number[]>;
+  collection_memberships: Record<string, number[]>;
+  total_collections: number;
 }
 
 /** Signals that all per-platform events + removals have been emitted. */

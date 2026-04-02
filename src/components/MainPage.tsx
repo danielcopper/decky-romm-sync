@@ -28,7 +28,9 @@ import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
+import { getAccordionState } from "../utils/syncAccordion";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
+import type { AccordionState, PlatformRow } from "../utils/syncAccordion";
 import type { MigrationStatus } from "../api/backend";
 
 type Page = "settings" | "library" | "data" | "downloads";
@@ -78,6 +80,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
   const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  const [accordion, setAccordion] = useState<AccordionState | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downloadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -95,6 +98,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // Read directly from module-level store — no async callable, no WebSocket
       const progress = getSyncProgress();
       setSyncProgress(progress);
+      setAccordion(getAccordionState());
 
       if (!progressOnly && !progress.running) {
         stopPolling();
