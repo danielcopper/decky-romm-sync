@@ -101,6 +101,79 @@ function getOverviews(appIds: number[]): AppStoreOverview[] {
   return overviews;
 }
 
+/**
+ * Find an existing Steam collection by registry ID first, then by name variants.
+ * This prevents creating duplicates when naming settings change.
+ * If found under an old name, renames it to the current name.
+ */
+async function findExistingCollection(
+  stableKey: string,
+  currentName: string,
+  legacyNames: string[],
+): Promise<any | null> {
+  // 1. Registry lookup — most reliable
+  for (const [steamId, key] of Object.entries(_registry)) {
+    if (key === stableKey) {
+      const coll = collectionStore.GetCollection(steamId);
+      if (coll) {
+        // Rename if name drifted
+        if (coll.displayName !== currentName) {
+          logInfo(`Renaming collection "${coll.displayName}" → "${currentName}" (matched by registry)`);
+          coll.displayName = currentName;
+        }
+        return coll;
+      }
+      // Registry pointed to a deleted collection — clean up
+      unregisterCollection(steamId);
+    }
+  }
+
+  // 2. Exact current name match
+  const byCurrentName = collectionStore.userCollections.find(
+    (c: any) => c.displayName === currentName
+  );
+  if (byCurrentName) return byCurrentName;
+
+  // 3. Legacy name patterns (old "RomM: X (hostname)" format, bare name, etc.)
+  for (const name of legacyNames) {
+    if (name === currentName) continue; // already checked
+    const coll = collectionStore.userCollections.find(
+      (c: any) => c.displayName === name
+    );
+    if (coll) {
+      logInfo(`Found collection under legacy name "${name}", renaming to "${currentName}"`);
+      coll.displayName = currentName;
+      return coll;
+    }
+  }
+
+  return null;
+}
+
+/** Build all possible legacy name variants for a platform collection */
+async function platformLegacyNames(platformName: string): Promise<string[]> {
+  const hostname = await getHostname();
+  return [
+    `RomM: ${platformName} (${hostname})`,
+    `RomM: ${platformName}`,
+    platformName,
+    `${_prefix}${platformName}`,
+    `${_prefix}${platformName} (${hostname})`,
+  ];
+}
+
+/** Build all possible legacy name variants for a named (RomM) collection */
+async function namedLegacyNames(collName: string): Promise<string[]> {
+  const hostname = await getHostname();
+  return [
+    `RomM: [${collName}] (${hostname})`,
+    `RomM: [${collName}]`,
+    `[${collName}]`,
+    `${_prefix}[${collName}]`,
+    `${_prefix}[${collName}] (${hostname})`,
+  ];
+}
+
 export async function createOrUpdateCollections(
   platformAppIds: Record<string, number[]>,
   onProgress?: (current: number, total: number, name: string) => void,
@@ -124,11 +197,10 @@ export async function createOrUpdateCollections(
       const collectionName = await platformCollectionName(platformName);
       const stableKey = `platform:${platformName}`;
       const overviews = getOverviews(appIds);
+      const legacyNames = await platformLegacyNames(platformName);
 
       try {
-        const existing = collectionStore.userCollections.find(
-          (c) => c.displayName === collectionName
-        );
+        const existing = await findExistingCollection(stableKey, collectionName, legacyNames);
 
         if (existing) {
           logInfo(`Updating collection "${collectionName}" with ${appIds.length} apps`);
@@ -182,11 +254,10 @@ export async function createOrUpdateRomMCollections(
       const collectionName = await namedCollectionName(collName);
       const stableKey = `named:${collName}`;
       const overviews = getOverviews(appIds);
+      const legacyNames = await namedLegacyNames(collName);
 
       try {
-        const existing = collectionStore.userCollections.find(
-          (c) => c.displayName === collectionName
-        );
+        const existing = await findExistingCollection(stableKey, collectionName, legacyNames);
 
         if (existing) {
           logInfo(`Updating RomM collection "${collectionName}" with ${appIds.length} apps`);
@@ -234,10 +305,9 @@ export async function appendToCollections(
       const collectionName = await platformCollectionName(platformName);
       const stableKey = `platform:${platformName}`;
       const overviews = getOverviews(appIds);
+      const legacyNames = await platformLegacyNames(platformName);
       try {
-        const existing = collectionStore.userCollections.find(
-          (c) => c.displayName === collectionName
-        );
+        const existing = await findExistingCollection(stableKey, collectionName, legacyNames);
         if (existing) {
           existing.AsDragDropCollection().AddApps(overviews);
           await existing.Save();
@@ -279,10 +349,9 @@ export async function appendToRomMCollections(
       const collectionName = await namedCollectionName(collName);
       const stableKey = `named:${collName}`;
       const overviews = getOverviews(appIds);
+      const legacyNames = await namedLegacyNames(collName);
       try {
-        const existing = collectionStore.userCollections.find(
-          (c) => c.displayName === collectionName
-        );
+        const existing = await findExistingCollection(stableKey, collectionName, legacyNames);
         if (existing) {
           existing.AsDragDropCollection().AddApps(overviews);
           await existing.Save();
