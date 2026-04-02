@@ -1055,8 +1055,9 @@ class LibraryService:
         if has_collections:
             fetch_steps.append("collections")
         # Placeholder total_steps — caller will replace with final count.
-        # Use a reasonable estimate: fetch steps + artwork + shortcuts.
-        preliminary_total_steps = len(fetch_steps) + 2  # artwork + shortcuts
+        # Artwork is now interleaved per-title in the apply step, so we
+        # only need +1 for the single "apply" step.
+        preliminary_total_steps = len(fetch_steps) + 1  # apply (shortcuts+artwork+removals)
         current_step = 0
 
         # Phase 1: Fetch platforms

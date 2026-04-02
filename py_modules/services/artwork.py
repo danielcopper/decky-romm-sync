@@ -219,6 +219,56 @@ class ArtworkService:
 
     # ── Artwork base64 query ───────────────────────────────────────────────
 
+    async def download_and_get_artwork_base64(self, rom_id: int, pending_sync: dict) -> dict:
+        """Download cover artwork for a single ROM (if not cached) and return base64.
+
+        Replaces the batch ``download_artwork`` + ``get_artwork_base64`` two-step
+        flow.  Downloads one cover from RomM on demand, caches it to a staging
+        file, updates ``pending_sync[rom_id]["cover_path"]``, and returns the
+        base64-encoded image data.
+
+        Returns ``{"base64": "<data>"}`` or ``{"base64": None}``.
+        """
+        grid = self._steam_config.grid_dir()
+        if not grid:
+            return {"base64": None}
+
+        # Check if already on disk (cache hit)
+        existing = self.existing_cover_path(rom_id, grid)
+        if existing:
+            try:
+                data = await self._loop.run_in_executor(
+                    None, lambda: pathlib.Path(existing).read_bytes()
+                )
+                # Update pending_sync so finalization can find the cover_path
+                if rom_id in pending_sync:
+                    pending_sync[rom_id]["cover_path"] = existing
+                return {"base64": base64.b64encode(data).decode("ascii")}
+            except Exception as e:
+                self._logger.warning(f"Failed to read cached artwork for rom {rom_id}: {e}")
+
+        # Get cover URL from pending sync data
+        pending = pending_sync.get(rom_id, {})
+        cover_url = pending.get("cover_url", "")
+        if not cover_url:
+            return {"base64": None}
+
+        # Download to staging file
+        staging = os.path.join(grid, f"romm_{rom_id}_cover.png")
+        try:
+            await self._loop.run_in_executor(
+                None, self._romm_api.download_cover, cover_url, staging
+            )
+            data = await self._loop.run_in_executor(
+                None, lambda: pathlib.Path(staging).read_bytes()
+            )
+            # Update pending_sync so finalization can rename to {app_id}p.png
+            pending["cover_path"] = staging
+            return {"base64": base64.b64encode(data).decode("ascii")}
+        except Exception as e:
+            self._logger.warning(f"Failed to download artwork for rom {rom_id}: {e}")
+            return {"base64": None}
+
     async def get_artwork_base64(self, rom_id: int, pending_sync: dict) -> dict:
         """Return base64-encoded cover artwork for a single ROM."""
         grid = self._steam_config.grid_dir()

@@ -26,6 +26,7 @@ def build_shortcuts_data(roms: list[dict], plugin_dir: str) -> list[dict]:
             "sgdb_id": rom.get("sgdb_id"),
             "ra_id": rom.get("ra_id"),
             "cover_path": "",
+            "cover_url": rom.get("path_cover_large") or rom.get("path_cover_small") or "",
         }
         for rom in roms
     ]
