@@ -21,6 +21,7 @@ import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveS
 import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setCollectionNaming } from "./utils/collections";
+import { prefetchLibraryData, invalidateLibraryCache } from "./utils/libraryCache";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
@@ -165,6 +166,8 @@ export default definePlugin(() => {
     try {
       const s = await getSettings();
       setCollectionNaming(s.collection_prefix ?? "", s.collection_hostname_suffix ?? false);
+      // Prefetch library data now that backend is reachable
+      prefetchLibraryData();
     } catch (e) {
       logError(`Failed to load collection naming settings: ${e}`);
     }
@@ -195,6 +198,9 @@ export default definePlugin(() => {
     // processing loop in syncManager.ts.  The sync_complete handler no longer
     // touches collections — doing so would overwrite or delete collections
     // that the per-platform loop just created incrementally.
+
+    // Invalidate library prefetch cache so next Library page visit gets fresh data
+    invalidateLibraryCache();
 
     // Re-apply playtime to Steam UI (app IDs may have changed after re-sync)
     (async () => {

@@ -26,6 +26,11 @@ import {
   debugLog,
 } from "../api/backend";
 import type { PlatformSyncSetting, CollectionSyncSetting, FirmwarePlatformExt } from "../types";
+import {
+  getCachedPlatforms, getPlatformsPromise,
+  getCachedCollections, getCollectionsPromise,
+  getCachedBios, getBiosPromise,
+} from "../utils/libraryCache";
 
 const CATEGORY_TITLES: Record<string, string> = {
   favorites: "Favorites",
