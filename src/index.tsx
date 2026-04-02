@@ -173,6 +173,25 @@ export default definePlugin(() => {
     }
   })();
 
+  // Startup health check: warn if Steam has an abnormal number of user collections
+  // (catches runaway duplication before it crashes the Library)
+  (async () => {
+    try {
+      // Wait for collectionStore to be available (Steam may still be loading)
+      await new Promise((r) => setTimeout(r, 5000));
+      if (typeof collectionStore !== "undefined" && collectionStore.userCollections) {
+        const count = collectionStore.userCollections.length;
+        if (count > 200) {
+          logError(`HEALTH CHECK WARNING: ${count} user collections detected — this is abnormally high and may crash Steam's Library. Check for collection duplication.`);
+        } else {
+          logInfo(`Collection health check: ${count} user collections (OK)`);
+        }
+      }
+    } catch {
+      // Non-critical
+    }
+  })();
+
   const onSyncComplete = (data: {
     platform_app_ids: Record<string, number[]>;
     romm_collection_app_ids?: Record<string, number[]>;
