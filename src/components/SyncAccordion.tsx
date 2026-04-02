@@ -17,8 +17,11 @@ interface SyncAccordionProps {
 function statusIcon(status: PlatformRow["status"]): string {
   switch (status) {
     case "pending":
-    case "fetching":
       return "\u25CB"; // ○
+    case "fetching":
+      return "\u27F3"; // ⟳
+    case "fetched":
+      return "\u2713"; // ✓
     case "applying":
       return "\u27F3"; // ⟳
     case "done":
@@ -34,6 +37,10 @@ function statusIcon(status: PlatformRow["status"]): string {
 
 function statusColor(status: PlatformRow["status"]): string {
   switch (status) {
+    case "fetching":
+      return "rgba(255,255,255,0.7)"; // bright while fetching
+    case "fetched":
+      return "rgba(76,175,80,0.6)"; // dim green — fetched, waiting for apply
     case "done":
       return "#4caf50"; // green
     case "applying":
@@ -48,7 +55,10 @@ function statusColor(status: PlatformRow["status"]): string {
 }
 
 function rowOpacity(status: PlatformRow["status"]): number {
-  return status === "pending" || status === "fetching" ? 0.45 : 1;
+  if (status === "pending") return 0.4;
+  if (status === "fetching") return 0.75;
+  if (status === "fetched") return 0.65;
+  return 1;
 }
 
 // ── Counter text (right side) ─────────────────────────────────
@@ -86,19 +96,19 @@ function computeVisibleSlice(platforms: PlatformRow[], activeIdx: number): Visib
   // Always include active
   if (activeIdx >= 0) indices.add(activeIdx);
 
-  // 2 completed before active
+  // 2 completed/fetched before active
   let beforeCount = 0;
   for (let i = (activeIdx >= 0 ? activeIdx : platforms.length) - 1; i >= 0 && beforeCount < 2; i--) {
-    if (platforms[i].status === "done" || platforms[i].status === "partial") {
+    if (platforms[i].status === "done" || platforms[i].status === "partial" || platforms[i].status === "fetched") {
       indices.add(i);
       beforeCount++;
     }
   }
 
-  // 2 pending after active
+  // 2 pending/fetching after active
   let afterCount = 0;
   for (let i = Math.max(activeIdx, 0) + 1; i < platforms.length && afterCount < 2; i++) {
-    if (platforms[i].status === "pending" || platforms[i].status === "fetching") {
+    if (platforms[i].status === "pending" || platforms[i].status === "fetching" || platforms[i].status === "fetched") {
       indices.add(i);
       afterCount++;
     }

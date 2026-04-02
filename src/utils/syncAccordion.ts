@@ -6,7 +6,7 @@
  * Read by MainPage.tsx via getAccordionState() on a polling interval.
  */
 
-export type PlatformStatus = "pending" | "fetching" | "applying" | "done" | "partial" | "error";
+export type PlatformStatus = "pending" | "fetching" | "fetched" | "applying" | "done" | "partial" | "error";
 
 export interface PlatformRow {
   name: string;
@@ -47,6 +47,21 @@ export function initAccordion(platforms: Array<{ name: string; slug: string; rom
     })),
     activePlatformIndex: -1,
   };
+}
+
+export function markPlatformFetching(name: string): void {
+  const row = _state.platforms.find((p) => p.name === name);
+  if (row?.status === "pending") {
+    row.status = "fetching";
+  }
+}
+
+export function markPlatformFetched(name: string, romCount?: number): void {
+  const row = _state.platforms.find((p) => p.name === name);
+  if (row && (row.status === "pending" || row.status === "fetching")) {
+    row.status = "fetched";
+    if (romCount !== undefined) row.romCount = romCount;
+  }
 }
 
 export function setActivePlatform(index: number): void {

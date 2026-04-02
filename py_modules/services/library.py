@@ -321,7 +321,7 @@ class LibraryService:
         self._sync_last_heartbeat = time.monotonic()
         try:
             fetch_result = await self._fetch_and_prepare()
-            all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids, _fetch_steps = fetch_result
+            all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids = fetch_result
             platform_names = {p.get("name") for p in platforms}
             new, changed, unchanged_ids, stale, disabled_count = self._classify_roms(shortcuts_data, platform_names)
 
@@ -333,7 +333,6 @@ class LibraryService:
             preview_id = str(uuid.uuid4())
             self._pending_delta = {
                 "preview_id": preview_id,
-                "fetch_step_count": _fetch_steps,
                 "new": new,
                 "changed": changed,
                 "unchanged_ids": unchanged_ids,
@@ -735,6 +734,11 @@ class LibraryService:
             platform_name = platform.get("name", platform.get("display_name", "Unknown"))
             platform_slug = platform.get("slug", "")
 
+            # Notify frontend this platform is being fetched
+            await self._emit("sync_fetch_platform", {
+                "name": platform_name, "slug": platform_slug, "status": "fetching",
+            })
+
             # Try incremental skip
             skipped, roms = await self._try_incremental_skip_isolated(
                 platform, registry, last_sync, platform_name, platform_slug
@@ -748,6 +752,13 @@ class LibraryService:
             progress["done"] += 1
             self._perf.increment("platforms_fetched")
             sem.record_latency(time.monotonic() - t0)
+
+            # Notify frontend this platform is done fetching
+            await self._emit("sync_fetch_platform", {
+                "name": platform_name, "slug": platform_slug,
+                "status": "done", "rom_count": len(roms),
+            })
+
             await self._emit_progress(
                 "roms",
                 current=progress["roms_found"],
@@ -1015,7 +1026,7 @@ class LibraryService:
 
     async def _fetch_and_prepare(self):
         """Fetch platforms + ROMs + collection ROMs, prepare shortcut data.
-        Returns (all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids, fetch_step_count)
+        Returns (all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids)
         or raises on cancel/error.
         Artwork download is deferred to the apply phase.
         Uses updated_after on subsequent syncs to skip unchanged platforms.
@@ -1025,8 +1036,7 @@ class LibraryService:
         # We always have platforms + roms.  Collections and prepare
         # are folded into fetch; artwork + shortcuts are added by
         # the caller (_do_sync / sync_apply_delta) once it knows
-        # what work remains.  We return fetch_step_count so callers
-        # can continue numbering.
+        # what work remains.
         #
         # Steps emitted here:
         #   1  Fetching platforms

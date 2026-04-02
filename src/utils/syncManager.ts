@@ -20,6 +20,8 @@ import {
   updatePlatformArtwork,
   markPlatformDone,
   markPlatformPartial,
+  markPlatformFetching,
+  markPlatformFetched,
   updateCollectionsProgress,
   updateRemovalsProgress,
   resetAccordion,
@@ -100,6 +102,14 @@ export function initSyncManager(): { unregister: () => void } {
     enqueue({ type: "collections", data });
   });
 
+  const h6 = addEventListener("sync_fetch_platform", (data: { name: string; slug: string; status: string; rom_count?: number }) => {
+    if (data.status === "fetching") {
+      markPlatformFetching(data.name);
+    } else if (data.status === "done") {
+      markPlatformFetched(data.name, data.rom_count);
+    }
+  });
+
   return {
     unregister: () => {
       removeEventListener("sync_apply_platform", h1);
@@ -107,6 +117,7 @@ export function initSyncManager(): { unregister: () => void } {
       removeEventListener("sync_apply_done", h3);
       removeEventListener("sync_plan", h4);
       removeEventListener("sync_apply_collections", h5);
+      removeEventListener("sync_fetch_platform", h6);
     },
   };
 }

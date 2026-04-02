@@ -482,7 +482,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                   <>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                       <div style={{ fontSize: "13px", fontWeight: "bold", color: "#fff" }}>
-                        Fetching library...
+                        {syncProgress?.message || "Fetching library..."}
                       </div>
                       {syncProgress?.platformsTotal ? (
                         <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)" }}>
