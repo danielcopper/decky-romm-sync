@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1213,7 +1213,7 @@ class TestSyncApplyDelta:
 
         emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_apply"]
         assert len(emit_calls) == 1
-        # Platform collection data is no longer in sync_apply — it's built in report_sync_results
+        # Platform collection data is no longer in sync_apply â€” it's built in report_sync_results
         # and sent via sync_complete instead.
         assert "collection_platform_app_ids" not in emit_calls[0][0][1]
         assert "platform_eligible_rom_ids" not in emit_calls[0][0][1]
@@ -1244,11 +1244,11 @@ class TestSyncCancelPreview:
         assert result == {"success": True}
 
 
-# ── Tests for uncovered helper methods in library_sync.py ──────────
+# â”€â”€ Tests for uncovered helper methods in library_sync.py â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class TestGetPlatforms:
-    """Tests for get_platforms() — lines 90-117."""
+    """Tests for get_platforms() â€” lines 90-117."""
 
     @pytest.mark.asyncio
     async def test_returns_platforms_with_rom_count(self, plugin):
@@ -1344,7 +1344,7 @@ class TestGetPlatforms:
 
 
 class TestSavePlatformSync:
-    """Tests for save_platform_sync() — lines 120-123."""
+    """Tests for save_platform_sync() â€” lines 120-123."""
 
     def test_saves_enabled_setting(self, plugin):
         result = plugin._sync_service.save_platform_sync(42, True)
@@ -1359,7 +1359,7 @@ class TestSavePlatformSync:
 
 
 class TestSetAllPlatformsSync:
-    """Tests for set_all_platforms_sync() — lines 126-139."""
+    """Tests for set_all_platforms_sync() â€” lines 126-139."""
 
     @pytest.mark.asyncio
     async def test_enables_all(self, plugin):
@@ -1404,7 +1404,7 @@ class TestSetAllPlatformsSync:
 
 
 class TestSyncControl:
-    """Tests for start_sync, cancel_sync, get_sync_progress, sync_heartbeat — lines 143-163."""
+    """Tests for start_sync, cancel_sync, get_sync_progress, sync_heartbeat â€” lines 143-163."""
 
     def test_start_sync_when_idle(self, plugin):
         result = plugin._sync_service.start_sync()
@@ -1444,7 +1444,7 @@ class TestSyncControl:
 
 
 class TestCheckCancelling:
-    """Tests for _check_cancelling() — lines 505-508."""
+    """Tests for _check_cancelling() â€” lines 505-508."""
 
     def test_raises_when_cancelling(self, plugin):
         plugin._sync_service._sync_state = SyncState.CANCELLING
@@ -1460,7 +1460,7 @@ class TestCheckCancelling:
 
 
 class TestBuildShortcutsData:
-    """Tests for _build_shortcuts_data() — lines 510-530."""
+    """Tests for _build_shortcuts_data() â€” lines 510-530."""
 
     def test_builds_correct_format(self, plugin):
         roms = [
@@ -1506,7 +1506,7 @@ class TestBuildShortcutsData:
 
 
 class TestFetchEnabledPlatforms:
-    """Tests for _fetch_enabled_platforms() — lines 398-411, 402-403."""
+    """Tests for _fetch_enabled_platforms() â€” lines 398-411, 402-403."""
 
     @pytest.mark.asyncio
     async def test_filters_by_enabled(self, plugin):
@@ -1560,7 +1560,7 @@ class TestFetchEnabledPlatforms:
 
 
 class TestReconstructPlatformFromRegistry:
-    """Tests for _reconstruct_platform_from_registry() — lines 413-429."""
+    """Tests for _reconstruct_platform_from_registry() â€” lines 413-429."""
 
     def test_reconstructs_matching_entries(self, plugin):
         plugin._state["shortcut_registry"] = {
@@ -1603,7 +1603,7 @@ class TestReconstructPlatformFromRegistry:
 
 
 class TestTryIncrementalSkip:
-    """Tests for _try_incremental_skip() — lines 431-465."""
+    """Tests for _try_incremental_skip() â€” lines 431-465."""
 
     @pytest.mark.asyncio
     async def test_skips_unchanged_platform(self, plugin):
@@ -1717,7 +1717,7 @@ class TestTryIncrementalSkip:
 
 
 class TestFullFetchPlatformRoms:
-    """Tests for _full_fetch_platform_roms() — lines 467-503."""
+    """Tests for _full_fetch_platform_roms() â€” lines 467-503."""
 
     @pytest.mark.asyncio
     async def test_fetches_single_page(self, plugin):
@@ -1785,7 +1785,7 @@ class TestFullFetchPlatformRoms:
 
 
 class TestFinalizeCoverPath:
-    """Tests for _finalize_cover_path() — lines 699-712."""
+    """Tests for _finalize_cover_path() â€” lines 699-712."""
 
     def test_renames_staging_to_final(self, plugin, tmp_path):
         grid = str(tmp_path)
@@ -1828,7 +1828,7 @@ class TestFinalizeCoverPath:
 
 
 class TestBuildRegistryEntry:
-    """Tests for _build_registry_entry() — lines 714-727."""
+    """Tests for _build_registry_entry() â€” lines 714-727."""
 
     def test_builds_full_entry(self, plugin):
         pending = {
@@ -1876,7 +1876,7 @@ class TestBuildRegistryEntry:
 
 
 class TestClearSyncCache:
-    """Tests for clear_sync_cache() — lines 1037-1042."""
+    """Tests for clear_sync_cache() â€” lines 1037-1042."""
 
     def test_clears_last_sync(self, plugin):
         plugin._state["last_sync"] = "2025-01-01T00:00:00"
@@ -1886,7 +1886,7 @@ class TestClearSyncCache:
 
 
 class TestReportSyncResultsCancelled:
-    """Tests for report_sync_results with cancelled=True — lines 773-788."""
+    """Tests for report_sync_results with cancelled=True â€” lines 773-788."""
 
     @pytest.mark.asyncio
     async def test_emits_cancelled_progress(self, plugin, tmp_path):
@@ -1927,7 +1927,7 @@ class TestReportSyncResultsCancelled:
 
 
 class TestDoSyncErrorHandling:
-    """Tests for _do_sync error/edge handling — lines 587-695."""
+    """Tests for _do_sync error/edge handling â€” lines 587-695."""
 
     @pytest.mark.asyncio
     async def test_fetch_error_emits_error_progress(self, plugin):
@@ -1984,7 +1984,7 @@ class TestDoSyncErrorHandling:
 
 
 class TestFinishSync:
-    """Tests for _finish_sync() — lines 685-695."""
+    """Tests for _finish_sync() â€” lines 685-695."""
 
     @pytest.mark.asyncio
     async def test_sets_cancelled_state(self, plugin):
@@ -2003,7 +2003,7 @@ class TestFinishSync:
 
 
 class TestSyncPreviewErrorHandling:
-    """Tests for sync_preview error paths — lines 210-219."""
+    """Tests for sync_preview error paths â€” lines 210-219."""
 
     @pytest.mark.asyncio
     async def test_general_exception_returns_error(self, plugin):
@@ -2034,7 +2034,7 @@ class TestSyncPreviewErrorHandling:
 
 
 class TestReportRemovalSteamInputCleanup:
-    """Tests for Steam Input cleanup in _report_removal_results_io — lines 967-980."""
+    """Tests for Steam Input cleanup in _report_removal_results_io â€” lines 967-980."""
 
     @pytest.mark.asyncio
     async def test_cleans_steam_input_on_removal(self, plugin, tmp_path):
@@ -2097,7 +2097,7 @@ def _make_loop_raising(exc):
 # ---------------------------------------------------------------------------
 
 # conftest.py already provides a `plugin` fixture wired with a LibraryService
-# (plugin._sync_service).  We reuse it here — no separate fixture needed.
+# (plugin._sync_service).  We reuse it here â€” no separate fixture needed.
 
 
 # ---------------------------------------------------------------------------
@@ -2294,7 +2294,7 @@ class TestGetCollections:
 
 
 class TestSaveCollectionSync:
-    """Tests for LibraryService.save_collection_sync() — synchronous method."""
+    """Tests for LibraryService.save_collection_sync() â€” synchronous method."""
 
     def test_saves_enabled(self, plugin):
         """Enabling a collection stores True under its id."""
@@ -2796,8 +2796,8 @@ class TestCollectionSyncEdgeCases:
     def test_sc2_platform_keeps_rom_alive_when_collection_disabled(self, plugin):
         """ROM A stays (platform reference); ROM C becomes stale (collection-only, now disabled).
 
-        Platform GBA enabled → ROM A stays. PSX not enabled and Favorites
-        collection disabled → ROM C has no source and is stale.
+        Platform GBA enabled â†’ ROM A stays. PSX not enabled and Favorites
+        collection disabled â†’ ROM C has no source and is stale.
         """
         svc = plugin._sync_service
 
@@ -2870,8 +2870,8 @@ class TestCollectionSyncEdgeCases:
         svc._settings["enabled_platforms"] = {}  # No platforms enabled
         svc._settings["enabled_collections"] = {"10": True}
 
-        # API mocks: no enabled platforms → no platform ROMs
-        # list_collections → one collection; list_roms_by_collection → ROM A
+        # API mocks: no enabled platforms â†’ no platform ROMs
+        # list_collections â†’ one collection; list_roms_by_collection â†’ ROM A
         rom_a = {
             "id": 1,
             "name": "ROM A",
@@ -2889,7 +2889,7 @@ class TestCollectionSyncEdgeCases:
             nonlocal call_num
             call_num += 1
             if call_num == 1:
-                # list_platforms → empty (but this is called by _fetch_enabled_platforms)
+                # list_platforms â†’ empty (but this is called by _fetch_enabled_platforms)
                 return []
             if call_num == 2:
                 # list_collections inside _fetch_collection_roms
@@ -2997,7 +2997,7 @@ class TestCollectionSyncEdgeCases:
     # ------------------------------------------------------------------
     # Scenario 5b/6b: Platform groups toggle in _should_include_in_platform_collection
     # These test the shared helper that both sync_apply_delta and
-    # _report_sync_results_io use — the bug was that sync_apply_delta
+    # _report_sync_results_io use â€” the bug was that sync_apply_delta
     # didn't apply the toggle at all.
     # ------------------------------------------------------------------
 
@@ -3018,19 +3018,19 @@ class TestCollectionSyncEdgeCases:
         assert svc._should_include_in_platform_collection(3, platform_rom_ids) is True
 
     def test_sc5b_should_include_helper_excludes_all_when_no_platforms_enabled(self, plugin):
-        """Empty set = no platforms enabled → exclude all (toggle OFF)."""
+        """Empty set = no platforms enabled â†’ exclude all (toggle OFF)."""
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = False
         assert svc._should_include_in_platform_collection(1, set()) is False
 
     def test_sc5b_should_include_helper_includes_all_when_no_tracking_data(self, plugin):
-        """None = legacy sync without platform tracking → include all."""
+        """None = legacy sync without platform tracking â†’ include all."""
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = False
         assert svc._should_include_in_platform_collection(1, None) is True
 
     def test_sc5b_should_include_helper_includes_all_empty_set_when_toggle_on(self, plugin):
-        """Empty set + toggle ON → include all."""
+        """Empty set + toggle ON â†’ include all."""
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = True
         assert svc._should_include_in_platform_collection(1, set()) is True
@@ -3059,7 +3059,7 @@ class TestCollectionSyncEdgeCases:
         assert "PlayStation" not in platform_app_ids, "PSX should be excluded (collection-only, toggle OFF)"
 
     def test_sc6c_build_collection_app_ids_includes_all_when_toggle_on(self, plugin):
-        """Same as sc5c but with toggle ON — PSX should be included."""
+        """Same as sc5c but with toggle ON â€” PSX should be included."""
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = True
 
@@ -3075,7 +3075,7 @@ class TestCollectionSyncEdgeCases:
         assert "PlayStation" in platform_app_ids, "PSX should be included (toggle ON)"
 
     # ------------------------------------------------------------------
-    # Scenario 7: Deduplication — ROM in both platform and collection
+    # Scenario 7: Deduplication â€” ROM in both platform and collection
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
@@ -3113,7 +3113,7 @@ class TestCollectionSyncEdgeCases:
             if call_num == 4:
                 # list_virtual_collections (franchise)
                 return []
-            # list_roms_by_collection for Favorites — ROM A already seen
+            # list_roms_by_collection for Favorites â€” ROM A already seen
             return _page([rom_a])
 
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
@@ -3158,7 +3158,7 @@ class TestCollectionSyncEdgeCases:
         assert 1001 in romm_collection_app_ids["Favorites"]
 
     # ------------------------------------------------------------------
-    # Scenario 8: All sources removed — game gets stale
+    # Scenario 8: All sources removed â€” game gets stale
     # ------------------------------------------------------------------
 
     def test_sc8_rom_becomes_stale_when_no_source_references_it(self, plugin):
@@ -3169,7 +3169,7 @@ class TestCollectionSyncEdgeCases:
             "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001),
         }
 
-        # Empty shortcuts_data — no ROM was fetched from any source
+        # Empty shortcuts_data â€” no ROM was fetched from any source
         shortcuts_data: list = []
         fetched_platform_names: set = set()
 
@@ -3394,323 +3394,7 @@ class TestCollectionSyncEdgeCases:
         assert len(unchanged_ids) == 0
 
 
-# ── Incremental Persistence Tests ─────────────────────────────
+# NOTE: Incremental persistence tests (report_incremental_results /
+# report_sync_finalized) live in test_incremental_sync.py â€” they use
+# the _make_library() helper to avoid the fcntl dependency on Windows.
 
-
-class TestReportIncrementalResults:
-    """Tests for the incremental batch persistence during sync."""
-
-    @pytest.mark.asyncio
-    async def test_persists_batch_to_registry(self, plugin, tmp_path):
-        """Incremental batch updates shortcut_registry and saves state."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-            2: {"name": "Game B", "platform_name": "SNES", "platform_slug": "snes", "cover_path": ""},
-        }
-
-        result = await plugin.report_incremental_results({"1": 100001, "2": 100002}, [])
-        assert result["success"] is True
-        assert result["persisted"] == 2
-        assert "1" in plugin._state["shortcut_registry"]
-        assert plugin._state["shortcut_registry"]["1"]["app_id"] == 100001
-        assert plugin._state["shortcut_registry"]["1"]["name"] == "Game A"
-        assert "2" in plugin._state["shortcut_registry"]
-        assert plugin._state["shortcut_registry"]["2"]["app_id"] == 100002
-
-    @pytest.mark.asyncio
-    async def test_incremental_handles_removals(self, plugin, tmp_path):
-        """Incremental batch removes stale entries from registry."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"]["99"] = {
-            "app_id": 99999,
-            "name": "Old Game",
-            "platform_name": "NES",
-        }
-        plugin._sync_service._pending_sync = {}
-
-        result = await plugin.report_incremental_results({}, [99])
-        assert result["success"] is True
-        assert result["persisted"] == 1
-        assert "99" not in plugin._state["shortcut_registry"]
-
-    @pytest.mark.asyncio
-    async def test_does_not_update_last_sync(self, plugin, tmp_path):
-        """Incremental batches should NOT update last_sync — only finalization does."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-        }
-
-        await plugin.report_incremental_results({"1": 100001}, [])
-        assert plugin._state["last_sync"] is None
-
-    @pytest.mark.asyncio
-    async def test_does_not_clear_pending_sync(self, plugin, tmp_path):
-        """Incremental batches should NOT clear _pending_sync — finalization does."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-        }
-
-        await plugin.report_incremental_results({"1": 100001}, [])
-        # _pending_sync should still be populated
-        assert 1 in plugin._sync_service._pending_sync
-
-    @pytest.mark.asyncio
-    async def test_multiple_batches_accumulate(self, plugin, tmp_path):
-        """Multiple incremental batches accumulate entries in the registry."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-            2: {"name": "Game B", "platform_name": "SNES", "platform_slug": "snes", "cover_path": ""},
-            3: {"name": "Game C", "platform_name": "GBA", "platform_slug": "gba", "cover_path": ""},
-        }
-
-        # Batch 1
-        result1 = await plugin.report_incremental_results({"1": 100001}, [])
-        assert result1["persisted"] == 1
-        assert len(plugin._state["shortcut_registry"]) == 1
-
-        # Batch 2
-        result2 = await plugin.report_incremental_results({"2": 100002, "3": 100003}, [])
-        assert result2["persisted"] == 2
-        assert len(plugin._state["shortcut_registry"]) == 3
-
-    @pytest.mark.asyncio
-    async def test_steam_input_config_applied(self, plugin, tmp_path):
-        """Steam Input config is applied per-batch when setting is not 'default'."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin.settings["steam_input_mode"] = "gamepad_with_joystick_mouse"
-        plugin._sync_service._steam_config = MagicMock()
-        plugin._sync_service._steam_config.grid_dir.return_value = str(tmp_path)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-        }
-
-        await plugin.report_incremental_results({"1": 100001}, [])
-        plugin._sync_service._steam_config.set_steam_input_config.assert_called_once_with(
-            [100001], mode="gamepad_with_joystick_mouse"
-        )
-
-
-class TestReportSyncFinalized:
-    """Tests for the finalization step after all incremental batches."""
-
-    @pytest.mark.asyncio
-    async def test_finalize_sets_last_sync_on_success(self, plugin, tmp_path):
-        """Successful finalization sets last_sync timestamp."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin._sync_service._pending_sync = {}
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = None
-
-        result = await plugin.report_sync_finalized({}, [], False)
-        assert result["success"] is True
-        assert plugin._state["last_sync"] is not None
-
-    @pytest.mark.asyncio
-    async def test_finalize_does_not_set_last_sync_on_cancel(self, plugin, tmp_path):
-        """Cancelled finalization does NOT set last_sync."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin._sync_service._pending_sync = {}
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = None
-
-        result = await plugin.report_sync_finalized({}, [], True)
-        assert result["success"] is True
-        assert plugin._state["last_sync"] is None
-
-    @pytest.mark.asyncio
-    async def test_finalize_builds_collections(self, plugin, tmp_path):
-        """Finalization builds platform collection mappings from full registry."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        decky.emit.reset_mock()
-
-        # Pre-populate registry (as if incremental batches already ran)
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 100001, "name": "Game A", "platform_name": "N64", "platform_slug": "n64"},
-            "2": {"app_id": 100002, "name": "Game B", "platform_name": "N64", "platform_slug": "n64"},
-        }
-
-        plugin._sync_service._pending_sync = {}
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = {1, 2}
-
-        result = await plugin.report_sync_finalized({}, [], False)
-        assert result["success"] is True
-
-        # Verify sync_complete was emitted with platform_app_ids
-        sync_complete_call = None
-        for call in decky.emit.call_args_list:
-            if call[0][0] == "sync_complete":
-                sync_complete_call = call
-                break
-        assert sync_complete_call is not None
-        assert "N64" in sync_complete_call[0][1]["platform_app_ids"]
-
-    @pytest.mark.asyncio
-    async def test_finalize_clears_pending_sync(self, plugin, tmp_path):
-        """Finalization clears _pending_sync."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin._sync_service._pending_sync = {1: {"name": "X", "platform_name": "Y", "cover_path": ""}}
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = None
-
-        await plugin.report_sync_finalized({}, [], False)
-        assert plugin._sync_service._pending_sync == {}
-
-    @pytest.mark.asyncio
-    async def test_finalize_persists_stragglers(self, plugin, tmp_path):
-        """Finalization persists any remaining shortcuts not in an incremental batch."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            5: {"name": "Straggler Game", "platform_name": "GBA", "platform_slug": "gba", "cover_path": ""},
-        }
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = None
-
-        result = await plugin.report_sync_finalized({"5": 100005}, [], False)
-        assert result["success"] is True
-        assert "5" in plugin._state["shortcut_registry"]
-        assert plugin._state["shortcut_registry"]["5"]["app_id"] == 100005
-
-    @pytest.mark.asyncio
-    async def test_cancel_skips_collections(self, plugin, tmp_path):
-        """Cancelled finalization does not build collection mappings."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        decky.emit.reset_mock()
-
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 100001, "name": "Game A", "platform_name": "N64", "platform_slug": "n64"},
-        }
-        plugin._sync_service._pending_sync = {}
-        plugin._sync_service._pending_collection_memberships = {"My Collection": [1]}
-        plugin._sync_service._pending_platform_rom_ids = {1}
-
-        await plugin.report_sync_finalized({}, [], True)
-
-        # sync_complete should have empty platform_app_ids
-        sync_complete_call = None
-        for call in decky.emit.call_args_list:
-            if call[0][0] == "sync_complete":
-                sync_complete_call = call
-                break
-        assert sync_complete_call is not None
-        assert sync_complete_call[0][1]["platform_app_ids"] == {}
-
-
-class TestIncrementalThenFinalizeFlow:
-    """End-to-end tests: incremental batches + finalization."""
-
-    @pytest.mark.asyncio
-    async def test_full_incremental_flow(self, plugin, tmp_path):
-        """3 incremental batches + finalize → registry has all entries + last_sync set."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-            2: {"name": "Game B", "platform_name": "SNES", "platform_slug": "snes", "cover_path": ""},
-            3: {"name": "Game C", "platform_name": "GBA", "platform_slug": "gba", "cover_path": ""},
-            4: {"name": "Game D", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-            5: {"name": "Game E", "platform_name": "SNES", "platform_slug": "snes", "cover_path": ""},
-        }
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = {1, 2, 3, 4, 5}
-
-        # Batch 1
-        await plugin.report_incremental_results({"1": 1001, "2": 1002}, [])
-        # Batch 2
-        await plugin.report_incremental_results({"3": 1003, "4": 1004}, [])
-        # Batch 3 (last item)
-        await plugin.report_incremental_results({"5": 1005}, [])
-
-        # Finalize
-        result = await plugin.report_sync_finalized({}, [], False)
-        assert result["success"] is True
-        assert len(plugin._state["shortcut_registry"]) == 5
-        assert plugin._state["last_sync"] is not None
-        assert plugin._sync_service._pending_sync == {}
-
-    @pytest.mark.asyncio
-    async def test_partial_cancel_preserves_completed_batches(self, plugin, tmp_path):
-        """2 batches + cancel → registry has batch 1 + 2 entries only, no last_sync."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-            2: {"name": "Game B", "platform_name": "SNES", "platform_slug": "snes", "cover_path": ""},
-            3: {"name": "Game C", "platform_name": "GBA", "platform_slug": "gba", "cover_path": ""},
-        }
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = {1, 2, 3}
-
-        # Batch 1
-        await plugin.report_incremental_results({"1": 1001}, [])
-        # Batch 2
-        await plugin.report_incremental_results({"2": 1002}, [])
-
-        # Cancel (game 3 was never processed)
-        result = await plugin.report_sync_finalized({}, [], True)
-        assert result["success"] is True
-        assert len(plugin._state["shortcut_registry"]) == 2
-        assert "1" in plugin._state["shortcut_registry"]
-        assert "2" in plugin._state["shortcut_registry"]
-        assert "3" not in plugin._state["shortcut_registry"]
-        assert plugin._state["last_sync"] is None
-
-    @pytest.mark.asyncio
-    async def test_backward_compat_report_sync_results_still_works(self, plugin, tmp_path):
-        """Old report_sync_results still works identically (backward compat)."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-            2: {"name": "Game B", "platform_name": "SNES", "platform_slug": "snes", "cover_path": ""},
-        }
-        plugin._sync_service._pending_collection_memberships = {}
-        plugin._sync_service._pending_platform_rom_ids = {1, 2}
-
-        result = await plugin.report_sync_results({"1": 100001, "2": 100002}, [])
-        assert result["success"] is True
-        assert "1" in plugin._state["shortcut_registry"]
-        assert "2" in plugin._state["shortcut_registry"]
-        assert plugin._state["last_sync"] is not None
-        assert plugin._sync_service._pending_sync == {}
