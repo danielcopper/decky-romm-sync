@@ -250,24 +250,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     return s > 0 ? `${m}m${s}s` : `${m}m`;
   };
 
-  const formatProgressText = (progress: SyncProgress | null): string => {
-    if (!progress) return "Syncing...";
-    const step = progress.step && progress.totalSteps
-      ? `[${progress.step}/${progress.totalSteps}] `
-      : "";
-    const msg = progress.message || "Syncing...";
-
-    // Append ETA when available
-    const eta = progress.etaSec != null && progress.etaSec > 0
-      ? ` · ${formatEta(progress.etaSec)}`
-      : "";
-
-    // Truncate to ~40 chars to prevent multi-line jumping in the QAM panel
-    const maxLen = 40 - step.length - eta.length;
-    const truncated = msg.length > maxLen ? msg.slice(0, maxLen - 1) + "\u2026" : msg;
-    return step + truncated + eta;
-  };
-
   const formatLastSync = (iso: string | null): string => {
     if (!iso) return "Never";
     try {
@@ -482,33 +464,66 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           </>
         ) : (
           <>
-            {syncProgress && syncProgress.step && syncProgress.totalSteps ? (
-              <PanelSectionRow>
+            <PanelSectionRow>
+              <div style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+                padding: "12px 0",
+                width: "100%",
+              }}>
+                {/* Step indicator */}
+                {syncProgress?.step && syncProgress?.totalSteps ? (
+                  <div style={{
+                    fontSize: "11px",
+                    color: "rgba(255, 255, 255, 0.5)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}>
+                    Step {syncProgress.step} of {syncProgress.totalSteps}
+                  </div>
+                ) : null}
+
+                {/* Progress bar */}
                 <ProgressBarWithInfo
                   indeterminate={progressFraction === undefined}
                   nProgress={progressFraction}
-                  sOperationText={formatProgressText(syncProgress)}
+                  sOperationText=""
                 />
-              </PanelSectionRow>
-            ) : (
-              <PanelSectionRow>
-                <Field
-                  label={
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <Spinner width={16} height={16} />
-                      <span>
-                        {syncProgress?.message || "Fetching..."}
-                        {syncProgress?.etaSec != null && syncProgress.etaSec > 0 && (
-                          <span style={{ opacity: 0.6, fontSize: "11px" }}>
-                            {" · "}{formatEta(syncProgress.etaSec)}
-                          </span>
-                        )}
-                      </span>
-                    </div>
-                  }
-                />
-              </PanelSectionRow>
-            )}
+
+                {/* Main message — full width, word-wrapping */}
+                <div style={{
+                  fontSize: "13px",
+                  fontWeight: "bold",
+                  color: "#fff",
+                  wordBreak: "break-word",
+                  lineHeight: "1.4",
+                }}>
+                  {syncProgress?.message || "Syncing..."}
+                </div>
+
+                {/* ETA / speed row */}
+                <div style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontSize: "12px",
+                  color: "rgba(255, 255, 255, 0.6)",
+                }}>
+                  <span>
+                    {syncProgress?.etaSec != null && syncProgress.etaSec > 0
+                      ? `~${formatEta(syncProgress.etaSec)} remaining`
+                      : syncProgress?.total
+                        ? `${syncProgress.current ?? 0} / ${syncProgress.total}`
+                        : ""}
+                  </span>
+                  <span>
+                    {syncProgress?.elapsedSec != null && syncProgress.elapsedSec > 5
+                      ? `${formatEta(syncProgress.elapsedSec)} elapsed`
+                      : ""}
+                  </span>
+                </div>
+              </div>
+            </PanelSectionRow>
             <PanelSectionRow>
               <ButtonItem layout="below" onClick={handleCancel}>
                 Cancel Sync
