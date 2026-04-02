@@ -1,5 +1,5 @@
 import { addEventListener, removeEventListener } from "@decky/api";
-import type { SyncApplyPlatformData, SyncApplyRemovalsData, SyncApplyDoneData, SyncAddItem, SyncChangedItem } from "../types";
+import type { SyncApplyPlatformData, SyncApplyRemovalsData, SyncApplyDoneData, SyncAddItem, SyncChangedItem, SyncPlanData, SyncApplyCollectionsData } from "../types";
 import {
   downloadAndGetArtwork,
   reportSyncResults,
@@ -13,6 +13,17 @@ import {
 import { getExistingRomMShortcuts, addShortcut, removeShortcut } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
 import { appendToCollections, appendToRomMCollections, getHostname, clearPlatformCollection } from "./collections";
+import {
+  initAccordion,
+  setActivePlatform,
+  updatePlatformProgress,
+  updatePlatformArtwork,
+  markPlatformDone,
+  markPlatformPartial,
+  updateCollectionsProgress,
+  updateRemovalsProgress,
+  resetAccordion,
+} from "./syncAccordion";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -33,7 +44,8 @@ const ART_CONCURRENCY = 8;        // Max parallel artwork fetches
 type QueueItem =
   | { type: "platform"; data: SyncApplyPlatformData }
   | { type: "removals"; data: SyncApplyRemovalsData }
-  | { type: "done";     data: SyncApplyDoneData };
+  | { type: "done";     data: SyncApplyDoneData }
+  | { type: "collections"; data: SyncApplyCollectionsData };
 
 const _queue: QueueItem[] = [];
 let _resolveWaiter: (() => void) | null = null;
@@ -79,11 +91,22 @@ export function initSyncManager(): { unregister: () => void } {
     enqueue({ type: "done", data });
   });
 
+  const h4 = addEventListener("sync_plan", (data: SyncPlanData) => {
+    initAccordion(data.platforms);
+    logInfo(`sync_plan received: ${data.platforms.length} platforms, ${data.estimated_total_roms} ROMs`);
+  });
+
+  const h5 = addEventListener("sync_apply_collections", (data: SyncApplyCollectionsData) => {
+    enqueue({ type: "collections", data });
+  });
+
   return {
     unregister: () => {
       removeEventListener("sync_apply_platform", h1);
       removeEventListener("sync_apply_removals", h2);
       removeEventListener("sync_apply_done", h3);
+      removeEventListener("sync_plan", h4);
+      removeEventListener("sync_apply_collections", h5);
     },
   };
 }
@@ -138,11 +161,12 @@ async function startProcessingLoop(): Promise<void> {
     // ── Artwork queue ────────────────────────────────────────
     let artworkQueue: Promise<void>[] = [];
 
-    function enqueueArtwork(appId: number, romId: number, name: string): void {
+    function enqueueArtwork(appId: number, romId: number, name: string, platformName: string): void {
       const p: Promise<void> = downloadAndGetArtwork(romId)
         .then(async (artResult) => {
           if (artResult.base64) {
             await SteamClient.Apps.SetCustomArtworkForApp(appId, artResult.base64, "png", 0);
+            updatePlatformArtwork(platformName, artResult.base64);
           }
         })
         .catch((artErr) => { logError(`Artwork failed for ${name}: ${artErr}`); })
@@ -156,15 +180,16 @@ async function startProcessingLoop(): Promise<void> {
       }
     }
 
-    async function drainArtwork(prefix: string): Promise<void> {
+    async function drainArtwork(platformName: string): Promise<void> {
       if (artworkQueue.length === 0) return;
       let remaining = artworkQueue.length;
-      updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…`, subMessage: "", stepLabel: "Applying changes" });
+      updateSyncProgress({ message: `Finishing artwork (${remaining} remaining)…`, subMessage: "" });
       while (artworkQueue.length > 0) {
         await Promise.race(artworkQueue);
         remaining = artworkQueue.length;
         if (remaining > 0) {
-          updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…`, subMessage: "", stepLabel: "Applying changes" });
+          updateSyncProgress({ message: `Finishing artwork (${remaining} remaining)…`, subMessage: "" });
+          updatePlatformProgress(platformName, 0, 0, `Finishing artwork (${remaining} remaining)...`);
         }
       }
     }
@@ -202,6 +227,7 @@ async function startProcessingLoop(): Promise<void> {
         if (item.type === "removals") {
           const removeIds = item.data.remove_rom_ids;
           logInfo(`Processing ${removeIds.length} removals`);
+          updateRemovalsProgress(0, removeIds.length);
           for (let i = 0; i < removeIds.length; i++) {
             const romId = removeIds[i];
             const appId = existing.get(romId);
@@ -214,16 +240,51 @@ async function startProcessingLoop(): Promise<void> {
               total: globalTotal || globalProcessed,
               message: `Removing shortcut ${i + 1}/${removeIds.length}`,
               subMessage: "",
-              stepLabel: "Cleaning up",
-              platformCurrent: 0,
-              platformTotal: 0,
-              platformLabel: "",
             });
+            updateRemovalsProgress(i + 1, removeIds.length);
             await delay(50);
             if (batchRemovedRomIds.length >= BATCH_SIZE) await flushBatch();
             if (_cancelRequested) { cancelled = true; break; }
           }
           await flushBatch();
+          continue;
+        }
+
+        // ── sync_apply_collections: build all collections ────
+        if (item.type === "collections") {
+          const collData = item.data;
+          const memberships = collData.collection_memberships ?? {};
+          const platformAppIdsMap = collData.platform_app_ids ?? {};
+          const totalColls = collData.total_collections ?? Object.keys(memberships).length;
+          logInfo(`Building collections: ${totalColls} collections`);
+
+          // Build platform collections from platform_app_ids
+          let collIdx = 0;
+          for (const [platName, romIds] of Object.entries(platformAppIdsMap)) {
+            const appIds = romIds.map((rid) => romIdToAppId[String(rid)]).filter((id): id is number => id != null);
+            if (appIds.length > 0) {
+              updateCollectionsProgress(collIdx + 1, totalColls, `RomM: ${platName}`);
+              await appendToCollections({ [platName]: appIds });
+              activePlatforms.add(platName);
+            }
+            collIdx++;
+          }
+
+          // Build RomM named collections from collection_memberships
+          const rommCollections: Record<string, number[]> = {};
+          for (const [collName, romIds] of Object.entries(memberships)) {
+            const appIds = romIds.map((rid) => romIdToAppId[String(rid)]).filter((id): id is number => id != null);
+            if (appIds.length > 0) {
+              rommCollections[collName] = appIds;
+              activeRomMCollections.add(collName);
+            }
+            collIdx++;
+            updateCollectionsProgress(Math.min(collIdx, totalColls), totalColls, collName);
+          }
+          if (Object.keys(rommCollections).length > 0) {
+            await appendToRomMCollections(rommCollections);
+          }
+          logInfo(`Collections built: ${Object.keys(platformAppIdsMap).length} platform + ${Object.keys(memberships).length} named`);
           continue;
         }
 
@@ -236,38 +297,23 @@ async function startProcessingLoop(): Promise<void> {
           total_shortcuts_all,
           shortcuts_before,
         } = pData;
-        const platformPrefix = `${platform_name} (${platform_index}/${total_platforms})`;
         const newItems: SyncAddItem[] = pData.shortcuts ?? [];
         const changedItems: SyncChangedItem[] = pData.changed_shortcuts ?? [];
         const isDelta = changedItems.length > 0 || (pData.changed_shortcuts !== undefined);
         const platformTotal = newItems.length + changedItems.length;
         const platformAppIds: number[] = [];
-        const platformRomMCollections: Record<string, number[]> = {};
 
         // Set global total from the first platform event
         if (globalTotal === 0) globalTotal = total_shortcuts_all;
 
-        // Build rom_id → collection_names lookup for this platform
-        const collectionMemberships = pData.collection_memberships ?? {};
-        const romIdToCollections = new Map<number, string[]>();
-        for (const [collName, romIds] of Object.entries(collectionMemberships)) {
-          for (const rid of romIds) {
-            const arr = romIdToCollections.get(rid);
-            if (arr) arr.push(collName);
-            else romIdToCollections.set(rid, [collName]);
-          }
-        }
+        // Set accordion active platform
+        setActivePlatform(platform_index - 1);
 
         updateSyncProgress({
           running: true, phase: "applying",
           current: shortcuts_before, total: globalTotal,
-          message: `${platformPrefix} — Starting (${platformTotal} games)`,
-          step: pData.step, totalSteps: pData.total_steps,
+          message: `${platform_name} — Starting (${platformTotal} games)`,
           subMessage: "",
-          stepLabel: "Applying changes",
-          platformCurrent: platform_index,
-          platformTotal: total_platforms,
-          platformLabel: platform_name,
         });
         globalProcessed = shortcuts_before;
 
@@ -279,13 +325,10 @@ async function startProcessingLoop(): Promise<void> {
           globalProcessed = shortcuts_before + i + 1;
           updateSyncProgress({
             current: globalProcessed,
-            message: `${platformPrefix} — Adding ${i + 1}/${platformTotal}`,
+            message: `${platform_name} — Adding ${i + 1}/${platformTotal}`,
             subMessage: shortcut.name,
-            stepLabel: "Applying changes",
-            platformCurrent: platform_index,
-            platformTotal: total_platforms,
-            platformLabel: platform_name,
           });
+          updatePlatformProgress(platform_name, i + 1, platformTotal, shortcut.name);
 
           try {
             let appId: number | undefined;
@@ -318,15 +361,8 @@ async function startProcessingLoop(): Promise<void> {
 
             if (appId) {
               platformAppIds.push(appId);
-              enqueueArtwork(appId, shortcut.rom_id, shortcut.name);
+              enqueueArtwork(appId, shortcut.rom_id, shortcut.name, platform_name);
               await throttleArtwork();
-              const colls = romIdToCollections.get(shortcut.rom_id);
-              if (colls) {
-                for (const c of colls) {
-                  if (!platformRomMCollections[c]) platformRomMCollections[c] = [];
-                  platformRomMCollections[c].push(appId);
-                }
-              }
             }
           } catch (e) {
             logError(`Failed to process shortcut for rom ${shortcut.rom_id}: ${e}`);
@@ -354,13 +390,10 @@ async function startProcessingLoop(): Promise<void> {
             const itemIdx = newItems.length + i + 1;
             updateSyncProgress({
               current: globalProcessed,
-              message: `${platformPrefix} — Updating ${itemIdx}/${platformTotal}`,
+              message: `${platform_name} — Updating ${itemIdx}/${platformTotal}`,
               subMessage: shortcut.name,
-              stepLabel: "Applying changes",
-              platformCurrent: platform_index,
-              platformTotal: total_platforms,
-              platformLabel: platform_name,
             });
+            updatePlatformProgress(platform_name, itemIdx, platformTotal, shortcut.name);
 
             try {
               const appId = shortcut.existing_app_id;
@@ -371,15 +404,8 @@ async function startProcessingLoop(): Promise<void> {
               romIdToAppId[String(shortcut.rom_id)] = appId;
               batchRomIdToAppId[String(shortcut.rom_id)] = appId;
               platformAppIds.push(appId);
-              enqueueArtwork(appId, shortcut.rom_id, shortcut.name);
+              enqueueArtwork(appId, shortcut.rom_id, shortcut.name, platform_name);
               await throttleArtwork();
-              const colls = romIdToCollections.get(shortcut.rom_id);
-              if (colls) {
-                for (const c of colls) {
-                  if (!platformRomMCollections[c]) platformRomMCollections[c] = [];
-                  platformRomMCollections[c].push(appId);
-                }
-              }
             } catch (e) {
               logError(`Failed to update shortcut for rom ${shortcut.rom_id}: ${e}`);
             }
@@ -398,26 +424,21 @@ async function startProcessingLoop(): Promise<void> {
           }
         }
 
-        // ── Platform finalization: drain artwork → collections → flush ──
-        await drainArtwork(platformPrefix);
+        // ── Platform finalization: drain artwork → flush ─────
+        await drainArtwork(platform_name);
 
         if (platformAppIds.length > 0) {
-          updateSyncProgress({ message: `${platformPrefix} — Building collections…`, subMessage: "", stepLabel: "Applying changes", platformLabel: platform_name });
-          await appendToCollections({ [platform_name]: platformAppIds });
           activePlatforms.add(platform_name);
-          if (Object.keys(platformRomMCollections).length > 0) {
-            await appendToRomMCollections(platformRomMCollections);
-            for (const name of Object.keys(platformRomMCollections)) {
-              activeRomMCollections.add(name);
-            }
-          }
         }
 
         await flushBatch();
-        logInfo(`Platform ${platform_index}/${total_platforms} complete: ${platform_name} (${platformTotal} games, ${platformAppIds.length} shortcuts)`);
 
         if (cancelled) {
-          logInfo(`Sync cancelled after completing platform: ${platform_name}`);
+          markPlatformPartial(platform_name, globalProcessed - shortcuts_before, platformTotal);
+          logInfo(`Sync cancelled after platform: ${platform_name}`);
+        } else {
+          markPlatformDone(platform_name);
+          logInfo(`Platform ${platform_index}/${total_platforms} complete: ${platform_name} (${platformTotal} games, ${platformAppIds.length} shortcuts)`);
         }
       } // inner while (_queue.length > 0)
     } // outer while (!doneReceived && !cancelled)
@@ -474,7 +495,7 @@ async function startProcessingLoop(): Promise<void> {
     }
 
     // ── Finalize: report to backend ──────────────────────────
-    updateSyncProgress({ message: "Finalizing sync…", subMessage: "", stepLabel: "Finalizing", platformCurrent: 0, platformTotal: 0, platformLabel: "" });
+    updateSyncProgress({ message: "Finalizing sync\u2026", subMessage: "" });
     try {
       if (useIncremental) {
         await reportSyncFinalized({}, [], cancelled);
@@ -496,7 +517,8 @@ async function startProcessingLoop(): Promise<void> {
     const doneMsg = cancelled
       ? `Sync cancelled (${Object.keys(romIdToAppId).length} processed, ${totalPersisted} persisted)`
       : "Sync complete";
-    updateSyncProgress({ running: false, phase: "done", message: doneMsg, subMessage: "", stepLabel: "", platformCurrent: 0, platformTotal: 0, platformLabel: "" });
+    updateSyncProgress({ running: false, phase: "done", message: doneMsg, subMessage: "" });
+    resetAccordion();
     logInfo(`Sync ${cancelled ? "cancelled" : "complete"}: ${Object.keys(romIdToAppId).length} added/updated, ${removedRomIds.length} removed, ${totalPersisted} persisted incrementally`);
   } finally {
     _isSyncRunning = false;

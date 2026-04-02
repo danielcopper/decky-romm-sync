@@ -29,8 +29,9 @@ import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
 import { getAccordionState } from "../utils/syncAccordion";
+import { SyncAccordion } from "./SyncAccordion";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
-import type { AccordionState, PlatformRow } from "../utils/syncAccordion";
+import type { AccordionState } from "../utils/syncAccordion";
 import type { MigrationStatus } from "../api/backend";
 
 type Page = "settings" | "library" | "data" | "downloads";
@@ -472,144 +473,52 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               <div style={{
                 display: "flex",
                 flexDirection: "column",
-                gap: "6px",
-                padding: "12px 0",
+                gap: "4px",
+                padding: "8px 0",
                 width: "100%",
               }}>
-                {/* ── Step label + step counter row ─────────────────── */}
-                <div style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "baseline",
-                }}>
-                  {syncProgress?.stepLabel ? (
-                    <div style={{
-                      fontSize: "13px",
-                      fontWeight: "bold",
-                      color: "#fff",
-                      letterSpacing: "0.3px",
-                    }}>
-                      {syncProgress.stepLabel}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: "13px", fontWeight: "bold", color: "#fff" }}>
-                      Syncing…
-                    </div>
-                  )}
-                  {syncProgress?.step && syncProgress?.totalSteps ? (
-                    <div style={{
-                      fontSize: "11px",
-                      color: "rgba(255, 255, 255, 0.45)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.5px",
-                      flexShrink: 0,
-                      marginLeft: "8px",
-                    }}>
-                      Step {syncProgress.step}/{syncProgress.totalSteps}
-                    </div>
-                  ) : null}
-                </div>
-
-                {/* ── Overall progress bar ──────────────────────────── */}
-                <ProgressBarWithInfo
-                  indeterminate={progressFraction === undefined}
-                  nProgress={progressFraction}
-                  sOperationText=""
-                />
-
-                {/* ── Overall progress context line ────────────────── */}
-                <div style={{
-                  fontSize: "12px",
-                  color: "rgba(255, 255, 255, 0.55)",
-                  lineHeight: "1.3",
-                }}>
-                  {syncProgress?.total
-                    ? `${syncProgress.current ?? 0} / ${syncProgress.total}`
-                    : syncProgress?.message || ""}
-                </div>
-
-                {/* ── Current-unit section (platform / collection) ─── */}
-                {syncProgress?.platformTotal && syncProgress.platformTotal > 0 ? (
-                  <div style={{
-                    marginTop: "4px",
-                    padding: "6px 8px",
-                    backgroundColor: "rgba(255, 255, 255, 0.04)",
-                    borderRadius: "4px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "4px",
-                  }}>
-                    {/* Platform / unit label */}
-                    <div style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "baseline",
-                    }}>
-                      <div style={{
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: "rgba(255, 255, 255, 0.85)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        maxWidth: "70%",
-                      }}>
-                        {syncProgress.platformLabel || ""}
+                {/* ── Fetch header (State 2: before any platform apply) ── */}
+                {accordion && accordion.platforms.length > 0 && accordion.activePlatformIndex < 0 ? (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <div style={{ fontSize: "13px", fontWeight: "bold", color: "#fff" }}>
+                        Fetching library...
                       </div>
-                      <div style={{
-                        fontSize: "11px",
-                        color: "rgba(255, 255, 255, 0.45)",
-                        flexShrink: 0,
-                      }}>
-                        {(syncProgress.platformCurrent ?? 0)}/{syncProgress.platformTotal}
-                      </div>
+                      {syncProgress?.platformsTotal ? (
+                        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)" }}>
+                          {syncProgress.platformsFetched ?? 0}/{syncProgress.platformsTotal} platforms
+                        </div>
+                      ) : null}
                     </div>
-                    {/* Platform progress bar */}
                     <ProgressBarWithInfo
-                      indeterminate={false}
-                      nProgress={
-                        syncProgress.platformTotal > 0
-                          ? ((syncProgress.platformCurrent ?? 0) / syncProgress.platformTotal) * 100
-                          : 0
-                      }
+                      indeterminate={progressFraction === undefined}
+                      nProgress={progressFraction}
                       sOperationText=""
                     />
-                  </div>
+                    {syncProgress?.total ? (
+                      <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.55)" }}>
+                        {syncProgress.current ?? 0} / {syncProgress.total} ROMs
+                      </div>
+                    ) : null}
+                  </>
+                ) : !accordion || accordion.platforms.length === 0 ? (
+                  /* ── State 1: Connecting (no plan yet) ── */
+                  <>
+                    <div style={{ fontSize: "13px", fontWeight: "bold", color: "#fff" }}>
+                      {syncProgress?.message || "Connecting to RomM..."}
+                    </div>
+                    <ProgressBarWithInfo indeterminate nProgress={0} sOperationText="" />
+                  </>
                 ) : null}
 
-                {/* ── Sub-message — individual title being processed ── */}
-                {syncProgress?.subMessage ? (
-                  <div style={{
-                    fontSize: "12px",
-                    color: "rgba(255, 255, 255, 0.55)",
-                    wordBreak: "break-word",
-                    lineHeight: "1.3",
-                    fontStyle: "italic",
-                    marginTop: "2px",
-                  }}>
-                    {syncProgress.subMessage}
-                  </div>
+                {/* ── Platform accordion rows ── */}
+                {accordion && accordion.platforms.length > 0 ? (
+                  <SyncAccordion
+                    accordion={accordion}
+                    syncProgress={syncProgress}
+                    formatEta={formatEta}
+                  />
                 ) : null}
-
-                {/* ── ETA / elapsed row ─────────────────────────────── */}
-                <div style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontSize: "11px",
-                  color: "rgba(255, 255, 255, 0.4)",
-                  marginTop: "2px",
-                }}>
-                  <span>
-                    {syncProgress?.etaSec != null && syncProgress.etaSec > 0
-                      ? `~${formatEta(syncProgress.etaSec)} remaining`
-                      : ""}
-                  </span>
-                  <span>
-                    {syncProgress?.elapsedSec != null && syncProgress.elapsedSec > 5
-                      ? `${formatEta(syncProgress.elapsedSec)} elapsed`
-                      : ""}
-                  </span>
-                </div>
               </div>
             </PanelSectionRow>
             <PanelSectionRow>
