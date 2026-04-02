@@ -975,7 +975,7 @@ class TestSyncPreview:
             {"rom_id": 3, "name": "Game C", "platform_name": "N64", "platform_slug": "n64", "fs_name": "c.z64"},
         ]
         plugin._sync_service._fetch_and_prepare = AsyncMock(
-            return_value=(all_roms, shortcuts_data, platforms, {}, set())
+            return_value=(all_roms, shortcuts_data, platforms, {}, set(), 2)
         )
         plugin._sync_service._emit_progress = AsyncMock()
 
@@ -1009,7 +1009,7 @@ class TestSyncPreview:
             {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
         ]
         plugin._sync_service._fetch_and_prepare = AsyncMock(
-            return_value=(all_roms, shortcuts_data, platforms, {}, set())
+            return_value=(all_roms, shortcuts_data, platforms, {}, set(), 2)
         )
         plugin._sync_service._emit_progress = AsyncMock()
 
@@ -1019,6 +1019,7 @@ class TestSyncPreview:
         assert len(plugin._sync_service._pending_delta["new"]) == 1
         assert plugin._sync_service._pending_delta["platforms_count"] == 1
         assert plugin._sync_service._pending_delta["total_roms"] == 1
+        assert plugin._sync_service._pending_delta["fetch_step_count"] == 2
 
     @pytest.mark.asyncio
     async def test_returns_error_when_sync_running(self, plugin):
@@ -1042,7 +1043,7 @@ class TestSyncPreview:
             {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
         ]
         plugin._sync_service._fetch_and_prepare = AsyncMock(
-            return_value=(all_roms, shortcuts_data, platforms, {}, set())
+            return_value=(all_roms, shortcuts_data, platforms, {}, set(), 2)
         )
         plugin._sync_service._emit_progress = AsyncMock()
 
@@ -1057,6 +1058,7 @@ class TestSyncApplyDelta:
         """Helper to populate _pending_delta with valid data."""
         plugin._sync_service._pending_delta = {
             "preview_id": preview_id,
+            "fetch_step_count": 2,
             "new": [
                 {
                     "rom_id": 3,
@@ -2904,7 +2906,7 @@ class TestCollectionSyncEdgeCases:
         svc._loop = mock_loop
 
         # _fetch_and_prepare drives the whole flow
-        all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids = await svc._fetch_and_prepare()
+        all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids, _fetch_step_count = await svc._fetch_and_prepare()
 
         assert len(all_roms) == 1
         assert all_roms[0]["id"] == 1
@@ -3119,7 +3121,7 @@ class TestCollectionSyncEdgeCases:
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
         svc._loop = mock_loop
 
-        _all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids = await svc._fetch_and_prepare()
+        _all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids, _fetch_step_count = await svc._fetch_and_prepare()
 
         # ROM A should appear exactly once despite being in both platform and collection
         rom_ids_in_shortcuts = [sd["rom_id"] for sd in shortcuts_data]
@@ -3259,6 +3261,7 @@ class TestCollectionSyncEdgeCases:
             _platforms,
             collection_memberships,
             _platform_rom_ids,
+            _fetch_step_count,
         ) = await svc._fetch_and_prepare()
 
         # Platform ROM was still fetched
