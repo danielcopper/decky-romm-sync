@@ -27,7 +27,7 @@ import { getSyncProgress } from "../utils/syncProgress";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
-import { requestSyncCancel } from "../utils/syncManager";
+import { requestSyncCancel, startShortcutPreScan } from "../utils/syncManager";
 import { getAccordionState } from "../utils/syncAccordion";
 import { SyncAccordion } from "./SyncAccordion";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
@@ -153,6 +153,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setStatus("");
     setPreview(null);
     setSyncProgress({ running: true, phase: "fetching", message: "Fetching library..." });
+    startShortcutPreScan(); // Begin scanning existing shortcuts in parallel with fetch
     startPolling(true);
     try {
       const result = await syncPreview();
@@ -201,6 +202,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setLoading(true);
     setSyncing(true);
     setSyncProgress({ running: true, phase: "applying", message: "Applying changes..." });
+    startShortcutPreScan(); // Pre-scan if not already done during fetch
     try {
       const result = await syncApplyDelta(previewId);
       if (result.success) {

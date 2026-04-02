@@ -116,44 +116,87 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const biosLoaded = useRef(false);
 
-  // Load sync platforms on mount
+  // Load sync platforms on mount — use prefetch cache if available
   useEffect(() => {
-    getPlatforms()
+    const cached = getCachedPlatforms();
+    if (cached) {
+      if (cached.success) setSyncPlatforms(cached.platforms);
+      else setSyncError(true);
+      setSyncLoading(false);
+      return;
+    }
+    const pending = getPlatformsPromise();
+    const promise = pending || getPlatforms();
+    promise
       .then((result) => {
-        if (result.success) {
-          setSyncPlatforms(result.platforms);
-        } else {
-          setSyncError(true);
-        }
+        if (result.success) setSyncPlatforms(result.platforms);
+        else setSyncError(true);
       })
       .catch(() => setSyncError(true))
       .finally(() => setSyncLoading(false));
   }, []);
 
-  // Load collections data lazily on first switch to collections tab
+  // Load collections data lazily on first switch — use prefetch cache if available
   useEffect(() => {
     if (activeTab === "collections" && !collectionsLoaded.current) {
       collectionsLoaded.current = true;
-      Promise.all([
-        getCollections(),
-        getSettings(),
-      ]).then(([collResult, settingsResult]) => {
-        if (collResult.success) {
-          setCollections(collResult.collections);
-        } else {
-          setCollectionsError(true);
-        }
-        setPlatformGroups(!!settingsResult.collection_create_platform_groups);
-      }).catch(() => setCollectionsError(true))
-        .finally(() => setCollectionsLoading(false));
+      const cached = getCachedCollections();
+      if (cached) {
+        if (cached.success) setCollections(cached.collections);
+        else setCollectionsError(true);
+        setPlatformGroups(cached.platformGroups);
+        setCollectionsLoading(false);
+        return;
+      }
+      const pending = getCollectionsPromise();
+      if (pending) {
+        pending.then((result) => {
+          if (result.success) setCollections(result.collections);
+          else setCollectionsError(true);
+          setPlatformGroups(result.platformGroups);
+        }).catch(() => setCollectionsError(true))
+          .finally(() => setCollectionsLoading(false));
+      } else {
+        Promise.all([getCollections(), getSettings()])
+          .then(([collResult, settingsResult]) => {
+            if (collResult.success) setCollections(collResult.collections);
+            else setCollectionsError(true);
+            setPlatformGroups(!!settingsResult.collection_create_platform_groups);
+          }).catch(() => setCollectionsError(true))
+            .finally(() => setCollectionsLoading(false));
+      }
     }
   }, [activeTab]);
 
-  // Load BIOS data lazily on first switch to BIOS tab
+  // Load BIOS data lazily on first switch — use prefetch cache if available
   useEffect(() => {
     if (activeTab === "bios" && !biosLoaded.current) {
       biosLoaded.current = true;
-      refreshBios();
+      const cached = getCachedBios();
+      if (cached) {
+        if (cached.success) {
+          setBiosPlatforms(cached.platforms);
+          setServerOffline(cached.serverOffline);
+        } else {
+          setBiosError(cached.message || "Failed to fetch firmware status");
+        }
+        setBiosLoading(false);
+        return;
+      }
+      const pending = getBiosPromise();
+      if (pending) {
+        pending.then((result) => {
+          if (result.success) {
+            setBiosPlatforms(result.platforms);
+            setServerOffline(result.serverOffline);
+          } else {
+            setBiosError(result.message || "Failed to fetch firmware status");
+          }
+        }).catch((e) => setBiosError(`Failed to fetch firmware status: ${e}`))
+          .finally(() => setBiosLoading(false));
+      } else {
+        refreshBios();
+      }
     }
   }, [activeTab]);
 

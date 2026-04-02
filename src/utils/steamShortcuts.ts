@@ -9,15 +9,18 @@ const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * Scan all non-Steam shortcuts and return those managed by RomM.
  * Returns Map<romId, steamAppId>.
  */
-export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
+export async function getExistingRomMShortcuts(
+  onProgress?: (scanned: number, total: number) => void,
+): Promise<Map<number, number>> {
   const result = new Map<number, number>();
 
   if (typeof collectionStore === "undefined") return result;
 
   const appIds = Array.from(collectionStore.deckDesktopApps.apps.keys());
+  const total = appIds.length;
 
-  // Fire up to 10 RegisterForAppDetails calls in parallel to avoid 2s-per-shortcut overhead
-  const CONCURRENCY = 10;
+  // Fire up to 50 RegisterForAppDetails calls in parallel
+  const CONCURRENCY = 50;
   for (let i = 0; i < appIds.length; i += CONCURRENCY) {
     const batch = appIds.slice(i, i + CONCURRENCY);
     const entries = await Promise.all(
@@ -33,6 +36,7 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
         }
       }
     }
+    onProgress?.(Math.min(i + CONCURRENCY, total), total);
   }
 
   return result;
@@ -48,14 +52,14 @@ function getLaunchOptions(appId: number): Promise<string | null> {
         resolve(details?.strLaunchOptions ?? details?.LaunchOptions ?? null);
       }
     });
-    // Timeout after 2s to avoid hanging
+    // Timeout after 500ms — most resolve in <100ms
     setTimeout(() => {
       if (!resolved) {
         resolved = true;
         reg.unregister();
         resolve(null);
       }
-    }, 2000);
+    }, 500);
   });
 }
 

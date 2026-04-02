@@ -32,6 +32,32 @@ const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 let _cancelRequested = false;
 let _isSyncRunning = false;
 
+// ── Pre-scan cache ───────────────────────────────────────────
+// Start scanning existing shortcuts early (during fetch) so the apply
+// phase doesn't block for ~30s.
+let _preScanPromise: Promise<Map<number, number>> | null = null;
+
+/** Begin scanning existing RomM shortcuts in the background. Call early. */
+export function startShortcutPreScan(): void {
+  if (!_preScanPromise) {
+    _preScanPromise = getExistingRomMShortcuts((scanned, total) => {
+      updateSyncProgress({
+        message: `Scanning existing shortcuts ${scanned}/${total}`,
+      });
+    });
+  }
+}
+
+/** Consume the pre-scan result (waits if still in progress). Falls back to fresh scan. */
+async function getPreScannedShortcuts(): Promise<Map<number, number>> {
+  if (_preScanPromise) {
+    const result = await _preScanPromise;
+    _preScanPromise = null;
+    return result;
+  }
+  return getExistingRomMShortcuts();
+}
+
 /** Request cancellation of the frontend shortcut processing loop. */
 export function requestSyncCancel(): void {
   _cancelRequested = true;
@@ -133,7 +159,9 @@ async function startProcessingLoop(): Promise<void> {
     logInfo("Per-platform processing loop started");
 
     // ── Shared state across all platforms ─────────────────────
-    const existing = await getExistingRomMShortcuts();
+    updateSyncProgress({ message: "Preparing shortcuts..." });
+    const existing = await getPreScannedShortcuts();
+    logInfo(`Shortcut scan complete: ${existing.size} existing RomM shortcuts found`);
     const romIdToAppId: Record<string, number> = {};
     const removedRomIds: number[] = [];
     let lastHeartbeat = Date.now();
