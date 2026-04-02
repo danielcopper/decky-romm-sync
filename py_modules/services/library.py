@@ -406,6 +406,25 @@ class LibraryService:
             message=f"Adding shortcuts 0/{total_changes}",
         )
 
+        # ── Emit sync_plan so the frontend can render the accordion ──
+        from collections import Counter
+        all_shortcuts = delta["new"] + (delta["changed"] or [])
+        platform_counts = Counter(sd.get("platform_name", "Unknown") for sd in all_shortcuts)
+        plan_platforms = []
+        for pname in sorted(platform_counts):
+            slug = ""
+            for sd in all_shortcuts:
+                if sd.get("platform_name") == pname:
+                    slug = sd.get("platform_slug", "")
+                    break
+            plan_platforms.append({"name": pname, "slug": slug, "rom_count": platform_counts[pname]})
+        has_collections = bool(self._pending_collection_memberships)
+        await self._emit("sync_plan", {
+            "platforms": plan_platforms,
+            "has_collections": has_collections,
+            "estimated_total_roms": sum(platform_counts.values()),
+        })
+
         # Emit per-platform events instead of a single monolithic sync_apply
         await self._emit_per_platform(
             shortcuts_data=delta["new"],
@@ -1065,6 +1084,16 @@ class LibraryService:
         self._logger.info(
             f"Estimated total ROMs across {len(platforms)} platforms: {estimated_total_roms}"
         )
+
+        # ── Emit sync_plan so the frontend can render the accordion ──
+        await self._emit("sync_plan", {
+            "platforms": [
+                {"name": p["name"], "slug": p["slug"], "rom_count": p.get("rom_count", 0)}
+                for p in platforms
+            ],
+            "has_collections": has_collections,
+            "estimated_total_roms": estimated_total_roms,
+        })
 
         # Phase 2: Fetch ROMs per platform (concurrent, bounded by semaphore)
         total_platforms = len(platforms)
