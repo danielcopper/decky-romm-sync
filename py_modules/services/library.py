@@ -416,11 +416,14 @@ class LibraryService:
         )
 
         # Emit delta with step plan for frontend
+        # Sort new/changed by platform_name for per-platform frontend processing
+        sorted_new = sorted(delta["new"], key=lambda sd: sd.get("platform_name", ""))
+        sorted_changed = sorted(delta["changed"], key=lambda sd: sd.get("platform_name", ""))
         await self._emit(
             "sync_apply",
             {
-                "shortcuts": delta["new"],
-                "changed_shortcuts": delta["changed"],
+                "shortcuts": sorted_new,
+                "changed_shortcuts": sorted_changed,
                 "remove_rom_ids": delta["remove_rom_ids"],
                 "next_step": apply_step,
                 "total_steps": total_steps,
@@ -1136,6 +1139,9 @@ class LibraryService:
         # Phase 4: Prepare shortcut data (fast, CPU-only)
         with self._perf.time_phase("prepare_shortcuts"):
             shortcuts_data = self._build_shortcuts_data(all_roms)
+            # Sort by platform_name so the frontend processes platforms
+            # in a consistent, grouped order (per-platform pipeline).
+            shortcuts_data.sort(key=lambda sd: sd.get("platform_name", ""))
         self._check_cancelling()
 
         # Cache metadata from sync response

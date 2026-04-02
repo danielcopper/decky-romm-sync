@@ -1,5 +1,5 @@
 import { addEventListener } from "@decky/api";
-import type { SyncApplyData, SyncChangedItem } from "../types";
+import type { SyncApplyData, SyncAddItem, SyncChangedItem } from "../types";
 import {
   downloadAndGetArtwork,
   reportSyncResults,
@@ -24,11 +24,21 @@ export function requestSyncCancel(): void {
   _cancelRequested = true;
 }
 
-// ── Incremental batch configuration ────────────────────────
+// ── Configuration ──────────────────────────────────────────
 const BATCH_SIZE = 20;            // Persist every 20 shortcuts
 const BATCH_TIMEOUT_MS = 5_000;   // Or every 5 seconds, whichever comes first
 const ART_CONCURRENCY = 8;        // Max parallel artwork fetches
-const COLLECTION_UPDATE_INTERVAL = 50; // Update Steam collections every N shortcuts
+
+/** Group items by platform_name, preserving insertion order. */
+function groupByPlatform<T extends { platform_name: string }>(items: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const list = map.get(item.platform_name);
+    if (list) list.push(item);
+    else map.set(item.platform_name, [item]);
+  }
+  return map;
+}
 
 /**
  * Initialize the sync manager that listens for sync_apply events from the backend.
@@ -70,56 +80,6 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
       let lastFlushTime = Date.now();
       let totalPersisted = 0;
 
-      // ── Incremental collection state ──────────────────────
-      let pendingPlatformAppIds: Record<string, number[]> = {};
-      let pendingRomMCollectionAppIds: Record<string, number[]> = {};
-      let shortcutsSinceCollectionUpdate = 0;
-      const collectionMemberships = data.collection_memberships ?? {};
-
-      /** Build a rom_id→collection_names lookup for fast incremental collection mapping. */
-      const romIdToCollections: Map<number, string[]> = new Map();
-      for (const [collName, romIds] of Object.entries(collectionMemberships)) {
-        for (const rid of romIds) {
-          const existing = romIdToCollections.get(rid);
-          if (existing) existing.push(collName);
-          else romIdToCollections.set(rid, [collName]);
-        }
-      }
-
-      /** Track a successfully created/updated shortcut for incremental collection updates. */
-      function trackForCollections(appId: number, romId: number, platformName: string): void {
-        if (!pendingPlatformAppIds[platformName]) pendingPlatformAppIds[platformName] = [];
-        pendingPlatformAppIds[platformName].push(appId);
-        // Also track RomM collection memberships
-        const colls = romIdToCollections.get(romId);
-        if (colls) {
-          for (const collName of colls) {
-            if (!pendingRomMCollectionAppIds[collName]) pendingRomMCollectionAppIds[collName] = [];
-            pendingRomMCollectionAppIds[collName].push(appId);
-          }
-        }
-        shortcutsSinceCollectionUpdate++;
-      }
-
-      /** Flush pending platform+RomM collection app IDs to Steam collections (append mode). */
-      async function flushCollections(): Promise<void> {
-        const hasPlatform = Object.keys(pendingPlatformAppIds).length > 0;
-        const hasRomM = Object.keys(pendingRomMCollectionAppIds).length > 0;
-        if (!hasPlatform && !hasRomM) return;
-        const platformToSend = { ...pendingPlatformAppIds };
-        const rommToSend = { ...pendingRomMCollectionAppIds };
-        pendingPlatformAppIds = {};
-        pendingRomMCollectionAppIds = {};
-        shortcutsSinceCollectionUpdate = 0;
-        try {
-          if (hasPlatform) await appendToCollections(platformToSend);
-          if (hasRomM) await appendToRomMCollections(rommToSend);
-          logInfo(`Incremental collections: ${Object.keys(platformToSend).length} platforms, ${Object.keys(rommToSend).length} RomM collections`);
-        } catch (e) {
-          logWarn(`Incremental collection update failed: ${e}`);
-        }
-      }
-
       /** Flush the current batch to the backend for incremental persistence. */
       async function flushBatch(): Promise<void> {
         if (!useIncremental) return;
@@ -141,16 +101,13 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
         } catch (e) {
           logWarn(`Incremental reporting not available, falling back to batch mode: ${e}`);
           useIncremental = false;
-          // Re-add to full accumulator — they'll be caught by the final report
-          // (romIdToAppId already has them, so no data loss)
         }
       }
 
       // In-flight artwork promises for parallel approach
       let artworkQueue: Promise<void>[] = [];
 
-      /** Fire artwork fetch for a shortcut (non-blocking, limited concurrency).
-       *  Downloads cover from RomM on-demand and sets Steam custom artwork. */
+      /** Fire artwork fetch for a shortcut (non-blocking, limited concurrency). */
       function enqueueArtwork(appId: number, romId: number, name: string): void {
         const p: Promise<void> = downloadAndGetArtwork(romId)
           .then(async (artResult) => {
@@ -169,35 +126,85 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           await Promise.race(artworkQueue);
         }
       }
-  
-      // Step plan from backend — unified, continuous numbering
+
+      /** Wait for all in-flight artwork to finish, showing live countdown. */
+      async function drainArtwork(prefix: string): Promise<void> {
+        if (artworkQueue.length === 0) return;
+        let remaining = artworkQueue.length;
+        updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…` });
+        while (artworkQueue.length > 0) {
+          await Promise.race(artworkQueue);
+          remaining = artworkQueue.length;
+          if (remaining > 0) {
+            updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…` });
+          }
+        }
+      }
+
+      // ── Build rom_id→collection_names lookup ───────────────
+      const collectionMemberships = data.collection_memberships ?? {};
+      const romIdToCollections = new Map<number, string[]>();
+      for (const [collName, romIds] of Object.entries(collectionMemberships)) {
+        for (const rid of romIds) {
+          const arr = romIdToCollections.get(rid);
+          if (arr) arr.push(collName);
+          else romIdToCollections.set(rid, [collName]);
+        }
+      }
+
+      // Step plan from backend
       const currentStep = data.next_step ?? 1;
       const totalSteps = data.total_steps ?? 3;
-  
-      // --- Combined totals: shortcuts + removals in one step ---
-      const totalNew = data.shortcuts.length;
-      const totalChanged = data.changed_shortcuts?.length ?? 0;
-      const totalShortcuts = totalNew + totalChanged;
+
+      // ── Group shortcuts by platform ────────────────────────
+      const newByPlatform = groupByPlatform(data.shortcuts);
+      const changedByPlatform = isDelta && data.changed_shortcuts
+        ? groupByPlatform(data.changed_shortcuts)
+        : new Map<string, SyncChangedItem[]>();
+
+      // Build ordered list of unique platform names
+      const platformSet = new Set<string>();
+      for (const name of newByPlatform.keys()) platformSet.add(name);
+      for (const name of changedByPlatform.keys()) platformSet.add(name);
+      const platformNames = [...platformSet];
+      const totalPlatforms = platformNames.length;
+
+      // Overall totals (for global progress bar)
+      const totalShortcuts = data.shortcuts.length + (data.changed_shortcuts?.length ?? 0);
       const totalRemovals = data.remove_rom_ids.length;
       const totalWork = totalShortcuts + totalRemovals;
-  
-      if (totalShortcuts > 0) {
+      let globalProcessed = 0;
+
+      logInfo(`Per-platform processing: ${totalPlatforms} platforms, ${totalShortcuts} shortcuts, ${totalRemovals} removals`);
+
+      // ── Per-platform processing loop ───────────────────────
+      for (let pIdx = 0; pIdx < totalPlatforms; pIdx++) {
+        const platformName = platformNames[pIdx];
+        const platformPrefix = `${platformName} (${pIdx + 1}/${totalPlatforms})`;
+        const newItems: SyncAddItem[] = newByPlatform.get(platformName) ?? [];
+        const changedItems: SyncChangedItem[] = changedByPlatform.get(platformName) ?? [];
+        const platformTotal = newItems.length + changedItems.length;
+        const platformAppIds: number[] = [];
+        const platformRomMCollections: Record<string, number[]> = {};
+
         updateSyncProgress({
           running: true, phase: "applying",
-          current: 0, total: totalWork,
-          message: `Adding shortcut 0/${totalWork}`,
+          current: globalProcessed, total: totalWork,
+          message: `${platformPrefix} — Starting (${platformTotal} games)`,
           step: currentStep, totalSteps,
         });
-  
-        for (let i = 0; i < data.shortcuts.length; i++) {
-          const item = data.shortcuts[i];
+
+        // ── New shortcuts for this platform ──────────────────
+        for (let i = 0; i < newItems.length; i++) {
+          const item = newItems[i];
+          globalProcessed++;
+          updateSyncProgress({
+            current: globalProcessed,
+            message: `${platformPrefix} — Adding ${i + 1}/${platformTotal} — ${item.name}`,
+          });
+
           try {
-            updateSyncProgress({
-              current: i + 1,
-              message: `Adding shortcut ${i + 1}/${totalWork} — ${item.name}`,
-            });
             let appId: number | undefined;
-  
             if (isDelta) {
               const newAppId = await addShortcut(item);
               if (newAppId) {
@@ -224,101 +231,126 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
                 }
               }
             }
-  
-            // Track for incremental collections + enqueue artwork
+
             if (appId) {
-              trackForCollections(appId, item.rom_id, item.platform_name);
+              platformAppIds.push(appId);
               enqueueArtwork(appId, item.rom_id, item.name);
               await throttleArtwork();
+              // Track RomM collection memberships for this rom
+              const colls = romIdToCollections.get(item.rom_id);
+              if (colls) {
+                for (const c of colls) {
+                  if (!platformRomMCollections[c]) platformRomMCollections[c] = [];
+                  platformRomMCollections[c].push(appId);
+                }
+              }
             }
           } catch (e) {
             logError(`Failed to process shortcut for rom ${item.rom_id}: ${e}`);
           }
           await delay(50);
 
-          // Flush batch when threshold reached
+          // Flush persistence batch when threshold reached
           const batchCount = Object.keys(batchRomIdToAppId).length;
           const timeSinceFlush = Date.now() - lastFlushTime;
           if (batchCount >= BATCH_SIZE || (batchCount > 0 && timeSinceFlush >= BATCH_TIMEOUT_MS)) {
             await flushBatch();
-            if (shortcutsSinceCollectionUpdate >= COLLECTION_UPDATE_INTERVAL) {
-              await flushCollections();
-            }
           }
-  
+
           if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
             syncHeartbeat().catch(() => {});
             lastHeartbeat = Date.now();
           }
-  
+
           if (_cancelRequested) {
-            logInfo(`Cancel requested after processing ${i + 1}/${totalShortcuts} shortcuts`);
             cancelled = true;
             await flushBatch();
             break;
           }
         }
-  
-        // Process changed shortcuts (delta mode only)
-        if (!cancelled && isDelta && data.changed_shortcuts) {
-          for (let i = 0; i < data.changed_shortcuts.length; i++) {
-            const item: SyncChangedItem = data.changed_shortcuts[i];
-            const idx = totalNew + i;
+
+        // ── Changed shortcuts for this platform (delta mode) ─
+        if (!cancelled && changedItems.length > 0) {
+          for (let i = 0; i < changedItems.length; i++) {
+            const item = changedItems[i];
+            globalProcessed++;
+            const itemIdx = newItems.length + i + 1;
+            updateSyncProgress({
+              current: globalProcessed,
+              message: `${platformPrefix} — Updating ${itemIdx}/${platformTotal} — ${item.name}`,
+            });
+
             try {
-              updateSyncProgress({
-                current: idx + 1,
-                message: `Updating shortcut ${idx + 1}/${totalWork} — ${item.name}`,
-              });
               const appId = item.existing_app_id;
-  
               SteamClient.Apps.SetShortcutName(appId, item.name);
               SteamClient.Apps.SetShortcutExe(appId, item.exe);
               SteamClient.Apps.SetShortcutStartDir(appId, item.start_dir);
               SteamClient.Apps.SetAppLaunchOptions(appId, item.launch_options);
               romIdToAppId[String(item.rom_id)] = appId;
               batchRomIdToAppId[String(item.rom_id)] = appId;
-  
-              // Track for incremental collections + enqueue artwork
-              trackForCollections(appId, item.rom_id, item.platform_name);
+              platformAppIds.push(appId);
               enqueueArtwork(appId, item.rom_id, item.name);
               await throttleArtwork();
+              const colls = romIdToCollections.get(item.rom_id);
+              if (colls) {
+                for (const c of colls) {
+                  if (!platformRomMCollections[c]) platformRomMCollections[c] = [];
+                  platformRomMCollections[c].push(appId);
+                }
+              }
             } catch (e) {
               logError(`Failed to update shortcut for rom ${item.rom_id}: ${e}`);
             }
             await delay(50);
 
-            // Flush batch when threshold reached
             const batchCount = Object.keys(batchRomIdToAppId).length;
             const timeSinceFlush = Date.now() - lastFlushTime;
             if (batchCount >= BATCH_SIZE || (batchCount > 0 && timeSinceFlush >= BATCH_TIMEOUT_MS)) {
               await flushBatch();
-              if (shortcutsSinceCollectionUpdate >= COLLECTION_UPDATE_INTERVAL) {
-                await flushCollections();
-              }
             }
-  
+
             if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
               syncHeartbeat().catch(() => {});
               lastHeartbeat = Date.now();
             }
-  
+
             if (_cancelRequested) {
-              logInfo(`Cancel requested during changed shortcuts processing`);
               cancelled = true;
               await flushBatch();
               break;
             }
           }
         }
-  
-        // Flush any remaining shortcuts before moving to removals
+
+        if (cancelled) {
+          // Even on cancel, finalize what we have for this platform
+          await drainArtwork(platformPrefix);
+          if (platformAppIds.length > 0) {
+            await appendToCollections({ [platformName]: platformAppIds });
+            if (Object.keys(platformRomMCollections).length > 0) {
+              await appendToRomMCollections(platformRomMCollections);
+            }
+          }
+          await flushBatch();
+          logInfo(`Platform cancelled mid-way: ${platformName} (${platformAppIds.length} completed)`);
+          break;
+        }
+
+        // ── Platform complete: drain artwork, build collections, flush ──
+        await drainArtwork(platformPrefix);
+
+        if (platformAppIds.length > 0) {
+          await appendToCollections({ [platformName]: platformAppIds });
+          if (Object.keys(platformRomMCollections).length > 0) {
+            await appendToRomMCollections(platformRomMCollections);
+          }
+        }
+
         await flushBatch();
-        // Push all pending shortcuts to Steam collections so they're
-        // browsable while removals + artwork drain happen
-        await flushCollections();
+        logInfo(`Platform ${pIdx + 1}/${totalPlatforms} complete: ${platformName} (${platformTotal} games, ${platformAppIds.length} shortcuts)`);
       }
 
-      // --- Removals (same step, combined progress) ---
+      // ── Removals (cross-platform, at the end) ──────────────
       if (!cancelled && data.remove_rom_ids.length > 0) {
         for (let i = 0; i < data.remove_rom_ids.length; i++) {
           const romId = data.remove_rom_ids[i];
@@ -328,14 +360,14 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           }
           removedRomIds.push(romId);
           batchRemovedRomIds.push(romId);
+          globalProcessed++;
           updateSyncProgress({
-            current: totalShortcuts + i + 1,
+            current: globalProcessed,
             total: totalWork,
             message: `Removing shortcut ${i + 1}/${totalRemovals}`,
           });
           await delay(50);
 
-          // Flush removal batch when threshold reached
           if (batchRemovedRomIds.length >= BATCH_SIZE) {
             await flushBatch();
           }
@@ -347,46 +379,19 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             break;
           }
         }
-  
-        // Flush any remaining removals
         await flushBatch();
-      }
-
-      // --- Drain in-flight artwork with live progress ---
-      if (artworkQueue.length > 0) {
-        let artRemaining = artworkQueue.length;
-        logInfo(`Waiting for ${artRemaining} remaining artwork fetches...`);
-        updateSyncProgress({
-          message: `Finishing artwork (${artRemaining} remaining)…`,
-        });
-        while (artworkQueue.length > 0) {
-          await Promise.race(artworkQueue);
-          artRemaining = artworkQueue.length;
-          if (artRemaining > 0) {
-            updateSyncProgress({
-              message: `Finishing artwork (${artRemaining} remaining)…`,
-            });
-          }
-        }
       }
   
       // ── Finalize: report to backend ──────────────────────────
       updateSyncProgress({ message: "Finalizing sync…" });
-      // If incremental mode was used, call reportSyncFinalized (which
-      // only needs to handle stragglers + collection building + last_sync).
-      // If incremental mode failed, fall back to the legacy reportSyncResults.
       try {
         if (useIncremental) {
-          // All items already persisted incrementally — pass empty maps
-          // for the "remaining" parameter since flushBatch already sent them.
           await reportSyncFinalized({}, [], cancelled);
         } else {
-          // Fallback: legacy all-at-once report
           await reportSyncResults(romIdToAppId, removedRomIds, cancelled);
         }
       } catch (e) {
         logError(`Failed to report sync results: ${e}`);
-        // Last-resort fallback: try the old API if finalized failed
         if (useIncremental) {
           try {
             logWarn("reportSyncFinalized failed, attempting legacy reportSyncResults...");
