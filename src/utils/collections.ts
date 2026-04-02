@@ -405,6 +405,57 @@ export async function appendToRomMCollections(
   }
 }
 
+/**
+ * Remove specific app IDs from all user collections (Favorites, Hidden, etc.).
+ * Must be called BEFORE the shortcuts themselves are removed, so Steam's
+ * collection renderer never sees references to deleted apps.
+ */
+export function removeAppsFromAllCollections(appIds: number[]): void {
+  try {
+    if (typeof collectionStore === "undefined" || !appIds.length) return;
+    const overviews = getOverviews(appIds);
+    if (!overviews.length) return;
+    // Iterate all user collections + built-in ones (Favorites, Hidden)
+    const allCollections = collectionStore.userCollections;
+    let cleaned = 0;
+    for (const coll of allCollections) {
+      try {
+        const matching = overviews.filter((o) => coll.apps?.has(o.appid));
+        if (matching.length > 0) {
+          coll.AsDragDropCollection().RemoveApps(matching);
+          logInfo(`Removed ${matching.length} apps from collection "${coll.displayName}"`);
+          cleaned += matching.length;
+        }
+      } catch (e) {
+        logWarn(`Failed to clean collection "${coll.displayName}": ${e}`);
+      }
+    }
+    if (cleaned > 0) {
+      logInfo(`Cleaned ${cleaned} app references from collections before removal`);
+    }
+  } catch (e) {
+    logError(`removeAppsFromAllCollections failed: ${e}`);
+  }
+}
+
+/**
+ * Safely drain a collection's apps and then delete it.
+ * Draining first prevents Steam from crashing if it tries to render
+ * a collection whose referenced apps have already been removed.
+ */
+async function drainAndDelete(coll: any, label: string): Promise<void> {
+  try {
+    const apps = coll.allApps;
+    if (apps && apps.length > 0) {
+      logInfo(`Draining ${apps.length} apps from "${label}" before deletion`);
+      coll.AsDragDropCollection().RemoveApps(apps);
+    }
+  } catch (e) {
+    logWarn(`Failed to drain apps from "${label}": ${e}`);
+  }
+  await coll.Delete();
+}
+
 export async function clearPlatformCollection(platformName: string): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {
@@ -423,7 +474,7 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
         const coll = collectionStore.GetCollection(steamId);
         if (coll) {
           logInfo(`Deleting collection by registry: "${coll.displayName}" (id=${steamId})`);
-          await coll.Delete();
+          await drainAndDelete(coll, coll.displayName);
           deleted = true;
         }
         unregisterCollection(steamId);
@@ -439,11 +490,11 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
 
     for (const name of [currentName, legacyScoped, legacyBare]) {
       const coll = collectionStore.userCollections.find(
-        (c) => c.displayName === name
+        (c: any) => c.displayName === name
       );
       if (coll) {
         logInfo(`Deleting legacy collection "${name}" (id=${coll.id})`);
-        await coll.Delete();
+        await drainAndDelete(coll, name);
         unregisterCollection(coll.id);
         dirty = true;
         deleted = true;
@@ -474,39 +525,42 @@ export async function clearAllRomMCollections(): Promise<void> {
       const coll = collectionStore.GetCollection(steamId);
       if (coll) {
         logInfo(`Deleting registered collection "${coll.displayName}" (key=${key}, id=${steamId})`);
-        await coll.Delete();
+        await drainAndDelete(coll, coll.displayName);
         deletedIds.add(steamId);
       }
       unregisterCollection(steamId);
     }
 
-    // Fallback: sweep by name patterns for legacy collections
-    const hostname = await getHostname();
-    const hostSuffix = ` (${hostname})`;
-    const prefixes = new Set([_prefix]);
-    prefixes.add("RomM: ");
-    if (_prefix) prefixes.add("");
-
-    const legacyCollections = collectionStore.userCollections.filter((c) => {
-      if (deletedIds.has(c.id)) return false; // already handled
-      for (const pfx of prefixes) {
-        if (!c.displayName.startsWith(pfx)) continue;
-        if (c.displayName.endsWith(hostSuffix)) return true;
-        if (!/\s\([^)]+\)$/.test(c.displayName)) return true;
-      }
+    // Fallback: sweep by name patterns for legacy collections.
+    // Build explicit matchers so an empty _prefix doesn't match every collection.
+    const isRomMCollection = (name: string): boolean => {
+      // Always match the canonical "RomM: " prefix (legacy hard-coded format)
+      if (name.startsWith("RomM: ")) return true;
+      // Match current prefix (if non-empty) — e.g. "MyPrefix: SNES"
+      if (_prefix && name.startsWith(_prefix)) return true;
+      // Match named collection bracket pattern — e.g. "[Favorites]" or "[Best of SNES]"
+      if (/^\[.+\]/.test(name)) return true;
+      if (_prefix && name.startsWith(_prefix + "[")) return true;
       return false;
+    };
+
+    // Also do a second pass over ALL userCollections to catch registry-phase
+    // collections that Delete() didn't fully remove from the observable list
+    const allRomM = collectionStore.userCollections.filter((c: any) => {
+      if (deletedIds.has(c.id)) return false;
+      return isRomMCollection(c.displayName);
     });
 
-    if (legacyCollections.length > 0) {
-      logInfo(`Deleting ${legacyCollections.length} legacy collections by name matching`);
-      for (const c of legacyCollections) {
-        logInfo(`Deleting legacy collection "${c.displayName}" (id=${c.id})`);
-        await c.Delete();
+    if (allRomM.length > 0) {
+      logInfo(`Deleting ${allRomM.length} collections by name matching`);
+      for (const c of allRomM) {
+        logInfo(`Deleting collection "${c.displayName}" (id=${c.id})`);
+        await drainAndDelete(c, c.displayName);
       }
     }
 
     await persistRegistry();
-    logInfo(`Cleared all RomM collections (${deletedIds.size} by registry, ${legacyCollections.length} by name)`);
+    logInfo(`Cleared all RomM collections (${deletedIds.size} by registry, ${allRomM.length} by name)`);
   } catch (e) {
     logError(`Failed to clear collections: ${e}`);
   }

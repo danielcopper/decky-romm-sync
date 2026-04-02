@@ -26,7 +26,7 @@ import {
   updateWhitelistSettings,
 } from "../api/backend";
 import { removeShortcut } from "../utils/steamShortcuts";
-import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
+import { clearPlatformCollection, clearAllRomMCollections, removeAppsFromAllCollections } from "../utils/collections";
 import type { RegistryPlatform } from "../types";
 
 const DEFAULT_WHITELIST_PATTERNS: string[] = [
@@ -192,6 +192,11 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
     setActionStatus(`Removing ${p.name} shortcuts...`);
     try {
       const result = await removePlatformShortcuts(p.slug);
+      // Clean app references from ALL collections BEFORE removing shortcuts
+      if (result.app_ids?.length) {
+        removeAppsFromAllCollections(result.app_ids);
+      }
+      await clearPlatformCollection(result.platform_name || p.name);
       if (result.app_ids) {
         for (const appId of result.app_ids) {
           removeShortcut(appId);
@@ -200,7 +205,6 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
       if (result.rom_ids?.length) {
         await reportRemovalResults(result.rom_ids);
       }
-      await clearPlatformCollection(result.platform_name || p.name);
       setActionStatus(`Removed ${p.count} ${p.name} game${p.count !== 1 ? "s" : ""}`);
       await refreshPlatforms();
       loadNonSteamApps();
@@ -252,6 +256,12 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
               setConfirmRemoveAllRomm(false);
               setStatus("Removing all shortcuts...");
               const result = await removeAllShortcuts();
+              // Clean app references from ALL collections (Favorites, Hidden, etc.)
+              // BEFORE actually removing shortcuts, so Steam never renders orphans.
+              if (result.app_ids?.length) {
+                removeAppsFromAllCollections(result.app_ids);
+              }
+              await clearAllRomMCollections();
               if (result.app_ids) {
                 for (const appId of result.app_ids) {
                   removeShortcut(appId);
@@ -260,7 +270,6 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
               if (result.rom_ids?.length) {
                 await reportRemovalResults(result.rom_ids);
               }
-              await clearAllRomMCollections();
               setStatus(result.message);
               await refreshPlatforms();
               loadNonSteamApps();
@@ -377,6 +386,11 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
                   }
                   const toRemove = nonSteamApps.filter((a) => !whitelistedIds.has(a.appId));
                   setStatus(`Removing ${toRemove.length} non-steam games...`);
+                  // Clean app references from ALL collections (Favorites, Hidden, etc.)
+                  // BEFORE removing shortcuts, so Steam never renders orphan references.
+                  const idsToRemove = toRemove.map((a) => a.appId);
+                  removeAppsFromAllCollections(idsToRemove);
+                  await clearAllRomMCollections();
                   for (const app of toRemove) {
                     SteamClient.Apps.RemoveShortcut(app.appId);
                   }
