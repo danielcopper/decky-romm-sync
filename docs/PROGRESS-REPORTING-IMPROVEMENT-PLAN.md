@@ -326,91 +326,112 @@ When the overall bar is present, individual phases don't need their own bars —
 
 ## Implementation Options
 
-### **A) Targeted Fix: Fetch Progress + Collections Phase** (Improvements 1 + 2)
+### **A) Kill the Spinner: Fetch Progress Bar + ETA** (Improvement 1 only)
 
-Fix the two biggest UX pain points: the fetch black hole and the collection stall. Minimal scope, minimal risk, maximum user-facing impact per line of code.
+**The surgical fix for the #1 problem.** Sum platform `rom_count` values before fetching starts, pass as `total` in every `roms` emission, feed the ETAEstimator. Result: the 30-120s fetch phase gets a real progress bar and ETA instead of a dead spinner.
 
-**Scope:**
-- Modify `_fetch_and_prepare()`: sum `rom_count` from platforms, pass as `total` in `roms` emissions
-- Add `_emit_progress("collections", ...)` calls in `_fetch_collection_roms()`
-- Feed ETAEstimator during fetch phase
-- Frontend: no changes needed (already handles `total > 0` → bar)
+```
+Before:  🔄 "Fetching SNES... 423 found (5/14)"     [spinner, no ETA, 90 seconds of nothing]
+After:   ████████░░░░░░░░░░░ 25%  "SNES · 2,140/8,500 ROMs (5/14) · ~38s left"
+```
 
-**Effort:** ~2-3 hours
-**Files touched:** 1 Python file (library.py)
-**Risk:** Very low — additive changes only, no structural refactoring
+**What changes:**
+- `_fetch_and_prepare()`: after fetching platforms, sum `platform.rom_count` → `estimated_total_roms`
+- Every `_emit_progress("roms", ...)` call gets `total=estimated_total_roms`
+- ETAEstimator is fed after each platform completes (already have `_eta.start()` in place)
+- Frontend: **zero changes needed** — it already shows a bar when `total > 0`
 
----
-
-### **B) Full Step Overhaul: Global Steps + Sub-Phases** (Improvements 1 + 2 + 3 + 5)
-
-Fix fetch progress AND unify the entire sync into a single step plan visible from start to finish. Also break down the frontend shortcut phase into labeled sub-phases.
-
-**Scope:**
-- Everything in Option A
-- Compute global step plan at sync start (platforms→roms→collections→artwork→shortcuts→removals)
-- Pass `step/total_steps` in ALL emissions (not just apply phase)
-- Refactor `syncManager.ts` to emit sub-phase labels ("Adding", "Updating", "Setting artwork", "Removing")
-- Frontend shows `[2/6]` prefix throughout entire sync
-
-**Effort:** ~5-6 hours
-**Files touched:** 2 files (library.py, syncManager.ts), minor type changes (index.ts)
-**Risk:** Low-medium — step numbering logic needs careful testing across both sync paths (preview+apply and full sync)
+**Scope:** ~5-10 lines of Python in one function
+**Effort:** ~30 minutes
+**Files touched:** 1 (library.py)
+**Risk:** Near-zero — additive only, no structural changes. `rom_count` is an estimate that may overshoot/undershoot by a few percent, but that's fine.
 
 ---
 
-### **C) Visual Redesign: Overall Progress Bar + Elapsed** (Improvements 1 + 2 + 3 + 4 + 5 + 6 + 8)
+### **B) Fix All Silent Phases** (Improvements 1 + 2 + 3)
 
-The full UX transformation. A persistent overall progress bar replaces the spinner/bar switching, elapsed time is visible, and every phase has a clear visual identity.
+Everything in A, plus: add progress to collection fetching (currently a silent multi-second stall after ROM fetch), and unify the entire sync into a global step plan visible from start to finish.
 
-**Scope:**
-- Everything in Option B
-- Add `overallProgress` (0.0-1.0) field computed with weighted step formula
-- New frontend layout: persistent overall bar + detail text line (replaces conditional spinner/bar)
-- Show elapsed time after 5s threshold
-- Smooth transitions between phases (no more jarring spinner→bar switch)
+```
+Before:  [spinner for 90s] → [frozen for 8s] → [bar appears at 0%]
+After:   [1/5] Fetching platforms             ████████████████████ 100%
+         [2/5] Fetching ROMs (14 platforms)   ████████░░░░░░░░░░░  25% · ~38s
+         [3/5] Fetching collections (2/5)     ████████████░░░░░░░  60%
+         [4/5] Downloading artwork 50/396     ████░░░░░░░░░░░░░░░  13% · ~24s
+         [5/5] Applying shortcuts 12/50       ████████░░░░░░░░░░░  24%
+```
+
+**What changes (on top of A):**
+- `_fetch_collection_roms()`: emit `"collections"` phase with `current/total` per-collection
+- Compute global step plan before first emission (`["platforms","roms","collections","artwork","shortcuts"]`)
+- Every `_emit_progress` call includes global `step` and `total_steps`
+- The step indicator `[2/5]` appears in ALL phases, not just apply
+
+**Effort:** ~3-4 hours
+**Files touched:** 1-2 (library.py, minor type update in types/index.ts)
+**Risk:** Low — all backend changes, frontend already handles step/totalSteps fields
+
+---
+
+### **C) Full Visual Overhaul** (Improvements 1 + 2 + 3 + 4 + 5 + 6 + 8)
+
+Everything in B, plus: persistent overall progress bar, frontend shortcut sub-phase labels, elapsed time display, and smooth visual transitions (no more jarring spinner↔bar switch).
+
+```
+┌────────────────────────────────────────────────┐
+│  ████████████░░░░░░░░░░░░░░░░  38%  · 1m 12s  │  ← overall progress (always visible)
+│  [2/5] Fetching N64 · 2,140/8,500 ROMs · ~38s │  ← per-phase detail
+│  Cancel Sync                                   │
+└────────────────────────────────────────────────┘
+```
+
+**What changes (on top of B):**
+- Backend: `overallProgress` (0.0–1.0) computed from weighted step formula
+- Frontend: persistent overall `ProgressBarWithInfo` replaces the spinner/bar switch
+- Frontend: `syncManager.ts` sub-phase labels ("Adding 12/23", "Setting artwork 3/31", "Removing 2/4")
+- Frontend: elapsed time shown after 5s threshold
+- No more jarring spinner→bar transition — always a bar
 
 **Effort:** ~8-10 hours
-**Files touched:** 3-4 files (library.py, syncManager.ts, MainPage.tsx, types/index.ts)
-**Risk:** Medium — MainPage.tsx rendering changes need testing on actual Deck hardware for layout/overflow. Weighted progress formula needs tuning.
+**Files touched:** 4 (library.py, syncManager.ts, MainPage.tsx, types/index.ts)
+**Risk:** Medium — MainPage.tsx rendering changes need Deck hardware testing. Weight formula needs tuning.
 
 ---
 
-### **D) The Full Package: Everything + Post-Sync Summary** (All 8 Improvements)
+### **D) The Full Package** (All 8 Improvements)
 
-Everything in Option C plus the enriched post-sync toast and performance summary.
+Everything in C, plus enriched post-sync toast with counts/timing and optional summary card.
 
-**Scope:**
-- Everything in Option C
-- Enrich `sync_complete` event with counts + timing
-- Richer toast message in `index.tsx`
-- Optional: dismissible summary card in MainPage showing last sync's performance data
+```
+Toast: "Sync complete! 396 games · 2m 14s · 23 new, 5 updated, 2 removed"
+```
 
 **Effort:** ~10-13 hours
-**Files touched:** 5+ files (library.py, syncManager.ts, MainPage.tsx, types/index.ts, index.tsx)
-**Risk:** Medium — same as C, plus toast/summary card adds another UI surface to test
+**Files touched:** 5+ (everything in C + index.tsx)
+**Risk:** Medium — same as C plus additional UI surface
 
 ---
 
-## Recommendation: **C**
+## Recommendation: **B**
 
-Option C is the sweet spot. Here's why:
+The fetch spinner is so bad that **any option is worth doing**, but here's the analysis:
 
-1. **Option A is too narrow.** It fixes the worst gap (fetch progress) but leaves the overall experience fragmented — phases still have no continuity, the spinner/bar switch persists, and the frontend shortcut phase stays opaque. The user still can't answer "how far through the whole sync am I?"
+1. **Option A is a valid "ship it now" fix.** It's 30 minutes and kills the #1 problem. If you want immediate relief, this is it. But the rest of the sync still feels disjointed — silent collection stalls, no step continuity, no overall sense of progress.
 
-2. **Option B is the logical minimum** but stops short of the visual payoff. You fix the data pipeline (correct totals, global steps, sub-phases) but the UI still has the jarring spinner→bar transition and no overall indicator. You do all the hard backend work without the frontend payoff.
+2. **Option B is the right balance.** It fixes the fetch black hole (A), eliminates the collection silence, AND gives the user a unified step indicator from start to finish. Every phase says `[2/5] Doing X...` so the user always knows where they are in the overall process. All backend changes, near-zero frontend risk since the existing UI already handles `step/totalSteps` and `total > 0 → bar`. The 3-4 hour investment pays off in a sync that feels coherent instead of fragmented.
 
-3. **Option C delivers the complete visual transformation.** The persistent overall progress bar is the single change that makes the biggest perceptual difference — users always see forward motion, always know the percentage, and never experience the "did it freeze?" moment. Combined with the global step plan and sub-phase labels, every second of the sync is accounted for in the UI.
+3. **Option C is the "premium" version** but the effort doubles (8-10h) for marginal perceptual gain over B. The overall progress bar and elapsed time are nice, but once you have per-phase bars + step indicators + ETA from B, the biggest UX complaints are already solved. C makes sense as a follow-up PR, not the same scope.
 
-4. **Option D adds nice-to-haves but not essentials.** The enriched toast is a 30-minute cherry on top that can be done as a follow-up. It doesn't justify scoping it into the same PR.
+4. **Option D** adds polish that belongs in a separate PR.
 
-**Recommended implementation order within Option C:**
-1. Backend: Platform-aware fetch progress (Improvement 1) — unlocks everything else
-2. Backend: Collection fetch progress (Improvement 2) — quick win
-3. Backend: Global step plan (Improvement 3) — structural change
-4. Frontend: Sub-phase labels in syncManager.ts (Improvement 5)
-5. Backend: Overall progress calculation (Improvement 4)
-6. Frontend: New MainPage layout with overall bar + elapsed (Improvements 6 + 8)
-7. Test on Deck hardware, tune weights, verify QAM panel layout
+**Why B over A:** Option A fixes the fetch phase but the user still experiences: a 3-8 second silent stall after fetching (collections), no step indicator during fetch phases, and no sense of "I'm in step 2 of 5 across the whole sync." B solves all three for ~3 extra hours. That's the ROI sweet spot.
+
+**Why B over C:** C's visual redesign (persistent overall bar, elapsed time, syncManager sub-phases) requires MainPage.tsx refactoring that needs Deck hardware testing. B is all backend and can be merged with high confidence. Ship B now, iterate to C later.
+
+**Recommended implementation order within Option B:**
+1. **Fetch progress bar** (Improvement 1) — the #1 fix, 30 min, instantly testable
+2. **Collection fetch progress** (Improvement 2) — quick win, another 30 min
+3. **Global step plan** (Improvement 3) — structural change, ~2-3h, makes the whole sync coherent
+4. Test full sync end-to-end, verify no regressions
 
 Each step is independently committable and testable.
