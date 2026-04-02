@@ -447,6 +447,7 @@ class LibraryService:
         total_steps=0,
         *,
         sub_phase="",
+        sub_message="",
     ):
         """Update _sync_progress and emit sync_progress event to frontend.
 
@@ -480,6 +481,7 @@ class LibraryService:
             "etaSec": round(eta_sec, 1) if eta_sec else None,
             "itemsPerSec": round(ips, 2) if ips else None,
             "subPhase": sub_phase,
+            "subMessage": sub_message,
         }
         await self._emit("sync_progress", self._sync_progress)
 
@@ -984,10 +986,11 @@ class LibraryService:
                             "collections",
                             current=collections_done,
                             total=collections_total,
-                            message=f"Collections {collections_done}/{collections_total} ({cname})",
+                            message=f"Fetching collections — {collections_done}/{collections_total}",
                             step=step,
                             total_steps=total_steps,
                             sub_phase=f"collection:{cname}",
+                            sub_message=cname,
                         )
                     return cname, rom_ids, roms
 

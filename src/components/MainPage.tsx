@@ -491,7 +491,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                   sOperationText=""
                 />
 
-                {/* Main message — full width, word-wrapping */}
+                {/* Main message — platform/collection context */}
                 <div style={{
                   fontSize: "13px",
                   fontWeight: "bold",
@@ -501,6 +501,19 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 }}>
                   {syncProgress?.message || "Syncing..."}
                 </div>
+
+                {/* Sub-message — individual title being processed */}
+                {syncProgress?.subMessage ? (
+                  <div style={{
+                    fontSize: "12px",
+                    color: "rgba(255, 255, 255, 0.6)",
+                    wordBreak: "break-word",
+                    lineHeight: "1.3",
+                    fontStyle: "italic",
+                  }}>
+                    {syncProgress.subMessage}
+                  </div>
+                ) : null}
 
                 {/* ETA / speed row */}
                 <div style={{

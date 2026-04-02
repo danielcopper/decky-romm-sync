@@ -159,12 +159,12 @@ async function startProcessingLoop(): Promise<void> {
     async function drainArtwork(prefix: string): Promise<void> {
       if (artworkQueue.length === 0) return;
       let remaining = artworkQueue.length;
-      updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…` });
+      updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…`, subMessage: "" });
       while (artworkQueue.length > 0) {
         await Promise.race(artworkQueue);
         remaining = artworkQueue.length;
         if (remaining > 0) {
-          updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…` });
+          updateSyncProgress({ message: `${prefix} — Finishing artwork (${remaining} remaining)…`, subMessage: "" });
         }
       }
     }
@@ -213,6 +213,7 @@ async function startProcessingLoop(): Promise<void> {
               current: globalProcessed,
               total: globalTotal || globalProcessed,
               message: `Removing shortcut ${i + 1}/${removeIds.length}`,
+              subMessage: "",
             });
             await delay(50);
             if (batchRemovedRomIds.length >= BATCH_SIZE) await flushBatch();
@@ -258,6 +259,7 @@ async function startProcessingLoop(): Promise<void> {
           current: shortcuts_before, total: globalTotal,
           message: `${platformPrefix} — Starting (${platformTotal} games)`,
           step: pData.step, totalSteps: pData.total_steps,
+          subMessage: "",
         });
         globalProcessed = shortcuts_before;
 
@@ -269,7 +271,8 @@ async function startProcessingLoop(): Promise<void> {
           globalProcessed = shortcuts_before + i + 1;
           updateSyncProgress({
             current: globalProcessed,
-            message: `${platformPrefix} — Adding ${i + 1}/${platformTotal} — ${shortcut.name}`,
+            message: `${platformPrefix} — Adding ${i + 1}/${platformTotal}`,
+            subMessage: shortcut.name,
           });
 
           try {
@@ -339,7 +342,8 @@ async function startProcessingLoop(): Promise<void> {
             const itemIdx = newItems.length + i + 1;
             updateSyncProgress({
               current: globalProcessed,
-              message: `${platformPrefix} — Updating ${itemIdx}/${platformTotal} — ${shortcut.name}`,
+              message: `${platformPrefix} — Updating ${itemIdx}/${platformTotal}`,
+              subMessage: shortcut.name,
             });
 
             try {
@@ -382,7 +386,7 @@ async function startProcessingLoop(): Promise<void> {
         await drainArtwork(platformPrefix);
 
         if (platformAppIds.length > 0) {
-          updateSyncProgress({ message: `${platformPrefix} — Building collections…` });
+          updateSyncProgress({ message: `${platformPrefix} — Building collections…`, subMessage: "" });
           await appendToCollections({ [platform_name]: platformAppIds });
           activePlatforms.add(platform_name);
           if (Object.keys(platformRomMCollections).length > 0) {
@@ -454,7 +458,7 @@ async function startProcessingLoop(): Promise<void> {
     }
 
     // ── Finalize: report to backend ──────────────────────────
-    updateSyncProgress({ message: "Finalizing sync…" });
+    updateSyncProgress({ message: "Finalizing sync…", subMessage: "" });
     try {
       if (useIncremental) {
         await reportSyncFinalized({}, [], cancelled);
@@ -476,7 +480,7 @@ async function startProcessingLoop(): Promise<void> {
     const doneMsg = cancelled
       ? `Sync cancelled (${Object.keys(romIdToAppId).length} processed, ${totalPersisted} persisted)`
       : "Sync complete";
-    updateSyncProgress({ running: false, phase: "done", message: doneMsg });
+    updateSyncProgress({ running: false, phase: "done", message: doneMsg, subMessage: "" });
     logInfo(`Sync ${cancelled ? "cancelled" : "complete"}: ${Object.keys(romIdToAppId).length} added/updated, ${removedRomIds.length} removed, ${totalPersisted} persisted incrementally`);
   } finally {
     _isSyncRunning = false;

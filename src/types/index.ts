@@ -105,6 +105,7 @@ export interface SyncProgress {
   etaSec?: number | null;
   itemsPerSec?: number | null;
   subPhase?: string;
+  subMessage?: string;
 }
 
 export interface SyncStats {
