@@ -106,6 +106,11 @@ export interface SyncProgress {
   itemsPerSec?: number | null;
   subPhase?: string;
   subMessage?: string;
+  // Dual-bar fields — overall vs current-unit progress
+  stepLabel?: string;       // Human-readable step description ("Fetching ROMs")
+  platformCurrent?: number; // Current unit progress numerator
+  platformTotal?: number;   // Current unit progress denominator
+  platformLabel?: string;   // Current unit label ("GameCube (3/14 platforms)")
 }
 
 export interface SyncStats {

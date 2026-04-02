@@ -448,6 +448,10 @@ class LibraryService:
         *,
         sub_phase="",
         sub_message="",
+        step_label="",
+        platform_current=0,
+        platform_total=0,
+        platform_label="",
     ):
         """Update _sync_progress and emit sync_progress event to frontend.
 
@@ -482,6 +486,11 @@ class LibraryService:
             "itemsPerSec": round(ips, 2) if ips else None,
             "subPhase": sub_phase,
             "subMessage": sub_message,
+            # Dual-bar fields
+            "stepLabel": step_label,
+            "platformCurrent": platform_current,
+            "platformTotal": platform_total,
+            "platformLabel": platform_label,
         }
         await self._emit("sync_progress", self._sync_progress)
 
@@ -767,6 +776,10 @@ class LibraryService:
                 message=f"{platform_name} done · {progress['roms_found']}/{progress['estimated_total_roms']} ROMs ({progress['done']}/{progress['total']} platforms)",
                 step=progress["step"],
                 total_steps=progress["total_steps"],
+                step_label="Fetching ROMs",
+                platform_current=progress["done"],
+                platform_total=progress["total"],
+                platform_label=platform_name,
             )
             return roms
 
@@ -856,6 +869,10 @@ class LibraryService:
                 sub_phase=f"platform:{platform_name}",
                 step=progress["step"],
                 total_steps=progress["total_steps"],
+                step_label="Fetching ROMs",
+                platform_current=progress["done"],
+                platform_total=progress["total"],
+                platform_label=platform_name,
             )
             if len(rom_list) < limit:
                 break
@@ -991,6 +1008,10 @@ class LibraryService:
                             total_steps=total_steps,
                             sub_phase=f"collection:{cname}",
                             sub_message=cname,
+                            step_label="Fetching collections",
+                            platform_current=collections_done,
+                            platform_total=collections_total,
+                            platform_label=cname,
                         )
                     return cname, rom_ids, roms
 
@@ -1070,6 +1091,7 @@ class LibraryService:
             message="Fetching platforms...",
             step=current_step,
             total_steps=preliminary_total_steps,
+            step_label="Connecting",
         )
         with self._perf.time_phase("fetch_platforms"):
             platforms = await self._fetch_enabled_platforms()
@@ -1083,17 +1105,18 @@ class LibraryService:
 
         # Phase 2: Fetch ROMs per platform (concurrent, bounded by semaphore)
         current_step += 1
+        total_platforms = len(platforms)
         await self._emit_progress(
             "roms",
-            message=f"Fetching ROMs from {len(platforms)} platforms...",
+            message=f"Fetching ROMs from {total_platforms} platforms...",
             total=estimated_total_roms,
             step=current_step,
             total_steps=preliminary_total_steps,
+            step_label="Fetching ROMs",
+            platform_total=total_platforms,
         )
         last_sync = self._state.get("last_sync")
         registry = self._state.get("shortcut_registry", {})
-
-        total_platforms = len(platforms)
         self._eta.start()
 
         sem = AdaptiveSemaphore(
@@ -1150,6 +1173,8 @@ class LibraryService:
                 message=f"Fetching collections (0/{enabled_count})...",
                 step=current_step,
                 total_steps=preliminary_total_steps,
+                step_label="Fetching collections",
+                platform_total=enabled_count,
             )
         with self._perf.time_phase("fetch_collections"):
             collection_only_roms, collection_memberships = await self._fetch_collection_roms(
