@@ -12,6 +12,7 @@ import {
 } from "../api/backend";
 import { getExistingRomMShortcuts, addShortcut, removeShortcut } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
+import { appendToCollections, appendToRomMCollections } from "./collections";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -27,6 +28,7 @@ export function requestSyncCancel(): void {
 const BATCH_SIZE = 20;            // Persist every 20 shortcuts
 const BATCH_TIMEOUT_MS = 5_000;   // Or every 5 seconds, whichever comes first
 const ART_CONCURRENCY = 8;        // Max parallel artwork fetches
+const COLLECTION_UPDATE_INTERVAL = 50; // Update Steam collections every N shortcuts
 
 /**
  * Initialize the sync manager that listens for sync_apply events from the backend.
@@ -67,6 +69,56 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
       let batchRemovedRomIds: number[] = [];
       let lastFlushTime = Date.now();
       let totalPersisted = 0;
+
+      // ── Incremental collection state ──────────────────────
+      let pendingPlatformAppIds: Record<string, number[]> = {};
+      let pendingRomMCollectionAppIds: Record<string, number[]> = {};
+      let shortcutsSinceCollectionUpdate = 0;
+      const collectionMemberships = data.collection_memberships ?? {};
+
+      /** Build a rom_id→collection_names lookup for fast incremental collection mapping. */
+      const romIdToCollections: Map<number, string[]> = new Map();
+      for (const [collName, romIds] of Object.entries(collectionMemberships)) {
+        for (const rid of romIds) {
+          const existing = romIdToCollections.get(rid);
+          if (existing) existing.push(collName);
+          else romIdToCollections.set(rid, [collName]);
+        }
+      }
+
+      /** Track a successfully created/updated shortcut for incremental collection updates. */
+      function trackForCollections(appId: number, romId: number, platformName: string): void {
+        if (!pendingPlatformAppIds[platformName]) pendingPlatformAppIds[platformName] = [];
+        pendingPlatformAppIds[platformName].push(appId);
+        // Also track RomM collection memberships
+        const colls = romIdToCollections.get(romId);
+        if (colls) {
+          for (const collName of colls) {
+            if (!pendingRomMCollectionAppIds[collName]) pendingRomMCollectionAppIds[collName] = [];
+            pendingRomMCollectionAppIds[collName].push(appId);
+          }
+        }
+        shortcutsSinceCollectionUpdate++;
+      }
+
+      /** Flush pending platform+RomM collection app IDs to Steam collections (append mode). */
+      async function flushCollections(): Promise<void> {
+        const hasPlatform = Object.keys(pendingPlatformAppIds).length > 0;
+        const hasRomM = Object.keys(pendingRomMCollectionAppIds).length > 0;
+        if (!hasPlatform && !hasRomM) return;
+        const platformToSend = { ...pendingPlatformAppIds };
+        const rommToSend = { ...pendingRomMCollectionAppIds };
+        pendingPlatformAppIds = {};
+        pendingRomMCollectionAppIds = {};
+        shortcutsSinceCollectionUpdate = 0;
+        try {
+          if (hasPlatform) await appendToCollections(platformToSend);
+          if (hasRomM) await appendToRomMCollections(rommToSend);
+          logInfo(`Incremental collections: ${Object.keys(platformToSend).length} platforms, ${Object.keys(rommToSend).length} RomM collections`);
+        } catch (e) {
+          logWarn(`Incremental collection update failed: ${e}`);
+        }
+      }
 
       /** Flush the current batch to the backend for incremental persistence. */
       async function flushBatch(): Promise<void> {
@@ -173,8 +225,9 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
               }
             }
   
-            // Enqueue artwork fetch immediately (parallel, non-blocking)
+            // Track for incremental collections + enqueue artwork
             if (appId) {
+              trackForCollections(appId, item.rom_id, item.platform_name);
               enqueueArtwork(appId, item.rom_id, item.name);
               await throttleArtwork();
             }
@@ -188,6 +241,9 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           const timeSinceFlush = Date.now() - lastFlushTime;
           if (batchCount >= BATCH_SIZE || (batchCount > 0 && timeSinceFlush >= BATCH_TIMEOUT_MS)) {
             await flushBatch();
+            if (shortcutsSinceCollectionUpdate >= COLLECTION_UPDATE_INTERVAL) {
+              await flushCollections();
+            }
           }
   
           if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
@@ -222,7 +278,8 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
               romIdToAppId[String(item.rom_id)] = appId;
               batchRomIdToAppId[String(item.rom_id)] = appId;
   
-              // Enqueue artwork for changed shortcuts too
+              // Track for incremental collections + enqueue artwork
+              trackForCollections(appId, item.rom_id, item.platform_name);
               enqueueArtwork(appId, item.rom_id, item.name);
               await throttleArtwork();
             } catch (e) {
@@ -235,6 +292,9 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             const timeSinceFlush = Date.now() - lastFlushTime;
             if (batchCount >= BATCH_SIZE || (batchCount > 0 && timeSinceFlush >= BATCH_TIMEOUT_MS)) {
               await flushBatch();
+              if (shortcutsSinceCollectionUpdate >= COLLECTION_UPDATE_INTERVAL) {
+                await flushCollections();
+              }
             }
   
             if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
@@ -253,6 +313,9 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
   
         // Flush any remaining shortcuts before moving to removals
         await flushBatch();
+        // Push all pending shortcuts to Steam collections so they're
+        // browsable while removals + artwork drain happen
+        await flushCollections();
       }
 
       // --- Removals (same step, combined progress) ---

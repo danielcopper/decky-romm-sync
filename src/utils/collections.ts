@@ -137,6 +137,78 @@ export async function createOrUpdateRomMCollections(
   }
 }
 
+/**
+ * Append apps to existing platform collections (or create if new).
+ * Unlike createOrUpdateCollections, this does NOT remove existing apps first.
+ * Used for incremental collection updates during sync.
+ */
+export async function appendToCollections(
+  platformAppIds: Record<string, number[]>,
+): Promise<void> {
+  try {
+    if (typeof collectionStore === "undefined") return;
+    const hostname = await getHostname();
+    for (const [platformName, appIds] of Object.entries(platformAppIds)) {
+      if (appIds.length === 0) continue;
+      const collectionName = `RomM: ${platformName} (${hostname})`;
+      const overviews = getOverviews(appIds);
+      try {
+        const existing = collectionStore.userCollections.find(
+          (c) => c.displayName === collectionName
+        );
+        if (existing) {
+          existing.AsDragDropCollection().AddApps(overviews);
+          await existing.Save();
+        } else {
+          const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
+          collection.AsDragDropCollection().AddApps(overviews);
+          await collection.Save();
+        }
+      } catch (e) {
+        logError(`Failed to append to platform collection "${collectionName}": ${e}`);
+      }
+    }
+  } catch (e) {
+    logError(`appendToCollections failed: ${e}`);
+  }
+}
+
+/**
+ * Append apps to existing RomM collections (or create if new).
+ * Unlike createOrUpdateRomMCollections, this does NOT remove existing apps first.
+ * Used for incremental collection updates during sync.
+ */
+export async function appendToRomMCollections(
+  collectionAppIds: Record<string, number[]>,
+): Promise<void> {
+  try {
+    if (typeof collectionStore === "undefined") return;
+    const hostname = await getHostname();
+    for (const [collName, appIds] of Object.entries(collectionAppIds)) {
+      if (appIds.length === 0) continue;
+      const collectionName = `RomM: [${collName}] (${hostname})`;
+      const overviews = getOverviews(appIds);
+      try {
+        const existing = collectionStore.userCollections.find(
+          (c) => c.displayName === collectionName
+        );
+        if (existing) {
+          existing.AsDragDropCollection().AddApps(overviews);
+          await existing.Save();
+        } else {
+          const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
+          collection.AsDragDropCollection().AddApps(overviews);
+          await collection.Save();
+        }
+      } catch (e) {
+        logError(`Failed to append to RomM collection "${collectionName}": ${e}`);
+      }
+    }
+  } catch (e) {
+    logError(`appendToRomMCollections failed: ${e}`);
+  }
+}
+
 export async function clearPlatformCollection(platformName: string): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {

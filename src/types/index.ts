@@ -168,6 +168,8 @@ export interface SyncApplyData {
   remove_rom_ids: number[];
   next_step?: number;
   total_steps?: number;
+  /** Maps RomM collection name → list of rom_ids belonging to it. */
+  collection_memberships?: Record<string, number[]>;
 }
 
 export interface FirmwareFile {

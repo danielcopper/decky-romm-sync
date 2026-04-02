@@ -424,6 +424,10 @@ class LibraryService:
                 "remove_rom_ids": delta["remove_rom_ids"],
                 "next_step": apply_step,
                 "total_steps": total_steps,
+                "collection_memberships": {
+                    name: [int(rid) for rid in rids]
+                    for name, rids in self._pending_collection_memberships.items()
+                },
             },
         )
 
@@ -1214,6 +1218,10 @@ class LibraryService:
                     "remove_rom_ids": stale_rom_ids,
                     "next_step": apply_step,
                     "total_steps": full_total_steps,
+                    "collection_memberships": {
+                        name: [int(rid) for rid in rids]
+                        for name, rids in collection_memberships.items()
+                    },
                 },
             )
 
