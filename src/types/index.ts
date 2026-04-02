@@ -61,6 +61,8 @@ export interface PluginSettings {
   romm_allow_insecure_ssl: boolean;
   retroarch_input_check?: RetroArchInputCheck;
   collection_create_platform_groups?: boolean;
+  collection_prefix?: string;
+  collection_hostname_suffix?: boolean;
   remove_on_unsync?: boolean;
 }
 

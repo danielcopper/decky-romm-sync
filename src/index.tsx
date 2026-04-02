@@ -17,9 +17,10 @@ import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
-import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, logError, logInfo } from "./api/backend";
+import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, getSettings, logError, logInfo } from "./api/backend";
 import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
+import { setCollectionNaming } from "./utils/collections";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
@@ -156,6 +157,16 @@ export default definePlugin(() => {
       await initSessionManager();
     } catch (e) {
       logError(`Failed to init save sync: ${e}`);
+    }
+  })();
+
+  // Load collection naming settings so collections use correct names from first sync
+  (async () => {
+    try {
+      const s = await getSettings();
+      setCollectionNaming(s.collection_prefix ?? "", s.collection_hostname_suffix ?? false);
+    } catch (e) {
+      logError(`Failed to load collection naming settings: ${e}`);
     }
   })();
 

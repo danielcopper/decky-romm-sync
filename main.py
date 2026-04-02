@@ -342,6 +342,8 @@ class Plugin:
             "log_level": self.settings.get("log_level", "warn"),
             "romm_allow_insecure_ssl": self.settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self.settings.get("collection_create_platform_groups", False),
+            "collection_prefix": self.settings.get("collection_prefix", ""),
+            "collection_hostname_suffix": self.settings.get("collection_hostname_suffix", False),
             "remove_on_unsync": self.settings.get("remove_on_unsync", True),
         }
 
@@ -474,6 +476,12 @@ class Plugin:
 
     async def save_remove_on_unsync(self, enabled):
         self.settings["remove_on_unsync"] = bool(enabled)
+        self._save_settings_to_disk()
+        return {"success": True}
+
+    async def save_collection_naming(self, prefix, hostname_suffix):
+        self.settings["collection_prefix"] = str(prefix) if prefix else ""
+        self.settings["collection_hostname_suffix"] = bool(hostname_suffix)
         self._save_settings_to_disk()
         return {"success": True}
 

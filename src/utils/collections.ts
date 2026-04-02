@@ -2,13 +2,40 @@
  * Steam collection management for RomM platforms.
  * Uses Steam's internal collectionStore API.
  *
- * Collection names are machine-scoped to prevent cross-device conflicts
- * when Steam Cloud syncs collections: "RomM: Platform (hostname)"
+ * Collection naming is configurable:
+ *   - prefix (default: "") e.g. "RomM: "
+ *   - hostname suffix (default: false) e.g. " (steamdeck)"
+ *
+ * Platform collection:  {prefix}{PlatformName}{hostnameSuffix}
+ * Named collection:     {prefix}[{CollectionName}]{hostnameSuffix}
  */
 
 import { logInfo, logWarn, logError } from "../api/backend";
 
 let _hostname = "";
+
+// ── Configurable naming ───────────────────────────────────────
+let _prefix = "";
+let _includeHostname = false;
+
+export function setCollectionNaming(prefix: string, includeHostname: boolean): void {
+  _prefix = prefix;
+  _includeHostname = includeHostname;
+}
+
+async function hostnameSuffix(): Promise<string> {
+  if (!_includeHostname) return "";
+  const h = await getHostname();
+  return ` (${h})`;
+}
+
+async function platformCollectionName(platformName: string): Promise<string> {
+  return `${_prefix}${platformName}${await hostnameSuffix()}`;
+}
+
+async function namedCollectionName(collName: string): Promise<string> {
+  return `${_prefix}[${collName}]${await hostnameSuffix()}`;
+}
 
 export async function getHostname(): Promise<string> {
   if (_hostname) return _hostname;
@@ -55,7 +82,7 @@ export async function createOrUpdateCollections(
     for (const [platformName, appIds] of entries) {
       idx++;
       onProgress?.(idx, entries.length, platformName);
-      const collectionName = `RomM: ${platformName} (${hostname})`;
+      const collectionName = await platformCollectionName(platformName);
       const overviews = getOverviews(appIds);
 
       try {
@@ -105,7 +132,7 @@ export async function createOrUpdateRomMCollections(
     for (const [collName, appIds] of entries) {
       idx++;
       onProgress?.(idx, entries.length, collName);
-      const collectionName = `RomM: [${collName}] (${hostname})`;
+      const collectionName = await namedCollectionName(collName);
       const overviews = getOverviews(appIds);
 
       try {
@@ -147,10 +174,9 @@ export async function appendToCollections(
 ): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") return;
-    const hostname = await getHostname();
     for (const [platformName, appIds] of Object.entries(platformAppIds)) {
       if (appIds.length === 0) continue;
-      const collectionName = `RomM: ${platformName} (${hostname})`;
+      const collectionName = await platformCollectionName(platformName);
       const overviews = getOverviews(appIds);
       try {
         const existing = collectionStore.userCollections.find(
@@ -185,10 +211,9 @@ export async function appendToRomMCollections(
 ): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") return;
-    const hostname = await getHostname();
     for (const [collName, appIds] of Object.entries(collectionAppIds)) {
       if (appIds.length === 0) continue;
-      const collectionName = `RomM: [${collName}] (${hostname})`;
+      const collectionName = await namedCollectionName(collName);
       const overviews = getOverviews(appIds);
       try {
         const existing = collectionStore.userCollections.find(
@@ -219,30 +244,26 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
       logWarn("collectionStore not available, cannot clear platform collection");
       return;
     }
+    const currentName = await platformCollectionName(platformName);
     const hostname = await getHostname();
-    const scopedName = `RomM: ${platformName} (${hostname})`;
-    const legacyName = `RomM: ${platformName}`;
+    // Also match old naming conventions for cleanup
+    const legacyScoped = `RomM: ${platformName} (${hostname})`;
+    const legacyBare = `RomM: ${platformName}`;
 
-    // Delete the machine-scoped collection
-    const scoped = collectionStore.userCollections.find(
-      (c) => c.displayName === scopedName
-    );
-    if (scoped) {
-      logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
-      await scoped.Delete();
+    const namesToDelete = new Set([currentName, legacyScoped, legacyBare]);
+    let deleted = false;
+    for (const name of namesToDelete) {
+      const coll = collectionStore.userCollections.find(
+        (c) => c.displayName === name
+      );
+      if (coll) {
+        logInfo(`Deleting collection "${name}" (id=${coll.id})`);
+        await coll.Delete();
+        deleted = true;
+      }
     }
-
-    // Also clean up legacy collection (without hostname suffix) if it exists
-    const legacy = collectionStore.userCollections.find(
-      (c) => c.displayName === legacyName
-    );
-    if (legacy) {
-      logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
-      await legacy.Delete();
-    }
-
-    if (!scoped && !legacy) {
-      logInfo(`Collection "${scopedName}" not found, nothing to clear`);
+    if (!deleted) {
+      logInfo(`Collection "${currentName}" not found, nothing to clear`);
     }
   } catch (e) {
     logError(`Failed to clear platform collection: ${e}`);
@@ -256,19 +277,24 @@ export async function clearAllRomMCollections(): Promise<void> {
       return;
     }
     const hostname = await getHostname();
-    const suffix = ` (${hostname})`;
+    const hostSuffix = ` (${hostname})`;
 
-    // Match collections belonging to this machine OR legacy ones without any hostname suffix.
-    // Covers both platform collections ("RomM: PlatformName (hostname)") and
-    // RomM collection-based collections ("RomM: [CollectionName] (hostname)").
-    // Legacy collections match "RomM: ..." but do NOT have a parenthesized suffix.
-    // This avoids deleting collections from other devices like "RomM: N64 (othermachine)".
+    // Match collections created by this plugin under any naming convention:
+    //   Current format:  "{prefix}PlatformName{hostnameSuffix}"  or  "{prefix}[CollName]{hostnameSuffix}"
+    //   Legacy format:   "RomM: PlatformName (hostname)"  or  "RomM: PlatformName" (bare)
+    // Strategy: match by current prefix OR legacy "RomM: " prefix, plus hostname scoping
+    const prefixes = new Set([_prefix]);
+    prefixes.add("RomM: "); // always clean up legacy
+    if (_prefix) prefixes.add(""); // if prefix is set, also clean bare names from when prefix was empty
+
     const rommCollections = collectionStore.userCollections.filter((c) => {
-      if (!c.displayName.startsWith("RomM: ")) return false;
-      // This machine's scoped collections (both platform and RomM collection style)
-      if (c.displayName.endsWith(suffix)) return true;
-      // Legacy collections: start with "RomM: " but have no " (...)" suffix at all
-      if (!/\s\([^)]+\)$/.test(c.displayName)) return true;
+      for (const pfx of prefixes) {
+        if (!c.displayName.startsWith(pfx)) continue;
+        // Matches current hostname suffix
+        if (c.displayName.endsWith(hostSuffix)) return true;
+        // Matches collections without any " (...)" suffix (bare/current-no-hostname)
+        if (!/\s\([^)]+\)$/.test(c.displayName)) return true;
+      }
       return false;
     });
 
