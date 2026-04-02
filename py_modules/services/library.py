@@ -1433,6 +1433,147 @@ class LibraryService:
         self._sync_state = SyncState.IDLE
         return {"success": True}
 
+    # ── Incremental sync results (called by frontend in batches) ──
+
+    def _incremental_report_io(self, rom_id_to_app_id: dict, removed_rom_ids: list) -> None:
+        """Sync helper: update registry + finalize artwork for a batch, then save state.
+
+        Called every BATCH_SIZE shortcuts from the frontend so that progress is
+        persisted incrementally.  Does NOT touch collection memberships or
+        last_sync — those are deferred to ``_finalize_sync_io``.
+        """
+        grid = self._steam_config.grid_dir()
+
+        for rom_id_str, app_id in rom_id_to_app_id.items():
+            pending = self._pending_sync.get(int(rom_id_str), {})
+            cover_path = self._finalize_cover_path(grid, pending.get("cover_path", ""), app_id, rom_id_str)
+            self._state["shortcut_registry"][rom_id_str] = self._build_registry_entry(pending, app_id, cover_path)
+
+        for rom_id in removed_rom_ids:
+            self._state["shortcut_registry"].pop(str(rom_id), None)
+
+        # Apply Steam Input mode for this batch
+        steam_input_mode = self._settings.get("steam_input_mode", "default")
+        if steam_input_mode != "default" and rom_id_to_app_id:
+            try:
+                self._steam_config.set_steam_input_config(
+                    [int(aid) for aid in rom_id_to_app_id.values()], mode=steam_input_mode
+                )
+            except Exception as e:
+                self._logger.error(f"Failed to set Steam Input config for batch: {e}")
+
+        self._save_state()
+
+    async def report_incremental_results(self, rom_id_to_app_id: dict, removed_rom_ids: list) -> dict:
+        """Persist a batch of shortcut results incrementally during sync.
+
+        Called by the frontend every BATCH_SIZE shortcuts (e.g. every 20).
+        Updates ``shortcut_registry`` and saves state to disk immediately.
+        Collection memberships and ``last_sync`` are deferred to
+        ``report_sync_finalized()``.
+
+        Returns ``{"success": True, "persisted": <count>}``.
+        """
+        await self._loop.run_in_executor(None, self._incremental_report_io, rom_id_to_app_id, removed_rom_ids)
+        count = len(rom_id_to_app_id) + len(removed_rom_ids)
+        self._logger.info(f"Incremental batch persisted: {count} items")
+        return {"success": True, "persisted": count}
+
+    def _finalize_sync_io(self, cancelled: bool) -> tuple[dict, dict]:
+        """Sync helper: build collection mappings, set last_sync, save state.
+
+        Extracted from ``_report_sync_results_io`` — this runs once after all
+        incremental batches have been persisted.
+        """
+        # Capture pending state before clearing
+        pending_collection_memberships = self._pending_collection_memberships
+        pending_platform_rom_ids = self._pending_platform_rom_ids
+        self._pending_collection_memberships = {}
+        self._pending_platform_rom_ids = None
+        self._pending_sync = {}
+
+        if cancelled:
+            # On cancellation: do NOT update last_sync so the next sync
+            # will re-fetch everything and detect already-created shortcuts
+            # as "unchanged".  Also skip collection building — partial
+            # collection data would be misleading.
+            self._save_state()
+            return {}, {}
+
+        # Build final collection mappings from the full registry
+        platform_app_ids, romm_collection_app_ids = self._build_collection_app_ids(
+            self._state["shortcut_registry"],
+            pending_platform_rom_ids,
+            pending_collection_memberships,
+        )
+
+        self._state["last_sync"] = datetime.now(UTC).isoformat()
+        self._state["last_synced_collections"] = list(pending_collection_memberships.keys())
+        self._state["last_synced_platforms"] = list(platform_app_ids.keys())
+        self._save_state()
+
+        return platform_app_ids, romm_collection_app_ids
+
+    async def report_sync_finalized(self, remaining_rom_id_to_app_id: dict, removed_rom_ids: list, cancelled: bool = False) -> dict:
+        """Called after all incremental batches.  Handles finalization:
+
+        - Persist any remaining shortcuts not yet in an incremental batch
+        - Build platform & collection app_id mappings
+        - Set ``last_sync`` timestamp (only on success)
+        - Emit ``sync_complete`` event
+        """
+        # Persist any stragglers (shortcuts added after the last flush)
+        if remaining_rom_id_to_app_id or removed_rom_ids:
+            await self._loop.run_in_executor(
+                None, self._incremental_report_io, remaining_rom_id_to_app_id, removed_rom_ids
+            )
+
+        # Finalization: collections, timestamps
+        platform_app_ids, romm_collection_app_ids = await self._loop.run_in_executor(
+            None, self._finalize_sync_io, cancelled
+        )
+
+        total = len(self._state["shortcut_registry"])
+
+        if cancelled:
+            await self._emit(
+                "sync_complete",
+                {
+                    "platform_app_ids": platform_app_ids,
+                    "romm_collection_app_ids": romm_collection_app_ids,
+                    "total_games": total,
+                    "cancelled": True,
+                },
+            )
+            await self._emit_progress(
+                "done",
+                current=total,
+                total=total,
+                message=f"Sync cancelled: {total} games in registry",
+                running=False,
+            )
+            self._logger.info(f"Sync finalized (cancelled): {total} games in registry")
+        else:
+            await self._emit(
+                "sync_complete",
+                {
+                    "platform_app_ids": platform_app_ids,
+                    "romm_collection_app_ids": romm_collection_app_ids,
+                    "total_games": total,
+                },
+            )
+            await self._emit_progress(
+                "done",
+                current=total,
+                total=total,
+                message=f"Sync complete: {total} games from {len(platform_app_ids)} platforms",
+                running=False,
+            )
+            self._logger.info(f"Sync finalized: {total} games from {len(platform_app_ids)} platforms")
+
+        self._sync_state = SyncState.IDLE
+        return {"success": True}
+
     # ── Artwork delegation ───────────────────────────────────
 
     async def _download_artwork(self, all_roms, progress_step=4, progress_total_steps=6):

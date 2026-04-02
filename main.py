@@ -501,6 +501,12 @@ class Plugin:
     async def report_sync_results(self, rom_id_to_app_id, removed_rom_ids, cancelled=False):
         return await self._sync_service.report_sync_results(rom_id_to_app_id, removed_rom_ids, cancelled)
 
+    async def report_incremental_results(self, rom_id_to_app_id, removed_rom_ids):
+        return await self._sync_service.report_incremental_results(rom_id_to_app_id, removed_rom_ids)
+
+    async def report_sync_finalized(self, remaining_rom_id_to_app_id, removed_rom_ids, cancelled=False):
+        return await self._sync_service.report_sync_finalized(remaining_rom_id_to_app_id, removed_rom_ids, cancelled)
+
     async def get_registry_platforms(self):
         return self._sync_service.get_registry_platforms()
 

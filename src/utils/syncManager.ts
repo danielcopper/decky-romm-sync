@@ -1,6 +1,15 @@
 import { addEventListener } from "@decky/api";
 import type { SyncApplyData, SyncChangedItem } from "../types";
-import { getArtworkBase64, reportSyncResults, syncHeartbeat, logInfo, logError } from "../api/backend";
+import {
+  getArtworkBase64,
+  reportSyncResults,
+  reportIncrementalResults,
+  reportSyncFinalized,
+  syncHeartbeat,
+  logInfo,
+  logWarn,
+  logError,
+} from "../api/backend";
 import { getExistingRomMShortcuts, addShortcut, removeShortcut } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
 
@@ -13,6 +22,11 @@ let _isSyncRunning = false;
 export function requestSyncCancel(): void {
   _cancelRequested = true;
 }
+
+// ── Incremental batch configuration ────────────────────────
+const BATCH_SIZE = 20;            // Persist every 20 shortcuts
+const BATCH_TIMEOUT_MS = 5_000;   // Or every 5 seconds, whichever comes first
+const ART_CONCURRENCY = 8;        // Max parallel artwork fetches
 
 /**
  * Initialize the sync manager that listens for sync_apply events from the backend.
@@ -46,7 +60,62 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
       const existing = await getExistingRomMShortcuts();
       const romIdToAppId: Record<string, number> = {};
       const removedRomIds: number[] = [];
-      const artworkTargets: Array<{ appId: number; romId: number; name: string }> = [];
+
+      // ── Incremental batch state ────────────────────────────
+      let useIncremental = true;
+      let batchRomIdToAppId: Record<string, number> = {};
+      let batchRemovedRomIds: number[] = [];
+      let lastFlushTime = Date.now();
+      let totalPersisted = 0;
+
+      /** Flush the current batch to the backend for incremental persistence. */
+      async function flushBatch(): Promise<void> {
+        if (!useIncremental) return;
+        const batchCount = Object.keys(batchRomIdToAppId).length + batchRemovedRomIds.length;
+        if (batchCount === 0) return;
+
+        const toSend = { ...batchRomIdToAppId };
+        const toRemove = [...batchRemovedRomIds];
+        batchRomIdToAppId = {};
+        batchRemovedRomIds = [];
+        lastFlushTime = Date.now();
+
+        try {
+          const result = await reportIncrementalResults(toSend, toRemove);
+          if (result.success) {
+            totalPersisted += result.persisted;
+            logInfo(`Incremental batch persisted: ${result.persisted} items (total: ${totalPersisted})`);
+          }
+        } catch (e) {
+          logWarn(`Incremental reporting not available, falling back to batch mode: ${e}`);
+          useIncremental = false;
+          // Re-add to full accumulator — they'll be caught by the final report
+          // (romIdToAppId already has them, so no data loss)
+        }
+      }
+
+      // In-flight artwork promises for parallel approach
+      let artworkQueue: Promise<void>[] = [];
+
+      /** Fire artwork fetch for a shortcut (non-blocking, limited concurrency). */
+      function enqueueArtwork(appId: number, romId: number, name: string): void {
+        const p: Promise<void> = getArtworkBase64(romId)
+          .then(async (artResult) => {
+            if (artResult.base64) {
+              await SteamClient.Apps.SetCustomArtworkForApp(appId, artResult.base64, "png", 0);
+            }
+          })
+          .catch((artErr) => { logError(`Artwork failed for ${name}: ${artErr}`); })
+          .finally(() => { artworkQueue = artworkQueue.filter((q) => q !== p); });
+        artworkQueue.push(p);
+      }
+
+      /** Wait for artwork queue to drain below concurrency limit. */
+      async function throttleArtwork(): Promise<void> {
+        while (artworkQueue.length >= ART_CONCURRENCY) {
+          await Promise.race(artworkQueue);
+        }
+      }
   
       // Step plan from backend
       let currentStep = data.next_step ?? 1;
@@ -79,6 +148,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
               if (newAppId) {
                 appId = newAppId;
                 romIdToAppId[String(item.rom_id)] = newAppId;
+                batchRomIdToAppId[String(item.rom_id)] = newAppId;
               }
             } else {
               const existingAppId = existing.get(item.rom_id);
@@ -89,22 +159,33 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
                 SteamClient.Apps.SetAppLaunchOptions(existingAppId, item.launch_options);
                 appId = existingAppId;
                 romIdToAppId[String(item.rom_id)] = existingAppId;
+                batchRomIdToAppId[String(item.rom_id)] = existingAppId;
               } else {
                 const newAppId = await addShortcut(item);
                 if (newAppId) {
                   appId = newAppId;
                   romIdToAppId[String(item.rom_id)] = newAppId;
+                  batchRomIdToAppId[String(item.rom_id)] = newAppId;
                 }
               }
             }
   
+            // Enqueue artwork fetch immediately (parallel, non-blocking)
             if (appId) {
-              artworkTargets.push({ appId, romId: item.rom_id, name: item.name });
+              enqueueArtwork(appId, item.rom_id, item.name);
+              await throttleArtwork();
             }
           } catch (e) {
             logError(`Failed to process shortcut for rom ${item.rom_id}: ${e}`);
           }
           await delay(50);
+
+          // Flush batch when threshold reached
+          const batchCount = Object.keys(batchRomIdToAppId).length;
+          const timeSinceFlush = Date.now() - lastFlushTime;
+          if (batchCount >= BATCH_SIZE || (batchCount > 0 && timeSinceFlush >= BATCH_TIMEOUT_MS)) {
+            await flushBatch();
+          }
   
           if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
             syncHeartbeat().catch(() => {});
@@ -114,6 +195,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           if (_cancelRequested) {
             logInfo(`Cancel requested after processing ${i + 1}/${totalShortcuts} shortcuts`);
             cancelled = true;
+            await flushBatch();
             break;
           }
         }
@@ -135,12 +217,22 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
               SteamClient.Apps.SetShortcutStartDir(appId, item.start_dir);
               SteamClient.Apps.SetAppLaunchOptions(appId, item.launch_options);
               romIdToAppId[String(item.rom_id)] = appId;
+              batchRomIdToAppId[String(item.rom_id)] = appId;
   
-              artworkTargets.push({ appId, romId: item.rom_id, name: item.name });
+              // Enqueue artwork for changed shortcuts too
+              enqueueArtwork(appId, item.rom_id, item.name);
+              await throttleArtwork();
             } catch (e) {
               logError(`Failed to update shortcut for rom ${item.rom_id}: ${e}`);
             }
             await delay(50);
+
+            // Flush batch when threshold reached
+            const batchCount = Object.keys(batchRomIdToAppId).length;
+            const timeSinceFlush = Date.now() - lastFlushTime;
+            if (batchCount >= BATCH_SIZE || (batchCount > 0 && timeSinceFlush >= BATCH_TIMEOUT_MS)) {
+              await flushBatch();
+            }
   
             if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
               syncHeartbeat().catch(() => {});
@@ -150,36 +242,22 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             if (_cancelRequested) {
               logInfo(`Cancel requested during changed shortcuts processing`);
               cancelled = true;
+              await flushBatch();
               break;
             }
           }
         }
   
+        // Flush any remaining shortcuts before moving to next phase
+        await flushBatch();
         currentStep++;
       }
 
-      // --- Batch artwork fetch (parallel, up to 8 at a time) ---
-      if (!cancelled && artworkTargets.length > 0) {
-        const ART_CONCURRENCY = 8;
-        for (let i = 0; i < artworkTargets.length; i += ART_CONCURRENCY) {
-          if (_cancelRequested) {
-            logInfo("Cancel requested during artwork fetching");
-            cancelled = true;
-            break;
-          }
-          const batch = artworkTargets.slice(i, i + ART_CONCURRENCY);
-          await Promise.all(batch.map(async ({ appId, romId, name }) => {
-            try {
-              const artResult = await getArtworkBase64(romId);
-              if (artResult.base64) {
-                await SteamClient.Apps.SetCustomArtworkForApp(appId, artResult.base64, "png", 0);
-                logInfo(`Set cover artwork for ${name} (appId=${appId})`);
-              }
-            } catch (artErr) {
-              logError(`Failed to fetch/set artwork for ${name}: ${artErr}`);
-            }
-          }));
-        }
+      // --- Wait for any remaining in-flight artwork ---
+      if (artworkQueue.length > 0) {
+        logInfo(`Waiting for ${artworkQueue.length} remaining artwork fetches...`);
+        await Promise.allSettled(artworkQueue);
+        artworkQueue = [];
       }
 
       // --- Step: Remove shortcuts ---
@@ -198,34 +276,62 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             removeShortcut(appId);
           }
           removedRomIds.push(romId);
+          batchRemovedRomIds.push(romId);
           updateSyncProgress({
             current: i + 1,
             message: `Removing shortcuts ${i + 1}/${totalRemovals}`,
           });
           await delay(50);
+
+          // Flush removal batch when threshold reached
+          if (batchRemovedRomIds.length >= BATCH_SIZE) {
+            await flushBatch();
+          }
   
           if (_cancelRequested) {
             logInfo("Cancel requested during removals");
             cancelled = true;
+            await flushBatch();
             break;
           }
         }
   
+        // Flush any remaining removals
+        await flushBatch();
         currentStep++;
       }
   
-      // Report results to backend
+      // ── Finalize: report to backend ──────────────────────────
+      // If incremental mode was used, call reportSyncFinalized (which
+      // only needs to handle stragglers + collection building + last_sync).
+      // If incremental mode failed, fall back to the legacy reportSyncResults.
       try {
-        await reportSyncResults(romIdToAppId, removedRomIds, cancelled);
+        if (useIncremental) {
+          // All items already persisted incrementally — pass empty maps
+          // for the "remaining" parameter since flushBatch already sent them.
+          await reportSyncFinalized({}, [], cancelled);
+        } else {
+          // Fallback: legacy all-at-once report
+          await reportSyncResults(romIdToAppId, removedRomIds, cancelled);
+        }
       } catch (e) {
         logError(`Failed to report sync results: ${e}`);
+        // Last-resort fallback: try the old API if finalized failed
+        if (useIncremental) {
+          try {
+            logWarn("reportSyncFinalized failed, attempting legacy reportSyncResults...");
+            await reportSyncResults(romIdToAppId, removedRomIds, cancelled);
+          } catch (error_) {
+            logError(`Legacy fallback also failed: ${error_}`);
+          }
+        }
       }
   
       const doneMsg = cancelled
-        ? `Sync cancelled (${Object.keys(romIdToAppId).length} processed)`
+        ? `Sync cancelled (${Object.keys(romIdToAppId).length} processed, ${totalPersisted} persisted)`
         : "Sync complete";
       updateSyncProgress({ running: false, phase: "done", message: doneMsg });
-      logInfo(`sync_apply ${cancelled ? "cancelled" : "complete"}: ${Object.keys(romIdToAppId).length} added/updated, ${removedRomIds.length} removed`);
+      logInfo(`sync_apply ${cancelled ? "cancelled" : "complete"}: ${Object.keys(romIdToAppId).length} added/updated, ${removedRomIds.length} removed, ${totalPersisted} persisted incrementally`);
     } finally {
       _isSyncRunning = false;
     }
