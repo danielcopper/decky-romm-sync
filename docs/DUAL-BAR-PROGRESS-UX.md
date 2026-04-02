@@ -1,8 +1,10 @@
 # Sync Progress UX: Dual Progress Bars + Descriptive Step Labels
 
 > **Created:** April 2, 2026
-> **Status:** ✅ Implemented and deployed
+> **Status:** ⛔ **SUPERSEDED** by [PER-PLATFORM-PIPELINE-PLAN.md](PER-PLATFORM-PIPELINE-PLAN.md)
 > **Supersedes:** Single-bar progress with bare "Step X of Y" labels
+>
+> **Why superseded:** The dual-bar approach was found to be unintuitive — abstract phase names (Connect/Fetch/Collect/Apply) don't map to what users care about (which platforms are done). The new plan replaces the 4-phase stepper with a **per-platform accordion** where each row represents a platform, the active one expands to show progress, and completed ones show checkmarks.
 
 ---
 
