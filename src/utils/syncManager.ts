@@ -133,7 +133,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
         updateSyncProgress({
           running: true, phase: "applying",
           current: 0, total: totalWork,
-          message: `Applying changes 0/${totalWork}`,
+          message: `Adding shortcut 0/${totalWork}`,
           step: currentStep, totalSteps,
         });
   
@@ -142,7 +142,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           try {
             updateSyncProgress({
               current: i + 1,
-              message: `Applying changes ${i + 1}/${totalWork} — ${item.name}`,
+              message: `Adding shortcut ${i + 1}/${totalWork} — ${item.name}`,
             });
             let appId: number | undefined;
   
@@ -211,7 +211,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             try {
               updateSyncProgress({
                 current: idx + 1,
-                message: `Updating ${idx + 1}/${totalWork} — ${item.name}`,
+                message: `Updating shortcut ${idx + 1}/${totalWork} — ${item.name}`,
               });
               const appId = item.existing_app_id;
   
@@ -255,13 +255,6 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
         await flushBatch();
       }
 
-      // --- Wait for any remaining in-flight artwork ---
-      if (artworkQueue.length > 0) {
-        logInfo(`Waiting for ${artworkQueue.length} remaining artwork fetches...`);
-        await Promise.allSettled(artworkQueue);
-        artworkQueue = [];
-      }
-
       // --- Removals (same step, combined progress) ---
       if (!cancelled && data.remove_rom_ids.length > 0) {
         for (let i = 0; i < data.remove_rom_ids.length; i++) {
@@ -275,7 +268,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           updateSyncProgress({
             current: totalShortcuts + i + 1,
             total: totalWork,
-            message: `Removing stale ${i + 1}/${totalRemovals}`,
+            message: `Removing shortcut ${i + 1}/${totalRemovals}`,
           });
           await delay(50);
 
@@ -295,8 +288,27 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
         // Flush any remaining removals
         await flushBatch();
       }
+
+      // --- Drain in-flight artwork with live progress ---
+      if (artworkQueue.length > 0) {
+        let artRemaining = artworkQueue.length;
+        logInfo(`Waiting for ${artRemaining} remaining artwork fetches...`);
+        updateSyncProgress({
+          message: `Finishing artwork (${artRemaining} remaining)…`,
+        });
+        while (artworkQueue.length > 0) {
+          await Promise.race(artworkQueue);
+          artRemaining = artworkQueue.length;
+          if (artRemaining > 0) {
+            updateSyncProgress({
+              message: `Finishing artwork (${artRemaining} remaining)…`,
+            });
+          }
+        }
+      }
   
       // ── Finalize: report to backend ──────────────────────────
+      updateSyncProgress({ message: "Finalizing sync…" });
       // If incremental mode was used, call reportSyncFinalized (which
       // only needs to handle stragglers + collection building + last_sync).
       // If incremental mode failed, fall back to the legacy reportSyncResults.

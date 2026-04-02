@@ -410,7 +410,7 @@ class LibraryService:
         await self._emit_progress(
             "applying",
             total=total_changes,
-            message=f"Applying changes 0/{total_changes}",
+            message=f"Adding shortcuts 0/{total_changes}",
             step=apply_step,
             total_steps=total_steps,
         )
@@ -1190,7 +1190,7 @@ class LibraryService:
             await self._emit_progress(
                 "applying",
                 total=total_changes,
-                message=f"Applying changes 0/{total_changes}",
+                message=f"Adding shortcuts 0/{total_changes}",
                 step=apply_step,
                 total_steps=full_total_steps,
             )
