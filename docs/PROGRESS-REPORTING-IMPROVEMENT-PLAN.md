@@ -435,3 +435,76 @@ The fetch spinner is so bad that **any option is worth doing**, but here's the a
 4. Test full sync end-to-end, verify no regressions
 
 Each step is independently committable and testable.
+
+---
+
+## ✅ Option B: IMPLEMENTED
+
+**Status:** Implemented April 1, 2026
+
+All three improvements from Option B have been implemented in `library.py`:
+
+1. **Improvement 1 (Fetch Progress Bar):** `_fetch_and_prepare()` now sums `platform.rom_count` → `estimated_total_roms` and passes `total=estimated_total_roms` in every `_emit_progress("roms", ...)` call. The ETAEstimator auto-feeds from the stepped emission. Frontend shows a real progress bar + ETA instead of a dead spinner.
+
+2. **Improvement 2 (Collection Progress):** `_fetch_collection_roms()` now emits `"collections"` phase with `current/total` per-collection. Each collection completion updates the progress bar.
+
+3. **Improvement 3 (Global Step Plan):** A global step plan is computed at the start of `_fetch_and_prepare()`. Steps are numbered continuously across fetch and apply phases:
+   - `[1/N]` Fetching platforms
+   - `[2/N]` Fetching ROMs (with bar + ETA)
+   - `[3/N]` Fetching collections (if any)
+   - `[4/N]` Downloading artwork
+   - `[5/N]` Applying shortcuts
+
+   `_fetch_and_prepare()` returns `fetch_step_count` so callers (`_do_sync`, `sync_apply_delta`) continue numbering seamlessly.
+
+---
+
+## 🗓️ ROADMAP: Option C — Visual Overhaul (Follow-Up PR)
+
+**Status:** Planned — to be implemented after Option B is verified on Deck hardware
+
+Option C builds on top of the Option B foundation to deliver the full visual transformation. Now that every phase has real data (total, ETA, step/totalSteps), the frontend can be redesigned for a premium experience.
+
+### What Option C Adds
+
+| # | Improvement | What Changes | Files |
+|---|---|---|---|
+| 4 | **Aggregate Progress Bar** | `overallProgress` (0.0–1.0) computed from weighted step formula. A persistent top-level bar that advances across the entire sync — never resets between phases. | library.py, types/index.ts |
+| 5 | **Frontend Sub-Phase Labels** | `syncManager.ts` breaks shortcut application into labeled sub-phases: "Adding 12/23", "Updating 5/8", "Setting artwork 3/31", "Removing 2/4" | syncManager.ts |
+| 6 | **Elapsed Time Display** | Show elapsed time in the UI after 5s threshold: `"· 1m 12s elapsed"` | MainPage.tsx |
+| 8 | **Smooth Transitions** | Replace the conditional spinner/bar rendering with a single persistent layout: overall bar + detail text line. No more jarring spinner→bar switch. | MainPage.tsx |
+
+### Target UI Layout
+
+```
+┌────────────────────────────────────────────────┐
+│  ████████████░░░░░░░░░░░░░░░░  38%  · 1m 12s  │  ← overall progress (always visible, never resets)
+│  [2/5] Fetching N64 · 2,140/8,500 ROMs · ~38s │  ← per-phase detail (text updates per phase)
+│  Cancel Sync                                   │
+└────────────────────────────────────────────────┘
+```
+
+### Implementation Notes
+
+- **Weight formula** for `overallProgress`:
+  ```python
+  STEP_WEIGHTS = {
+      "platforms": 0.05,    # Fast API call
+      "roms": 0.45,         # Usually the longest phase
+      "collections": 0.10,  # Variable
+      "artwork": 0.25,      # Network-bound, per-ROM
+      "shortcuts": 0.12,    # SteamClient calls, per-ROM
+      "removals": 0.03,     # Fast
+  }
+  ```
+  Each phase contributes `(current/total) * weight` to the overall bar.
+
+- **MainPage.tsx refactoring** is the biggest risk — the Decky QAM panel has strict width constraints (320px) and the `ProgressBarWithInfo` component has limited customization. Needs hardware testing.
+
+- **syncManager.ts sub-phases** require changing from a single `"Applying shortcuts {i}/{total}"` message to distinct messages per sub-loop. This is a frontend-only change that doesn't affect the backend event protocol.
+
+### Prerequisites
+
+- [ ] Option B verified on Deck hardware (progress bars and ETAs display correctly)
+- [ ] Confirm `ProgressBarWithInfo` supports the layout width needed for overall + detail lines
+- [ ] Measure actual step durations on a real sync to calibrate weight formula
