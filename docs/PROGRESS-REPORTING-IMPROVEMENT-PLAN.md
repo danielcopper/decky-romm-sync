@@ -6,9 +6,58 @@
 
 ---
 
+## 🚨 THE #1 PROBLEM: "Fetching ROMs" Is a Dead Zone
+
+**User report:** *"Fetching roms sits and spins for a very long time without conveying any progress or indication about what it is doing."*
+
+This is the single biggest UX failure in the entire sync pipeline. Here's what happens:
+
+1. User presses "Sync Library"
+2. UI shows a spinner with `"Fetching platforms..."` (fast, 1-2s)
+3. UI shows a spinner with `"Fetching SNES... 423 total (5/14)"` — **and stays there for 30-120+ seconds**
+4. The spinner gives no indication of:
+   - How many ROMs there are in total across all platforms
+   - What percentage is complete
+   - How much longer it will take (no ETA)
+   - Whether it's actually doing anything or frozen
+5. User stares at a message that barely changes, with a generic spinner, having no idea if they should wait 10 seconds or 10 minutes
+
+**This is the LONGEST phase of the entire sync** — for a library with 14 platforms and 8,500 ROMs, the fetch phase can take 60-120 seconds. And for the entire duration, the user gets a spinner with no bar, no percentage, no ETA.
+
+### Root Cause (One Missing Parameter)
+
+In `library.py` line ~883, the progress emission during ROM fetching:
+
+```python
+await self._emit_progress(
+    "roms",
+    current=progress["roms_found"],
+    message=f"Fetching {platform_name}... {progress['roms_found']} total ({progress['done']}/{progress['total']})",
+    sub_phase=f"platform:{platform_name}",
+)
+```
+
+**`total=` is never passed.** The frontend receives `total=0`, which triggers the indeterminate spinner path instead of a progress bar. The ETA estimator skips updates because it has no total to work with.
+
+Meanwhile, the data to fix this **already exists**: every platform object returned from `_fetch_enabled_platforms()` has a `rom_count` field. We just never sum them up and pass them as `total`. A ~5 line fix would give users a real progress bar with ETA for the entire fetch phase.
+
+### Why This Matters More Than Anything Else
+
+| Phase | Duration | User sees | Impact |
+|---|---|---|---|
+| **Fetch platforms** | 1-2s | Spinner + "Fetching platforms..." | Low — fast enough |
+| **Fetch ROMs** | **30-120s** | **Spinner only, no bar, no ETA** | **🔴 CRITICAL — longest phase, zero feedback** |
+| Fetch collections | 3-10s | Frozen on last fetch message | Medium |
+| Download artwork | 10-60s | Progress bar + ETA ✅ | Low — already good |
+| Apply shortcuts | 5-30s | Progress bar + step count ✅ | Low — already good |
+
+The fetch phase is **60-70% of total sync time** and it's the only phase with **zero meaningful progress indication**. Everything after it already has bars and ETAs.
+
+---
+
 ## Current State: What's Already Good
 
-Before listing gaps, credit where it's due — the current system has:
+Before listing all gaps, credit where it's due — the current system has:
 
 - ✅ `_emit_progress` central emitter with phase/step/total structure
 - ✅ ETA estimator (EMA-based, from `ETAEstimator` in `perf.py`)
@@ -22,17 +71,18 @@ Before listing gaps, credit where it's due — the current system has:
 
 ## Gap Analysis: What's Broken or Missing
 
-### Gap 1: Fetch Phase Is a Black Hole
+### Gap 1 (CRITICAL): Fetch Phase Is a Black Hole
 
 **The `platforms` and `roms` phases have `total = 0`**, meaning:
 - No progress bar (indeterminate spinner only)
 - No percentage complete
 - ETA estimator has nothing to work with
 - User sees `"Fetching SNES... 423 found (5/14)"` but has no sense of how long "5/14" will take
+- **This phase is 60-70% of total sync wall-clock time**
 
-**Why it matters:** The fetch phase is often the LONGEST phase (5-60+ seconds depending on library size and network latency). Users stare at a spinner with no indication of how much longer they'll wait.
+**Why it matters:** The fetch phase is often the LONGEST phase (30-120+ seconds depending on library size and network latency). Users stare at a spinner with no indication of how much longer they'll wait. This is the **single most reported frustration** with the sync UX.
 
-**Root cause:** The total ROM count isn't known until all platforms are fetched. We DO know the number of platforms upfront, and each platform announces its `rom_count` in the platform list response — we just don't use it.
+**Root cause:** `_emit_progress("roms", ...)` never passes `total=`. We DO know the number of platforms upfront, and each platform announces its `rom_count` in the platform list response — we just don't use it. A 5-line fix would give the entire fetch phase a real progress bar + ETA.
 
 ### Gap 2: No Progress During Collection Fetching (Phase 3)
 
