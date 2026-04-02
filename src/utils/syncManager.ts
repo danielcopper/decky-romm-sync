@@ -1,7 +1,7 @@
 import { addEventListener } from "@decky/api";
 import type { SyncApplyData, SyncChangedItem } from "../types";
 import {
-  getArtworkBase64,
+  downloadAndGetArtwork,
   reportSyncResults,
   reportIncrementalResults,
   reportSyncFinalized,
@@ -97,9 +97,10 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
       // In-flight artwork promises for parallel approach
       let artworkQueue: Promise<void>[] = [];
 
-      /** Fire artwork fetch for a shortcut (non-blocking, limited concurrency). */
+      /** Fire artwork fetch for a shortcut (non-blocking, limited concurrency).
+       *  Downloads cover from RomM on-demand and sets Steam custom artwork. */
       function enqueueArtwork(appId: number, romId: number, name: string): void {
-        const p: Promise<void> = getArtworkBase64(romId)
+        const p: Promise<void> = downloadAndGetArtwork(romId)
           .then(async (artResult) => {
             if (artResult.base64) {
               await SteamClient.Apps.SetCustomArtworkForApp(appId, artResult.base64, "png", 0);
@@ -117,20 +118,22 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
         }
       }
   
-      // Step plan from backend
-      let currentStep = data.next_step ?? 1;
+      // Step plan from backend — unified, continuous numbering
+      const currentStep = data.next_step ?? 1;
       const totalSteps = data.total_steps ?? 3;
   
-      // --- Step: Apply shortcuts (new + changed) ---
+      // --- Combined totals: shortcuts + removals in one step ---
       const totalNew = data.shortcuts.length;
       const totalChanged = data.changed_shortcuts?.length ?? 0;
       const totalShortcuts = totalNew + totalChanged;
+      const totalRemovals = data.remove_rom_ids.length;
+      const totalWork = totalShortcuts + totalRemovals;
   
       if (totalShortcuts > 0) {
         updateSyncProgress({
           running: true, phase: "applying",
-          current: 0, total: totalShortcuts,
-          message: `Applying shortcuts 0/${totalShortcuts}`,
+          current: 0, total: totalWork,
+          message: `Applying changes 0/${totalWork}`,
           step: currentStep, totalSteps,
         });
   
@@ -139,7 +142,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           try {
             updateSyncProgress({
               current: i + 1,
-              message: `Applying shortcuts ${i + 1}/${totalShortcuts}`,
+              message: `Applying changes ${i + 1}/${totalWork} — ${item.name}`,
             });
             let appId: number | undefined;
   
@@ -208,7 +211,7 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
             try {
               updateSyncProgress({
                 current: idx + 1,
-                message: `Updating shortcuts ${idx + 1}/${totalShortcuts}`,
+                message: `Updating ${idx + 1}/${totalWork} — ${item.name}`,
               });
               const appId = item.existing_app_id;
   
@@ -248,9 +251,8 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           }
         }
   
-        // Flush any remaining shortcuts before moving to next phase
+        // Flush any remaining shortcuts before moving to removals
         await flushBatch();
-        currentStep++;
       }
 
       // --- Wait for any remaining in-flight artwork ---
@@ -260,15 +262,8 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
         artworkQueue = [];
       }
 
-      // --- Step: Remove shortcuts ---
+      // --- Removals (same step, combined progress) ---
       if (!cancelled && data.remove_rom_ids.length > 0) {
-        const totalRemovals = data.remove_rom_ids.length;
-        updateSyncProgress({
-          phase: "applying", current: 0, total: totalRemovals,
-          message: `Removing shortcuts 0/${totalRemovals}`,
-          step: currentStep, totalSteps,
-        });
-  
         for (let i = 0; i < data.remove_rom_ids.length; i++) {
           const romId = data.remove_rom_ids[i];
           const appId = existing.get(romId);
@@ -278,8 +273,9 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
           removedRomIds.push(romId);
           batchRemovedRomIds.push(romId);
           updateSyncProgress({
-            current: i + 1,
-            message: `Removing shortcuts ${i + 1}/${totalRemovals}`,
+            current: totalShortcuts + i + 1,
+            total: totalWork,
+            message: `Removing stale ${i + 1}/${totalRemovals}`,
           });
           await delay(50);
 
@@ -298,7 +294,6 @@ export function initSyncManager(): ReturnType<typeof addEventListener> {
   
         // Flush any remaining removals
         await flushBatch();
-        currentStep++;
       }
   
       // ── Finalize: report to backend ──────────────────────────

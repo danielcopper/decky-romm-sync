@@ -333,6 +333,7 @@ class LibraryService:
             preview_id = str(uuid.uuid4())
             self._pending_delta = {
                 "preview_id": preview_id,
+                "fetch_step_count": _fetch_steps,
                 "new": new,
                 "changed": changed,
                 "unchanged_ids": unchanged_ids,
@@ -385,40 +386,14 @@ class LibraryService:
         self._sync_state = SyncState.RUNNING
         self._sync_last_heartbeat = time.monotonic()
 
-        # Calculate apply step plan
-        delta_roms = delta.get("delta_roms", [])
-        has_artwork = len(delta_roms) > 0
-        has_shortcuts = len(delta["new"]) + len(delta["changed"]) > 0
-        has_removals = len(delta["remove_rom_ids"]) > 0
+        # ── Unified step plan (continues from fetch phase) ───
+        # Artwork is now downloaded per-title in the frontend loop,
+        # so we have just one "apply" step after the fetch steps.
+        fetch_step_count = delta.get("fetch_step_count", 0)
+        total_steps = fetch_step_count + 1  # One combined apply step
+        apply_step = fetch_step_count + 1
 
-        apply_steps = []
-        if has_artwork:
-            apply_steps.append("artwork")
-        if has_shortcuts:
-            apply_steps.append("shortcuts")
-        if has_removals:
-            apply_steps.append("removals")
-        total_steps = len(apply_steps)
-        current_step = 0
-
-        # Step: Download artwork
-        if has_artwork:
-            current_step += 1
-            self._eta.start()
-            await self._emit_progress(
-                "applying",
-                total=len(delta_roms),
-                message=f"Downloading artwork 0/{len(delta_roms)}",
-                step=current_step,
-                total_steps=total_steps,
-            )
-            cover_paths = await self._download_artwork(
-                delta_roms, progress_step=current_step, progress_total_steps=total_steps
-            )
-            for sd in delta["new"] + delta["changed"]:
-                sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
-
-        # Populate _pending_sync for report_sync_results and get_artwork_base64
+        # Populate _pending_sync for report_sync_results and download_and_get_artwork
         self._pending_sync = delta["all_shortcuts"]
         self._pending_collection_memberships = delta.get("collection_memberships", {})
         self._pending_platform_rom_ids = delta.get("platform_rom_ids", set())
@@ -430,15 +405,13 @@ class LibraryService:
         }
         self._save_state()
 
-        # Figure out which step the frontend starts at
-        next_step = current_step + 1
-
-        total_changes = len(delta["new"]) + len(delta["changed"])
+        total_changes = len(delta["new"]) + len(delta["changed"]) + len(delta["remove_rom_ids"])
+        self._eta.start()
         await self._emit_progress(
             "applying",
             total=total_changes,
-            message=f"Applying shortcuts 0/{total_changes}",
-            step=next_step,
+            message=f"Applying changes 0/{total_changes}",
+            step=apply_step,
             total_steps=total_steps,
         )
 
@@ -449,7 +422,7 @@ class LibraryService:
                 "shortcuts": delta["new"],
                 "changed_shortcuts": delta["changed"],
                 "remove_rom_ids": delta["remove_rom_ids"],
-                "next_step": next_step,
+                "next_step": apply_step,
                 "total_steps": total_steps,
             },
         )
@@ -1193,45 +1166,15 @@ class LibraryService:
                 self._sync_state = SyncState.IDLE
                 return
 
-            # ── Build final global step plan (Improvement 3) ─────
-            # fetch_step_count tells us how many steps the fetch phase
-            # used (platforms + roms + optionally collections).
-            # We append artwork + shortcuts as needed.
-            has_artwork = len(all_roms) > 0
-            has_shortcuts = len(shortcuts_data) > 0
-            apply_steps = []
-            if has_artwork:
-                apply_steps.append("artwork")
-            if has_shortcuts:
-                apply_steps.append("shortcuts")
-            full_total_steps = fetch_step_count + len(apply_steps)
-            full_current_step = fetch_step_count
-
-            if has_artwork:
-                full_current_step += 1
-                # Restart ETA for the artwork phase so estimates are fresh.
-                self._eta.start()
-                await self._emit_progress(
-                    "applying",
-                    total=len(all_roms),
-                    message=f"Downloading artwork 0/{len(all_roms)}",
-                    step=full_current_step,
-                    total_steps=full_total_steps,
-                )
-                with self._perf.time_phase("download_artwork"):
-                    cover_paths = await self._download_artwork(
-                        all_roms, progress_step=full_current_step, progress_total_steps=full_total_steps
-                    )
-                self._perf.set_gauge("artwork_downloaded", len(cover_paths))
-            else:
-                cover_paths = {}
+            # ── Unified step plan ─────────────────────────────
+            # Artwork is now downloaded per-title in the frontend
+            # loop, so we have just one "apply" step after fetch.
+            full_total_steps = fetch_step_count + 1  # One combined apply step
+            apply_step = fetch_step_count + 1
 
             if self._sync_state == SyncState.CANCELLING:
                 await self._finish_sync(_SYNC_CANCELLED)
                 return
-
-            for sd in shortcuts_data:
-                sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
 
             # Determine stale rom_ids by comparing current sync with registry
             current_rom_ids = {r["id"] for r in all_roms}
@@ -1241,13 +1184,14 @@ class LibraryService:
             if not self._settings.get("remove_on_unsync", True):
                 stale_rom_ids = []
 
-            # Emit sync_apply for frontend to process via SteamClient
-            next_step = full_current_step + (1 if has_shortcuts else 0)
+            total_changes = len(shortcuts_data) + len(stale_rom_ids)
+            # Restart ETA for the apply phase
+            self._eta.start()
             await self._emit_progress(
                 "applying",
-                total=len(shortcuts_data),
-                message=f"Applying shortcuts 0/{len(shortcuts_data)}",
-                step=next_step,
+                total=total_changes,
+                message=f"Applying changes 0/{total_changes}",
+                step=apply_step,
                 total_steps=full_total_steps,
             )
 
@@ -1268,7 +1212,7 @@ class LibraryService:
                 {
                     "shortcuts": shortcuts_data,
                     "remove_rom_ids": stale_rom_ids,
-                    "next_step": next_step,
+                    "next_step": apply_step,
                     "total_steps": full_total_steps,
                 },
             )

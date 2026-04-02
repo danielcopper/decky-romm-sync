@@ -522,6 +522,11 @@ class Plugin:
     async def get_artwork_base64(self, rom_id):
         return await self._artwork_service.get_artwork_base64(int(rom_id), self._sync_service.pending_sync)
 
+    async def download_and_get_artwork(self, rom_id):
+        return await self._artwork_service.download_and_get_artwork_base64(
+            int(rom_id), self._sync_service.pending_sync
+        )
+
     async def clear_sync_cache(self):
         return self._sync_service.clear_sync_cache()
 

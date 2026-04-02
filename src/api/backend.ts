@@ -86,6 +86,7 @@ export const getRegistryPlatforms = callable<[], { platforms: RegistryPlatform[]
 export const removePlatformShortcuts = callable<[string], { success: boolean; app_ids: number[]; rom_ids: (string | number)[]; platform_name: string }>("remove_platform_shortcuts");
 export const removeAllShortcuts = callable<[], { success: boolean; message: string; removed_count: number; app_ids: number[]; rom_ids: (string | number)[] }>("remove_all_shortcuts");
 export const getArtworkBase64 = callable<[number], { base64: string | null }>("get_artwork_base64");
+export const downloadAndGetArtwork = callable<[number], { base64: string | null }>("download_and_get_artwork");
 export const getSgdbArtworkBase64 = callable<[number, number], { base64: string | null; no_api_key?: boolean }>("get_sgdb_artwork_base64");
 export const reportSyncResults = callable<[Record<string, number>, number[], boolean], { success: boolean }>("report_sync_results");
 export const reportIncrementalResults = callable<[Record<string, number>, number[]], { success: boolean; persisted: number }>("report_incremental_results");
