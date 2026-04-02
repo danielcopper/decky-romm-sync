@@ -159,10 +159,12 @@ export async function appendToCollections(
         if (existing) {
           existing.AsDragDropCollection().AddApps(overviews);
           await existing.Save();
+          logInfo(`Appended ${appIds.length} apps to platform collection "${collectionName}"`);
         } else {
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
           collection.AsDragDropCollection().AddApps(overviews);
           await collection.Save();
+          logInfo(`Created platform collection "${collectionName}" with ${appIds.length} apps`);
         }
       } catch (e) {
         logError(`Failed to append to platform collection "${collectionName}": ${e}`);
@@ -195,10 +197,12 @@ export async function appendToRomMCollections(
         if (existing) {
           existing.AsDragDropCollection().AddApps(overviews);
           await existing.Save();
+          logInfo(`Appended ${appIds.length} apps to RomM collection "${collectionName}"`);
         } else {
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
           collection.AsDragDropCollection().AddApps(overviews);
           await collection.Save();
+          logInfo(`Created RomM collection "${collectionName}" with ${appIds.length} apps`);
         }
       } catch (e) {
         logError(`Failed to append to RomM collection "${collectionName}": ${e}`);

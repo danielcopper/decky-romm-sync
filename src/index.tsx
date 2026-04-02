@@ -18,7 +18,6 @@ import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId }
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
 import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, logError, logInfo } from "./api/backend";
-import { createOrUpdateCollections, createOrUpdateRomMCollections, clearPlatformCollection, getHostname } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
@@ -181,57 +180,10 @@ export default definePlugin(() => {
       }
     }
 
-    // Create/update platform and RomM Steam collections + clean stale ones
-    (async () => {
-      try {
-        // Create/update platform collections
-        if (data.platform_app_ids && Object.keys(data.platform_app_ids).length > 0) {
-          await createOrUpdateCollections(data.platform_app_ids);
-        }
-
-        if (data.romm_collection_app_ids && Object.keys(data.romm_collection_app_ids).length > 0) {
-          await createOrUpdateRomMCollections(data.romm_collection_app_ids);
-        }
-
-        if (typeof collectionStore !== "undefined") {
-          const hostname = await getHostname();
-          const suffix = ` (${hostname})`;
-
-          // Clean stale platform collections
-          const activePlatforms = new Set(Object.keys(data.platform_app_ids ?? {}));
-          const stalePlatform = collectionStore.userCollections.filter((c) => {
-            if (!c.displayName.startsWith("RomM: ")) return false;
-            const afterPrefix = c.displayName.slice(6);
-            if (afterPrefix.startsWith("[")) return false; // Skip RomM collections
-            if (!c.displayName.endsWith(suffix)) return false; // Only this machine
-            const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
-            return !activePlatforms.has(platformName);
-          });
-          for (const c of stalePlatform) {
-            const afterPrefix = c.displayName.slice(6);
-            const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
-            logInfo(`Removing stale platform collection "${c.displayName}"`);
-            await clearPlatformCollection(platformName);
-          }
-
-          // Clean stale RomM collection-based collections
-          const activeNames = new Set(Object.keys(data.romm_collection_app_ids ?? {}));
-          const rommCollectionPattern = /^RomM: \[([^\]]+)\]/;
-          const staleRomm = collectionStore.userCollections.filter((c) => {
-            if (!c.displayName.startsWith("RomM: [")) return false;
-            if (!c.displayName.endsWith(suffix)) return false;
-            const match = rommCollectionPattern.exec(c.displayName);
-            return match ? !activeNames.has(match[1]) : false;
-          });
-          for (const c of staleRomm) {
-            logInfo(`Removing stale RomM collection "${c.displayName}"`);
-            await c.Delete();
-          }
-        }
-      } catch (e) {
-        logError(`Failed to manage RomM collections: ${e}`);
-      }
-    })();
+    // NOTE: Collection creation/cleanup is now handled by the per-platform
+    // processing loop in syncManager.ts.  The sync_complete handler no longer
+    // touches collections — doing so would overwrite or delete collections
+    // that the per-platform loop just created incrementally.
 
     // Re-apply playtime to Steam UI (app IDs may have changed after re-sync)
     (async () => {

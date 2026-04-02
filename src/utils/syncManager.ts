@@ -12,7 +12,7 @@ import {
 } from "../api/backend";
 import { getExistingRomMShortcuts, addShortcut, removeShortcut } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
-import { appendToCollections, appendToRomMCollections } from "./collections";
+import { appendToCollections, appendToRomMCollections, getHostname, clearPlatformCollection } from "./collections";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -174,6 +174,10 @@ async function startProcessingLoop(): Promise<void> {
     let globalTotal = 0;
     let cancelled = false;
     let doneReceived = false;
+
+    // ── Track active names for stale cleanup at the end ──────
+    const activePlatforms = new Set<string>();
+    const activeRomMCollections = new Set<string>();
 
     // ── Process queue items ──────────────────────────────────
     while (!doneReceived && !cancelled) {
@@ -378,8 +382,12 @@ async function startProcessingLoop(): Promise<void> {
         if (platformAppIds.length > 0) {
           updateSyncProgress({ message: `${platformPrefix} — Building collections…` });
           await appendToCollections({ [platform_name]: platformAppIds });
+          activePlatforms.add(platform_name);
           if (Object.keys(platformRomMCollections).length > 0) {
             await appendToRomMCollections(platformRomMCollections);
+            for (const name of Object.keys(platformRomMCollections)) {
+              activeRomMCollections.add(name);
+            }
           }
         }
 
@@ -391,6 +399,51 @@ async function startProcessingLoop(): Promise<void> {
         }
       } // inner while (_queue.length > 0)
     } // outer while (!doneReceived && !cancelled)
+
+    // ── Clean stale collections ───────────────────────────────
+    if (!cancelled) {
+      try {
+        if (typeof collectionStore !== "undefined") {
+          const hostname = await getHostname();
+          const suffix = ` (${hostname})`;
+
+          // Remove platform collections that weren't touched in this sync
+          const stalePlatform = collectionStore.userCollections.filter((c) => {
+            if (!c.displayName.startsWith("RomM: ")) return false;
+            const afterPrefix = c.displayName.slice(6);
+            if (afterPrefix.startsWith("[")) return false;
+            if (!c.displayName.endsWith(suffix)) return false;
+            const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
+            return !activePlatforms.has(platformName);
+          });
+          for (const c of stalePlatform) {
+            const afterPrefix = c.displayName.slice(6);
+            const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
+            logInfo(`Removing stale platform collection "${c.displayName}"`);
+            await clearPlatformCollection(platformName);
+          }
+
+          // Remove RomM collections that weren't touched in this sync
+          const rommCollectionPattern = /^RomM: \[([^\]]+)\]/;
+          const staleRomm = collectionStore.userCollections.filter((c) => {
+            if (!c.displayName.startsWith("RomM: [")) return false;
+            if (!c.displayName.endsWith(suffix)) return false;
+            const match = rommCollectionPattern.exec(c.displayName);
+            return match ? !activeRomMCollections.has(match[1]) : false;
+          });
+          for (const c of staleRomm) {
+            logInfo(`Removing stale RomM collection "${c.displayName}"`);
+            await c.Delete();
+          }
+
+          if (stalePlatform.length > 0 || staleRomm.length > 0) {
+            logInfo(`Stale cleanup: removed ${stalePlatform.length} platform + ${staleRomm.length} RomM collections`);
+          }
+        }
+      } catch (e) {
+        logError(`Stale collection cleanup failed: ${e}`);
+      }
+    }
 
     // ── Finalize: report to backend ──────────────────────────
     updateSyncProgress({ message: "Finalizing sync…" });
