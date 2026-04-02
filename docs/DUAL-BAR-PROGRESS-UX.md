@@ -22,19 +22,24 @@ unit of work (platform / collection) at all times.
 | Numeric progress | Mixed into message | Dedicated line below overall bar: `142 / 3,400` |
 | Game title | Same styling as message | Italic, dimmer, clearly subordinate |
 | ETA row | 12px | 11px, 0.4 opacity — more subdued |
-
+s
 ---
 
 ## Wireframes
+
+All states share a **stepper bar** across the top showing the 4 phases.
+The active step is highlighted (filled circle); completed steps show a
+checkmark; future steps are dimmed outlines.
 
 ### State 1: Step 1 — Connecting (indeterminate)
 
 ```
 ┌─────────────────────────────────────────────┐
-│ Connecting                      Step 1/4    │
+│  ●━━━━━━━━○━━━━━━━━○━━━━━━━━○              │
+│  Connect   Fetch    Collect   Apply         │  ← stepper bar
+│                                             │
+│ Connecting to server...                     │
 │ ░░░░░░░░░░░░░▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░ │  ← indeterminate
-│                                             │
-│                                             │
 │                                             │
 │ [ Cancel Sync ]                             │
 └─────────────────────────────────────────────┘
@@ -46,15 +51,18 @@ No platform card. No ETA (nothing to estimate yet).
 
 ```
 ┌─────────────────────────────────────────────┐
-│ Fetching ROMs                   Step 2/4    │  ← bold white + dim counter
-│ ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  ← overall bar (142/3400 ROMs)
-│ 142 / 3,400                                 │  ← numeric context
+│  ✓━━━━━━━━●━━━━━━━━○━━━━━━━━○              │
+│  Connect   Fetch    Collect   Apply         │  ← step 2 active
+│                                             │
+│ Fetching ROMs                               │
+│ ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  ← overall (142/3400 ROMs)
+│ 142 / 3,400                                 │
 │ ┌─────────────────────────────────────────┐ │
-│ │ GameCube                        3/14    │ │  ← platform label + unit counter
-│ │ ██████████████████░░░░░░░░░░░░░░░░░░░░ │ │  ← platform progress bar
+│ │ GameCube                        3/14    │ │  ← platform + unit counter
+│ │ ██████████████████░░░░░░░░░░░░░░░░░░░░ │ │  ← platform bar
 │ └─────────────────────────────────────────┘ │
 │                                             │
-│ ~2m12s remaining              38s elapsed   │  ← dim ETA row
+│ ~2m12s remaining              38s elapsed   │
 │ [ Cancel Sync ]                             │
 └─────────────────────────────────────────────┘
 ```
@@ -67,8 +75,11 @@ No platform card. No ETA (nothing to estimate yet).
 
 ```
 ┌─────────────────────────────────────────────┐
-│ Fetching collections            Step 3/4    │
-│ ██████████████████████████████░░░░░░░░░░░░░ │  ← overall bar (5/8)
+│  ✓━━━━━━━━✓━━━━━━━━●━━━━━━━━○              │
+│  Connect   Fetch    Collect   Apply         │  ← step 3 active
+│                                             │
+│ Fetching collections                        │
+│ ██████████████████████████████░░░░░░░░░░░░░ │  ← overall (5/8)
 │ 5 / 8                                       │
 │ ┌─────────────────────────────────────────┐ │
 │ │ Best of SNES                    5/8     │ │  ← collection name + counter
@@ -84,8 +95,11 @@ No platform card. No ETA (nothing to estimate yet).
 
 ```
 ┌─────────────────────────────────────────────┐
-│ Applying changes                Step 4/4    │
-│ ██████████████████████░░░░░░░░░░░░░░░░░░░░ │  ← overall bar (847/1620)
+│  ✓━━━━━━━━✓━━━━━━━━✓━━━━━━━━●              │
+│  Connect   Fetch    Collect   Apply         │  ← step 4 active
+│                                             │
+│ Applying changes                            │
+│ ██████████████████████░░░░░░░░░░░░░░░░░░░░ │  ← overall (847/1620)
 │ 847 / 1,620                                 │
 │ ┌─────────────────────────────────────────┐ │
 │ │ Nintendo 64                     5/14    │ │  ← which platform, how many done
@@ -97,30 +111,50 @@ No platform card. No ETA (nothing to estimate yet).
 └─────────────────────────────────────────────┘
 ```
 
-### State 5: Cleaning Up (no platform card)
+### State 5: Cleaning Up (still step 4, no platform card)
 
 ```
 ┌─────────────────────────────────────────────┐
-│ Cleaning up                     Step 4/4    │
+│  ✓━━━━━━━━✓━━━━━━━━✓━━━━━━━━●              │
+│  Connect   Fetch    Collect   Apply         │  ← still step 4
+│                                             │
+│ Cleaning up                                 │
 │ ██████████████████████████████████████████░ │
 │ 1,618 / 1,620                               │
-│                                             │
 │                                             │
 │ ~2s remaining                 6m01s elapsed │
 │ [ Cancel Sync ]                             │
 └─────────────────────────────────────────────┘
 ```
 
-### State 6: Finalizing (indeterminate, no card)
+### State 6: Finalizing (all steps complete)
 
 ```
 ┌─────────────────────────────────────────────┐
-│ Finalizing                                  │
+│  ✓━━━━━━━━✓━━━━━━━━✓━━━━━━━━✓              │
+│  Connect   Fetch    Collect   Apply         │  ← all complete
+│                                             │
+│ Finalizing...                               │
 │ ░░░░░░░░░░░░░▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░ │
 │                                             │
 │                                 6m12s elapsed│
 │ [ Cancel Sync ]                             │
 └─────────────────────────────────────────────┘
+```
+
+### Stepper Visual Reference
+
+```
+State legend:
+  ○  = future (dimmed outline, gray text)
+  ●  = active (filled/highlighted, white text)
+  ✓  = completed (checkmark, green/accent)
+
+Step labels (always visible):
+  Connect   Fetch   Collect   Apply
+
+Layout: horizontal, evenly spaced across ~310px QAM panel width.
+Connectors (━━━━) between circles change color with completion.
 ```
 
 ---
