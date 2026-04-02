@@ -350,7 +350,7 @@ export default definePlugin(() => {
       unregisterGameDetailPatch();
       unregisterMetadataPatches();
       removeEventListener("sync_complete", syncCompleteListener);
-      removeEventListener("sync_apply", syncApplyListener);
+      syncApplyListener.unregister();
       removeEventListener("sync_progress", syncProgressListener);
       removeEventListener("download_progress", downloadProgressListener);
       removeEventListener("download_complete", downloadCompleteListener);

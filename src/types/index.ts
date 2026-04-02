@@ -172,6 +172,34 @@ export interface SyncApplyData {
   collection_memberships?: Record<string, number[]>;
 }
 
+/** Per-platform event: one platform's worth of shortcuts to process. */
+export interface SyncApplyPlatformData {
+  platform_name: string;
+  platform_index: number;
+  total_platforms: number;
+  /** Grand total of shortcuts across ALL platforms (for global progress bar). */
+  total_shortcuts_all: number;
+  /** Cumulative shortcut count BEFORE this platform (for global progress offset). */
+  shortcuts_before: number;
+  shortcuts: SyncAddItem[];
+  changed_shortcuts?: SyncChangedItem[];
+  collection_memberships?: Record<string, number[]>;
+  step: number;
+  total_steps: number;
+}
+
+/** Stale ROM removals, emitted after all per-platform events. */
+export interface SyncApplyRemovalsData {
+  remove_rom_ids: number[];
+}
+
+/** Signals that all per-platform events + removals have been emitted. */
+export interface SyncApplyDoneData {
+  total_platforms: number;
+  total_shortcuts: number;
+  total_removals: number;
+}
+
 export interface FirmwareFile {
   id: number;
   file_name: string;

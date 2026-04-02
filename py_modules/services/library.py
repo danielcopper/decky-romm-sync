@@ -415,28 +415,14 @@ class LibraryService:
             total_steps=total_steps,
         )
 
-        # Emit delta with step plan for frontend
-        # Sort new/changed by platform_name for per-platform frontend processing
-        sorted_new = sorted(delta["new"], key=lambda sd: sd.get("platform_name", ""))
-        sorted_changed = sorted(delta["changed"], key=lambda sd: sd.get("platform_name", ""))
-        await self._emit(
-            "sync_apply",
-            {
-                "shortcuts": sorted_new,
-                "changed_shortcuts": sorted_changed,
-                "remove_rom_ids": delta["remove_rom_ids"],
-                "next_step": apply_step,
-                "total_steps": total_steps,
-                "collection_memberships": {
-                    name: [int(rid) for rid in rids]
-                    for name, rids in self._pending_collection_memberships.items()
-                },
-            },
-        )
-
-        self._logger.info(
-            f"Delta sync emitted: {len(delta['new'])} new, {len(delta['changed'])} changed, "
-            f"{len(delta['remove_rom_ids'])} removed"
+        # Emit per-platform events instead of a single monolithic sync_apply
+        await self._emit_per_platform(
+            shortcuts_data=delta["new"],
+            changed_shortcuts=delta["changed"],
+            stale_rom_ids=delta["remove_rom_ids"],
+            collection_memberships=self._pending_collection_memberships,
+            apply_step=apply_step,
+            full_total_steps=total_steps,
         )
 
         # Heartbeat safety timeout
@@ -1217,21 +1203,15 @@ class LibraryService:
             self._pending_collection_memberships = collection_memberships
             self._pending_platform_rom_ids = platform_rom_ids
 
-            await self._emit(
-                "sync_apply",
-                {
-                    "shortcuts": shortcuts_data,
-                    "remove_rom_ids": stale_rom_ids,
-                    "next_step": apply_step,
-                    "total_steps": full_total_steps,
-                    "collection_memberships": {
-                        name: [int(rid) for rid in rids]
-                        for name, rids in collection_memberships.items()
-                    },
-                },
+            # Emit per-platform events instead of a single monolithic sync_apply
+            await self._emit_per_platform(
+                shortcuts_data=shortcuts_data,
+                changed_shortcuts=None,
+                stale_rom_ids=stale_rom_ids,
+                collection_memberships=collection_memberships,
+                apply_step=apply_step,
+                full_total_steps=full_total_steps,
             )
-
-            self._logger.info(f"Sync data emitted: {len(shortcuts_data)} shortcuts, {len(stale_rom_ids)} stale")
         except Exception as e:
             import traceback
 
@@ -1253,6 +1233,112 @@ class LibraryService:
             self._sync_state = SyncState.IDLE
             if self._sync_progress.get("phase") != "error" and self._sync_progress.get("running"):
                 self._start_safety_timeout()
+
+    async def _emit_per_platform(
+        self,
+        shortcuts_data: list,
+        changed_shortcuts: list | None,
+        stale_rom_ids: list,
+        collection_memberships: dict,
+        apply_step: int,
+        full_total_steps: int,
+    ):
+        """Emit per-platform sync_apply_platform events instead of one big sync_apply.
+
+        Groups shortcuts by platform_name, emits one event per platform so the
+        frontend can fully process each platform (shortcuts → artwork → collections
+        → persist) before starting the next one.  Removals are emitted separately
+        at the end via sync_apply_removals.  A final sync_apply_done event signals
+        the frontend that no more events are coming.
+        """
+        from collections import defaultdict
+
+        # Group new shortcuts by platform
+        new_by_platform: dict[str, list] = defaultdict(list)
+        for sd in shortcuts_data:
+            new_by_platform[sd.get("platform_name", "Unknown")].append(sd)
+
+        # Group changed shortcuts by platform
+        changed_by_platform: dict[str, list] = defaultdict(list)
+        if changed_shortcuts:
+            for sd in changed_shortcuts:
+                changed_by_platform[sd.get("platform_name", "Unknown")].append(sd)
+
+        # Build ordered platform list (union of new + changed)
+        platform_set: set[str] = set(new_by_platform.keys()) | set(changed_by_platform.keys())
+        sorted_platforms = sorted(platform_set)
+        total_platforms = len(sorted_platforms)
+        total_shortcuts = len(shortcuts_data) + (len(changed_shortcuts) if changed_shortcuts else 0)
+
+        # Build rom_id sets per platform for collection filtering
+        rom_ids_by_platform: dict[str, set[int]] = {}
+        for pname in sorted_platforms:
+            ids: set[int] = set()
+            for sd in new_by_platform.get(pname, []):
+                ids.add(sd["rom_id"])
+            for sd in changed_by_platform.get(pname, []):
+                ids.add(sd["rom_id"])
+            rom_ids_by_platform[pname] = ids
+
+        # Cumulative shortcut counter for global progress offset
+        shortcuts_before = 0
+
+        for i, pname in enumerate(sorted_platforms):
+            p_new = new_by_platform.get(pname, [])
+            p_changed = changed_by_platform.get(pname, [])
+            p_rom_ids = rom_ids_by_platform[pname]
+
+            # Filter collection memberships to only this platform's rom_ids
+            p_coll: dict[str, list[int]] = {}
+            for cname, rids in collection_memberships.items():
+                filtered = [int(rid) for rid in rids if rid in p_rom_ids]
+                if filtered:
+                    p_coll[cname] = filtered
+
+            event_data = {
+                "platform_name": pname,
+                "platform_index": i + 1,
+                "total_platforms": total_platforms,
+                "total_shortcuts_all": total_shortcuts,
+                "shortcuts_before": shortcuts_before,
+                "shortcuts": p_new,
+                "step": apply_step,
+                "total_steps": full_total_steps,
+                "collection_memberships": p_coll,
+            }
+            if p_changed:
+                event_data["changed_shortcuts"] = p_changed
+
+            await self._emit("sync_apply_platform", event_data)
+
+            shortcuts_before += len(p_new) + len(p_changed)
+
+            self._logger.info(
+                f"Emitted platform {i + 1}/{total_platforms}: {pname} "
+                f"({len(p_new)} new, {len(p_changed)} changed)"
+            )
+
+            # Small delay between emissions to avoid overwhelming the event bus
+            if i < total_platforms - 1:
+                await asyncio.sleep(0.05)
+
+        # Emit removals as a separate event
+        if stale_rom_ids:
+            await self._emit("sync_apply_removals", {
+                "remove_rom_ids": stale_rom_ids,
+            })
+            self._logger.info(f"Emitted {len(stale_rom_ids)} removals")
+
+        # Signal frontend that all events have been emitted
+        await self._emit("sync_apply_done", {
+            "total_platforms": total_platforms,
+            "total_shortcuts": total_shortcuts,
+            "total_removals": len(stale_rom_ids),
+        })
+        self._logger.info(
+            f"Per-platform emission complete: {total_platforms} platforms, "
+            f"{total_shortcuts} shortcuts, {len(stale_rom_ids)} removals"
+        )
 
     async def _finish_sync(self, message):
         self._sync_progress = {
