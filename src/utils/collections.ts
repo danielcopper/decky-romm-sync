@@ -14,6 +14,27 @@ import { logInfo, logWarn, logError, getCollectionRegistry, saveCollectionRegist
 
 let _hostname = "";
 
+// ── Safety cap ────────────────────────────────────────────────
+// Maximum number of NEW collections a single operation can create.
+// If this limit is hit, the operation stops creating further collections
+// and logs an error. This prevents runaway duplication from ever crashing
+// Steam's Library again.
+const MAX_NEW_COLLECTIONS_PER_OP = 50;
+let _newCollectionsThisOp = 0;
+
+function resetCreationCounter(): void {
+  _newCollectionsThisOp = 0;
+}
+
+function canCreateNewCollection(name: string): boolean {
+  if (_newCollectionsThisOp >= MAX_NEW_COLLECTIONS_PER_OP) {
+    logError(`SAFETY CAP: Refusing to create collection "${name}" — already created ${_newCollectionsThisOp} new collections this operation (limit ${MAX_NEW_COLLECTIONS_PER_OP}). This likely indicates a find/match bug.`);
+    return false;
+  }
+  _newCollectionsThisOp++;
+  return true;
+}
+
 // ── Configurable naming ───────────────────────────────────────
 let _prefix = "";
 let _includeHostname = false;
@@ -184,6 +205,7 @@ export async function createOrUpdateCollections(
       return;
     }
     await loadRegistry();
+    resetCreationCounter();
 
     const hostname = await getHostname();
     logInfo(`Creating/updating collections for platforms: ${Object.keys(platformAppIds).join(", ")} (hostname: ${hostname})`);
@@ -213,6 +235,7 @@ export async function createOrUpdateCollections(
           registerCollection(existing.id, stableKey);
           dirty = true;
         } else {
+          if (!canCreateNewCollection(collectionName)) continue;
           logInfo(`Creating collection "${collectionName}" with ${appIds.length} apps`);
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
           collection.AsDragDropCollection().AddApps(overviews);
@@ -241,6 +264,7 @@ export async function createOrUpdateRomMCollections(
       return;
     }
     await loadRegistry();
+    resetCreationCounter();
 
     const hostname = await getHostname();
     logInfo(`Creating/updating RomM collections: ${Object.keys(collectionAppIds).join(", ")} (hostname: ${hostname})`);
@@ -270,6 +294,7 @@ export async function createOrUpdateRomMCollections(
           registerCollection(existing.id, stableKey);
           dirty = true;
         } else {
+          if (!canCreateNewCollection(collectionName)) continue;
           logInfo(`Creating RomM collection "${collectionName}" with ${appIds.length} apps`);
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
           collection.AsDragDropCollection().AddApps(overviews);
@@ -299,6 +324,7 @@ export async function appendToCollections(
   try {
     if (typeof collectionStore === "undefined") return;
     await loadRegistry();
+    resetCreationCounter();
     let dirty = false;
     for (const [platformName, appIds] of Object.entries(platformAppIds)) {
       if (appIds.length === 0) continue;
@@ -315,6 +341,7 @@ export async function appendToCollections(
           dirty = true;
           logInfo(`Appended ${appIds.length} apps to platform collection "${collectionName}"`);
         } else {
+          if (!canCreateNewCollection(collectionName)) continue;
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
           collection.AsDragDropCollection().AddApps(overviews);
           await collection.Save();
@@ -343,6 +370,7 @@ export async function appendToRomMCollections(
   try {
     if (typeof collectionStore === "undefined") return;
     await loadRegistry();
+    resetCreationCounter();
     let dirty = false;
     for (const [collName, appIds] of Object.entries(collectionAppIds)) {
       if (appIds.length === 0) continue;
@@ -359,6 +387,7 @@ export async function appendToRomMCollections(
           dirty = true;
           logInfo(`Appended ${appIds.length} apps to RomM collection "${collectionName}"`);
         } else {
+          if (!canCreateNewCollection(collectionName)) continue;
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
           collection.AsDragDropCollection().AddApps(overviews);
           await collection.Save();
