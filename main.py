@@ -485,6 +485,16 @@ class Plugin:
         self._save_settings_to_disk()
         return {"success": True}
 
+    async def get_collection_registry(self):
+        return self.settings.get("collection_registry", {})
+
+    async def save_collection_registry(self, registry):
+        if not isinstance(registry, dict):
+            return {"success": False}
+        self.settings["collection_registry"] = registry
+        self._save_settings_to_disk()
+        return {"success": True}
+
     async def start_sync(self):
         return self._sync_service.start_sync()
 
