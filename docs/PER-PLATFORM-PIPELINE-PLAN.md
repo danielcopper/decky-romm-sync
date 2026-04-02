@@ -120,8 +120,10 @@ The fetch header collapses. The first platform's row expands.
 ┌─────────────────────────────────────────┐
 │  ⟳  Atari 2600                  12/42   │
 │     ████████████████░░░░░░░░░░░░░░░░░░ │
-│     Pitfall! (USA)                      │
-│     ~8s remaining                       │
+│     ┌──────┐                            │
+│     │cover │  Pitfall! (USA)            │
+│     │ art  │  ~8s remaining             │
+│     └──────┘                            │
 │  ○  GameCube                      396   │
 │  ○  N64                           329   │
 │  ○  NES                         1,111   │
@@ -136,6 +138,9 @@ The fetch header collapses. The first platform's row expands.
 
 - Only one row is expanded at a time (the active platform)
 - Progress bar = shortcuts created / total for this platform
+- **Cover art thumbnail** (≈40×60 px) appears as each artwork download
+  completes — shows the most recently downloaded cover, cycling through
+  games as they finish. Empty until the first artwork resolves.
 - Game title in italic (the shortcut currently being created)
 - Footer shows overall platform count + global ETA
 
@@ -147,8 +152,10 @@ The fetch header collapses. The first platform's row expands.
 │  ✓  GameCube                      396   │
 │  ⟳  N64                        87/329   │
 │     ██████████████░░░░░░░░░░░░░░░░░░░░ │
-│     GoldenEye 007 (USA)                 │
-│     ~45s remaining                      │
+│     ┌──────┐                            │
+│     │cover │  GoldenEye 007 (USA)       │
+│     │ art  │  ~45s remaining            │
+│     └──────┘                            │
 │  ○  NES                         1,111   │
 │  ○  PlayStation                 1,978   │
 │  ○  PS2                           637   │
@@ -159,20 +166,40 @@ The fetch header collapses. The first platform's row expands.
 └─────────────────────────────────────────┘
 ```
 
+The cover art thumbnail shows the most recently downloaded cover for this
+platform. It cycles naturally as artwork downloads complete in the
+background — the user sees a stream of box art flipping through.
+
 ### State 5: Artwork Draining (Within a Platform)
 
 When all shortcuts for a platform are created but artwork downloads are still
-in flight, the expanded row shows artwork status:
+in flight, the expanded row shows artwork status. The cover art thumbnail
+continues cycling as each remaining artwork download completes.
 
 ```
+┌─────────────────────────────────────────┐
+│  ✓  Atari 2600                     42   │
+│  ✓  GameCube                      396   │
 │  ⟳  N64                       329/329   │
 │     ████████████████████████████████████ │
-│     Finishing artwork (3 remaining)...   │
-│     ~5s remaining                       │
+│     ┌──────┐                            │
+│     │cover │  Finishing artwork          │
+│     │ art  │  (3 remaining)...          │
+│     └──────┘                            │
+│  ○  NES                         1,111   │
+│  ○  PlayStation                 1,978   │
+│  ○  PS2                           637   │
+│  ○  SNES                          827   │
+│                                         │
+│  3 of 7 platforms · ~5m remaining       │
+│  [ Cancel Sync ]                        │
+└─────────────────────────────────────────┘
 ```
 
 This is a transient sub-state within the active platform. The row stays
-expanded until artwork is fully drained, then transitions to `✓`.
+expanded until artwork is fully drained, then transitions to `✓`. The cover
+thumbnail shows the last completed download — giving the user a satisfying
+"flipbook" of covers streaming in during the drain.
 
 ### State 6: Collections Phase
 
@@ -289,8 +316,10 @@ When more than **8 platforms** are syncing, apply progressive truncation:
 │  ✓  GameCube                      396   │  ← nearest completed
 │  ⟳  N64                        87/329   │  ← active (expanded)
 │     ██████████████░░░░░░░░░░░░░░░░░░░░ │
-│     GoldenEye 007 (USA)                 │
-│     ~45s remaining                      │
+│     ┌──────┐                            │
+│     │cover │  GoldenEye 007 (USA)       │
+│     │ art  │  ~45s remaining            │
+│     └──────┘                            │
 │  ○  NES                         1,111   │  ← next pending
 │  ○  PlayStation                 1,978   │
 │  ○  (6 more platforms)                  │  ← collapsed summary
@@ -552,6 +581,7 @@ interface PlatformRow {
   shortcutsProcessed: number; // How many shortcuts created so far
   shortcutsTotal: number;     // Total shortcuts for this platform
   currentGame?: string;       // Game title currently being processed
+  lastArtworkBase64?: string; // Most recently downloaded cover art (cycles as artwork completes)
 }
 
 interface AccordionState {
@@ -568,6 +598,7 @@ Functions:
 function initAccordion(platforms: SyncPlanPlatform[]): void;
 function setActivePlatform(index: number): void;
 function updatePlatformProgress(name: string, processed: number, total: number, currentGame?: string): void;
+function updatePlatformArtwork(name: string, base64: string): void;  // NEW: called when artwork download completes
 function markPlatformDone(name: string): void;
 function markPlatformError(name: string): void;
 function markPlatformPartial(name: string, processed: number, total: number): void;
@@ -603,7 +634,7 @@ The accordion replaces the entire "syncing" section in `MainPage.tsx`.
 | Status | Icon | Name style | Counter | Expanded? |
 |---|---|---|---|---|
 | `pending` | `○` (gray) | Dim (0.45 opacity) | ROM count (dim) | No |
-| `applying` | `⟳` (white, animated) | Bold white | `87/329` (white) | **Yes** — shows progress bar + game title + ETA |
+| `applying` | `⟳` (white, animated) | Bold white | `87/329` (white) | **Yes** — shows progress bar + cover art thumbnail + game title + ETA |
 | `done` | `✓` (green) | Normal (0.7 opacity) | ROM count (dim) | No |
 | `partial` | `✗` (yellow) | Normal | `87/329` (dim) | No |
 | `error` | `✗` (red) | Normal | `—` | No |
@@ -633,6 +664,12 @@ The existing `startProcessingLoop()` largely stays the same. Key changes:
    current `updateSyncProgress()` calls.
 
 2. **After draining artwork for a platform:** Call `markPlatformDone(name)`.
+   **Artwork thumbnail piping:** In `enqueueArtwork`, after a successful
+   `downloadAndGetArtwork` resolves with base64 data, call
+   `updatePlatformArtwork(platformName, artResult.base64)`. This updates
+   the accordion state so the expanded row renders the latest cover.
+   The thumbnail cycles naturally as artwork downloads complete
+   concurrently (up to `ART_CONCURRENCY=8` in flight). Cost: ~3 lines.
 
 3. **Remove per-platform collection building.** Don't call
    `appendToCollections` or `appendToRomMCollections` per-platform anymore.
