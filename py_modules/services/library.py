@@ -878,9 +878,26 @@ class LibraryService:
         Mutates all_seen and collection_only_roms in place.
         Returns the list of all rom_ids belonging to this collection.
         """
+        coll_rom_ids, roms = await self._fetch_single_collection_roms_isolated(collection)
+        for rom in roms:
+            rid = rom["id"]
+            if rid not in all_seen:
+                all_seen.add(rid)
+                collection_only_roms.append(rom)
+        return coll_rom_ids
+
+    async def _fetch_single_collection_roms_isolated(
+        self, collection: dict
+    ) -> tuple[list[int], list[dict]]:
+        """Fetch ROMs for a single collection without shared state mutation.
+
+        Returns (coll_rom_ids, roms) where roms have platform_name/slug set
+        and files stripped.  Caller is responsible for deduplication.
+        """
         cid = str(collection.get("id", ""))
         is_virtual = collection.get("is_virtual", False)
         coll_rom_ids: list[int] = []
+        roms: list[dict] = []
 
         offset = 0
         limit = self._PAGE_SIZE
@@ -899,18 +916,16 @@ class LibraryService:
             for rom in items:
                 rid = rom["id"]
                 coll_rom_ids.append(rid)
-                if rid not in all_seen:
-                    all_seen.add(rid)
-                    rom["platform_name"] = rom.get("platform_name", rom.get("platform_display_name", "Unknown"))
-                    rom["platform_slug"] = rom.get("platform_slug", rom.get("platform_fs_slug", ""))
-                    rom.pop("files", None)
-                    collection_only_roms.append(rom)
+                rom["platform_name"] = rom.get("platform_name", rom.get("platform_display_name", "Unknown"))
+                rom["platform_slug"] = rom.get("platform_slug", rom.get("platform_fs_slug", ""))
+                rom.pop("files", None)
+                roms.append(rom)
 
             if len(items) < limit:
                 break
             offset += limit
 
-        return coll_rom_ids
+        return coll_rom_ids, roms
 
     async def _fetch_collection_roms(
         self, seen_rom_ids: set[int], step: int = 0, total_steps: int = 0
@@ -921,8 +936,9 @@ class LibraryService:
         collection_only_roms: ROMs not already fetched via platforms
         collection_memberships: {collection_name: [all rom_ids in collection]}
 
-        When *step* and *total_steps* are provided (Improvement 2+3),
-        emits per-collection progress events.
+        Fetches collections concurrently (bounded by semaphore) for speed,
+        then merges and deduplicates results.
+        When *step* and *total_steps* are provided, emits progress events.
         """
         collection_only_roms: list[dict] = []
         collection_memberships: dict[str, list[int]] = {}
@@ -939,44 +955,62 @@ class LibraryService:
             self._log_debug(
                 f"Collection metadata: {len(user_collections)} user, {len(franchise_collections)} franchise"
             )
-            all_seen = set(seen_rom_ids)  # Copy so we don't mutate caller's set
 
             # Build list of enabled collections to fetch
             enabled_list = [
                 c for c in user_collections + franchise_collections
                 if str(c.get("id", "")) in enabled_ids
             ]
-            collections_done = 0
             collections_total = len(enabled_list)
+            collections_done = 0
 
-            for c in user_collections + franchise_collections:
-                cid = str(c.get("id", ""))
-                if cid not in enabled_ids:
-                    self._log_debug(f"  Skipping collection '{c.get('name', cid)}' (id={cid}, not enabled)")
-                    continue
+            # Concurrent fetch with bounded semaphore
+            _COLLECTION_CONCURRENCY = 6
+            sem = asyncio.Semaphore(_COLLECTION_CONCURRENCY)
 
-                coll_name = c.get("name", cid)
-                is_virtual = c.get("is_virtual", False)
-                self._log_debug(f"  Fetching collection '{coll_name}' (id={cid}, virtual={is_virtual})")
-
-                coll_rom_ids = await self._fetch_single_collection_roms(c, all_seen, collection_only_roms)
-
-                if coll_rom_ids:
-                    collection_memberships[coll_name] = coll_rom_ids
-                    self._log_debug(f"  Collection '{coll_name}': {len(coll_rom_ids)} ROMs")
-
-                # Improvement 2: emit per-collection progress
-                collections_done += 1
-                if step > 0:
-                    await self._emit_progress(
-                        "collections",
-                        current=collections_done,
-                        total=collections_total,
-                        message=f"Collections {collections_done}/{collections_total} ({coll_name})",
-                        step=step,
-                        total_steps=total_steps,
-                        sub_phase=f"collection:{coll_name}",
+            async def _fetch_one(c: dict) -> tuple[str, list[int], list[dict]]:
+                nonlocal collections_done
+                cname = c.get("name", str(c.get("id", "")))
+                async with sem:
+                    self._log_debug(
+                        f"  Fetching collection '{cname}' "
+                        f"(id={c.get('id')}, virtual={c.get('is_virtual', False)})"
                     )
+                    rom_ids, roms = await self._fetch_single_collection_roms_isolated(c)
+
+                    collections_done += 1
+                    if step > 0:
+                        await self._emit_progress(
+                            "collections",
+                            current=collections_done,
+                            total=collections_total,
+                            message=f"Collections {collections_done}/{collections_total} ({cname})",
+                            step=step,
+                            total_steps=total_steps,
+                            sub_phase=f"collection:{cname}",
+                        )
+                    return cname, rom_ids, roms
+
+            results = await asyncio.gather(
+                *[_fetch_one(c) for c in enabled_list],
+                return_exceptions=True,
+            )
+
+            # Merge results and deduplicate
+            all_seen = set(seen_rom_ids)
+            for result in results:
+                if isinstance(result, Exception):
+                    self._logger.warning(f"Collection fetch failed: {result}")
+                    continue
+                cname, rom_ids, roms = result
+                if rom_ids:
+                    collection_memberships[cname] = rom_ids
+                    self._log_debug(f"  Collection '{cname}': {len(rom_ids)} ROMs")
+                for rom in roms:
+                    rid = rom["id"]
+                    if rid not in all_seen:
+                        all_seen.add(rid)
+                        collection_only_roms.append(rom)
 
         except RommUnsupportedError:
             self._logger.info("Collections not supported on this RomM version")
