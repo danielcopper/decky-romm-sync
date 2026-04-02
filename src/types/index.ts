@@ -198,6 +198,7 @@ export interface SyncApplyDoneData {
   total_platforms: number;
   total_shortcuts: number;
   total_removals: number;
+  remove_on_unsync?: boolean;
 }
 
 export interface FirmwareFile {

@@ -174,6 +174,7 @@ async function startProcessingLoop(): Promise<void> {
     let globalTotal = 0;
     let cancelled = false;
     let doneReceived = false;
+    let removeOnUnsync = true;  // Assume true unless backend says otherwise
 
     // ── Track active names for stale cleanup at the end ──────
     const activePlatforms = new Set<string>();
@@ -189,6 +190,7 @@ async function startProcessingLoop(): Promise<void> {
         // ── sync_apply_done: no more events coming ───────────
         if (item.type === "done") {
           doneReceived = true;
+          removeOnUnsync = item.data.remove_on_unsync ?? true;
           // Use the done event's totals for global progress if not already set
           if (globalTotal === 0) {
             globalTotal = item.data.total_shortcuts + item.data.total_removals;
@@ -401,7 +403,11 @@ async function startProcessingLoop(): Promise<void> {
     } // outer while (!doneReceived && !cancelled)
 
     // ── Clean stale collections ───────────────────────────────
-    if (!cancelled) {
+    // Only remove stale collections if removeOnUnsync is enabled.
+    // When the removal guard is active (removeOnUnsync=false), shortcuts
+    // for disabled platforms are preserved, so their collections should
+    // be preserved too.
+    if (!cancelled && removeOnUnsync) {
       try {
         if (typeof collectionStore !== "undefined") {
           const hostname = await getHostname();
@@ -443,6 +449,8 @@ async function startProcessingLoop(): Promise<void> {
       } catch (e) {
         logError(`Stale collection cleanup failed: ${e}`);
       }
+    } else if (!cancelled && !removeOnUnsync) {
+      logInfo("Stale collection cleanup skipped (remove_on_unsync is disabled)");
     }
 
     // ── Finalize: report to backend ──────────────────────────

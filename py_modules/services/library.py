@@ -1334,6 +1334,7 @@ class LibraryService:
             "total_platforms": total_platforms,
             "total_shortcuts": total_shortcuts,
             "total_removals": len(stale_rom_ids),
+            "remove_on_unsync": self._settings.get("remove_on_unsync", True),
         })
         self._logger.info(
             f"Per-platform emission complete: {total_platforms} platforms, "
