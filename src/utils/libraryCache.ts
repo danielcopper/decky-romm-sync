@@ -121,14 +121,15 @@ async function fetchCollections(): Promise<CollectionsCache> {
       getCollections(),
       getSettings(),
     ]);
+    const collections = collResult.collections ?? [];
     _collectionsCache = {
       success: collResult.success,
-      collections: collResult.collections,
+      collections,
       message: collResult.message,
       error_code: collResult.error_code,
       platformGroups: !!settingsResult.collection_create_platform_groups,
     };
-    logInfo(`Library prefetch: ${collResult.collections.length} collections cached`);
+    logInfo(`Library prefetch: ${collections.length} collections cached`);
   } catch (e) {
     _collectionsCache = { success: false, collections: [], platformGroups: false, serverOffline: false } as CollectionsCache;
     logError(`Library prefetch collections failed: ${e}`);
