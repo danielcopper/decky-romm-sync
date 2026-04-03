@@ -422,9 +422,14 @@ export function removeAppsFromAllCollections(appIds: number[]): void {
       try {
         const matching = overviews.filter((o) => coll.apps?.has(o.appid));
         if (matching.length > 0) {
-          coll.AsDragDropCollection().RemoveApps(matching);
-          logInfo(`Removed ${matching.length} apps from collection "${coll.displayName}"`);
-          cleaned += matching.length;
+          const dd = coll.AsDragDropCollection?.();
+          if (dd) {
+            dd.RemoveApps(matching);
+            logInfo(`Removed ${matching.length} apps from collection "${coll.displayName}"`);
+            cleaned += matching.length;
+          } else {
+            logWarn(`Cannot clean "${coll.displayName}": AsDragDropCollection returned null`);
+          }
         }
       } catch (e) {
         logWarn(`Failed to clean collection "${coll.displayName}": ${e}`);
@@ -447,8 +452,13 @@ async function drainAndDelete(coll: any, label: string): Promise<void> {
   try {
     const apps = coll.allApps;
     if (apps && apps.length > 0) {
-      logInfo(`Draining ${apps.length} apps from "${label}" before deletion`);
-      coll.AsDragDropCollection().RemoveApps(apps);
+      const dd = coll.AsDragDropCollection?.();
+      if (dd) {
+        logInfo(`Draining ${apps.length} apps from "${label}" before deletion`);
+        dd.RemoveApps(apps);
+      } else {
+        logWarn(`Cannot drain "${label}": AsDragDropCollection returned null (built-in collection?)`);
+      }
     }
   } catch (e) {
     logWarn(`Failed to drain apps from "${label}": ${e}`);
