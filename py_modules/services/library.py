@@ -425,9 +425,9 @@ class LibraryService:
             "estimated_total_roms": sum(platform_counts.values()),
         })
 
-        # Emit per-platform events instead of a single monolithic sync_apply
-        await self._emit_per_platform(
-            shortcuts_data=delta["new"],
+        # Emit per-platform events for delta apply
+        await self._emit_per_platform_delta(
+            new_shortcuts=delta["new"],
             changed_shortcuts=delta["changed"],
             stale_rom_ids=delta["remove_rom_ids"],
             collection_memberships=self._pending_collection_memberships,
@@ -1213,14 +1213,8 @@ class LibraryService:
                 "estimated_total_roms": estimated_total_roms,
             })
 
-            # ── Phase 2: Concurrent fetch of all platform ROMs ───
+            # ── Phase 2: Per-platform fetch → build → emit pipeline ──
             total_platforms = len(platforms)
-            await self._emit_progress(
-                "roms",
-                message=f"Fetching ROMs from {total_platforms} platforms...",
-                total=estimated_total_roms,
-                platforms_total=total_platforms,
-            )
             last_sync = self._state.get("last_sync")
             registry = self._state.get("shortcut_registry", {})
             self._eta.start()
@@ -1241,26 +1235,69 @@ class LibraryService:
                 "estimated_total_roms": estimated_total_roms,
             }
 
-            with self._perf.time_phase("fetch_roms"):
-                tasks = [
-                    self._fetch_one_platform(platform, registry, last_sync, sem, progress)
-                    for platform in platforms
-                ]
-                results = await asyncio.gather(*tasks)
+            platform_rom_ids: set[int] = set()
+            all_shortcuts_data: list[dict] = []
+            shortcuts_before = 0
+            total_roms_fetched = 0
+            sorted_platforms = sorted(platforms, key=lambda p: p.get("name", ""))
 
-            if sem.adjustments:
-                self._perf.set_gauge("fetch_final_concurrency", sem.limit)
-                self._logger.info(
-                    f"Fetch concurrency adapted: {self._FETCH_CONCURRENCY} \u2192 {sem.limit} "
-                    f"({len(sem.adjustments)} adjustment(s))"
-                )
+            with self._perf.time_phase("fetch_and_apply_platforms"):
+                for i, platform in enumerate(sorted_platforms):
+                    self._check_cancelling()
+                    platform_name = platform.get("name", platform.get("display_name", "Unknown"))
 
-            all_roms: list[dict] = [rom for platform_roms in results for rom in platform_roms]
-            self._check_cancelling()
-            self._perf.set_gauge("total_roms_fetched", len(all_roms))
-            self._logger.info(f"Fetched {len(all_roms)} ROMs from {len(platforms)} platforms")
+                    # 2a. Fetch this platform's ROMs
+                    with self._perf.time_operation(f"platform:{platform.get('slug', '')}"):
+                        platform_roms = await self._fetch_one_platform(
+                            platform, registry, last_sync, sem, progress
+                        )
 
-            platform_rom_ids: set[int] = {r["id"] for r in all_roms}
+                    # 2b. Build shortcut data for this platform
+                    platform_shortcuts = self._build_shortcuts_data(platform_roms)
+
+                    # 2c. Accumulate IDs for stale detection + collection dedup
+                    for rom in platform_roms:
+                        platform_rom_ids.add(rom["id"])
+                    total_roms_fetched += len(platform_roms)
+
+                    # 2d. Cache metadata
+                    if self._metadata_service is not None:
+                        for rom in platform_roms:
+                            rom_id_str = str(rom["id"])
+                            self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
+                            self._metadata_service.mark_metadata_dirty()
+
+                    # 2e. Store in _pending_sync for report_sync_results
+                    for sd in platform_shortcuts:
+                        self._pending_sync[sd["rom_id"]] = sd
+                    all_shortcuts_data.extend(platform_shortcuts)
+
+                    # 2f. Emit per-platform event — frontend applies immediately
+                    await self._emit("sync_apply_platform", {
+                        "platform_name": platform_name,
+                        "platform_index": i + 1,
+                        "total_platforms": total_platforms,
+                        "total_shortcuts_all": estimated_total_roms,
+                        "shortcuts_before": shortcuts_before,
+                        "shortcuts": platform_shortcuts,
+                        "rom_count": len(platform_shortcuts),
+                    })
+                    shortcuts_before += len(platform_shortcuts)
+
+                    self._logger.info(
+                        f"Platform {i + 1}/{total_platforms}: {platform_name} "
+                        f"({len(platform_shortcuts)} shortcuts emitted)"
+                    )
+
+                    # Small delay between emissions to avoid overwhelming the event bus
+                    if i < total_platforms - 1:
+                        await asyncio.sleep(0.05)
+
+            if self._metadata_service is not None:
+                self._metadata_service.flush_metadata_if_dirty()
+
+            self._perf.set_gauge("total_roms_fetched", total_roms_fetched)
+            self._logger.info(f"Fetched {total_roms_fetched} ROMs from {len(platforms)} platforms")
 
             # ── Phase 3: Fetch collection-only ROMs ──────────
             if has_collections:
@@ -1272,65 +1309,81 @@ class LibraryService:
                     total=enabled_count,
                     message=f"Fetching collections (0/{enabled_count})...",
                 )
+            collection_memberships: dict = {}
             with self._perf.time_phase("fetch_collections"):
                 collection_only_roms, collection_memberships = await self._fetch_collection_roms(
                     platform_rom_ids,
                     emit_progress=has_collections,
                 )
-            all_roms.extend(collection_only_roms)
 
-            # ── Phase 4: Build shortcuts ─────────────────────
-            with self._perf.time_phase("prepare_shortcuts"):
-                shortcuts_data = self._build_shortcuts_data(all_roms)
-                shortcuts_data.sort(key=lambda sd: sd.get("platform_name", ""))
+            # Build shortcuts for collection-only ROMs and emit as a batch
+            if collection_only_roms:
+                coll_shortcuts = self._build_shortcuts_data(collection_only_roms)
+                for sd in coll_shortcuts:
+                    self._pending_sync[sd["rom_id"]] = sd
+                all_shortcuts_data.extend(coll_shortcuts)
+                if self._metadata_service is not None:
+                    for rom in collection_only_roms:
+                        rom_id_str = str(rom["id"])
+                        self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
+                        self._metadata_service.mark_metadata_dirty()
+                    self._metadata_service.flush_metadata_if_dirty()
+                total_roms_fetched += len(collection_only_roms)
+
+            # Emit collection memberships
+            if collection_memberships:
+                await self._emit("sync_apply_collections", {
+                    "collection_memberships": {
+                        cname: [int(rid) for rid in rids]
+                        for cname, rids in collection_memberships.items()
+                    },
+                    "total_collections": len(collection_memberships),
+                })
+                self._logger.info(
+                    f"Emitted sync_apply_collections: {len(collection_memberships)} collections"
+                )
+
             self._check_cancelling()
 
-            # Cache metadata
-            if self._metadata_service is not None:
-                for rom in all_roms:
-                    rom_id_str = str(rom["id"])
-                    self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
-                    self._metadata_service.mark_metadata_dirty()
-                self._metadata_service.flush_metadata_if_dirty()
-            self._log_debug(f"Metadata cached for {len(all_roms)} ROMs")
+            # ── Phase 4: Stale reconciliation ────────────────
+            # Compute stale detection using the accumulated ID set
+            all_current_ids = platform_rom_ids | {r["id"] for r in collection_only_roms}
+            stale_rom_ids: list[int] = []
+            if self._settings.get("remove_on_unsync", True):
+                stale_rom_ids = [
+                    int(rid)
+                    for rid in self._state["shortcut_registry"]
+                    if int(rid) not in all_current_ids
+                ]
 
-            # ── Phase 5: Compute stale + emit per-platform ───
-            current_rom_ids = {r["id"] for r in all_roms}
-            stale_rom_ids = [
-                int(rid)
-                for rid in self._state["shortcut_registry"]
-                if int(rid) not in current_rom_ids
-            ]
-            if not self._settings.get("remove_on_unsync", True):
-                stale_rom_ids = []
-
-            total_changes = len(shortcuts_data) + len(stale_rom_ids)
-            self._eta.start()
-            await self._emit_progress(
-                "applying",
-                total=total_changes,
-                message=f"Adding shortcuts 0/{total_changes}",
-            )
+            if stale_rom_ids:
+                await self._emit("sync_apply_removals", {
+                    "remove_rom_ids": stale_rom_ids,
+                })
+                self._logger.info(f"Emitted {len(stale_rom_ids)} removals")
 
             # Save sync stats
             self._state["sync_stats"] = {
                 "platforms": len(platforms),
-                "roms": len(all_roms),
+                "roms": total_roms_fetched,
             }
             self._save_state()
 
-            # Store pending data for report_sync_results
-            self._pending_sync = {sd["rom_id"]: sd for sd in shortcuts_data}
+            # Store remaining pending data for report_sync_results
             self._pending_collection_memberships = collection_memberships
             self._pending_platform_rom_ids = platform_rom_ids
 
-            # Emit per-platform events (collection_memberships excluded per-platform,
-            # will be emitted as sync_apply_collections after all platforms)
-            await self._emit_per_platform(
-                shortcuts_data=shortcuts_data,
-                changed_shortcuts=None,
-                stale_rom_ids=stale_rom_ids,
-                collection_memberships=collection_memberships,
+            # Signal frontend that all events have been emitted
+            total_shortcuts = len(all_shortcuts_data)
+            await self._emit("sync_apply_done", {
+                "total_platforms": total_platforms,
+                "total_shortcuts": total_shortcuts,
+                "total_removals": len(stale_rom_ids),
+                "remove_on_unsync": self._settings.get("remove_on_unsync", True),
+            })
+            self._logger.info(
+                f"Sync emission complete: {total_platforms} platforms, "
+                f"{total_shortcuts} shortcuts, {len(stale_rom_ids)} removals"
             )
         except Exception as e:
             import traceback
@@ -1354,41 +1407,46 @@ class LibraryService:
             if self._sync_progress.get("phase") != "error" and self._sync_progress.get("running"):
                 self._start_safety_timeout()
 
-    async def _emit_per_platform(
+    async def _finish_sync(self, message):
+        self._sync_progress = {
+            "running": False,
+            "phase": "cancelled",
+            "current": self._sync_progress.get("current", 0),
+            "total": self._sync_progress.get("total", 0),
+            "message": message,
+        }
+        await self._emit("sync_progress", self._sync_progress)
+        self._sync_state = SyncState.IDLE
+        self._logger.info(message)
+
+    async def _emit_per_platform_delta(
         self,
-        shortcuts_data: list,
+        new_shortcuts: list,
         changed_shortcuts: list | None,
         stale_rom_ids: list,
         collection_memberships: dict,
     ):
-        """Emit per-platform sync_apply_platform events.
+        """Emit per-platform events for the delta-apply flow (sync_apply_delta).
 
         Groups shortcuts by platform_name, emits one event per platform so the
-        frontend can process each platform (shortcuts → artwork) before starting
-        the next one.  Collection memberships are emitted separately via
-        sync_apply_collections after all platforms.  Removals are emitted via
-        sync_apply_removals.  A final sync_apply_done event signals completion.
+        frontend can process each platform before starting the next.
+        Collection memberships, removals, and done are emitted separately.
         """
         from collections import defaultdict
 
-        # Group new shortcuts by platform
         new_by_platform: dict[str, list] = defaultdict(list)
-        for sd in shortcuts_data:
+        for sd in new_shortcuts:
             new_by_platform[sd.get("platform_name", "Unknown")].append(sd)
 
-        # Group changed shortcuts by platform
         changed_by_platform: dict[str, list] = defaultdict(list)
         if changed_shortcuts:
             for sd in changed_shortcuts:
                 changed_by_platform[sd.get("platform_name", "Unknown")].append(sd)
 
-        # Build ordered platform list (union of new + changed)
-        platform_set: set[str] = set(new_by_platform.keys()) | set(changed_by_platform.keys())
+        platform_set = set(new_by_platform.keys()) | set(changed_by_platform.keys())
         sorted_platforms = sorted(platform_set)
         total_platforms = len(sorted_platforms)
-        total_shortcuts = len(shortcuts_data) + (len(changed_shortcuts) if changed_shortcuts else 0)
-
-        # Cumulative shortcut counter for global progress offset
+        total_shortcuts = len(new_shortcuts) + (len(changed_shortcuts) if changed_shortcuts else 0)
         shortcuts_before = 0
 
         for i, pname in enumerate(sorted_platforms):
@@ -1408,19 +1466,15 @@ class LibraryService:
                 event_data["changed_shortcuts"] = p_changed
 
             await self._emit("sync_apply_platform", event_data)
-
             shortcuts_before += len(p_new) + len(p_changed)
 
             self._logger.info(
                 f"Emitted platform {i + 1}/{total_platforms}: {pname} "
                 f"({len(p_new)} new, {len(p_changed)} changed)"
             )
-
-            # Small delay between emissions to avoid overwhelming the event bus
             if i < total_platforms - 1:
                 await asyncio.sleep(0.05)
 
-        # Emit collection memberships as a single event
         if collection_memberships:
             await self._emit("sync_apply_collections", {
                 "collection_memberships": {
@@ -1429,40 +1483,16 @@ class LibraryService:
                 },
                 "total_collections": len(collection_memberships),
             })
-            self._logger.info(
-                f"Emitted sync_apply_collections: {len(collection_memberships)} collections"
-            )
 
-        # Emit removals as a separate event
         if stale_rom_ids:
-            await self._emit("sync_apply_removals", {
-                "remove_rom_ids": stale_rom_ids,
-            })
-            self._logger.info(f"Emitted {len(stale_rom_ids)} removals")
+            await self._emit("sync_apply_removals", {"remove_rom_ids": stale_rom_ids})
 
-        # Signal frontend that all events have been emitted
         await self._emit("sync_apply_done", {
             "total_platforms": total_platforms,
             "total_shortcuts": total_shortcuts,
             "total_removals": len(stale_rom_ids),
             "remove_on_unsync": self._settings.get("remove_on_unsync", True),
         })
-        self._logger.info(
-            f"Per-platform emission complete: {total_platforms} platforms, "
-            f"{total_shortcuts} shortcuts, {len(stale_rom_ids)} removals"
-        )
-
-    async def _finish_sync(self, message):
-        self._sync_progress = {
-            "running": False,
-            "phase": "cancelled",
-            "current": self._sync_progress.get("current", 0),
-            "total": self._sync_progress.get("total", 0),
-            "message": message,
-        }
-        await self._emit("sync_progress", self._sync_progress)
-        self._sync_state = SyncState.IDLE
-        self._logger.info(message)
 
     # ── Sync results (called by frontend) ────────────────────
 

@@ -648,16 +648,16 @@ class TestShortcutDataFormat:
             if original_emit:
                 decky.emit = original_emit
 
-        # Find the sync_apply emission
+        # Find the sync_apply_platform emission (new per-platform flow)
         sync_items = None
         for event, args in emitted_events:
-            if event == "sync_apply" and args:
+            if event == "sync_apply_platform" and args:
                 sync_items = args[0] if args else None
                 break
 
-        assert sync_items is not None, "sync_apply event should have been emitted"
+        assert sync_items is not None, "sync_apply_platform event should have been emitted"
         required_fields = {"rom_id", "name", "exe", "start_dir", "launch_options", "platform_name", "platform_slug"}
-        for item in sync_items.get("shortcuts", sync_items):
+        for item in sync_items.get("shortcuts", []):
             for field in required_fields:
                 assert field in item, f"Missing field '{field}' in shortcut data"
 
@@ -1936,7 +1936,7 @@ class TestDoSyncErrorHandling:
         from unittest.mock import AsyncMock
 
         plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._fetch_and_prepare = AsyncMock(side_effect=Exception("API down"))
+        plugin._sync_service._fetch_enabled_platforms = AsyncMock(side_effect=Exception("API down"))
         plugin._sync_service._emit_progress = AsyncMock()
 
         await plugin._sync_service._do_sync()
@@ -1955,7 +1955,7 @@ class TestDoSyncErrorHandling:
         decky.emit.reset_mock()
 
         plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._fetch_and_prepare = AsyncMock(side_effect=asyncio.CancelledError("Sync cancelled"))
+        plugin._sync_service._fetch_enabled_platforms = AsyncMock(side_effect=asyncio.CancelledError("Sync cancelled"))
         plugin._sync_service._emit_progress = AsyncMock()
 
         # CancelledError is caught, _finish_sync called, then re-raised
@@ -1975,10 +1975,9 @@ class TestDoSyncErrorHandling:
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         async def failing_fetch():
-            # Successfully fetch but then fail during artwork
             raise RuntimeError("Unexpected error")
 
-        plugin._sync_service._fetch_and_prepare = failing_fetch
+        plugin._sync_service._fetch_enabled_platforms = failing_fetch
 
         await plugin._sync_service._do_sync()
 
