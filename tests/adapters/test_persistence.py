@@ -317,3 +317,68 @@ class TestLoadingEdgeCases:
         settings_path = os.path.join(adapter._settings_dir, "settings.json")
         mode = os.stat(settings_path).st_mode & 0o777
         assert mode == 0o600
+
+
+# ── State backup (.prev) ──────────────────────────────────────────────────────
+
+
+class TestStateBackup:
+    def test_save_state_creates_prev_backup(self, adapter):
+        """After two saves, state.json.prev should match the first save."""
+        adapter.save_state({"shortcut_registry": {"1": {"app_id": 100}}})
+        adapter.save_state({"shortcut_registry": {"1": {"app_id": 100}, "2": {"app_id": 200}}})
+        prev_path = os.path.join(adapter._runtime_dir, "state.json.prev")
+        assert os.path.exists(prev_path)
+        with open(prev_path) as f:
+            prev = json.load(f)
+        assert "1" in prev["shortcut_registry"]
+        assert "2" not in prev["shortcut_registry"]
+
+    def test_save_state_first_save_no_prev(self, adapter):
+        """First save should not create a .prev (nothing to back up)."""
+        adapter.save_state({"shortcut_registry": {}})
+        prev_path = os.path.join(adapter._runtime_dir, "state.json.prev")
+        assert not os.path.exists(prev_path)
+
+    def test_load_state_warns_on_empty_registry_with_prev(self, adapter, caplog):
+        """Loading empty state when .prev has entries should log a warning."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(state_path, "w") as f:
+            json.dump({"shortcut_registry": {}, "version": 1}, f)
+        with open(prev_path, "w") as f:
+            json.dump({"shortcut_registry": {"1": {"app_id": 100}}, "version": 1}, f)
+        with caplog.at_level(logging.WARNING):
+            adapter.load_state({"shortcut_registry": {}})
+        assert "possible data loss" in caplog.text.lower()
+        assert "1 entries" in caplog.text
+
+    def test_load_state_no_warning_when_prev_also_empty(self, adapter, caplog):
+        """No warning if both state and .prev have empty registries."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(state_path, "w") as f:
+            json.dump({"shortcut_registry": {}, "version": 1}, f)
+        with open(prev_path, "w") as f:
+            json.dump({"shortcut_registry": {}, "version": 1}, f)
+        with caplog.at_level(logging.WARNING):
+            adapter.load_state({"shortcut_registry": {}})
+        assert "possible data loss" not in caplog.text.lower()
+
+    def test_load_state_no_warning_when_registry_has_entries(self, adapter, caplog):
+        """No warning if current state has a non-empty registry."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        with open(state_path, "w") as f:
+            json.dump({"shortcut_registry": {"1": {"app_id": 100}}, "version": 1}, f)
+        with caplog.at_level(logging.WARNING):
+            adapter.load_state({"shortcut_registry": {}})
+        assert "possible data loss" not in caplog.text.lower()
+
+    def test_load_state_no_warning_when_no_prev(self, adapter, caplog):
+        """No warning if .prev doesn't exist (fresh install)."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        with open(state_path, "w") as f:
+            json.dump({"shortcut_registry": {}, "version": 1}, f)
+        with caplog.at_level(logging.WARNING):
+            adapter.load_state({"shortcut_registry": {}})
+        assert "possible data loss" not in caplog.text.lower()

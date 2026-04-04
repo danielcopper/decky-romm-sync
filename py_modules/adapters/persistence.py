@@ -10,6 +10,7 @@ import fcntl
 import json
 import logging
 import os
+import shutil
 
 _STATE_VERSION = 1
 _METADATA_CACHE_VERSION = 1
@@ -122,6 +123,9 @@ class PersistenceAdapter:
 
         Returns the merged dict.  If the file is missing or corrupt the
         returned dict is a copy of *defaults* with the version stamp.
+
+        If the loaded registry is empty but a ``.prev`` backup has entries,
+        a WARNING is logged to aid diagnosis of unexpected state loss.
         """
         state_path = os.path.join(self._runtime_dir, "state.json")
         state = dict(defaults)
@@ -136,12 +140,42 @@ class PersistenceAdapter:
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         state.setdefault("version", _STATE_VERSION)
+
+        # Detect unexpected state loss by comparing with .prev backup
+        registry = state.get("shortcut_registry", {})
+        if not registry:
+            prev_path = state_path + ".prev"
+            try:
+                with open(prev_path) as f:
+                    prev = json.load(f)
+                prev_count = len(prev.get("shortcut_registry", {})) if isinstance(prev, dict) else 0
+                if prev_count > 0:
+                    self._logger.warning(
+                        "State registry is empty but .prev backup has %d entries — "
+                        "possible data loss. Backup at: %s",
+                        prev_count,
+                        prev_path,
+                    )
+            except (json.JSONDecodeError, OSError):
+                pass
+
         return state
 
     def save_state(self, data: dict) -> None:
-        """Atomic write of *data* to ``state.json`` with flock, stamping version."""
+        """Atomic write of *data* to ``state.json`` with flock, stamping version.
+
+        Maintains a rolling ``.prev`` backup of the previous state for
+        recovery after unexpected data loss.
+        """
         data["version"] = _STATE_VERSION
         state_path = os.path.join(self._runtime_dir, "state.json")
+        # Keep a rolling backup before overwriting
+        if os.path.exists(state_path):
+            prev_path = state_path + ".prev"
+            try:
+                shutil.copy2(state_path, prev_path)
+            except OSError as exc:
+                self._logger.debug("Failed to create state .prev backup: %s", exc)
         self._locked_write(state_path, data)
 
     # ------------------------------------------------------------------
