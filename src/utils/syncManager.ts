@@ -12,7 +12,7 @@ import {
 } from "../api/backend";
 import { getExistingRomMShortcuts, addShortcut, removeShortcut } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
-import { appendToCollections, appendToRomMCollections, getHostname, clearPlatformCollection } from "./collections";
+import { appendToCollections, appendToRomMCollections, getHostname, clearPlatformCollection, isCollectionSafeToDelete } from "./collections";
 import {
   initAccordion,
   setActivePlatform,
@@ -518,6 +518,7 @@ async function startProcessingLoop(): Promise<void> {
             return match ? !activeRomMCollections.has(match[1]) : false;
           });
           for (const c of staleRomm) {
+            if (!isCollectionSafeToDelete(c)) continue;
             logInfo(`Removing stale RomM collection "${c.displayName}"`);
             await c.Delete();
           }

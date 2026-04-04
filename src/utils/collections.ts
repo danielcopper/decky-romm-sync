@@ -10,6 +10,25 @@ import { logInfo, logWarn, logError, getCollectionRegistry, saveCollectionRegist
 
 let _hostname = "";
 
+// ── System collection protection ──────────────────────────────
+// These are Steam's built-in collection IDs that must NEVER be deleted.
+// Attempting to delete them corrupts Steam's internal collection state
+// and causes persistent GetAppCountWithToolsFilter errors.
+const SYSTEM_COLLECTION_IDS = new Set([
+  "favorite", "hidden", "uncategorized",
+  "type-games", "type-software", "type-dlc", "type-music", "type-tools",
+  "desktop", "recent-activity",
+]);
+
+function isSystemCollection(coll: any): boolean {
+  return SYSTEM_COLLECTION_IDS.has(coll.id);
+}
+
+/** Check if a collection is safe to delete (not a system collection). */
+export function isCollectionSafeToDelete(coll: any): boolean {
+  return !isSystemCollection(coll);
+}
+
 // ── Safety cap ────────────────────────────────────────────────
 // Maximum number of NEW collections a single operation can create.
 // If this limit is hit, the operation stops creating further collections
@@ -428,6 +447,10 @@ export function removeAppsFromAllCollections(appIds: number[]): void {
  * a collection whose referenced apps have already been removed.
  */
 async function drainAndDelete(coll: any, label: string): Promise<void> {
+  if (isSystemCollection(coll)) {
+    logWarn(`REFUSED to delete system collection "${label}" (id=${coll.id}) — this would corrupt Steam's Library`);
+    return;
+  }
   try {
     const apps = coll.allApps;
     if (apps && apps.length > 0) {
@@ -511,6 +534,11 @@ export async function clearAllRomMCollections(): Promise<void> {
 
     // Primary: delete every collection tracked in the registry
     for (const [steamId, key] of Object.entries(_registry)) {
+      if (SYSTEM_COLLECTION_IDS.has(steamId)) {
+        logWarn(`Registry contains system collection id="${steamId}" (key=${key}) — removing from registry without deleting`);
+        unregisterCollection(steamId);
+        continue;
+      }
       const coll = collectionStore.GetCollection(steamId);
       if (coll) {
         logInfo(`Deleting registered collection "${coll.displayName}" (key=${key}, id=${steamId})`);
@@ -521,18 +549,16 @@ export async function clearAllRomMCollections(): Promise<void> {
     }
 
     // Fallback: sweep by name patterns for legacy collections.
+    // ONLY match the canonical "RomM: " prefix — never use broad patterns
+    // that could match system or unrelated user collections.
     const isRomMCollection = (name: string): boolean => {
-      // Match the canonical "RomM: " prefix
-      if (name.startsWith("RomM: ")) return true;
-      // Match named collection bracket pattern — e.g. "[Favorites]" or "[Best of SNES]"
-      if (/^\[.+\]/.test(name)) return true;
-      return false;
+      return name.startsWith("RomM: ");
     };
 
-    // Also do a second pass over ALL userCollections to catch registry-phase
-    // collections that Delete() didn't fully remove from the observable list
+    // Second pass over userCollections to catch legacy collections not in the registry
     const allRomM = collectionStore.userCollections.filter((c: any) => {
       if (deletedIds.has(c.id)) return false;
+      if (isSystemCollection(c)) return false;
       return isRomMCollection(c.displayName);
     });
 
