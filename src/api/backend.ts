@@ -82,7 +82,6 @@ export const saveCollectionSync = callable<[string, boolean], { success: boolean
 export const setAllCollectionsSync = callable<[boolean, string | null], { success: boolean }>("set_all_collections_sync");
 export const saveCollectionPlatformGroups = callable<[boolean], { success: boolean }>("save_collection_platform_groups");
 export const saveRemoveOnUnsync = callable<[boolean], { success: boolean }>("save_remove_on_unsync");
-export const saveCollectionNaming = callable<[string, boolean], { success: boolean }>("save_collection_naming");
 export const getCollectionRegistry = callable<[], Record<string, string>>("get_collection_registry");
 export const saveCollectionRegistry = callable<[Record<string, string>], { success: boolean }>("save_collection_registry");
 export const getRegistryPlatforms = callable<[], { platforms: RegistryPlatform[] }>("get_registry_platforms");

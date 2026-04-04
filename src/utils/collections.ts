@@ -2,12 +2,8 @@
  * Steam collection management for RomM platforms.
  * Uses Steam's internal collectionStore API.
  *
- * Collection naming is configurable:
- *   - prefix (default: "") e.g. "RomM: "
- *   - hostname suffix (default: false) e.g. " (steamdeck)"
- *
- * Platform collection:  {prefix}{PlatformName}{hostnameSuffix}
- * Named collection:     {prefix}[{CollectionName}]{hostnameSuffix}
+ * Collection names are machine-scoped to prevent cross-device conflicts
+ * when Steam Cloud syncs collections: "RomM: Platform (hostname)"
  */
 
 import { logInfo, logWarn, logError, getCollectionRegistry, saveCollectionRegistry } from "../api/backend";
@@ -33,15 +29,6 @@ function canCreateNewCollection(name: string): boolean {
   }
   _newCollectionsThisOp++;
   return true;
-}
-
-// ── Configurable naming ───────────────────────────────────────
-let _prefix = "";
-let _includeHostname = false;
-
-export function setCollectionNaming(prefix: string, includeHostname: boolean): void {
-  _prefix = prefix;
-  _includeHostname = includeHostname;
 }
 
 // ── Collection registry ───────────────────────────────────────
@@ -81,18 +68,14 @@ export function invalidateCollectionRegistry(): void {
   _registryLoaded = false;
 }
 
-async function hostnameSuffix(): Promise<string> {
-  if (!_includeHostname) return "";
-  const h = await getHostname();
-  return ` (${h})`;
-}
-
 async function platformCollectionName(platformName: string): Promise<string> {
-  return `${_prefix}${platformName}${await hostnameSuffix()}`;
+  const hostname = await getHostname();
+  return `RomM: ${platformName} (${hostname})`;
 }
 
 async function namedCollectionName(collName: string): Promise<string> {
-  return `${_prefix}[${collName}]${await hostnameSuffix()}`;
+  const hostname = await getHostname();
+  return `RomM: [${collName}] (${hostname})`;
 }
 
 export async function getHostname(): Promise<string> {
@@ -178,8 +161,6 @@ async function platformLegacyNames(platformName: string): Promise<string[]> {
     `RomM: ${platformName} (${hostname})`,
     `RomM: ${platformName}`,
     platformName,
-    `${_prefix}${platformName}`,
-    `${_prefix}${platformName} (${hostname})`,
   ];
 }
 
@@ -190,8 +171,6 @@ async function namedLegacyNames(collName: string): Promise<string[]> {
     `RomM: [${collName}] (${hostname})`,
     `RomM: [${collName}]`,
     `[${collName}]`,
-    `${_prefix}[${collName}]`,
-    `${_prefix}[${collName}] (${hostname})`,
   ];
 }
 
@@ -542,15 +521,11 @@ export async function clearAllRomMCollections(): Promise<void> {
     }
 
     // Fallback: sweep by name patterns for legacy collections.
-    // Build explicit matchers so an empty _prefix doesn't match every collection.
     const isRomMCollection = (name: string): boolean => {
-      // Always match the canonical "RomM: " prefix (legacy hard-coded format)
+      // Match the canonical "RomM: " prefix
       if (name.startsWith("RomM: ")) return true;
-      // Match current prefix (if non-empty) — e.g. "MyPrefix: SNES"
-      if (_prefix && name.startsWith(_prefix)) return true;
       // Match named collection bracket pattern — e.g. "[Favorites]" or "[Best of SNES]"
       if (/^\[.+\]/.test(name)) return true;
-      if (_prefix && name.startsWith(_prefix + "[")) return true;
       return false;
     };
 

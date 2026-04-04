@@ -28,7 +28,6 @@ import {
   saveLogLevel,
   fixRetroarchInputDriver,
   saveRemoveOnUnsync,
-  saveCollectionNaming,
   ensureDeviceRegistered,
   getSaveSortMigrationStatus,
   migrateSaveSortFiles,
@@ -39,7 +38,6 @@ import type { MigrationStatus, SaveSortMigrationStatus, ConflictDetail } from ".
 import { getMigrationState, setMigrationStatus, clearMigration, onMigrationChange } from "../utils/migrationStore";
 import { getSaveSortMigrationState, setSaveSortMigrationStatus as setStoreSaveSortStatus, clearSaveSortMigration, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import type { SaveSyncSettings as SaveSyncSettingsType, ConflictMode, RetroArchInputCheck } from "../types";
-import { setCollectionNaming } from "../utils/collections";
 
 // Module-level state survives component remounts (modal close can remount QAM)
 const pendingEdits: { url?: string; username?: string; password?: string } = {};
@@ -214,8 +212,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // Advanced state
   const [logLevel, setLogLevel] = useState("warn");
   const [removeOnUnsync, setRemoveOnUnsync] = useState(true);
-  const [collectionPrefix, setCollectionPrefix] = useState("");
-  const [collectionHostnameSuffix, setCollectionHostnameSuffix] = useState(false);
 
   useEffect(() => {
     getSettings().then((s) => {
@@ -228,11 +224,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       setSteamInputMode(s.steam_input_mode || "default");
       setLogLevel(s.log_level ?? "warn");
       setRemoveOnUnsync(s.remove_on_unsync ?? true);
-      const prefix = s.collection_prefix ?? "";
-      const hostSuffix = s.collection_hostname_suffix ?? false;
-      setCollectionPrefix(prefix);
-      setCollectionHostnameSuffix(hostSuffix);
-      setCollectionNaming(prefix, hostSuffix);
       if (s.retroarch_input_check) {
         setRetroarchWarning(s.retroarch_input_check);
       }
@@ -904,34 +895,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         )}
       </PanelSection>
       <PanelSection title="Advanced">
-        <PanelSectionRow>
-          <TextField
-            label="Collection Name Prefix"
-            description='Text prepended to collection names (e.g. "RomM: "). Leave blank for no prefix.'
-            value={collectionPrefix}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              const v = e.target.value;
-              setCollectionPrefix(v);
-              setCollectionNaming(v, collectionHostnameSuffix);
-              saveCollectionNaming(v, collectionHostnameSuffix);
-            }}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Include Hostname in Collections"
-            description='Append device hostname to collection names (e.g. "SNES (steamdeck)")'
-            checked={collectionHostnameSuffix}
-            onChange={(value) => {
-              setCollectionHostnameSuffix(value);
-              setCollectionNaming(collectionPrefix, value);
-              saveCollectionNaming(collectionPrefix, value).catch(() => {
-                setCollectionHostnameSuffix(!value);
-                setCollectionNaming(collectionPrefix, !value);
-              });
-            }}
-          />
-        </PanelSectionRow>
         <PanelSectionRow>
           <ToggleField
             label="Remove Shortcuts on Unsync"

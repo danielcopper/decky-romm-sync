@@ -17,10 +17,9 @@ import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
-import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, getSettings, testConnection, logError, logInfo } from "./api/backend";
+import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, testConnection, logError, logInfo } from "./api/backend";
 import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
-import { setCollectionNaming } from "./utils/collections";
 import { prefetchLibraryData, invalidateLibraryCache } from "./utils/libraryCache";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
@@ -161,11 +160,9 @@ export default definePlugin(() => {
     }
   })();
 
-  // Load collection naming settings so collections use correct names from first sync
+  // Load settings and init connection for first sync
   (async () => {
     try {
-      const s = await getSettings();
-      setCollectionNaming(s.collection_prefix ?? "", s.collection_hostname_suffix ?? false);
       // Ensure API version is set before prefetching (test_connection calls
       // set_version on the backend, which enables the v4.7 collections API).
       await testConnection();
