@@ -22,6 +22,7 @@ import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { prefetchLibraryData, invalidateLibraryCache } from "./utils/libraryCache";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
+import { cleanupOrphanedCollections } from "./utils/collections";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads";
@@ -48,7 +49,12 @@ const QAMPanel: FC = () => {
 };
 
 export default definePlugin(() => {
-  registerGameDetailPatch();
+  // IMPORTANT: Do NOT register route patches synchronously here!
+  // registerGameDetailPatch() triggers Decky's RouterHook to re-render all
+  // routes, which re-mounts the Library page. If the hidden collection contains
+  // orphaned app IDs (non-existent shortcuts), Steam crashes with
+  // "Cannot read properties of undefined (reading 'GetAppCountWithToolsFilter')".
+  // We must clean orphaned collections FIRST, then register patches.
   registerLaunchInterceptor();
 
   // Load metadata cache, register store patches, and populate RomM app ID set.
@@ -173,12 +179,18 @@ export default definePlugin(() => {
     }
   })();
 
-  // Startup health check: warn if Steam has an abnormal number of user collections
-  // (catches runaway duplication before it crashes the Library)
+  // Startup: clean orphaned collections, then register route patches.
+  // Route patches MUST wait until orphaned collection cleanup is done,
+  // because registerGameDetailPatch triggers a route re-render that
+  // crashes if orphaned app IDs exist in the hidden collection.
   (async () => {
     try {
-      // Wait for collectionStore to be available (Steam may still be loading)
-      await new Promise((r) => setTimeout(r, 5000));
+      // Wait for collectionStore + appStore to be available
+      await new Promise((r) => setTimeout(r, 3000));
+      // Remove orphaned apps from hidden collection and delete empty collections
+      // (these cause GetAppCountWithToolsFilter crashes in Library)
+      await cleanupOrphanedCollections();
+
       if (typeof collectionStore !== "undefined" && collectionStore.userCollections) {
         const count = collectionStore.userCollections.length;
         if (count > 200) {
@@ -188,8 +200,12 @@ export default definePlugin(() => {
         }
       }
     } catch {
-      // Non-critical
+      // Non-critical — still register patches below
     }
+
+    // NOW safe to register route patches after orphan cleanup
+    registerGameDetailPatch();
+    logInfo("Game detail patch registered (post-cleanup)");
   })();
 
   const onSyncComplete = (data: {

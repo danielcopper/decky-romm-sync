@@ -576,3 +576,84 @@ export async function clearAllRomMCollections(): Promise<void> {
     logError(`Failed to clear collections: ${e}`);
   }
 }
+
+/**
+ * Emergency startup cleanup: remove orphaned user collections whose apps
+ * ALL reference non-existent shortcuts. These orphans cause Steam's Library
+ * to crash with GetAppCountWithToolsFilter errors.
+ *
+ * This runs once at startup via collectionStore API (in-memory), which is
+ * the only reliable cleanup path — file-level edits get overwritten by
+ * Steam Cloud sync.
+ */
+export async function cleanupOrphanedCollections(): Promise<void> {
+  try {
+    if (typeof collectionStore === "undefined") return;
+    if (typeof appStore === "undefined") return;
+
+    // Phase 1: Clean orphaned app IDs from the hidden collection.
+    // Non-existent app IDs in hidden cause GetAppCountWithToolsFilter crashes
+    // when any Decky plugin triggers a Steam route re-render.
+    const hiddenColl = collectionStore.userCollections.find(
+      (c: any) => c.id === "hidden"
+    );
+    if (hiddenColl) {
+      const hiddenApps = hiddenColl.allApps ?? [];
+      const orphanedHiddenApps = hiddenApps.filter((app: any) => {
+        const overview = appStore.GetAppOverviewByAppID(app.appid);
+        return !overview || !overview.display_name;
+      });
+      if (orphanedHiddenApps.length > 0) {
+        logInfo(`Orphan cleanup: removing ${orphanedHiddenApps.length} orphaned apps from hidden collection`);
+        const dd = hiddenColl.AsDragDropCollection?.();
+        if (dd) {
+          dd.RemoveApps(orphanedHiddenApps);
+          logInfo(`Orphan cleanup: cleaned hidden collection`);
+        }
+      }
+    }
+
+    // Phase 2: Delete fully-orphaned user collections (all apps missing)
+    const orphaned: any[] = [];
+    for (const coll of collectionStore.userCollections) {
+      if (isSystemCollection(coll)) continue;
+
+      // Only clean uc-* collections (user-created, not RomM-prefixed)
+      // RomM collections are handled by clearAllRomMCollections
+      if (!coll.id.startsWith("uc-") && coll.displayName.startsWith("RomM: ")) continue;
+
+      // Check if ALL apps in this collection are non-existent
+      const apps = coll.allApps;
+      if (!apps || apps.length === 0) {
+        orphaned.push(coll);
+        continue;
+      }
+
+      let allMissing = true;
+      for (const app of apps) {
+        const overview = appStore.GetAppOverviewByAppID(app.appid);
+        if (overview && overview.display_name) {
+          allMissing = false;
+          break;
+        }
+      }
+      if (allMissing) {
+        orphaned.push(coll);
+      }
+    }
+
+    if (orphaned.length === 0) {
+      logInfo("Orphan cleanup: no orphaned collections found");
+      return;
+    }
+
+    logInfo(`Orphan cleanup: removing ${orphaned.length} orphaned collections`);
+    for (const coll of orphaned) {
+      logInfo(`Orphan cleanup: deleting "${coll.displayName}" (id=${coll.id}, apps=${coll.allApps?.length ?? 0})`);
+      await drainAndDelete(coll, coll.displayName);
+    }
+    logInfo(`Orphan cleanup: done, removed ${orphaned.length} collections`);
+  } catch (e) {
+    logError(`Orphan cleanup failed: ${e}`);
+  }
+}
