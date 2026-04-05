@@ -14,7 +14,7 @@ import { DownloadQueue } from "./components/DownloadQueue";
 import { initSyncManager } from "./utils/syncManager";
 import { setSyncProgress } from "./utils/syncProgress";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
-import { unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
+import { unregisterGameDetailPatch, registerRomMAppId, deferredRegisterGameDetailPatch } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
 import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, testConnection, logError, logInfo } from "./api/backend";
@@ -23,7 +23,7 @@ import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { prefetchLibraryData, invalidateLibraryCache } from "./utils/libraryCache";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 // cleanupOrphanedCollections import removed — no longer needed since
-// registerGameDetailPatch is disabled (it was the trigger for the crash)
+// collection state corruption has been fixed (system collection protection)
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads";
@@ -50,12 +50,12 @@ const QAMPanel: FC = () => {
 };
 
 export default definePlugin(() => {
-  // NOTE: registerGameDetailPatch() is intentionally NOT called here.
-  // It triggers Decky's RouterHook to re-render all routes, which causes
+  // NOTE: registerGameDetailPatch() is NOT called synchronously here.
+  // It triggers Decky's RouterHook to re-render all routes, which can cause
   // "Cannot read properties of undefined (reading 'GetAppCountWithToolsFilter')"
-  // crashes in the Steam Library page. The game detail customization feature
-  // is disabled until the root cause (orphaned app IDs in VDF + route re-render
-  // timing) is resolved. All core sync functionality works without it.
+  // crashes if Steam's stores aren't initialized yet.  Instead, the deferred
+  // registration in the init loop below waits for the backend + Steam UI
+  // readiness before registering, and auto-disables if the crash is detected.
   registerLaunchInterceptor();
 
   // Load metadata cache, register store patches, and populate RomM app ID set.
@@ -118,6 +118,17 @@ export default definePlugin(() => {
         }
         initAttempt++;
       }
+    }
+
+    // Once the backend is reachable and app IDs are loaded, attempt to
+    // register the game detail page patch.  Steam's UI stores should be
+    // initialised by now (the backend retry loop already consumed several
+    // seconds), but deferredRegisterGameDetailPatch retries with its own
+    // back-off and auto-disables if the Library crash is ever detected.
+    if (initDone) {
+      deferredRegisterGameDetailPatch((msg) => {
+        try { logInfo(msg); } catch { console.log(`[RomM] ${msg}`); }
+      });
     }
   })();
 

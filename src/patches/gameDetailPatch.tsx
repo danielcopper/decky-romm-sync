@@ -223,3 +223,115 @@ export function unregisterGameDetailPatch() {
     gamePatch = null;
   }
 }
+
+// ── Safe deferred registration ────────────────────────────────
+// The Library page crash (GetAppCountWithToolsFilter) occurs when addPatch
+// triggers a re-render before Steam's stores are fully initialized.  These
+// helpers defer registration until stores are ready and auto-disable if the
+// error is ever observed at runtime.
+
+let patchAutoDisabled = false;
+
+/**
+ * Check that Steam's global UI stores exist and are functional.
+ * If they aren't ready, calling addPatch would trigger a Library crash.
+ */
+function isSteamUIReady(): boolean {
+  try {
+    if (typeof appStore === "undefined" || appStore === null) return false;
+    if (typeof collectionStore === "undefined" || collectionStore === null) return false;
+    if (!Array.isArray(collectionStore.userCollections)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Register the game detail patch with error handling.
+ * A temporary window error listener catches the async React re-render
+ * crash and auto-disables the feature if it fires.
+ */
+function safeRegisterGameDetailPatch(): boolean {
+  if (patchAutoDisabled) return false;
+  if (gamePatch) return true; // already registered
+
+  if (!isSteamUIReady()) return false;
+
+  const errorHandler = (event: ErrorEvent) => {
+    if (event.message?.includes("GetAppCountWithToolsFilter")) {
+      patchAutoDisabled = true;
+      console.error(
+        "[RomM] Game detail patch caused GetAppCountWithToolsFilter error — auto-disabling",
+      );
+      try {
+        unregisterGameDetailPatch();
+      } catch {
+        /* swallow */
+      }
+    }
+  };
+
+  try {
+    globalThis.addEventListener("error", errorHandler);
+    registerGameDetailPatch();
+
+    // Keep the listener for 5 s — React re-render should finish well within
+    setTimeout(() => {
+      globalThis.removeEventListener("error", errorHandler);
+    }, 5000);
+
+    return true;
+  } catch (e) {
+    patchAutoDisabled = true;
+    console.error("[RomM] Game detail patch registration threw:", e);
+    try {
+      unregisterGameDetailPatch();
+    } catch {
+      /* swallow */
+    }
+    globalThis.removeEventListener("error", errorHandler);
+    return false;
+  }
+}
+
+/**
+ * Attempt deferred registration of the game detail patch.
+ * Retries with back-off until Steam UI is ready or max attempts reached.
+ */
+export async function deferredRegisterGameDetailPatch(
+  log: (msg: string) => void,
+): Promise<void> {
+  const DELAYS = [3000, 5000, 10000, 20000];
+
+  for (let attempt = 0; attempt <= DELAYS.length; attempt++) {
+    if (patchAutoDisabled) {
+      log("Game detail patch was auto-disabled due to a previous error");
+      return;
+    }
+
+    if (safeRegisterGameDetailPatch()) {
+      log(`Game detail patch registered successfully (attempt ${attempt + 1})`);
+      return;
+    }
+
+    if (attempt < DELAYS.length) {
+      log(
+        `Steam UI not ready for game detail patch, retrying in ${DELAYS[attempt] / 1000}s`,
+      );
+      await new Promise((r) => setTimeout(r, DELAYS[attempt]));
+    }
+  }
+
+  log("Game detail patch: max attempts reached — Steam UI stores not available");
+}
+
+/** Whether the game detail page customisation is active right now. */
+export function isGameDetailPatchActive(): boolean {
+  return gamePatch !== null && !patchAutoDisabled;
+}
+
+/** Whether the feature was disabled due to a detected crash. */
+export function isGameDetailPatchDisabled(): boolean {
+  return patchAutoDisabled;
+}
