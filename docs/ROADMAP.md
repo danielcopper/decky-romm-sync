@@ -377,9 +377,9 @@
 
 ---
 
-## Phase 4 — Advanced Features & Content
+## Phase 4 — Advanced Plugin Features
 
-*New capabilities that go beyond sync performance.*
+*The final plugin feature that requires careful re-introduction.*
 
 ### Feature 15: Game Detail Page Re-enablement ⬜
 
@@ -403,83 +403,9 @@
 
 ---
 
-### Feature 16: Elite "Hall of Fame" Collections ⬜
+### Out of Scope (Not Plugin Work)
 
-**Value:** Premium curated discovery — ~20 games per platform, 25–30 platforms, with strict quality gates. A tier above the existing "Best Of" collections.
-
-**Scope:**
-- Research phase: compile candidate lists from IGDB, Metacritic, editorial lists, LaunchBox ratings
-- Quality gates: critical consensus (2+ sources ≥85), original platform only, Deck verified, complete metadata, ROM quality (No-Intro/Redump preferred)
-- Create collections in RomM via API
-- Sync to Steam Deck via existing collection sync
-
-**Files:** Server-side (RomM API calls), no plugin code changes needed
-
-**Tests:** Verify collections appear on Deck, verify membership counts
-
-**Risk:** Low — uses existing collection infrastructure
-
-**Dependency:** None (can be done in parallel with any phase)
-
----
-
-### Feature 17: External Ratings Import ⬜
-
-**Value:** Users see quality ratings for every game in their library.
-
-**Scope:**
-- IGDB ratings fetch via API (we have client ID/secret)
-- RAWG ratings fetch via API (fallback/supplement)
-- Aggregate into RomM metadata via `PUT /api/roms/{id}`
-- Display in game detail page (when Feature 15 re-enables it)
-
-**Files:** Server-side scripts (`games/evaluation-stack/scripts/`), no plugin code changes
-
-**Tests:** API response parsing, rating normalization, RomM metadata update verification
-
-**Risk:** Low — server-side import only
-
-**Dependency:** Feature 15 for display (import can happen independently)
-
----
-
-### Feature 18: Platform Rollout Continuation (73 → 150+) ⬜
-
-**Value:** Broader library coverage — more platforms available for sync.
-
-**Scope:**
-- Continue batch imports via LaunchBox bridge (`launchbox-romm-bridge.py`)
-- Prioritize Tier 1 platforms not yet added (3DO, Jaguar, Neo Geo Pocket, Wonderswan Color, etc.)
-- Follow the proven 12-step playbook in `games/platform-rollout-playbook.md`
-- Target 150+ platforms (doubling current 73)
-
-**Files:** Server-side (LaunchBox bridge scripts, Docker bind mounts)
-
-**Tests:** Per-platform verification: ROM counts, artwork %, metadata %, test downloads on Deck
-
-**Risk:** Low — repeatable process already proven on 73 platforms
-
-**Dependency:** None (can proceed in parallel with any phase)
-
----
-
-### Feature 19: RetroDECK QA Execution ⬜
-
-**Value:** Every synced game actually works when you press Play. Zero "download but can't launch" experiences.
-
-**Scope:**
-- Test 100% of platform launches on Deck (at least 1 game per platform)
-- Fix broken emulator configs, missing BIOS, incorrect launch commands
-- Document known-working and known-broken platforms
-- See `games/RETRODECK-QA-PLAN.md` for full plan
-
-**Files:** Emulator configs on Deck, BIOS files, ES-DE custom systems XML
-
-**Tests:** Manual launch verification per platform
-
-**Risk:** Low — testing only, fixes are config changes
-
-**Dependency:** None
+The following are server-side RomM/LaunchBox work or Deck-side emulator config work. They benefit from the plugin but don't involve plugin code changes. **Tracked in [`games/GAMING-ROADMAP.md`](../../../games/GAMING-ROADMAP.md).**
 
 ---
 
@@ -490,12 +416,12 @@ Phase 1 (Foundation):       1 → 2 → 3 → 4        (sequential, each builds 
 Phase 2 (Performance):      5 → 6 → 7 → 8 → 9    (5 first — simplest; 7,8 are the big wins)
 Phase 3 (UX Overhaul):      10 → 11 → 12 → 13     (10 is quick; 11+12 are paired; 13 depends on 12)
                             14 — optional, evaluate after 12
-Phase 4 (Advanced):         15, 16, 17, 18, 19     (independent, can be parallelized)
+Phase 4 (Advanced):         15                      (game detail — high risk, do last)
 ```
 
 **Critical path:** 1 → 5 → 7 → 10 → 12 → 13 (instrumentation → performance → UX)
 
-**Parallel tracks (can proceed alongside anything):** 16, 17, 18, 19 (server-side/content work)
+**Total plugin PRs:** 15 (plus Feature 14 if needed)
 
 ---
 
