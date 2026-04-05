@@ -586,31 +586,89 @@ export async function clearAllRomMCollections(): Promise<void> {
  * the only reliable cleanup path — file-level edits get overwritten by
  * Steam Cloud sync.
  */
-export async function cleanupOrphanedCollections(): Promise<void> {
+export async function cleanupOrphanedCollections(): Promise<boolean> {
+  let cleanedOrphans = false;
   try {
-    if (typeof collectionStore === "undefined") return;
-    if (typeof appStore === "undefined") return;
+    if (typeof collectionStore === "undefined") return false;
+    if (typeof appStore === "undefined") return false;
 
-    // Phase 1: Clean orphaned app IDs from the hidden collection.
-    // Non-existent app IDs in hidden cause GetAppCountWithToolsFilter crashes
-    // when any Decky plugin triggers a Steam route re-render.
-    const hiddenColl = collectionStore.userCollections.find(
-      (c: any) => c.id === "hidden"
-    );
-    if (hiddenColl) {
-      const hiddenApps = hiddenColl.allApps ?? [];
-      const orphanedHiddenApps = hiddenApps.filter((app: any) => {
-        const overview = appStore.GetAppOverviewByAppID(app.appid);
-        return !overview || !overview.display_name;
-      });
-      if (orphanedHiddenApps.length > 0) {
-        logInfo(`Orphan cleanup: removing ${orphanedHiddenApps.length} orphaned apps from hidden collection`);
-        const dd = hiddenColl.AsDragDropCollection?.();
-        if (dd) {
-          dd.RemoveApps(orphanedHiddenApps);
-          logInfo(`Orphan cleanup: cleaned hidden collection`);
+    // Phase 1: Clean orphaned app IDs from the user-collections storage.
+    // The hidden collection in user-collections.hidden.added may contain
+    // non-Steam shortcut IDs that no longer exist. These cause
+    // GetAppCountWithToolsFilter crashes during route re-renders.
+    //
+    // CRITICAL: collectionStore.GetCollection("hidden").allApps does NOT
+    // include these orphaned IDs — they only exist in the raw storage
+    // (m_mapCollectionsFromStorage["hidden"].m_setApps).
+    // We must modify m_setApps and m_setAddedManually directly.
+    try {
+      const storageMap = (collectionStore as any).m_mapCollectionsFromStorage;
+      if (storageMap) {
+        const hiddenEntry = storageMap.get?.("hidden") ?? storageMap["hidden"];
+        if (hiddenEntry) {
+          const setApps = hiddenEntry.m_setApps;
+          const setAdded = hiddenEntry.m_setAddedManually;
+          logInfo(`Phase 1: hidden storageEntry has m_setApps=${setApps?.length ?? setApps?.size ?? "??"}, m_setAddedManually=${setAdded?.length ?? setAdded?.size ?? "??"}`);
+
+          // Find orphaned IDs: non-Steam shortcut IDs (>= 2^31) not in deckDesktopApps
+          const orphanIds: number[] = [];
+          const allAppIds = setApps instanceof Set ? Array.from(setApps) :
+                            (Array.isArray(setApps) ? setApps :
+                            (setApps?.keys ? Array.from(setApps.keys()) : []));
+
+          for (const id of allAppIds) {
+            const isNonSteam = id >= 2147483648;
+            if (!isNonSteam) continue; // Steam games are fine
+            const inDeckApps = collectionStore.deckDesktopApps?.apps?.has?.(id) ?? false;
+            const overview = appStore.GetAppOverviewByAppID(id);
+            const hasName = overview?.display_name || overview?.strDisplayName;
+            if (!inDeckApps && !hasName) {
+              orphanIds.push(id);
+              logInfo(`Phase 1: orphaned non-Steam ID ${id} (inDeckApps=${inDeckApps}, hasName=${!!hasName})`);
+            }
+          }
+
+          if (orphanIds.length > 0) {
+            logInfo(`Phase 1: removing ${orphanIds.length} orphaned IDs from hidden storage entry`);
+
+            // Remove from m_setApps (may be Set, ObservableSet, or Array)
+            if (typeof setApps?.delete === "function") {
+              for (const id of orphanIds) setApps.delete(id);
+              logInfo(`Phase 1: removed from m_setApps via .delete()`);
+            } else if (Array.isArray(setApps)) {
+              hiddenEntry.m_setApps = setApps.filter((id: number) => !orphanIds.includes(id));
+              logInfo(`Phase 1: removed from m_setApps via filter`);
+            }
+
+            // Remove from m_setAddedManually
+            if (typeof setAdded?.delete === "function") {
+              for (const id of orphanIds) setAdded.delete(id);
+            } else if (Array.isArray(setAdded)) {
+              hiddenEntry.m_setAddedManually = setAdded.filter((id: number) => !orphanIds.includes(id));
+            }
+
+            // Also remove from m_rgApps if it exists
+            if (Array.isArray(hiddenEntry.m_rgApps)) {
+              hiddenEntry.m_rgApps = hiddenEntry.m_rgApps.filter(
+                (app: any) => !orphanIds.includes(app?.appid ?? app)
+              );
+            }
+
+            cleanedOrphans = true;
+            const s = hiddenEntry.m_setApps;
+            const remaining = s?.size ?? s?.length ?? "??";
+            logInfo(`Phase 1: hidden storage entry now has ${remaining} apps (cleaned ${orphanIds.length} orphans)`);
+          } else {
+            logInfo(`Phase 1: no orphaned IDs found in hidden storage entry (${allAppIds.length} total apps)`);
+          }
+        } else {
+          logInfo("Phase 1: no hidden entry in m_mapCollectionsFromStorage");
         }
+      } else {
+        logInfo("Phase 1: m_mapCollectionsFromStorage not available");
       }
+    } catch (e) {
+      logWarn(`Phase 1: storage cleanup failed: ${e}`);
     }
 
     // Phase 2: Delete fully-orphaned user collections (all apps missing)
@@ -644,7 +702,7 @@ export async function cleanupOrphanedCollections(): Promise<void> {
 
     if (orphaned.length === 0) {
       logInfo("Orphan cleanup: no orphaned collections found");
-      return;
+      return cleanedOrphans;
     }
 
     logInfo(`Orphan cleanup: removing ${orphaned.length} orphaned collections`);
@@ -656,4 +714,5 @@ export async function cleanupOrphanedCollections(): Promise<void> {
   } catch (e) {
     logError(`Orphan cleanup failed: ${e}`);
   }
+  return cleanedOrphans;
 }

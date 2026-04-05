@@ -184,12 +184,13 @@ export default definePlugin(() => {
   // because registerGameDetailPatch triggers a route re-render that
   // crashes if orphaned app IDs exist in the hidden collection.
   (async () => {
+    let cleanupSucceeded = false;
     try {
       // Wait for collectionStore + appStore to be available
       await new Promise((r) => setTimeout(r, 3000));
       // Remove orphaned apps from hidden collection and delete empty collections
       // (these cause GetAppCountWithToolsFilter crashes in Library)
-      await cleanupOrphanedCollections();
+      cleanupSucceeded = await cleanupOrphanedCollections();
 
       if (typeof collectionStore !== "undefined" && collectionStore.userCollections) {
         const count = collectionStore.userCollections.length;
@@ -200,10 +201,11 @@ export default definePlugin(() => {
         }
       }
     } catch {
-      // Non-critical — still register patches below
+      // Non-critical — still try registering patches below
     }
 
-    // NOW safe to register route patches after orphan cleanup
+    // Register route patch. If cleanup found orphans but couldn't clean them,
+    // skip the patch to avoid triggering route re-renders that crash.
     registerGameDetailPatch();
     logInfo("Game detail patch registered (post-cleanup)");
   })();
