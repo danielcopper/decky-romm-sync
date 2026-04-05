@@ -14,7 +14,7 @@ import { DownloadQueue } from "./components/DownloadQueue";
 import { initSyncManager } from "./utils/syncManager";
 import { setSyncProgress } from "./utils/syncProgress";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
-import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
+import { unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
 import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, testConnection, logError, logInfo } from "./api/backend";
@@ -22,7 +22,8 @@ import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { prefetchLibraryData, invalidateLibraryCache } from "./utils/libraryCache";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
-import { cleanupOrphanedCollections } from "./utils/collections";
+// cleanupOrphanedCollections import removed — no longer needed since
+// registerGameDetailPatch is disabled (it was the trigger for the crash)
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads";
@@ -49,12 +50,12 @@ const QAMPanel: FC = () => {
 };
 
 export default definePlugin(() => {
-  // IMPORTANT: Do NOT register route patches synchronously here!
-  // registerGameDetailPatch() triggers Decky's RouterHook to re-render all
-  // routes, which re-mounts the Library page. If the hidden collection contains
-  // orphaned app IDs (non-existent shortcuts), Steam crashes with
-  // "Cannot read properties of undefined (reading 'GetAppCountWithToolsFilter')".
-  // We must clean orphaned collections FIRST, then register patches.
+  // NOTE: registerGameDetailPatch() is intentionally NOT called here.
+  // It triggers Decky's RouterHook to re-render all routes, which causes
+  // "Cannot read properties of undefined (reading 'GetAppCountWithToolsFilter')"
+  // crashes in the Steam Library page. The game detail customization feature
+  // is disabled until the root cause (orphaned app IDs in VDF + route re-render
+  // timing) is resolved. All core sync functionality works without it.
   registerLaunchInterceptor();
 
   // Load metadata cache, register store patches, and populate RomM app ID set.
@@ -177,37 +178,6 @@ export default definePlugin(() => {
     } catch (e) {
       logError(`Failed to load collection naming settings: ${e}`);
     }
-  })();
-
-  // Startup: clean orphaned collections, then register route patches.
-  // Route patches MUST wait until orphaned collection cleanup is done,
-  // because registerGameDetailPatch triggers a route re-render that
-  // crashes if orphaned app IDs exist in the hidden collection.
-  (async () => {
-    let cleanupSucceeded = false;
-    try {
-      // Wait for collectionStore + appStore to be available
-      await new Promise((r) => setTimeout(r, 3000));
-      // Remove orphaned apps from hidden collection and delete empty collections
-      // (these cause GetAppCountWithToolsFilter crashes in Library)
-      cleanupSucceeded = await cleanupOrphanedCollections();
-
-      if (typeof collectionStore !== "undefined" && collectionStore.userCollections) {
-        const count = collectionStore.userCollections.length;
-        if (count > 200) {
-          logError(`HEALTH CHECK WARNING: ${count} user collections detected — this is abnormally high and may crash Steam's Library. Check for collection duplication.`);
-        } else {
-          logInfo(`Collection health check: ${count} user collections (OK)`);
-        }
-      }
-    } catch {
-      // Non-critical — still try registering patches below
-    }
-
-    // Register route patch. If cleanup found orphans but couldn't clean them,
-    // skip the patch to avoid triggering route re-renders that crash.
-    registerGameDetailPatch();
-    logInfo("Game detail patch registered (post-cleanup)");
   })();
 
   const onSyncComplete = (data: {
