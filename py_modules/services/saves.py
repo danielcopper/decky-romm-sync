@@ -1336,6 +1336,41 @@ class SaveService:
 
         return {"success": True, "slots": result_slots, "active_slot": active_slot}
 
+    async def get_slot_saves(self, rom_id: int, slot: str) -> dict:
+        """Fetch server save files for a specific slot.
+
+        Used by the frontend to show save files when expanding an inactive slot panel.
+        Lightweight — no local file scanning or conflict detection.
+        """
+        rom_id = int(rom_id)
+        slot = str(slot).strip() if slot else ""
+
+        if not self._is_save_sync_enabled():
+            return {"success": False, "slot": slot, "saves": [], "error": "Save sync is disabled"}
+
+        device_id = self._get_server_device_id()
+
+        try:
+            server_saves: list[dict] = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
+                ),
+            )
+            saves = [
+                {
+                    "filename": s["file_name"],
+                    "id": s["id"],
+                    "size": s.get("file_size_bytes"),
+                    "updated_at": s.get("updated_at", ""),
+                    "emulator": s.get("emulator", ""),
+                }
+                for s in server_saves
+            ]
+            return {"success": True, "slot": slot, "saves": saves}
+        except Exception as e:
+            return {"success": False, "slot": slot, "saves": [], "error": str(e)}
+
     def set_game_slot(self, rom_id: int, slot: str) -> dict:
         """Set the active save slot for a specific game.
 
@@ -1364,6 +1399,128 @@ class SaveService:
         self.save_state()
         self._loop.create_task(self.check_save_status_background(rom_id))
         return {"success": True, "active_slot": resolved_slot}
+
+    def _check_slot_switch_readiness(self, rom_id: int) -> dict:
+        """Check whether it is safe to switch slots for this ROM.
+
+        A switch is unsafe if the user has local changes that have never been
+        synced (or have changed since the last sync) — switching would silently
+        discard those changes.
+
+        Returns ``{"ready": True}`` or
+        ``{"ready": False, "reason": str, "files": list[str]}``.
+        """
+        rom_id_str = str(rom_id)
+        save_state = self._save_sync_state["saves"].get(rom_id_str, {})
+        files_state = save_state.get("files", {})
+
+        pending: list[str] = []
+        local_files = self._find_save_files(rom_id)
+        for lf in local_files:
+            filename = lf["filename"]
+            file_state = files_state.get(filename, {})
+            last_sync_hash = file_state.get("last_sync_hash")
+            if last_sync_hash:
+                current_hash = self._file_md5(lf["path"])
+                if current_hash != last_sync_hash:
+                    pending.append(filename)
+            elif os.path.isfile(lf["path"]):
+                # File exists but was never synced — treat as pending
+                pending.append(filename)
+
+        if pending:
+            return {"ready": False, "reason": "pending_uploads", "files": pending}
+
+        return {"ready": True}
+
+    async def switch_slot(self, rom_id: int, new_slot: str) -> dict:
+        """Switch the active save slot with guards and immediate download sync.
+
+        Pre-checks (all must pass):
+        1. Save sync must be enabled.
+        2. ROM must be installed.
+        3. No local files with pending (unsynced) changes.
+
+        On success: updates ``active_slot``, downloads all saves for the new
+        slot from the server, then returns a fresh save status.
+        """
+        rom_id = int(rom_id)
+        rom_id_str = str(rom_id)
+
+        # 1. Save sync must be enabled
+        if not self._is_save_sync_enabled():
+            return {"success": False, "reason": "sync_disabled"}
+
+        # 2. Slot normalisation (empty → None for legacy mode)
+        slot_str = str(new_slot).strip() if new_slot else ""
+        resolved_slot: str | None = slot_str if slot_str else None
+
+        # 3. ROM must be installed
+        info = self._get_rom_save_info(rom_id)
+        if not info:
+            return {"success": False, "reason": "not_installed"}
+
+        saves_dir = info["saves_dir"]
+        system = info["system"]
+
+        # 4. Check for pending local changes (hashing — run in executor)
+        readiness = await self._loop.run_in_executor(None, self._check_slot_switch_readiness, rom_id)
+        if not readiness.get("ready"):
+            return {
+                "success": False,
+                "reason": readiness.get("reason", "pending_uploads"),
+                "files": readiness.get("files", []),
+            }
+
+        # 5. Fetch server saves for the new slot (also proves server is reachable)
+        device_id = self._get_server_device_id()
+        try:
+            all_server_saves: list[dict] = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
+                ),
+            )
+        except Exception:
+            return {"success": False, "reason": "server_unreachable"}
+
+        # Filter to the target slot (FakeSaveApi doesn't filter, real API may not either)
+        slot_saves = [s for s in all_server_saves if s.get("slot") == resolved_slot]
+
+        # 6. Update active slot in state
+        self.set_game_slot(rom_id, new_slot)
+
+        # 7. Download all saves for the new slot
+        if slot_saves:
+            await self._loop.run_in_executor(
+                None,
+                self._do_switch_downloads,
+                slot_saves,
+                saves_dir,
+                rom_id_str,
+                system,
+            )
+
+        # 8. Return fresh status
+        save_status = await self.get_save_status(rom_id)
+        return {"success": True, "save_status": save_status}
+
+    def _do_switch_downloads(
+        self,
+        slot_saves: list[dict],
+        saves_dir: str,
+        rom_id_str: str,
+        system: str,
+    ) -> None:
+        """Download all saves from *slot_saves* into *saves_dir*.
+
+        Runs synchronously — call via ``run_in_executor``.
+        """
+        for server_save in slot_saves:
+            filename = server_save.get("file_name", "")
+            if not filename:
+                continue
+            self._do_download_save(server_save, saves_dir, filename, rom_id_str, system)
 
     # ------------------------------------------------------------------
     # Save Setup Wizard

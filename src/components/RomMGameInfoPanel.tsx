@@ -13,8 +13,8 @@
  * CSS classes prefixed with `romm-panel-` are injected separately by styleInjector.
  */
 
-import { useState, useEffect, useRef, FC, createElement, ChangeEvent } from "react";
-import { ConfirmModal, DialogButton, Focusable, TextField, showModal } from "@decky/ui";
+import { useState, useEffect, useRef, FC, createElement } from "react";
+import { DialogButton, Focusable } from "@decky/ui";
 // DialogButton is natively focusable by Steam's gamepad engine (unlike Focusable
 // wrappers around non-interactive content, which don't register in this injection
 // context). Style as content sections, not buttons.
@@ -29,12 +29,12 @@ import {
   getAchievements,
   getAchievementProgress,
   getSaveSlots,
-  setGameSlot,
   isSaveTrackingConfigured,
   debugLog,
 } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
-import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, PendingConflict, Achievement, AchievementProgress, EarnedAchievement } from "../types";
+import { SavesTab } from "./SavesTab";
+import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, PendingConflict, Achievement, AchievementProgress, EarnedAchievement, SaveSlotSummary } from "../types";
 import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -65,7 +65,7 @@ interface PanelState {
   raId: number | null;
   slotConfirmed: boolean;
   activeSlot: string | null;
-  availableSlots: Array<{ slot: string; source?: "server" | "local"; count: number; latest_updated_at: string | null }>;
+  availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
 }
 
@@ -76,83 +76,6 @@ function formatReleaseDate(timestamp: number | null): string | null {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
 }
-
-/** Format an ISO datetime string as "22 Feb 2026, 14:32:15" */
-function formatSyncDateTime(isoStr: string | null): string {
-  if (!isoStr) return "Never synced";
-  const date = new Date(isoStr);
-  if (isNaN(date.getTime())) return "Never synced";
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const d = date.getDate();
-  const mon = months[date.getMonth()];
-  const y = date.getFullYear();
-  const h = String(date.getHours()).padStart(2, "0");
-  const m = String(date.getMinutes()).padStart(2, "0");
-  const s = String(date.getSeconds()).padStart(2, "0");
-  return `${d} ${mon} ${y}, ${h}:${m}:${s}`;
-}
-
-/** Display a slot name, using "(no slot)" for null/empty values */
-function displaySlot(slot: string | null): string {
-  if (slot === null || slot === "") return "(no slot)";
-  return slot;
-}
-
-/** Handle legacy-mode confirmation when empty slot name is submitted — extracted to reduce nesting depth. */
-function handleLegacyModeConfirm(
-  romId: number,
-  setState: React.Dispatch<React.SetStateAction<PanelState>>,
-): void {
-  showModal(createElement(ConfirmModal, {
-    strTitle: "Use Legacy Mode?",
-    strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
-    onOK: async () => {
-      const r = await setGameSlot(romId, "");
-      if (r.success) {
-        setState((prev) => ({ ...prev, activeSlot: null, conflicts: [] }));
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-      }
-    },
-  }));
-}
-
-/** Apply new slot to panel state after successful setGameSlot — extracted to reduce nesting depth. */
-function applyNewSlotState(
-  name: string,
-  setState: React.Dispatch<React.SetStateAction<PanelState>>,
-  romId: number,
-): void {
-  setState((prev) => ({
-    ...prev,
-    activeSlot: name,
-    conflicts: [],
-    availableSlots: prev.availableSlots.some((s) => s.slot === name)
-      ? prev.availableSlots
-      : [...prev.availableSlots, { slot: name, source: "local" as const, count: 0, latest_updated_at: null }],
-  }));
-  globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-}
-
-/** Modal for creating a new save slot — uses internal state for the text field. */
-const NewSlotModal: FC<{
-  closeModal?: () => void;
-  onSubmit: (name: string) => void;
-}> = ({ closeModal, onSubmit }) => {
-  const [value, setValue] = useState("");
-  return createElement(ConfirmModal, {
-    closeModal,
-    onOK: () => { onSubmit(value.trim()); },
-    strTitle: "New Save Slot",
-    bDisableBackgroundDismiss: true,
-  },
-    createElement(TextField, {
-      focusOnMount: true,
-      label: "Slot Name",
-      value,
-      onChange: (e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
-    } as any),
-  );
-};
 
 /** Refresh slot configuration and available slots — extracted to reduce nesting depth. */
 function refreshSlotState(
@@ -779,290 +702,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     );
   }
 
-  // --- Save Sync section (two-column layout: files left, slots right) ---
-  let saveSyncSection: ReturnType<typeof createElement> | null = null;
-  if (state.saveSyncEnabled) {
-    const hasConflict = state.conflicts.length > 0;
-    const fileCount = state.saveStatus?.files?.length ?? 0;
-
-    let syncStatusLabel: string;
-    let syncStatusColor: string;
-    if (hasConflict) {
-      syncStatusLabel = "Conflict detected";
-      syncStatusColor = "#d94126";
-    } else if (fileCount > 0) {
-      const lastCheck = state.saveStatus?.last_sync_check_at;
-      if (lastCheck) {
-        const diffMs = Date.now() - new Date(lastCheck).getTime();
-        const diffMin = Math.floor(diffMs / 60000);
-        if (diffMin < 1) syncStatusLabel = "Synced just now";
-        else if (diffMin < 60) syncStatusLabel = `Synced ${diffMin}m ago`;
-        else if (diffMin < 1440) syncStatusLabel = `Synced ${Math.floor(diffMin / 60)}h ago`;
-        else syncStatusLabel = `Synced ${Math.floor(diffMin / 1440)}d ago`;
-        syncStatusColor = "#5ba32b";
-      } else {
-        syncStatusLabel = "Not synced";
-        syncStatusColor = "#8f98a0";
-      }
-    } else {
-      syncStatusLabel = "No saves found";
-      syncStatusColor = "#8f98a0";
-    }
-
-    // --- Left column: Save Files ---
-    const leftColumnChildren: (ReturnType<typeof createElement> | null)[] = [];
-
-    if (state.activeSlot == null) {
-      leftColumnChildren.push(
-        createElement("div", {
-          key: "legacy-warning",
-          style: { padding: "8px", background: "rgba(255, 136, 0, 0.15)", borderRadius: "4px", border: "1px solid rgba(255, 136, 0, 0.3)", marginBottom: "8px", fontSize: "12px", color: "#ff8800" },
-        }, "This game uses legacy mode (no slot). Only one save version per game is supported."),
-      );
-    }
-
-    leftColumnChildren.push(
-      createElement("div", { key: "files-title", className: "romm-panel-section-title", style: { marginBottom: "8px" } }, "Save Files"),
-      createElement("div", {
-        key: "savesync-status-row",
-        className: "romm-panel-status-inline",
-      },
-        createElement("span", {
-          className: "romm-status-dot",
-          style: { backgroundColor: syncStatusColor },
-        }),
-        createElement("span", { className: "romm-panel-value" }, syncStatusLabel),
-      ),
-    );
-
-    // File count subtitle
-    if (fileCount > 0) {
-      leftColumnChildren.push(
-        createElement("div", {
-          key: "savesync-count",
-          className: "romm-panel-muted",
-          style: { marginTop: "4px" },
-        }, `${fileCount} save file${fileCount !== 1 ? "s" : ""} tracked`),
-      );
-    }
-
-    // Individual save file rows
-    if (state.saveStatus?.files && state.saveStatus.files.length > 0) {
-      leftColumnChildren.push(
-        createElement("div", { key: "save-file-list", className: "romm-panel-file-list" },
-          ...state.saveStatus.files.map((f) => {
-            // Determine status dot color
-            let dotColor: string;
-            if (f.status === "conflict") {
-              dotColor = "#d4a72c"; // orange for conflict
-            } else if (f.status === "upload" || f.status === "download") {
-              dotColor = "#d94126"; // red for pending
-            } else if (f.last_sync_at) {
-              dotColor = "#5ba32b"; // green for synced
-            } else {
-              dotColor = "#8f98a0"; // gray for no sync
-            }
-
-            const conflictForFile = state.conflicts.find((c) => c.filename === f.filename);
-            const fileRowChildren: ReturnType<typeof createElement>[] = [];
-
-            // Status dot + filename
-            fileRowChildren.push(
-              createElement("span", {
-                key: "dot",
-                className: "romm-status-dot",
-                style: { backgroundColor: dotColor },
-              }),
-            );
-            fileRowChildren.push(
-              createElement("span", { key: "name", className: "romm-panel-file-name" }, f.filename),
-            );
-
-            // Last synced datetime (use ROM-level check time — covers all files in the sync run)
-            const syncTime = state.saveStatus?.last_sync_check_at || f.last_sync_at;
-            fileRowChildren.push(
-              createElement("span", { key: "sync-time", className: "romm-panel-file-detail" },
-                `Synced: ${formatSyncDateTime(syncTime)}`,
-              ),
-            );
-
-            // Last changed datetime (file modification time)
-            if (f.local_mtime) {
-              fileRowChildren.push(
-                createElement("span", { key: "change-time", className: "romm-panel-file-detail" },
-                  `Changed: ${formatSyncDateTime(f.local_mtime)}`,
-                ),
-              );
-            }
-
-            // Conflict label (informational only)
-            if (f.status === "conflict" || conflictForFile) {
-              fileRowChildren.push(
-                createElement("span", { key: "conflict-label", className: "romm-panel-file-conflict" }, "Conflict"),
-              );
-            }
-
-            // Device sync info (v4.7+)
-            if (f.device_syncs && f.device_syncs.length > 0) {
-              const lastSyncer = f.device_syncs.reduce((latest, ds) => {
-                if (!latest) return ds;
-                if (!ds.last_synced_at) return latest;
-                if (!latest.last_synced_at) return ds;
-                return ds.last_synced_at > latest.last_synced_at ? ds : latest;
-              }, f.device_syncs[0]);
-
-              if (lastSyncer?.device_name) {
-                fileRowChildren.push(
-                  createElement("span", {
-                    key: "device-info",
-                    className: "romm-panel-file-detail",
-                    style: { color: "rgba(255, 255, 255, 0.5)" },
-                  }, `Last sync: ${lastSyncer.device_name}`),
-                );
-              }
-
-              if (f.is_current === false) {
-                fileRowChildren.push(
-                  createElement("span", {
-                    key: "not-current",
-                    className: "romm-panel-file-detail",
-                    style: { color: "#d4a72c" },
-                  }, "Newer version available on server"),
-                );
-              }
-            }
-
-            // Local path on its own line (full width via flex-wrap)
-            if (f.local_path) {
-              fileRowChildren.push(
-                createElement("span", {
-                  key: "path",
-                  className: "romm-panel-file-path",
-                  style: { flexBasis: "100%" },
-                }, f.local_path),
-              );
-            }
-
-            return createElement("div", { key: f.filename, className: "romm-panel-file-row" },
-              ...fileRowChildren,
-            );
-          }),
-        ),
-      );
-    }
-
-    // --- Right column: Slots ---
-    const rightColumnChildren: (ReturnType<typeof createElement> | null)[] = [];
-
-    rightColumnChildren.push(
-      createElement("div", { key: "slots-title", className: "romm-panel-section-title", style: { marginBottom: "8px" } }, "Slots"),
-    );
-
-    if (state.slotsLoading) {
-      rightColumnChildren.push(
-        createElement("div", { key: "slots-loading", className: "romm-panel-muted" }, "Loading slots..."),
-      );
-    } else if (state.availableSlots.length > 0 || state.activeSlot == null) {
-      // If active slot is null (legacy mode), ensure it appears in the list
-      const slotsToShow = state.activeSlot == null && !state.availableSlots.some((s) => s.slot == null)
-        ? [{ slot: null as any, source: "local" as const, count: 0, latest_updated_at: null }, ...state.availableSlots]
-        : state.availableSlots;
-      for (const s of slotsToShow) {
-        const isActive = state.activeSlot === s.slot || (state.activeSlot == null && s.slot == null);
-        const isLocal = s.source === "local";
-        let dotColor = "#8f98a0";
-        if (isActive) dotColor = "#5ba32b";
-        else if (isLocal) dotColor = "#d4a72c";
-        const textColor = isLocal ? "rgba(255,255,255,0.6)" : "#fff";
-        const slotLabel = `${displaySlot(s.slot)} (${s.count})${isLocal ? " \u2022 local" : ""}`;
-        rightColumnChildren.push(
-          createElement("div", {
-            key: `slot-${s.slot}`,
-            style: { display: "flex", alignItems: "center", gap: "6px", padding: "4px 0" },
-          },
-            createElement("span", {
-              className: "romm-status-dot",
-              style: { backgroundColor: dotColor },
-            }),
-            createElement("span", { style: { fontSize: "13px", color: textColor, flex: 1 } }, slotLabel),
-            isActive
-              ? createElement("span", { key: "active-label", style: { fontSize: "11px", color: "#5ba32b" } }, "active")
-              : createElement(DialogButton as any, {
-                  key: "switch-btn",
-                  style: { padding: "2px 8px", minWidth: "auto", fontSize: "11px", width: "auto" },
-                  onFocus: scrollFocusedToCenter,
-                  onClick: async () => {
-                    try {
-                      if (!state.romId) return;
-                      const result = await setGameSlot(state.romId, s.slot);
-                      if (result.success) {
-                        // Clear conflicts immediately — they belong to the previous slot
-                        setState((prev) => ({ ...prev, activeSlot: s.slot, conflicts: [] }));
-                        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
-                          detail: { type: "save_sync", rom_id: state.romId },
-                        }));
-                      }
-                    } catch (e) {
-                      debugLog(`Failed to set game slot: ${e}`);
-                    }
-                  },
-                  noFocusRing: false,
-                }, "Switch"),
-          ),
-        );
-      }
-    } else {
-      rightColumnChildren.push(
-        createElement("div", { key: "no-slots", className: "romm-panel-muted" }, "No slots available"),
-      );
-    }
-
-    // New Slot button (opens modal)
-    rightColumnChildren.push(
-      createElement(DialogButton as any, {
-        key: "new-slot-btn",
-        style: { padding: "4px 8px", minWidth: "auto", fontSize: "12px", marginTop: "8px" },
-        onFocus: scrollFocusedToCenter,
-        onClick: () => {
-          const romId = state.romId;
-          if (!romId) return;
-          showModal(
-            createElement(NewSlotModal, {
-              onSubmit: async (name: string) => {
-                if (!name) {
-                  // Empty = legacy mode — show warning, same as QAM default slot
-                  handleLegacyModeConfirm(romId, setState);
-                  return;
-                }
-                const result = await setGameSlot(romId, name);
-                if (result.success) {
-                  applyNewSlotState(name, setState, romId);
-                }
-              },
-            }),
-          );
-        },
-        noFocusRing: false,
-      }, "+ New Slot"),
-    );
-
-    // Don't wrap in section() — that creates ONE giant focusable element.
-    // Individual slot buttons are DialogButtons, enabling D-Pad navigation.
-    saveSyncSection = createElement("div", {
-      key: "save-sync",
-      className: "romm-panel-section",
-      style: { padding: "12px 0" },
-    },
-      createElement("div", {
-        key: "saves-columns",
-        style: { display: "flex", gap: "24px" },
-      },
-        createElement("div", { key: "files-col", style: { flex: 2, minWidth: 0 } }, ...leftColumnChildren.filter(Boolean)),
-        createElement("div", { key: "slots-col", style: { flex: 1, minWidth: 0 } }, ...rightColumnChildren.filter(Boolean)),
-      ),
-    );
-  }
-
   // --- Tab bar ---
   const tabs: { id: string; label: string; visible: boolean }[] = [
     { id: "info", label: "GAME INFO", visible: true },
@@ -1353,7 +992,38 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         },
       } as any);
     } else {
-      activeTabContent = saveSyncSection;
+      activeTabContent = createElement(SavesTab, {
+        romId: state.romId!,
+        saveStatus: state.saveStatus,
+        conflicts: state.conflicts,
+        activeSlot: state.activeSlot,
+        availableSlots: state.availableSlots,
+        slotsLoading: state.slotsLoading,
+        onSlotSwitched: (newSlot, newStatus) => {
+          setState((prev) => ({
+            ...prev,
+            activeSlot: newSlot,
+            saveStatus: newStatus,
+            conflicts: newStatus.conflicts ?? [],
+          }));
+          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync", rom_id: state.romId },
+          }));
+        },
+        onNewSlot: (slotName) => {
+          setState((prev) => ({
+            ...prev,
+            activeSlot: slotName || null,
+            conflicts: [],
+            availableSlots: prev.availableSlots.some((s) => s.slot === slotName)
+              ? prev.availableSlots
+              : [...prev.availableSlots, { slot: slotName, source: "local" as const, count: 0, latest_updated_at: null }],
+          }));
+          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync", rom_id: state.romId },
+          }));
+        },
+      });
     }
   } else if (state.activeTab === "bios") {
     activeTabContent = biosSection;

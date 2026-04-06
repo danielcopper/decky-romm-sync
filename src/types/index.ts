@@ -337,6 +337,28 @@ export interface SaveSlotSummary {
   latest_updated_at: string | null;
 }
 
+export interface SlotSaveFile {
+  filename: string;
+  id: number;
+  size: number | null;
+  updated_at: string;
+  emulator: string;
+}
+
+export interface SlotSavesResponse {
+  success: boolean;
+  slot: string;
+  saves: SlotSaveFile[];
+  error?: string;
+}
+
+export interface SwitchSlotResponse {
+  success: boolean;
+  reason?: "pending_uploads" | "unresolved_conflicts" | "server_unreachable" | "sync_disabled" | "not_installed";
+  files?: string[];
+  save_status?: SaveStatus;
+}
+
 export interface SaveSetupSlotInfo {
   slot: string | null;
   saves: Array<{

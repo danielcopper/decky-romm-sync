@@ -587,6 +587,12 @@ class Plugin:
     async def set_game_slot(self, rom_id, slot):
         return self._save_sync_service.set_game_slot(rom_id, slot)
 
+    async def get_slot_saves(self, rom_id, slot):
+        return await self._save_sync_service.get_slot_saves(rom_id, slot)
+
+    async def switch_slot(self, rom_id, new_slot):
+        return await self._save_sync_service.switch_slot(rom_id, new_slot)
+
     async def is_save_tracking_configured(self, rom_id):
         return self._save_sync_service.is_save_tracking_configured(rom_id)
 

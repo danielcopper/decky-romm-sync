@@ -340,6 +340,86 @@ export function hideNativePlaySection(playSectionClass: string) {
   font-size: 11px;
   color: #d94126;
   font-weight: 600;
+}
+/* Slot panel (collapsible) */
+.romm-slot-panel {
+  margin-bottom: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.romm-slot-panel-active {
+  border-color: rgba(91,163,43,0.3);
+}
+.romm-slot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: rgba(255,255,255,0.03);
+  transition: background 0.15s;
+}
+.romm-slot-header:hover {
+  background: rgba(255,255,255,0.06);
+}
+.romm-slot-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.romm-slot-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.romm-slot-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #dcdedf;
+}
+.romm-slot-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.romm-slot-badge-active {
+  background: rgba(91,163,43,0.2);
+  color: #5ba32b;
+}
+.romm-slot-badge-server {
+  background: rgba(26,159,255,0.15);
+  color: #1a9fff;
+}
+.romm-slot-badge-local {
+  background: rgba(212,167,44,0.15);
+  color: #d4a72c;
+}
+.romm-slot-count {
+  font-size: 12px;
+  color: #8f98a0;
+}
+.romm-slot-chevron {
+  font-size: 14px;
+  color: #8f98a0;
+  transition: transform 0.2s;
+}
+.romm-slot-body {
+  padding: 8px 12px 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.romm-slot-sync-summary {
+  font-size: 12px;
+  padding: 4px 12px 0;
+}
+.romm-save-status-label {
+  font-size: 11px;
+  font-weight: 600;
 }`;
     sp.window.document.head.appendChild(panelStyle);
   }
@@ -370,10 +450,9 @@ export function hideNativePlaySection(playSectionClass: string) {
   filter: brightness(1.2);
 }
 .romm-gear-btn.gpfocus, .romm-gear-btn:focus-visible {
-  background: rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.14) !important;
   filter: brightness(1.2);
-  outline: 2px solid #1a9fff;
-  outline-offset: 2px;
+  border-color: rgba(255,255,255,0.6) !important;
 }
 .romm-gear-btn:active {
   filter: brightness(0.9);

@@ -3304,3 +3304,283 @@ class TestCheckCoreChange:
 
         assert len(received_args) == 1
         assert received_args[0] == ("snes", "mario.sfc")
+
+
+# ---------------------------------------------------------------------------
+# TestGetSlotSaves
+# ---------------------------------------------------------------------------
+
+
+class TestGetSlotSaves:
+    """Tests for get_slot_saves — lightweight server save listing by slot."""
+
+    @pytest.mark.asyncio
+    async def test_happy_path(self, tmp_path):
+        """Returns mapped save dicts for the requested slot."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["server_device_id"] = "server-dev-1"
+
+        fake.saves[1] = {
+            "id": 1,
+            "rom_id": 42,
+            "file_name": "mario.srm",
+            "updated_at": "2026-03-24T10:00:00Z",
+            "file_size_bytes": 2048,
+            "emulator": "retroarch",
+            "slot": "default",
+        }
+        fake.saves[2] = {
+            "id": 2,
+            "rom_id": 42,
+            "file_name": "mario.state",
+            "updated_at": "2026-03-24T09:00:00Z",
+            "file_size_bytes": 512,
+            "emulator": "retroarch",
+            "slot": "default",
+        }
+
+        result = await svc.get_slot_saves(42, "default")
+
+        assert result["success"] is True
+        assert result["slot"] == "default"
+        assert len(result["saves"]) == 2
+        save = next(s for s in result["saves"] if s["id"] == 1)
+        assert save["filename"] == "mario.srm"
+        assert save["size"] == 2048
+        assert save["updated_at"] == "2026-03-24T10:00:00Z"
+        assert save["emulator"] == "retroarch"
+        # Verify list_saves was called with the correct slot kwarg
+        assert any(call[0] == "list_saves" and call[2].get("slot") == "default" for call in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_empty_slot(self, tmp_path):
+        """Returns empty saves list when server has no saves for the slot."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        # No saves added to fake
+
+        result = await svc.get_slot_saves(42, "desktop")
+
+        assert result["success"] is True
+        assert result["slot"] == "desktop"
+        assert result["saves"] == []
+
+    @pytest.mark.asyncio
+    async def test_server_error(self, tmp_path):
+        """Returns error response when list_saves raises an exception."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        fake.fail_on_next(RommApiError("connection timeout"))
+
+        result = await svc.get_slot_saves(42, "default")
+
+        assert result["success"] is False
+        assert result["slot"] == "default"
+        assert result["saves"] == []
+        assert "connection timeout" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_sync_disabled(self, tmp_path):
+        """Returns error response when save sync is disabled."""
+        svc, _ = make_service(tmp_path)
+        # save_sync_enabled defaults to False
+
+        result = await svc.get_slot_saves(42, "default")
+
+        assert result["success"] is False
+        assert result["slot"] == "default"
+        assert result["saves"] == []
+        assert "disabled" in result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# TestSwitchSlot
+# ---------------------------------------------------------------------------
+
+
+class TestSwitchSlot:
+    """Tests for SaveService.switch_slot — guarded slot switch with immediate download."""
+
+    def _synced_state(self, local_hash: str, save_id: int = 100) -> dict:
+        """Return a save state dict where the file appears fully synced."""
+        return {
+            "files": {
+                "pokemon.srm": {
+                    "last_sync_hash": local_hash,
+                    "last_sync_at": "2026-01-01T00:00:00Z",
+                    "last_sync_server_updated_at": "2026-01-01T00:00:00Z",
+                    "last_sync_server_save_id": save_id,
+                    "last_sync_server_size": 1024,
+                    "tracked_save_id": save_id,
+                },
+            },
+            "active_slot": "default",
+            "slot_confirmed": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_happy_path(self, tmp_path):
+        """Files fully synced + server has saves in new slot → downloads and returns success."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+
+        # Slot already synced — hash matches
+        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+
+        # Server has a save in "desktop" slot
+        fake.saves[200] = _server_save(save_id=200, slot="desktop")
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is True
+        assert "save_status" in result
+        # active_slot was updated
+        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "desktop"
+        # The server save was downloaded
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert len(download_calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_pending_uploads_blocked(self, tmp_path):
+        """Local file changed since last sync → switch blocked with reason + file list."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"modified save data")
+
+        # State records an *old* hash — hash mismatch simulates pending upload
+        old_hash = hashlib.md5(b"original save data").hexdigest()
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {
+                "pokemon.srm": {
+                    "last_sync_hash": old_hash,
+                    "last_sync_at": "2026-01-01T00:00:00Z",
+                    "tracked_save_id": 100,
+                },
+            },
+            "active_slot": "default",
+            "slot_confirmed": True,
+        }
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is False
+        assert result["reason"] == "pending_uploads"
+        assert "pokemon.srm" in result["files"]
+        # No downloads should have happened
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert len(download_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_never_synced_blocked(self, tmp_path):
+        """Local save exists but was never synced (no last_sync_hash) → switch blocked."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        # State has the game entry but no last_sync_hash for the file
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {},  # no entry for pokemon.srm at all
+            "active_slot": "default",
+            "slot_confirmed": True,
+        }
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is False
+        assert result["reason"] == "pending_uploads"
+        assert "pokemon.srm" in result["files"]
+
+    @pytest.mark.asyncio
+    async def test_server_unreachable(self, tmp_path):
+        """list_saves raises → switch blocked with reason=server_unreachable."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+
+        # Files synced so readiness check passes
+        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+
+        fake.fail_on_next(RommApiError(503, "Service unavailable"))
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+
+    @pytest.mark.asyncio
+    async def test_sync_disabled(self, tmp_path):
+        """Save sync disabled → immediate error, no API calls."""
+        svc, fake = make_service(tmp_path)
+        # save_sync_enabled defaults to False
+        _install_rom(svc, tmp_path)
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is False
+        assert result["reason"] == "sync_disabled"
+        assert len(fake.call_log) == 0
+
+    @pytest.mark.asyncio
+    async def test_not_installed(self, tmp_path):
+        """ROM not installed → returns not_installed error."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        # ROM 42 is NOT installed
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_installed"
+
+    @pytest.mark.asyncio
+    async def test_empty_new_slot(self, tmp_path):
+        """New slot has no saves on server → just updates active_slot, no downloads."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+
+        # Files synced so readiness check passes
+        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+
+        # Server has no saves in "newslot" (all fake saves are in other slots)
+        fake.saves[300] = _server_save(save_id=300, slot="other")
+
+        result = await svc.switch_slot(42, "newslot")
+
+        assert result["success"] is True
+        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "newslot"
+        # No downloads
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert len(download_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_local_files_is_ready(self, tmp_path):
+        """ROM installed but no local save files → readiness check passes (nothing pending)."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        # No save file created on disk
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {},
+            "active_slot": "default",
+            "slot_confirmed": True,
+        }
+
+        fake.saves[100] = _server_save(save_id=100, slot="desktop")
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is True
+        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "desktop"
