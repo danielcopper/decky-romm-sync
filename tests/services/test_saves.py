@@ -3584,3 +3584,78 @@ class TestSwitchSlot:
 
         assert result["success"] is True
         assert svc._save_sync_state["saves"]["42"]["active_slot"] == "desktop"
+
+    @pytest.mark.asyncio
+    async def test_switch_to_legacy_slot(self, tmp_path):
+        """switch_slot("") sets active_slot=None, persists "" in slots dict, returns success."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+
+        # Start in a named slot, fully synced
+        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+        svc._save_sync_state["saves"]["42"]["active_slot"] = "default"
+
+        # Server has a legacy save (slot=None)
+        fake.saves[200] = _server_save(save_id=200, slot=None)
+
+        result = await svc.switch_slot(42, "")
+
+        assert result["success"] is True
+        assert "save_status" in result
+        # active_slot in state is None (legacy)
+        assert svc._save_sync_state["saves"]["42"]["active_slot"] is None
+        # Legacy slot "" appears in the slots dict
+        slots_dict = svc._save_sync_state["saves"]["42"].get("slots", {})
+        assert "" in slots_dict
+
+    @pytest.mark.asyncio
+    async def test_legacy_slot_persisted_in_get_save_slots(self, tmp_path):
+        """get_save_slots includes the "" entry when active_slot is None and "" is in slots dict."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+
+        # Set up state with legacy slot explicitly
+        svc._save_sync_state["saves"]["99"] = {
+            "active_slot": None,
+            "slot_confirmed": True,
+            "files": {},
+            "slots": {"": {"source": "local", "count": 0, "latest_updated_at": None}},
+        }
+
+        # Server returns no slots
+        result = await svc.get_save_slots(99)
+
+        assert result["success"] is True
+        # The "" entry should be in the response slots list
+        slot_names = [s["slot"] for s in result["slots"]]
+        assert "" in slot_names
+        # active_slot is None (legacy)
+        assert result["active_slot"] is None
+
+    @pytest.mark.asyncio
+    async def test_server_legacy_save_maps_to_empty_string_not_default(self, tmp_path):
+        """Server saves with slot=None (legacy) must map to "" not "default" in get_save_slots."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state["server_device_id"] = "dev-1"
+
+        # Server has a legacy save with slot=None
+        fake.saves[1] = {
+            "id": 1,
+            "rom_id": 77,
+            "file_name": "game.srm",
+            "updated_at": "2026-04-07T10:00:00",
+            "slot": None,
+        }
+
+        result = await svc.get_save_slots(77)
+
+        assert result["success"] is True
+        slot_names = [s["slot"] for s in result["slots"]]
+        # Must be "" (legacy key), NOT "default"
+        assert "" in slot_names
+        assert "default" not in slot_names

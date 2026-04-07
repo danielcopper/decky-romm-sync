@@ -86,13 +86,16 @@ function refreshSlotState(
     .then((result) => setter((prev) => ({ ...prev, slotConfirmed: result.configured })))
     .catch(() => {});
   getSaveSlots(romId)
-    .then((slotResult) => setter((prev) => ({
-      ...prev,
-      availableSlots: slotResult.slots || [],
-      // Use ?? to preserve prev only when active_slot is undefined (not returned),
-      // but accept null (legacy mode) as a valid value
-      activeSlot: slotResult.active_slot === undefined ? prev.activeSlot : slotResult.active_slot,
-    })))
+    .then((slotResult) => {
+      setter((prev) => {
+        const newSlot = slotResult.active_slot === undefined ? prev.activeSlot : slotResult.active_slot;
+        return {
+          ...prev,
+          availableSlots: slotResult.slots || [],
+          activeSlot: newSlot,
+        };
+      });
+    })
     .catch(() => {});
 }
 
@@ -1002,22 +1005,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         onSlotSwitched: (newSlot, newStatus) => {
           setState((prev) => ({
             ...prev,
-            activeSlot: newSlot,
+            activeSlot: newSlot === "" ? null : newSlot,
             saveStatus: newStatus,
             conflicts: newStatus.conflicts ?? [],
-          }));
-          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
-            detail: { type: "save_sync", rom_id: state.romId },
-          }));
-        },
-        onNewSlot: (slotName) => {
-          setState((prev) => ({
-            ...prev,
-            activeSlot: slotName || null,
-            conflicts: [],
-            availableSlots: prev.availableSlots.some((s) => s.slot === slotName)
-              ? prev.availableSlots
-              : [...prev.availableSlots, { slot: slotName, source: "local" as const, count: 0, latest_updated_at: null }],
           }));
           globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
             detail: { type: "save_sync", rom_id: state.romId },

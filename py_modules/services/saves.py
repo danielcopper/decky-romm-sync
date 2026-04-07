@@ -1300,7 +1300,8 @@ class SaveService:
         # Merge: update persisted slots with server data, promote local→server
         merged: dict[str, dict] = {}
         for s in server_slots_list:
-            name = s.get("slot") or s.get("slot_name") or "default"
+            raw = s.get("slot") or s.get("slot_name")
+            name = raw if raw else ""
             merged[name] = {
                 "source": "server",
                 "count": s.get("count", 0),
@@ -1315,7 +1316,7 @@ class SaveService:
                     merged[name] = {"source": "local", "count": 0, "latest_updated_at": None}
                 # If it was "server" but is gone from server now — drop it
                 # (unless it's the active_slot)
-                elif info.get("source") == "server" and name == active_slot:
+                elif info.get("source") == "server" and name == (active_slot or ""):
                     merged[name] = {"source": "server", "count": 0, "latest_updated_at": None}
 
         # Persist merged slots in state
@@ -1390,11 +1391,11 @@ class SaveService:
         else:
             saves[rom_id_str]["active_slot"] = resolved_slot
 
-        # Ensure slot is in the persisted slots dict (skip for None/legacy)
-        if resolved_slot is not None:
-            slots_dict: dict[str, dict] = saves[rom_id_str].setdefault("slots", {})
-            if resolved_slot not in slots_dict:
-                slots_dict[resolved_slot] = {"source": "local", "count": 0, "latest_updated_at": None}
+        # Ensure slot is in the persisted slots dict (use "" as key for legacy/None)
+        slot_key = resolved_slot if resolved_slot is not None else ""
+        slots_dict: dict[str, dict] = saves[rom_id_str].setdefault("slots", {})
+        if slot_key not in slots_dict:
+            slots_dict[slot_key] = {"source": "local", "count": 0, "latest_updated_at": None}
 
         self.save_state()
         self._loop.create_task(self.check_save_status_background(rom_id))
@@ -1485,7 +1486,8 @@ class SaveService:
             return {"success": False, "reason": "server_unreachable"}
 
         # Filter to the target slot (FakeSaveApi doesn't filter, real API may not either)
-        slot_saves = [s for s in all_server_saves if s.get("slot") == resolved_slot]
+        # Normalize "" and None both to None before comparing (legacy saves may use either)
+        slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
 
         # 6. Update active slot in state
         self.set_game_slot(rom_id, new_slot)

@@ -12,7 +12,7 @@
 
 import { useState, useRef, createElement, FC, ChangeEvent } from "react";
 import { ConfirmModal, DialogButton, Focusable, TextField, showModal } from "@decky/ui";
-import { getSlotSaves, switchSlot, setGameSlot, debugLog } from "../api/backend";
+import { getSlotSaves, switchSlot, debugLog } from "../api/backend";
 import type { SaveStatus, PendingConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 
@@ -26,7 +26,6 @@ interface SavesTabProps {
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
-  onNewSlot: (slotName: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -464,8 +463,10 @@ export const SavesTab: FC<SavesTabProps> = ({
   availableSlots,
   slotsLoading,
   onSlotSwitched,
-  onNewSlot,
 }) => {
+  const [newSlotError, setNewSlotError] = useState<string | null>(null);
+  const newSlotErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // --- Legacy mode warning ---
   const legacyWarning = activeSlot === null
     ? createElement("div", {
@@ -513,17 +514,42 @@ export const SavesTab: FC<SavesTabProps> = ({
               strTitle: "Use Legacy Mode?",
               strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
               onOK: async () => {
-                const r = await setGameSlot(romId, "");
-                if (r.success) {
-                  onNewSlot("");
+                try {
+                  const result = await switchSlot(romId, "");
+                  if (result.success && result.save_status) {
+                    onSlotSwitched("", result.save_status);
+                  } else {
+                    debugLog(`SavesTab: legacy switch failed: ${result.reason}`);
+                  }
+                } catch (e) {
+                  debugLog(`SavesTab: legacy switch error: ${e}`);
                 }
               },
             }));
             return;
           }
-          const result = await setGameSlot(romId, name);
-          if (result.success) {
-            onNewSlot(name);
+          // Named slot — also use switchSlot to do pre-checks + immediate download
+          try {
+            const result = await switchSlot(romId, name);
+            if (result.success && result.save_status) {
+              onSlotSwitched(name, result.save_status);
+            } else {
+              debugLog(`SavesTab: new slot switch failed: ${result.reason}`);
+              let msg = "Failed to create slot";
+              if (result.reason === "pending_uploads") {
+                msg = "Sync your saves first — local changes haven't been uploaded";
+              } else if (result.reason === "server_unreachable") {
+                msg = "Can't switch — RomM server is not reachable";
+              }
+              setNewSlotError(msg);
+              if (newSlotErrorTimerRef.current) clearTimeout(newSlotErrorTimerRef.current);
+              newSlotErrorTimerRef.current = setTimeout(() => setNewSlotError(null), 5000);
+            }
+          } catch (e) {
+            debugLog(`SavesTab: new slot switch error: ${e}`);
+            setNewSlotError("An error occurred while creating the slot");
+            if (newSlotErrorTimerRef.current) clearTimeout(newSlotErrorTimerRef.current);
+            newSlotErrorTimerRef.current = setTimeout(() => setNewSlotError(null), 5000);
           }
         },
       }),
@@ -554,35 +580,43 @@ export const SavesTab: FC<SavesTabProps> = ({
     // Legacy mode: show save files directly above slot panels
     legacyFilesSection,
 
-    // Slot panels
-    ...sorted.map((slot) => {
-      const isActive = activeSlot !== null && slot.slot === activeSlot;
-      return createElement(SlotPanel, {
-        key: `panel-${slot.slot}`,
-        romId,
-        slot,
-        isActive,
-        defaultExpanded: isActive,
-        saveStatus: isActive ? saveStatus : null,
-        conflicts: isActive ? conflicts : [],
-        onSlotSwitched,
-      });
-    }),
+    // Slot panels — filter out "" (legacy) when already in legacy mode
+    ...sorted
+      .filter((s) => !(activeSlot === null && s.slot === ""))
+      .map((slot) => {
+        const isActive = activeSlot !== null && slot.slot === activeSlot;
+        return createElement(SlotPanel, {
+          key: `panel-${slot.slot}`,
+          romId,
+          slot,
+          isActive,
+          defaultExpanded: isActive,
+          saveStatus: isActive ? saveStatus : null,
+          conflicts: isActive ? conflicts : [],
+          onSlotSwitched,
+        });
+      }),
 
-    // New Slot button
-    createElement(DialogButton as any, {
-      key: "new-slot-btn",
-      style: {
-        padding: "6px 12px",
-        minWidth: "auto",
-        fontSize: "12px",
-        marginTop: "10px",
-        width: "auto",
-        alignSelf: "flex-start",
-      },
-      noFocusRing: false,
-      onFocus: scrollFocusedToCenter,
-      onClick: handleNewSlot,
-    }, "+ New Slot"),
+    // New Slot button + error feedback
+    createElement("div", { key: "new-slot-area", style: { marginTop: "10px" } },
+      createElement(DialogButton as any, {
+        key: "new-slot-btn",
+        style: {
+          padding: "6px 12px",
+          minWidth: "auto",
+          fontSize: "12px",
+          width: "auto",
+        },
+        noFocusRing: false,
+        onFocus: scrollFocusedToCenter,
+        onClick: handleNewSlot,
+      }, "+ New Slot"),
+      newSlotError
+        ? createElement("div", {
+            key: "new-slot-error",
+            style: { fontSize: "11px", color: "#d94126", marginTop: "4px" },
+          }, newSlotError)
+        : null,
+    ),
   );
 };

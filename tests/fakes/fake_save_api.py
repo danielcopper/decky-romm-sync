@@ -148,7 +148,7 @@ class FakeSaveApi:
         return {
             "slots": [
                 {
-                    "slot": slot_name or "default",
+                    "slot": slot_name,  # None for legacy saves (no slot) — preserve as-is
                     "count": len(saves),
                     "latest_updated_at": max((s.get("updated_at", "") for s in saves), default=None),
                 }
