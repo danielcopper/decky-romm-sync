@@ -554,8 +554,8 @@ export const SavesTab: FC<SavesTabProps> = ({
     // Legacy mode: show save files directly above slot panels
     legacyFilesSection,
 
-    // Slot panels (skip null-slot entries — legacy mode is handled above)
-    ...sorted.filter((s) => s.slot != null).map((slot) => {
+    // Slot panels
+    ...sorted.map((slot) => {
       const isActive = activeSlot !== null && slot.slot === activeSlot;
       return createElement(SlotPanel, {
         key: `panel-${slot.slot}`,
