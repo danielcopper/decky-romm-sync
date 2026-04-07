@@ -401,7 +401,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         if (cancelled) return;
         setState((prev) => ({
           ...prev,
-          activeSlot: result.active_slot || "default",
+          activeSlot: result.active_slot ?? prev.activeSlot,
           availableSlots: result.slots || [],
           slotsLoading: false,
         }));
