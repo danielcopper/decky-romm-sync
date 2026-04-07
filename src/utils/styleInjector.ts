@@ -437,7 +437,7 @@ export function hideNativePlaySection(playSectionClass: string) {
   min-width: 36px !important;
   height: 36px !important;
   border-radius: 4px !important;
-  border: 1px solid rgba(255,255,255,0.1) !important;
+  border: 1px solid rgba(255,255,255,0.1);
   background: rgba(255,255,255,0.06) !important;
   cursor: pointer;
   transition: background 0.15s ease, filter 0.15s ease;
@@ -448,11 +448,6 @@ export function hideNativePlaySection(playSectionClass: string) {
 .romm-gear-btn:hover {
   background: rgba(255,255,255,0.14);
   filter: brightness(1.2);
-}
-.romm-gear-btn.gpfocus {
-  border-color: rgba(255,255,255,0.5) !important;
-  background: rgba(255,255,255,0.14) !important;
-  filter: brightness(1.3);
 }
 .romm-gear-btn:active {
   filter: brightness(0.9);
