@@ -449,11 +449,6 @@ export function hideNativePlaySection(playSectionClass: string) {
   background: rgba(255,255,255,0.14);
   filter: brightness(1.2);
 }
-.romm-gear-btn.gpfocus, .romm-gear-btn:focus-visible {
-  background: rgba(255,255,255,0.14) !important;
-  filter: brightness(1.2);
-  border-color: rgba(255,255,255,0.6) !important;
-}
 .romm-gear-btn:active {
   filter: brightness(0.9);
 }`;
