@@ -467,9 +467,8 @@ export const SavesTab: FC<SavesTabProps> = ({
   onNewSlot,
 }) => {
   // --- Legacy mode warning ---
-  if (activeSlot === null) {
-    return createElement("div", null,
-      createElement("div", {
+  const legacyWarning = activeSlot === null
+    ? createElement("div", {
         key: "legacy-warning",
         style: {
           padding: "8px",
@@ -480,22 +479,8 @@ export const SavesTab: FC<SavesTabProps> = ({
           fontSize: "12px",
           color: "#ff8800",
         },
-      }, "This game uses legacy mode (no slot). Only one save version per game is supported."),
-
-      // Still render save files in legacy mode
-      saveStatus && saveStatus.files.length > 0
-        ? createElement("div", { key: "legacy-files" },
-            ...saveStatus.files.map((f) => {
-              const conflict = conflicts.find((c) => c.filename === f.filename);
-              return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
-            }),
-          )
-        : createElement("div", {
-            key: "no-files",
-            style: { fontSize: "13px", color: "#8f98a0", fontStyle: "italic" },
-          }, "No save files tracked yet"),
-    );
-  }
+      }, "This game uses legacy mode (no slot). Only one save version per game is supported.")
+    : null;
 
   // --- Loading state ---
   if (slotsLoading) {
@@ -545,13 +530,33 @@ export const SavesTab: FC<SavesTabProps> = ({
     );
   };
 
+  // --- Legacy mode: show warning + files directly (not in a slot panel) ---
+  const legacyFilesSection = activeSlot === null
+    ? (saveStatus && saveStatus.files.length > 0
+        ? createElement("div", { key: "legacy-files", style: { marginBottom: "12px" } },
+            ...saveStatus.files.map((f) => {
+              const conflict = conflicts.find((c) => c.filename === f.filename);
+              return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
+            }),
+          )
+        : createElement("div", {
+            key: "no-files",
+            style: { fontSize: "13px", color: "#8f98a0", fontStyle: "italic", marginBottom: "12px" },
+          }, "No save files tracked yet"))
+    : null;
+
   return createElement(Focusable as any, {
     noFocusRing: true,
     style: { display: "flex", flexDirection: "column" as const, gap: "0" },
   },
-    // Slot panels
-    ...sorted.map((slot) => {
-      const isActive = slot.slot === activeSlot;
+    legacyWarning,
+
+    // Legacy mode: show save files directly above slot panels
+    legacyFilesSection,
+
+    // Slot panels (skip null-slot entries — legacy mode is handled above)
+    ...sorted.filter((s) => s.slot != null).map((slot) => {
+      const isActive = activeSlot !== null && slot.slot === activeSlot;
       return createElement(SlotPanel, {
         key: `panel-${slot.slot}`,
         romId,
