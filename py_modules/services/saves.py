@@ -1404,9 +1404,9 @@ class SaveService:
     def _check_slot_switch_readiness(self, rom_id: int) -> dict:
         """Check whether it is safe to switch slots for this ROM.
 
-        A switch is unsafe if the user has local changes that have never been
-        synced (or have changed since the last sync) — switching would silently
-        discard those changes.
+        A switch is unsafe if local files have changed since the last sync
+        to the current slot — those changes would be lost.
+        Files that were never synced do not block (they'll be deleted on switch).
 
         Returns ``{"ready": True}`` or
         ``{"ready": False, "reason": str, "files": list[str]}``.
@@ -1425,9 +1425,6 @@ class SaveService:
                 current_hash = self._file_md5(lf["path"])
                 if current_hash != last_sync_hash:
                     pending.append(filename)
-            elif os.path.isfile(lf["path"]):
-                # File exists but was never synced — treat as pending
-                pending.append(filename)
 
         if pending:
             return {"ready": False, "reason": "pending_uploads", "files": pending}
@@ -1435,15 +1432,18 @@ class SaveService:
         return {"ready": True}
 
     async def switch_slot(self, rom_id: int, new_slot: str) -> dict:
-        """Switch the active save slot with guards and immediate download sync.
+        """Switch the active save slot with immediate state sync.
 
         Pre-checks (all must pass):
         1. Save sync must be enabled.
         2. ROM must be installed.
-        3. No local files with pending (unsynced) changes.
+        3. No local files with pending changes (changed since last sync to current slot).
+        4. Server must be reachable.
 
-        On success: updates ``active_slot``, downloads all saves for the new
-        slot from the server, then returns a fresh save status.
+        On success:
+        - If the new slot has server saves: downloads them, replacing local files.
+        - If the new slot is empty: deletes local save files (fresh start).
+        - Never uploads — saves are not carried between slots.
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
@@ -1492,8 +1492,9 @@ class SaveService:
         # 6. Update active slot in state
         self.set_game_slot(rom_id, new_slot)
 
-        # 7. Download all saves for the new slot
+        # 7. Sync local state to match the new slot
         if slot_saves:
+            # New slot has server saves — download them, replacing local files
             await self._loop.run_in_executor(
                 None,
                 self._do_switch_downloads,
@@ -1502,8 +1503,21 @@ class SaveService:
                 rom_id_str,
                 system,
             )
+        else:
+            # New slot is empty — delete local save files for a fresh start
+            await self._loop.run_in_executor(
+                None,
+                self._delete_local_saves_for_switch,
+                rom_id,
+                rom_id_str,
+            )
 
-        # 8. Return fresh status
+        # 8. Update last_sync_check_at
+        save_entry = self._save_sync_state["saves"].setdefault(rom_id_str, {})
+        save_entry["last_sync_check_at"] = datetime.now(UTC).isoformat()
+        self.save_state()
+
+        # 9. Return fresh status
         save_status = await self.get_save_status(rom_id)
         return {"success": True, "save_status": save_status}
 
@@ -1523,6 +1537,25 @@ class SaveService:
             if not filename:
                 continue
             self._do_download_save(server_save, saves_dir, filename, rom_id_str, system)
+
+    def _delete_local_saves_for_switch(self, rom_id: int, rom_id_str: str) -> None:
+        """Delete local save files and clear file tracking state for a slot switch.
+
+        Unlike delete_local_saves (the callable), this preserves slot config
+        (active_slot, slot_confirmed, slots dict) and only clears files + tracking.
+        Runs synchronously — call via run_in_executor.
+        """
+        local_files = self._find_save_files(rom_id)
+        for lf in local_files:
+            try:
+                os.remove(lf["path"])
+                self._log_debug(f"Deleted local save for switch: {lf['filename']}")
+            except Exception as e:
+                self._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")
+
+        # Clear file tracking state (but keep slot config)
+        save_entry = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
+        save_entry["files"] = {}
 
     # ------------------------------------------------------------------
     # Save Setup Wizard

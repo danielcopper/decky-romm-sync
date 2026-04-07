@@ -3478,12 +3478,16 @@ class TestSwitchSlot:
         assert len(download_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_never_synced_blocked(self, tmp_path):
-        """Local save exists but was never synced (no last_sync_hash) → switch blocked."""
+    async def test_never_synced_not_blocked(self, tmp_path):
+        """Local save exists but was never synced (no last_sync_hash) → switch NOT blocked.
+
+        Never-synced files will be deleted during the switch, so they must not block it.
+        After the switch to an empty slot the local file should be gone.
+        """
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
-        _create_save(tmp_path)
+        save_path = _create_save(tmp_path)
 
         # State has the game entry but no last_sync_hash for the file
         svc._save_sync_state["saves"]["42"] = {
@@ -3492,11 +3496,11 @@ class TestSwitchSlot:
             "slot_confirmed": True,
         }
 
+        # No server saves in "desktop" slot → switch succeeds and deletes local file
         result = await svc.switch_slot(42, "desktop")
 
-        assert result["success"] is False
-        assert result["reason"] == "pending_uploads"
-        assert "pokemon.srm" in result["files"]
+        assert result["success"] is True
+        assert not save_path.exists()
 
     @pytest.mark.asyncio
     async def test_server_unreachable(self, tmp_path):
@@ -3544,7 +3548,7 @@ class TestSwitchSlot:
 
     @pytest.mark.asyncio
     async def test_empty_new_slot(self, tmp_path):
-        """New slot has no saves on server → just updates active_slot, no downloads."""
+        """New slot has no saves on server → deletes local files and updates active_slot."""
         svc, fake = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
@@ -3564,6 +3568,58 @@ class TestSwitchSlot:
         # No downloads
         download_calls = [c for c in fake.call_log if c[0] == "download_save"]
         assert len(download_calls) == 0
+        # Local file deleted (fresh start for empty slot)
+        assert not save_path.exists()
+        # File tracking state cleared
+        assert svc._save_sync_state["saves"]["42"]["files"] == {}
+
+    @pytest.mark.asyncio
+    async def test_empty_slot_deletes_local_files(self, tmp_path):
+        """New slot is empty → local save files deleted and file tracking cleared."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+
+        # Current slot is fully synced
+        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+
+        # No server saves for "brand-new-slot"
+        result = await svc.switch_slot(42, "brand-new-slot")
+
+        assert result["success"] is True
+        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "brand-new-slot"
+        # Local save file removed
+        assert not save_path.exists()
+        # File tracking state cleared so next play starts fresh
+        assert svc._save_sync_state["saves"]["42"]["files"] == {}
+        # No downloads happened
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert len(download_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_with_server_saves_downloads(self, tmp_path):
+        """New slot has server saves → downloads them, replacing local file."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"old local save")
+        local_hash = _file_md5(str(save_path))
+
+        # Current slot is fully synced
+        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+
+        # Target slot has a server save
+        fake.saves[500] = _server_save(save_id=500, slot="target-slot")
+
+        result = await svc.switch_slot(42, "target-slot")
+
+        assert result["success"] is True
+        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "target-slot"
+        # Server save was downloaded (replaces local)
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert len(download_calls) >= 1
 
     @pytest.mark.asyncio
     async def test_no_local_files_is_ready(self, tmp_path):
