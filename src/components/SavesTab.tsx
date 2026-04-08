@@ -438,7 +438,7 @@ const SlotPanel: FC<SlotPanelProps> = ({
     // Right: file count + chevron
     createElement("div", { className: "romm-slot-header-right" },
       createElement("span", { className: "romm-slot-count" },
-        `${fileCount} save${fileCount !== 1 ? "s" : ""}`),
+        `${fileCount} save${fileCount === 1 ? "" : "s"}`),
       createElement("span", { className: "romm-slot-chevron" }, expanded ? "\u25BE" : "\u25B8"),
     ),
   );
@@ -453,11 +453,12 @@ const SlotPanel: FC<SlotPanelProps> = ({
     : null;
 
   // --- Slot body ---
-  const bodyChildren = expanded
-    ? (isActive
-        ? renderActiveSlotBody(saveStatus, conflicts)
-        : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, handleActivate))
-    : [];
+  let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
+  if (expanded) {
+    bodyChildren = isActive
+      ? renderActiveSlotBody(saveStatus, conflicts)
+      : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, handleActivate);
+  }
 
   const bodyEl = expanded
     ? createElement("div", { key: "body", className: "romm-slot-body" },
