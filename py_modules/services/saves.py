@@ -52,6 +52,9 @@ if TYPE_CHECKING:
     from services.protocols import EventEmitter
 
 
+_SYNC_DISABLED_MSG = "Save sync is disabled"
+
+
 class SaveService:
     """Bidirectional save file sync between local RetroDECK and RomM server.
 
@@ -1242,7 +1245,7 @@ class SaveService:
     async def sync_rom_saves(self, rom_id: int) -> dict:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""
         if not self._is_save_sync_enabled():
-            return {"success": False, "message": "Save sync is disabled", "synced": 0}
+            return {"success": False, "message": _SYNC_DISABLED_MSG, "synced": 0}
 
         if not self._save_sync_state.get("device_id"):
             reg = self.ensure_device_registered()
@@ -1347,7 +1350,7 @@ class SaveService:
         slot = str(slot).strip() if slot else ""
 
         if not self._is_save_sync_enabled():
-            return {"success": False, "slot": slot, "saves": [], "error": "Save sync is disabled"}
+            return {"success": False, "slot": slot, "saves": [], "error": _SYNC_DISABLED_MSG}
 
         device_id = self._get_server_device_id()
 
@@ -1765,7 +1768,7 @@ class SaveService:
     async def sync_all_saves(self) -> dict:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
         if not self._is_save_sync_enabled():
-            return {"success": False, "message": "Save sync is disabled", "synced": 0, "conflicts": 0}
+            return {"success": False, "message": _SYNC_DISABLED_MSG, "synced": 0, "conflicts": 0}
 
         if not self._save_sync_state.get("device_id"):
             reg = self.ensure_device_registered()

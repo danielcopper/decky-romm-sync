@@ -50,7 +50,7 @@ function formatBytes(bytes: number | null): string {
 function formatRelativeTime(isoStr: string | null): string {
   if (!isoStr) return "";
   const date = new Date(isoStr);
-  if (isNaN(date.getTime())) return "";
+  if (Number.isNaN(date.getTime())) return "";
   const diffMs = Date.now() - date.getTime();
   const diffMin = Math.floor(diffMs / 60000);
   if (diffMin < 1) return "just now";
@@ -103,6 +103,40 @@ const NewSlotModal: FC<{
     } as any),
   );
 };
+
+// ---------------------------------------------------------------------------
+// Device sync info helper
+// ---------------------------------------------------------------------------
+
+function renderDeviceSyncInfo(f: SaveFileStatus): (ReturnType<typeof createElement> | null)[] {
+  if (!f.device_syncs || f.device_syncs.length === 0) return [];
+
+  const lastSyncer = f.device_syncs.reduce((latest, ds) => {
+    if (!latest) return ds;
+    if (!ds.last_synced_at) return latest;
+    if (!latest.last_synced_at) return ds;
+    return ds.last_synced_at > latest.last_synced_at ? ds : latest;
+  }, f.device_syncs[0]);
+
+  const children: (ReturnType<typeof createElement> | null)[] = [];
+
+  if (lastSyncer?.device_name) {
+    children.push(createElement("span", {
+      key: "device-info",
+      style: { fontSize: "11px", color: "rgba(255,255,255,0.5)" },
+    }, `Last sync: ${lastSyncer.device_name} \u2713`));
+  }
+
+  if (f.is_current === false) {
+    children.push(createElement("span", {
+      key: "not-current",
+      style: { fontSize: "11px", color: "#d4a72c", marginLeft: "8px" },
+    }, "Newer version available on server"));
+  }
+
+  if (children.length === 0) return [];
+  return [createElement("div", { key: "device-sync", style: { marginTop: "2px" } }, ...children)];
+}
 
 // ---------------------------------------------------------------------------
 // SaveFileRow — one row in the active slot body
@@ -158,28 +192,7 @@ function renderSaveFileRow(
     ),
 
     // Device sync info (v4.7+)
-    f.device_syncs && f.device_syncs.length > 0
-      ? createElement("div", { style: { marginTop: "2px" } },
-          (() => {
-            const lastSyncer = f.device_syncs!.reduce((latest, ds) => {
-              if (!latest) return ds;
-              if (!ds.last_synced_at) return latest;
-              if (!latest.last_synced_at) return ds;
-              return ds.last_synced_at > latest.last_synced_at ? ds : latest;
-            }, f.device_syncs![0]);
-            return lastSyncer?.device_name
-              ? createElement("span", {
-                  style: { fontSize: "11px", color: "rgba(255,255,255,0.5)" },
-                }, `Last sync: ${lastSyncer.device_name} \u2713`)
-              : null;
-          })(),
-          f.is_current === false
-            ? createElement("span", {
-                style: { fontSize: "11px", color: "#d4a72c", marginLeft: "8px" },
-              }, "Newer version available on server")
-            : null,
-        )
-      : null,
+    ...renderDeviceSyncInfo(f),
 
     // Conflict detail
     (f.status === "conflict" || conflict)
@@ -225,6 +238,83 @@ function renderServerSaveRow(f: SlotSaveFile): ReturnType<typeof createElement> 
 // ---------------------------------------------------------------------------
 // SlotPanel — a single collapsible slot
 // ---------------------------------------------------------------------------
+
+const MUTED_COLOR = "#8f98a0";
+
+function computeSyncSummary(
+  isActive: boolean,
+  saveStatus: SaveStatus | null,
+  conflicts: PendingConflict[],
+): { syncSummaryText: string | null; syncSummaryColor: string } {
+  if (!isActive || !saveStatus) return { syncSummaryText: null, syncSummaryColor: MUTED_COLOR };
+
+  const hasConflict = conflicts.length > 0;
+  const fileCount = saveStatus.files?.length ?? 0;
+
+  if (hasConflict) return { syncSummaryText: "Conflict detected", syncSummaryColor: "#d94126" };
+  if (fileCount > 0 && saveStatus.last_sync_check_at) {
+    const rel = formatRelativeTime(saveStatus.last_sync_check_at);
+    return { syncSummaryText: rel === "just now" ? "Synced just now" : `Synced ${rel}`, syncSummaryColor: "#5ba32b" };
+  }
+  if (fileCount > 0) return { syncSummaryText: "Not synced", syncSummaryColor: MUTED_COLOR };
+  return { syncSummaryText: "No saves found", syncSummaryColor: MUTED_COLOR };
+}
+
+function renderActiveSlotBody(
+  saveStatus: SaveStatus | null,
+  conflicts: PendingConflict[],
+): (ReturnType<typeof createElement> | null)[] {
+  if (saveStatus && saveStatus.files.length > 0) {
+    return saveStatus.files.map((f) => {
+      const conflict = conflicts.find((c) => c.filename === f.filename);
+      return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
+    });
+  }
+  return [createElement("div", { key: "no-files", style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic" } },
+    "No save files tracked yet")];
+}
+
+function renderInactiveSlotBody(
+  loadingSlot: boolean,
+  slotFiles: SlotSaveFile[] | null,
+  switching: boolean,
+  switchError: string | null,
+  handleActivate: () => void,
+): (ReturnType<typeof createElement> | null)[] {
+  const children: (ReturnType<typeof createElement> | null)[] = [];
+
+  if (loadingSlot) {
+    children.push(createElement("div", { key: "loading", style: { fontSize: "13px", color: MUTED_COLOR } }, "Loading..."));
+  } else if (slotFiles && slotFiles.length > 0) {
+    for (const f of slotFiles) {
+      children.push(renderServerSaveRow(f));
+    }
+  } else if (slotFiles !== null) {
+    children.push(createElement("div", { key: "no-server-files", style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic" } },
+      "No saves in this slot"));
+  }
+
+  children.push(
+    createElement("div", { key: "activate-row", style: { marginTop: "10px" } },
+      createElement(DialogButton as any, {
+        key: "activate-btn",
+        style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto" },
+        noFocusRing: false,
+        onFocus: scrollFocusedToCenter,
+        disabled: switching,
+        onClick: handleActivate,
+      }, switching ? "Switching..." : "Activate Slot"),
+      switchError
+        ? createElement("div", {
+            key: "switch-error",
+            style: { fontSize: "11px", color: "#d94126", marginTop: "4px" },
+          }, switchError)
+        : null,
+    ),
+  );
+
+  return children;
+}
 
 interface SlotPanelProps {
   romId: number;
@@ -305,27 +395,7 @@ const SlotPanel: FC<SlotPanelProps> = ({
     }
   };
 
-  // --- Sync summary for active slot header ---
-  let syncSummaryText: string | null = null;
-  let syncSummaryColor = "#8f98a0";
-  if (isActive && saveStatus) {
-    const hasConflict = conflicts.length > 0;
-    const fileCount = saveStatus.files?.length ?? 0;
-    if (hasConflict) {
-      syncSummaryText = "Conflict detected";
-      syncSummaryColor = "#d94126";
-    } else if (fileCount > 0 && saveStatus.last_sync_check_at) {
-      const rel = formatRelativeTime(saveStatus.last_sync_check_at);
-      syncSummaryText = rel === "just now" ? "Synced just now" : `Synced ${rel}`;
-      syncSummaryColor = "#5ba32b";
-    } else if (fileCount > 0) {
-      syncSummaryText = "Not synced";
-      syncSummaryColor = "#8f98a0";
-    } else {
-      syncSummaryText = "No saves found";
-      syncSummaryColor = "#8f98a0";
-    }
-  }
+  const { syncSummaryText, syncSummaryColor } = computeSyncSummary(isActive, saveStatus, conflicts);
 
   const fileCount = isActive
     ? (saveStatus?.files?.length ?? 0)
@@ -383,60 +453,11 @@ const SlotPanel: FC<SlotPanelProps> = ({
     : null;
 
   // --- Slot body ---
-  let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
-
-  if (expanded) {
-    if (isActive) {
-      // Active slot: show save file rows
-      if (saveStatus && saveStatus.files.length > 0) {
-        for (const f of saveStatus.files) {
-          const conflict = conflicts.find((c) => c.filename === f.filename);
-          bodyChildren.push(renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at));
-        }
-      } else {
-        bodyChildren.push(
-          createElement("div", { key: "no-files", style: { fontSize: "13px", color: "#8f98a0", fontStyle: "italic" } },
-            "No save files tracked yet"),
-        );
-      }
-    } else {
-      // Inactive slot: show server save rows + activate button
-      if (loadingSlot) {
-        bodyChildren.push(
-          createElement("div", { key: "loading", style: { fontSize: "13px", color: "#8f98a0" } }, "Loading..."),
-        );
-      } else if (slotFiles && slotFiles.length > 0) {
-        for (const f of slotFiles) {
-          bodyChildren.push(renderServerSaveRow(f));
-        }
-      } else if (slotFiles !== null) {
-        bodyChildren.push(
-          createElement("div", { key: "no-server-files", style: { fontSize: "13px", color: "#8f98a0", fontStyle: "italic" } },
-            "No saves in this slot"),
-        );
-      }
-
-      // Activate button
-      bodyChildren.push(
-        createElement("div", { key: "activate-row", style: { marginTop: "10px" } },
-          createElement(DialogButton as any, {
-            key: "activate-btn",
-            style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto" },
-            noFocusRing: false,
-            onFocus: scrollFocusedToCenter,
-            disabled: switching,
-            onClick: handleActivate,
-          }, switching ? "Switching..." : "Activate Slot"),
-          switchError
-            ? createElement("div", {
-                key: "switch-error",
-                style: { fontSize: "11px", color: "#d94126", marginTop: "4px" },
-              }, switchError)
-            : null,
-        ),
-      );
-    }
-  }
+  const bodyChildren = expanded
+    ? (isActive
+        ? renderActiveSlotBody(saveStatus, conflicts)
+        : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, handleActivate))
+    : [];
 
   const bodyEl = expanded
     ? createElement("div", { key: "body", className: "romm-slot-body" },
@@ -556,20 +577,23 @@ export const SavesTab: FC<SavesTabProps> = ({
     );
   };
 
-  // --- Legacy mode: show warning + files directly (not in a slot panel) ---
-  const legacyFilesSection = activeSlot === null
-    ? (saveStatus && saveStatus.files.length > 0
-        ? createElement("div", { key: "legacy-files", style: { marginBottom: "12px" } },
-            ...saveStatus.files.map((f) => {
-              const conflict = conflicts.find((c) => c.filename === f.filename);
-              return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
-            }),
-          )
-        : createElement("div", {
-            key: "no-files",
-            style: { fontSize: "13px", color: "#8f98a0", fontStyle: "italic", marginBottom: "12px" },
-          }, "No save files tracked yet"))
-    : null;
+  // --- Legacy mode: show save files directly (not in a slot panel) ---
+  let legacyFilesSection: ReturnType<typeof createElement> | null = null;
+  if (activeSlot === null) {
+    if (saveStatus && saveStatus.files.length > 0) {
+      legacyFilesSection = createElement("div", { key: "legacy-files", style: { marginBottom: "12px" } },
+        ...saveStatus.files.map((f) => {
+          const conflict = conflicts.find((c) => c.filename === f.filename);
+          return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
+        }),
+      );
+    } else {
+      legacyFilesSection = createElement("div", {
+        key: "no-files",
+        style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic", marginBottom: "12px" },
+      }, "No save files tracked yet");
+    }
+  }
 
   return createElement(Focusable as any, {
     noFocusRing: true,
@@ -580,9 +604,9 @@ export const SavesTab: FC<SavesTabProps> = ({
     // Legacy mode: show save files directly above slot panels
     legacyFilesSection,
 
-    // Slot panels — filter out "" (legacy) when already in legacy mode
+    // Slot panels — skip the "" (legacy) panel when already in legacy mode
     ...sorted
-      .filter((s) => !(activeSlot === null && s.slot === ""))
+      .filter((s) => activeSlot !== null || s.slot !== "")
       .map((slot) => {
         const isActive = activeSlot !== null && slot.slot === activeSlot;
         return createElement(SlotPanel, {
