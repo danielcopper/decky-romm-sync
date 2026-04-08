@@ -328,23 +328,30 @@ class TestSlotFiltering:
         assert result.matched[0].server_save is not None
         assert result.matched[0].server_save["id"] == 10
 
-    def test_active_slot_none_shows_all_saves(self):
-        """When active_slot is None (legacy), all saves are visible regardless of slot."""
+    def test_active_slot_none_only_matches_unslotted_saves(self):
+        """When active_slot is None (legacy), only saves without a slot are matched."""
         local = [_local()]
         server = [_server(10, fn="pokemon.srm", slot="default")]
+        result = match_local_to_server_saves(local, server, {}, None)
+        assert result.matched[0].match_method == "local_only"
+        assert result.matched[0].server_save is None
+
+    def test_active_slot_none_matches_unslotted_server_save(self):
+        """When active_slot is None (legacy), saves with slot=None are matched."""
+        local = [_local()]
+        server = [_server(10, fn="pokemon.srm", slot=None)]
         result = match_local_to_server_saves(local, server, {}, None)
         assert result.matched[0].match_method == "filename"
         assert result.matched[0].server_save is not None
         assert result.matched[0].server_save["id"] == 10
 
-    def test_active_slot_empty_string_shows_all_saves(self):
-        """Empty string active_slot (UI sends '' for no-slot) treated same as None."""
+    def test_active_slot_empty_string_only_matches_unslotted_saves(self):
+        """Empty string active_slot treated same as None — only unslotted saves match."""
         local = [_local()]
         server = [_server(10, fn="pokemon.srm", slot="default")]
         result = match_local_to_server_saves(local, server, {}, "")
-        assert result.matched[0].match_method == "filename"
-        assert result.matched[0].server_save is not None
-        assert result.matched[0].server_save["id"] == 10
+        assert result.matched[0].match_method == "local_only"
+        assert result.matched[0].server_save is None
 
     def test_newer_in_slot_only_from_active_slot(self):
         """Newer-in-slot detection should not flag saves from other slots."""
