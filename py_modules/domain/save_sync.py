@@ -279,7 +279,8 @@ def match_local_to_server_saves(
     if active_slot:
         filtered_saves = [ss for ss in server_saves if ss.get("slot") == active_slot or ss.get("slot") is None]
     else:
-        filtered_saves = server_saves
+        # Legacy mode (no slot): only match saves without a slot assignment
+        filtered_saves = [ss for ss in server_saves if not ss.get("slot")]
 
     # Build indexes
     server_by_id: dict[int, dict] = {}
