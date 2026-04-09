@@ -496,9 +496,9 @@ export const SavesTab: FC<SavesTabProps> = ({
       const connState = (e as CustomEvent).detail?.state;
       setIsOffline(connState === "offline");
     };
-    window.addEventListener("romm_connection_changed", onConnectionChanged);
+    globalThis.addEventListener("romm_connection_changed", onConnectionChanged);
     return () => {
-      window.removeEventListener("romm_connection_changed", onConnectionChanged);
+      globalThis.removeEventListener("romm_connection_changed", onConnectionChanged);
     };
   }, []);
 
