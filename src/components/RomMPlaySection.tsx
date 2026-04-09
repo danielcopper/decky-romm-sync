@@ -23,7 +23,7 @@ import {
   showContextMenu,
   showModal,
 } from "@decky/ui";
-import { FaGamepad, FaCog, FaMicrochip } from "react-icons/fa";
+import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
 import {
   getCachedGameDetail,
@@ -273,7 +273,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
     achievementEarned: 0,
     achievementTotal: 0,
   });
-  const [, setConnectionState] = useState<ConnectionState>("checking");
+  const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
   const [actionPending, setActionPending] = useState<string | null>(null);
   const romIdRef = useRef<number | null>(null);
 
@@ -739,6 +739,24 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
 
   // Build info items array
   const infoItems: ReturnType<typeof createElement>[] = [];
+
+  // Offline indicator (first — most prominent)
+  if (connectionState === "offline") {
+    infoItems.push(
+      createElement("div", {
+        key: "offline-indicator",
+        className: "romm-info-item",
+      },
+        createElement("div", { className: "romm-info-header" },
+          createElement(FaExclamationTriangle, { size: 12, color: "#ff8800" }),
+        ),
+        createElement("div", {
+          className: "romm-info-value",
+          style: { color: "#ff8800" },
+        }, "RomM offline"),
+      ),
+    );
+  }
 
   // Last Played
   if (info.lastPlayed) {

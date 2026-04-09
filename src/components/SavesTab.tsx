@@ -10,9 +10,10 @@
  * - New-slot modal opens inline (same as old NewSlotModal in parent).
  */
 
-import { useState, useRef, createElement, FC, ChangeEvent } from "react";
+import { useState, useEffect, useRef, createElement, FC, ChangeEvent } from "react";
 import { ConfirmModal, DialogButton, Focusable, TextField, showModal } from "@decky/ui";
 import { getSlotSaves, switchSlot, debugLog } from "../api/backend";
+import { getRommConnectionState } from "../utils/connectionState";
 import type { SaveStatus, PendingConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 
@@ -488,6 +489,34 @@ export const SavesTab: FC<SavesTabProps> = ({
 }) => {
   const [newSlotError, setNewSlotError] = useState<string | null>(null);
   const newSlotErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
+
+  useEffect(() => {
+    const onConnectionChanged = (e: Event) => {
+      const connState = (e as CustomEvent).detail?.state;
+      setIsOffline(connState === "offline");
+    };
+    window.addEventListener("romm_connection_changed", onConnectionChanged);
+    return () => {
+      window.removeEventListener("romm_connection_changed", onConnectionChanged);
+    };
+  }, []);
+
+  // --- Offline banner ---
+  const offlineBanner = isOffline
+    ? createElement("div", {
+        key: "offline-banner",
+        style: {
+          padding: "8px",
+          background: "rgba(217, 65, 38, 0.15)",
+          borderRadius: "4px",
+          border: "1px solid rgba(217, 65, 38, 0.4)",
+          marginBottom: "12px",
+          fontSize: "12px",
+          color: "#d94126",
+        },
+      }, "RomM is offline \u2014 slot switching is disabled until the server is reachable. This prevents save sync conflicts.")
+    : null;
 
   // --- Legacy mode warning ---
   const legacyWarning = activeSlot === null
@@ -507,8 +536,11 @@ export const SavesTab: FC<SavesTabProps> = ({
 
   // --- Loading state ---
   if (slotsLoading) {
-    return createElement("div", { style: { fontSize: "13px", color: "#8f98a0", padding: "8px 0" } },
-      "Loading slots...");
+    return createElement(Focusable as any, { noFocusRing: true },
+      offlineBanner,
+      createElement("div", { style: { fontSize: "13px", color: "#8f98a0", padding: "8px 0" } },
+        "Loading slots..."),
+    );
   }
 
   // --- Sort slots: active first, then alphabetically ---
@@ -600,6 +632,7 @@ export const SavesTab: FC<SavesTabProps> = ({
     noFocusRing: true,
     style: { display: "flex", flexDirection: "column" as const, gap: "0" },
   },
+    offlineBanner,
     legacyWarning,
 
     // Legacy mode: show save files directly above slot panels
