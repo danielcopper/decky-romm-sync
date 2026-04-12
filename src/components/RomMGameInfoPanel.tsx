@@ -177,6 +177,8 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
               local_mtime: null,
               local_size: null,
               server_save_id: null,
+              server_file_name: null,
+              server_emulator: null,
               server_updated_at: null,
               server_size: null,
               last_sync_at: f.last_sync_at ?? null,

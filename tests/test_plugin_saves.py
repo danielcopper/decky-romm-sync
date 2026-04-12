@@ -830,3 +830,168 @@ async def test_delete_platform_saves(plugin, tmp_path):
     assert not srm2.exists()
     assert "10" not in plugin._save_sync_state["saves"]
     assert "20" not in plugin._save_sync_state["saves"]
+
+
+# ============================================================================
+# Version History callables (plugin-level integration)
+# ============================================================================
+
+
+class TestSavesVersionHistoryCallables:
+    """Integration tests for the three version history callables."""
+
+    @pytest.mark.asyncio
+    async def test_saves_supports_version_history_false(self, plugin):
+        """saves_supports_version_history returns False on v4.6 (FakeSaveApi default)."""
+        result = await plugin.saves_supports_version_history()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_saves_supports_version_history_true(self, plugin):
+        """saves_supports_version_history returns True when adapter supports device sync."""
+        plugin._fake_api._supports_device_sync = True
+        result = await plugin.saves_supports_version_history()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_saves_list_file_versions_empty_on_v46(self, plugin, tmp_path):
+        """saves_list_file_versions returns empty list on v4.6."""
+        plugin._fake_api.saves[100] = {
+            "id": 100,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-03-01T00:00:00Z",
+            "file_size_bytes": 1024,
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+        result = await plugin.saves_list_file_versions(42, "default", "pokemon.srm")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_saves_list_file_versions_happy_path(self, plugin, tmp_path):
+        """saves_list_file_versions returns filtered older versions on v4.7+."""
+        plugin._fake_api._supports_device_sync = True
+        plugin._save_sync_state["saves"]["42"] = {
+            "system": "gba",
+            "active_slot": "default",
+            "files": {"pokemon.srm": {"tracked_save_id": 100}},
+        }
+        plugin._fake_api.saves[100] = {
+            "id": 100,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-03-10T00:00:00Z",
+            "file_size_bytes": 1024,
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+        plugin._fake_api.saves[50] = {
+            "id": 50,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-03-01T00:00:00Z",
+            "file_size_bytes": 512,
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+
+        result = await plugin.saves_list_file_versions(42, "default", "pokemon.srm")
+
+        assert len(result) == 1
+        assert result[0]["id"] == 50
+
+    @pytest.mark.asyncio
+    async def test_saves_rollback_to_version_unsupported_on_v46(self, plugin, tmp_path):
+        """saves_rollback_to_version returns unsupported on v4.6."""
+        result = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50)
+        assert result == {"status": "unsupported"}
+
+    @pytest.mark.asyncio
+    async def test_saves_rollback_to_version_happy_path(self, plugin, tmp_path):
+        """saves_rollback_to_version downloads the target save on success."""
+        plugin._fake_api._supports_device_sync = True
+        _install_rom(plugin, tmp_path)
+
+        # Create local save file with content matching last_sync_hash
+        saves_dir = tmp_path / "retrodeck" / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        save_file = saves_dir / "pokemon.srm"
+        save_file.write_bytes(b"\x00" * 1024)
+
+        import hashlib
+
+        local_hash = hashlib.md5(b"\x00" * 1024).hexdigest()
+
+        plugin._save_sync_state["saves"]["42"] = {
+            "system": "gba",
+            "active_slot": "default",
+            "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": local_hash}},
+        }
+        plugin._fake_api.saves[100] = {
+            "id": 100,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-03-10T00:00:00Z",
+            "file_size_bytes": 1024,
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+        plugin._fake_api.saves[50] = {
+            "id": 50,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-03-01T00:00:00Z",
+            "file_size_bytes": 1024,
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+
+        result = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+        download_calls = [c for c in plugin._fake_api.call_log if c[0] == "download_save"]
+        assert any(c[1][0] == 50 for c in download_calls)
+
+    @pytest.mark.asyncio
+    async def test_saves_rollback_to_version_force_param(self, plugin, tmp_path):
+        """saves_rollback_to_version passes force=True to service when specified."""
+        plugin._fake_api._supports_device_sync = True
+        _install_rom(plugin, tmp_path)
+
+        saves_dir = tmp_path / "retrodeck" / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        save_file = saves_dir / "pokemon.srm"
+        save_file.write_bytes(b"\xff" * 1024)  # different from last_sync_hash
+
+        plugin._save_sync_state["saves"]["42"] = {
+            "system": "gba",
+            "active_slot": "default",
+            "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "aabbcc"}},
+        }
+        plugin._fake_api.saves[100] = {
+            "id": 100,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-03-10T00:00:00Z",
+            "file_size_bytes": 1024,
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+        plugin._fake_api.saves[50] = {
+            "id": 50,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-03-01T00:00:00Z",
+            "file_size_bytes": 1024,
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+
+        # Without force=True, should return unsynced_changes
+        result_no_force = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50, False)
+        assert result_no_force["status"] == "unsynced_changes"
+
+        # With force=True, should succeed
+        result_force = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50, True)
+        assert result_force["status"] == "ok"

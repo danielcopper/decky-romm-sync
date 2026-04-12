@@ -900,6 +900,8 @@ class SaveService:
             "local_mtime": local_mtime,
             "local_size": local_size,
             "server_save_id": server.get("id") if server else None,
+            "server_file_name": server.get("file_name") if server else None,
+            "server_emulator": server.get("emulator") if server else None,
             "server_updated_at": server.get("updated_at", "") if server else None,
             "server_size": server.get("file_size_bytes") if server else None,
             "last_sync_at": last_sync_at,
@@ -917,20 +919,25 @@ class SaveService:
         local_files = self._find_save_files(rom_id)
         info = self._get_rom_save_info(rom_id)
         rom_name = info["rom_name"] if info else None
+        server_device_id = self._get_server_device_id()
 
         save_state = self._save_sync_state["saves"].get(rom_id_str, {})
         files_state = save_state.get("files", {})
 
-        # Match local files to server saves (same domain logic as _sync_rom_saves)
+        # Match local files to server saves (same domain logic as _sync_rom_saves).
+        # device_id is required so _find_newer_in_slot can distinguish foreign
+        # saves from our own.
         match_result = match_local_to_server_saves(
             local_files,
             server_saves,
             files_state,
             save_state.get("active_slot"),
             rom_name,
+            device_id=server_device_id,
         )
 
         file_statuses = []
+        newer_in_slot_conflicts: list[SaveConflict | dict] = []
         for m in match_result.matched:
             if m.local_file:
                 local_hash = self._file_md5(m.local_file["path"])
@@ -951,7 +958,7 @@ class SaveService:
                         server=server,
                         last_sync_at=files_state.get(m.filename, {}).get("last_sync_at"),
                         status=action,
-                        server_device_id=self._get_server_device_id(),
+                        server_device_id=server_device_id,
                     )
                 )
             elif m.server_save:
@@ -966,14 +973,18 @@ class SaveService:
                         server=m.server_save,
                         last_sync_at=None,
                         status="download",
-                        server_device_id=self._get_server_device_id(),
+                        server_device_id=server_device_id,
                     )
                 )
+            # Surface newer-in-slot warnings (another device uploaded a newer
+            # save) alongside the status. Mirrors _sync_rom_saves behaviour
+            # so the banner appears on tab open, not only after a full sync.
+            self._check_newer_in_slot(m, files_state, rom_id, save_state, newer_in_slot_conflicts)
 
         playtime = self._save_sync_state.get("playtime", {}).get(rom_id_str, {})
         save_entry = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
 
-        conflicts = [
+        conflicts: list[SaveConflict | dict] = [
             {
                 "rom_id": rom_id,
                 "filename": fs["filename"],
@@ -989,6 +1000,7 @@ class SaveService:
             for fs in file_statuses
             if fs["status"] == "conflict"
         ]
+        conflicts.extend(newer_in_slot_conflicts)
 
         return {
             "rom_id": rom_id,
@@ -1905,6 +1917,212 @@ class SaveService:
 
         # keep_current
         return {"success": True, "message": "Keeping current save"}
+
+    # ------------------------------------------------------------------
+    # Version History API
+    # ------------------------------------------------------------------
+
+    def _find_file_state(self, rom_id_str: str, filename: str, server_saves: list[dict]) -> dict:
+        """Look up the per-file sync state for *filename*.
+
+        Tries an exact key match first.  If that misses (e.g. because the state
+        key includes RomM timestamp tags while *filename* is the plain local
+        name), falls back to scanning entries whose ``tracked_save_id`` resolves
+        to a server save with the same ``file_name_no_tags``.
+        """
+        files_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {}).get("files", {})
+
+        # Fast path: exact key match
+        exact = files_state.get(filename)
+        if exact and exact.get("tracked_save_id") is not None:
+            return exact
+
+        # Slow path: derive base name from filename, scan for matching entry
+        fn_base = filename.rsplit(".", 1)[0] if "." in filename else filename
+        for _key, entry in files_state.items():
+            tid = entry.get("tracked_save_id")
+            if tid is None:
+                continue
+            srv = next((s for s in server_saves if s.get("id") == tid), None)
+            if srv is None:
+                continue
+            srv_base = srv.get("file_name_no_tags") or ""
+            # file_name_no_tags strips region tags too (e.g. "(USA)"),
+            # so check if the local base starts with it
+            if srv_base and fn_base.startswith(srv_base):
+                return entry
+
+        return {}
+
+    def supports_version_history(self) -> bool:
+        """Return True if the connected RomM server supports version history.
+
+        Version history requires RomM >= 4.7.0 (slot-based saves, per-device
+        sync tracking, and multiple server-side versions per filename).
+        """
+        return self._romm_api.supports_device_sync()
+
+    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
+        """List older server-side versions of a save file.
+
+        Returns versions strictly older than the currently-tracked save,
+        sorted newest-first. On v4.6 (no version history support), returns
+        an empty list.
+
+        Each entry contains: id, updated_at, file_size_bytes, device_syncs.
+        """
+        if not self.supports_version_history():
+            return []
+
+        rom_id = int(rom_id)
+        rom_id_str = str(rom_id)
+        device_id = self._get_server_device_id()
+
+        try:
+            server_saves = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
+                ),
+            )
+        except Exception:
+            return []
+
+        # Find the tracked save and its base name (file_name_no_tags)
+        file_state = self._find_file_state(rom_id_str, filename, server_saves)
+        tracked_id = file_state.get("tracked_save_id")
+
+        # Resolve the base name from the tracked save on the server.
+        # Consistent with domain/save_sync.py server-only grouping which also
+        # uses file_name_no_tags to group saves that belong together.
+        tracked_save = next((s for s in server_saves if s.get("id") == tracked_id), None)
+        if tracked_save is None:
+            # Can't determine base name without a tracked save — no versions to show.
+            return []
+        base_name = tracked_save.get("file_name_no_tags") or tracked_save.get("file_name", "")
+
+        # Filter to saves with the same base name, excluding the tracked one
+        versions = [
+            {
+                "id": s["id"],
+                "file_name": s.get("file_name", ""),
+                "emulator": s.get("emulator"),
+                "updated_at": s.get("updated_at", ""),
+                "file_size_bytes": s.get("file_size_bytes"),
+                "device_syncs": s.get("device_syncs", []),
+            }
+            for s in server_saves
+            if (s.get("file_name_no_tags") or s.get("file_name", "")) == base_name and s.get("id") != tracked_id
+        ]
+
+        # Sort by updated_at descending (client-side — do not trust server order)
+        versions.sort(key=lambda v: v["updated_at"], reverse=True)
+        return versions
+
+    def _rollback_to_version_io(
+        self,
+        rom_id_str: str,
+        filename: str,
+        save_id: int,
+        force: bool,
+        info: dict,
+        server_saves: list[dict],
+    ) -> dict:
+        """Blocking I/O portion of rollback_to_version — runs in executor."""
+        # Find target save in server list (match by ID only — the target may
+        # have a different file_name due to RomM timestamp tagging)
+        target_save = next(
+            (s for s in server_saves if s.get("id") == save_id),
+            None,
+        )
+        if target_save is None:
+            return {"status": "not_found"}
+
+        saves_dir = info["saves_dir"]
+        local_path = os.path.join(saves_dir, filename)
+        system = info["system"]
+
+        # Gate D: check for unsynced local changes
+        file_state = self._find_file_state(rom_id_str, filename, server_saves)
+        last_sync_hash = file_state.get("last_sync_hash")
+
+        if not force and last_sync_hash and os.path.isfile(local_path):
+            current_hash = self._file_md5(local_path)
+            if current_hash != last_sync_hash:
+                return {
+                    "status": "unsynced_changes",
+                    "local_hash": current_hash,
+                    "tracked_hash": last_sync_hash,
+                }
+
+        # Download the target version to replace local file
+        self._do_download_save(target_save, saves_dir, filename, rom_id_str, system)
+        return {"status": "ok"}
+
+    async def rollback_to_version(
+        self, rom_id: int, slot: str, filename: str, save_id: int, force: bool = False
+    ) -> dict:
+        """Roll back a save file to a specific older server version.
+
+        Returns a status dict:
+        - ``{"status": "ok"}`` on success.
+        - ``{"status": "not_found"}`` if the target save id is not on the server.
+        - ``{"status": "unsupported"}`` if the server is pre-4.7.
+        - ``{"status": "unsynced_changes", "local_hash": ..., "tracked_hash": ...}``
+          if local file has changed since last sync and ``force`` is False.
+        - ``{"status": "tracked_missing"}`` if the currently-tracked save no
+          longer exists on the server and ``force`` is False.
+        """
+        if not self.supports_version_history():
+            return {"status": "unsupported"}
+
+        rom_id = int(rom_id)
+        rom_id_str = str(rom_id)
+        save_id = int(save_id)
+
+        info = self._get_rom_save_info(rom_id)
+        if not info:
+            return {"status": "not_found"}
+
+        device_id = self._get_server_device_id()
+
+        # Fetch fresh server saves
+        try:
+            server_saves: list[dict] = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
+                ),
+            )
+        except Exception as e:
+            self._log_debug(f"rollback_to_version: failed to list saves: {e}")
+            return {"status": "not_found"}
+
+        # Gate F: verify the currently-tracked save still exists on the server.
+        # Protects against accidental rollbacks after an unrelated deletion —
+        # bypassable via ``force`` once the user has acknowledged the warning.
+        file_state = self._find_file_state(rom_id_str, filename, server_saves)
+        tracked_id = file_state.get("tracked_save_id")
+        if not force and tracked_id is not None:
+            tracked_save = next((s for s in server_saves if s.get("id") == tracked_id), None)
+            if tracked_save is None:
+                return {"status": "tracked_missing"}
+
+        result = await self._loop.run_in_executor(
+            None,
+            self._rollback_to_version_io,
+            rom_id_str,
+            filename,
+            save_id,
+            force,
+            info,
+            server_saves,
+        )
+
+        if result.get("status") == "ok":
+            self.save_state()
+
+        return result
 
     def get_save_sync_settings(self) -> dict:
         """Return current save sync settings."""

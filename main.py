@@ -627,6 +627,15 @@ class Plugin:
     async def delete_platform_saves(self, platform_slug):
         return self._save_sync_service.delete_platform_saves(platform_slug)
 
+    async def saves_supports_version_history(self):
+        return self._save_sync_service.supports_version_history()
+
+    async def saves_list_file_versions(self, rom_id, slot, filename):
+        return await self._save_sync_service.list_file_versions(rom_id, slot, filename)
+
+    async def saves_rollback_to_version(self, rom_id, slot, filename, save_id, force=False):
+        return await self._save_sync_service.rollback_to_version(rom_id, slot, filename, save_id, force)
+
     async def record_session_start(self, rom_id):
         return self._playtime_service.record_session_start(rom_id)
 

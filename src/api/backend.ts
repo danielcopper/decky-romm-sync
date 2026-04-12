@@ -192,6 +192,27 @@ export const deleteLocalSaves = callable<[number], { success: boolean; deleted_c
 export const deletePlatformSaves = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_saves");
 export const deletePlatformBios = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_bios");
 
+// Save version history callables (v4.7+ only — gated by supportsVersionHistory)
+export interface SaveVersionEntry {
+  id: number;
+  file_name: string;
+  emulator: string | null;
+  updated_at: string;
+  file_size_bytes: number | null;
+  device_syncs: Array<{ device_id: string; device_name: string; is_current: boolean; last_synced_at: string | null }>;
+}
+
+export type RollbackStatus =
+  | { status: "ok" }
+  | { status: "not_found" }
+  | { status: "unsupported" }
+  | { status: "tracked_missing" }
+  | { status: "unsynced_changes"; local_hash: string; tracked_hash: string };
+
+export const savesSupportsVersionHistory = callable<[], boolean>("saves_supports_version_history");
+export const savesListFileVersions = callable<[number, string, string], SaveVersionEntry[]>("saves_list_file_versions");
+export const savesRollbackToVersion = callable<[number, string, string, number, boolean], RollbackStatus>("saves_rollback_to_version");
+
 // Achievements callables
 export const getAchievements = callable<[number], AchievementList>("get_achievements");
 export const getAchievementProgress = callable<[number], AchievementProgress>("get_achievement_progress");

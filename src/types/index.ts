@@ -305,6 +305,8 @@ export interface SaveFileStatus {
   local_mtime: string | null;
   local_size: number | null;
   server_save_id: number | null;
+  server_file_name: string | null;
+  server_emulator: string | null;
   server_updated_at: string | null;
   server_size: number | null;
   last_sync_at: string | null;

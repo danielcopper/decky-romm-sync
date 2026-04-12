@@ -12,10 +12,13 @@
 
 import { useState, useEffect, useRef, createElement, FC, ChangeEvent } from "react";
 import { ConfirmModal, DialogButton, Focusable, TextField, showModal } from "@decky/ui";
-import { getSlotSaves, switchSlot, debugLog } from "../api/backend";
+import { toaster } from "@decky/api";
+import { getSlotSaves, switchSlot, debugLog, savesSupportsVersionHistory, savesListFileVersions, savesRollbackToVersion } from "../api/backend";
+import type { SaveVersionEntry, RollbackStatus } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
-import type { SaveStatus, PendingConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse } from "../types";
+import type { SaveStatus, PendingConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse, DeviceSyncInfo } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
+import { formatTimestamp } from "../utils/formatters";
 
 // --- Type re-exports needed internally ---
 
@@ -62,6 +65,17 @@ function formatRelativeTime(isoStr: string | null): string {
   return `${d} ${months[date.getMonth()]}`;
 }
 
+/** Pick the most recently synced device from a device_syncs array, or null */
+function pickLastSyncer(syncs: DeviceSyncInfo[] | undefined): DeviceSyncInfo | null {
+  if (!syncs || syncs.length === 0) return null;
+  return syncs.reduce<DeviceSyncInfo | null>((latest, ds) => {
+    if (!latest) return ds;
+    if (!ds.last_synced_at) return latest;
+    if (!latest.last_synced_at) return ds;
+    return ds.last_synced_at > latest.last_synced_at ? ds : latest;
+  }, null);
+}
+
 /** Map a save file status to color and label */
 function statusLabel(status: string, lastSyncAt: string | null): { color: string; label: string } {
   switch (status) {
@@ -106,42 +120,233 @@ const NewSlotModal: FC<{
 };
 
 // ---------------------------------------------------------------------------
-// Device sync info helper
+// VersionHistoryPanel — expandable sub-panel below a save file row
 // ---------------------------------------------------------------------------
 
-function renderDeviceSyncInfo(f: SaveFileStatus): (ReturnType<typeof createElement> | null)[] {
-  if (!f.device_syncs || f.device_syncs.length === 0) return [];
-
-  const lastSyncer = f.device_syncs.reduce((latest, ds) => {
-    if (!latest) return ds;
-    if (!ds.last_synced_at) return latest;
-    if (!latest.last_synced_at) return ds;
-    return ds.last_synced_at > latest.last_synced_at ? ds : latest;
-  }, f.device_syncs[0]);
-
-  const children: (ReturnType<typeof createElement> | null)[] = [];
-
-  if (lastSyncer?.device_name) {
-    children.push(createElement("span", {
-      key: "device-info",
-      style: { fontSize: "11px", color: "rgba(255,255,255,0.5)" },
-    }, `Last sync: ${lastSyncer.device_name} \u2713`));
-  }
-
-  if (f.is_current === false) {
-    children.push(createElement("span", {
-      key: "not-current",
-      style: { fontSize: "11px", color: "#d4a72c", marginLeft: "8px" },
-    }, "Newer version available on server"));
-  }
-
-  if (children.length === 0) return [];
-  return [createElement("div", { key: "device-sync", style: { marginTop: "2px" } }, ...children)];
+interface VersionHistoryPanelProps {
+  romId: number;
+  slot: string;
+  filename: string;
+  isOffline: boolean;
+  onRestored: () => void;
 }
+
+const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
+  romId,
+  slot,
+  filename,
+  isOffline,
+  onRestored,
+}) => {
+  const [expanded, setExpanded] = useState(false);
+  const [versions, setVersions] = useState<SaveVersionEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [restoring, setRestoring] = useState<number | null>(null);
+
+  const handleToggle = async () => {
+    const willExpand = !expanded;
+    setExpanded(willExpand);
+    if (willExpand && versions === null && !isOffline) {
+      setLoading(true);
+      try {
+        const result = await savesListFileVersions(romId, slot, filename);
+        setVersions(result);
+      } catch (e) {
+        debugLog(`VersionHistoryPanel: failed to load versions for ${filename}: ${e}`);
+        setVersions([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleRestore = async (version: SaveVersionEntry, force: boolean) => {
+    setRestoring(version.id);
+    // When the user needs to confirm via modal, we keep `restoring` set so the
+    // Restore button stays disabled until the modal is resolved (prevents a
+    // double-submit window between the first call's finally and the onOK
+    // callback re-entering handleRestore with force=true).
+    let awaitingModal = false;
+    try {
+      const result: RollbackStatus = await savesRollbackToVersion(romId, slot, filename, version.id, force);
+      if (result.status === "ok") {
+        toaster.toast({ title: "RomM Sync", body: `Save restored from ${formatRelativeTime(version.updated_at)}` });
+        // Invalidate cache so next expand re-fetches
+        setVersions(null);
+        setExpanded(false);
+        onRestored();
+      } else if (result.status === "unsynced_changes") {
+        awaitingModal = true;
+        showModal(createElement(ConfirmModal, {
+          strTitle: "Unsynced Local Changes",
+          strDescription: "Your local save has changes that haven't been synced to the server. Rolling back will discard them. Continue?",
+          strOKButtonText: "Roll Back",
+          strCancelButtonText: "Cancel",
+          onOK: () => { handleRestore(version, true); },
+          onCancel: () => { setRestoring(null); },
+        }));
+      } else if (result.status === "tracked_missing") {
+        awaitingModal = true;
+        showModal(createElement(ConfirmModal, {
+          strTitle: "Current save missing on server",
+          strDescription: "The save currently tracked by this device no longer exists on the server. Rolling back will discard the reference to it. Continue?",
+          strOKButtonText: "Roll Back",
+          strCancelButtonText: "Cancel",
+          onOK: () => { handleRestore(version, true); },
+          onCancel: () => { setRestoring(null); },
+        }));
+      } else if (result.status === "not_found") {
+        toaster.toast({ title: "RomM Sync", body: "This version no longer exists on the server" });
+      } else if (result.status === "unsupported") {
+        toaster.toast({ title: "RomM Sync", body: "Version history requires RomM 4.7+" });
+      }
+    } catch (e) {
+      debugLog(`VersionHistoryPanel: restore error for save ${version.id}: ${e}`);
+    } finally {
+      if (!awaitingModal) setRestoring(null);
+    }
+  };
+
+  const versionCount = versions?.length ?? 0;
+
+  return createElement("div", {
+    key: `history-${filename}`,
+    style: { marginTop: "4px", marginLeft: "8px" },
+  },
+    // Expander toggle
+    createElement(DialogButton as any, {
+      style: {
+        background: "transparent",
+        border: "none",
+        padding: "2px 0",
+        textAlign: "left" as const,
+        width: "100%",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        gap: "4px",
+        fontSize: "11px",
+        color: "#8f98a0",
+      },
+      noFocusRing: false,
+      onFocus: scrollFocusedToCenter,
+      onClick: handleToggle,
+    },
+      createElement("span", {}, expanded ? "\u25BE" : "\u25B8"),
+      createElement("span", {}, expanded && versions !== null
+        ? `Previous Versions (${versionCount})`
+        : "Previous Versions"),
+    ),
+
+    // Version list (lazy-loaded)
+    expanded
+      ? createElement("div", { style: { marginTop: "4px" } },
+          isOffline
+            ? createElement("div", {
+                style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const },
+              }, "Offline \u2014 versions unavailable")
+            : loading
+              ? createElement("div", { style: { fontSize: "11px", color: "#8f98a0" } }, "Loading...")
+              : versionCount === 0
+                ? createElement("div", { style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const } }, "No older versions available")
+                : (versions ?? []).map((v) => {
+                    const lastSyncer = pickLastSyncer(v.device_syncs);
+                    const deviceName = lastSyncer?.device_name ?? null;
+                    const isThisRestoring = restoring === v.id;
+
+                    // Line 1: #id · emulator · size
+                    const headerParts: string[] = [`#${v.id}`];
+                    if (v.emulator) headerParts.push(v.emulator);
+                    if (v.file_size_bytes != null) headerParts.push(formatBytes(v.file_size_bytes));
+
+                    // Line 2: Last updated: <timestamp>[ · <device>]
+                    const lastUpdatedParts: string[] = [formatTimestamp(v.updated_at)];
+                    if (deviceName) lastUpdatedParts.push(`${deviceName} \u2713`);
+
+                    return createElement("div", {
+                      key: `ver-${v.id}`,
+                      style: {
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                        padding: "6px 0",
+                        borderBottom: "1px solid rgba(255,255,255,0.06)",
+                      },
+                    },
+                      // Info column (grows)
+                      createElement("div", { style: { flex: 1, minWidth: 0 } },
+                        // Line 1: #id · emulator · size
+                        createElement("div", {
+                          style: { fontSize: "12px", color: "#c7cdd3", fontWeight: 600 },
+                        }, headerParts.join(" \u00B7 ")),
+                        // Line 2: last updated + device
+                        createElement("div", {
+                          style: {
+                            fontSize: "11px",
+                            color: "#8f98a0",
+                            marginTop: "2px",
+                          },
+                        },
+                          createElement("span", { style: { color: "#697075" } }, "Last updated: "),
+                          lastUpdatedParts.join(" \u00B7 "),
+                        ),
+                        // Line 3: server filename (technical, bottom)
+                        createElement("div", {
+                          style: {
+                            fontSize: "11px",
+                            color: "#8f98a0",
+                            fontFamily: "monospace",
+                            wordBreak: "break-all" as const,
+                            marginTop: "2px",
+                          },
+                        }, v.file_name),
+                      ),
+                      // Restore button (fixed right, disabled when offline)
+                      createElement(DialogButton as any, {
+                        style: {
+                          padding: "2px 8px",
+                          minWidth: "auto",
+                          fontSize: "11px",
+                          width: "auto",
+                          flexShrink: 0,
+                        },
+                        noFocusRing: false,
+                        onFocus: scrollFocusedToCenter,
+                        disabled: isThisRestoring || restoring !== null || isOffline,
+                        onClick: () => { handleRestore(v, false); },
+                      }, isThisRestoring ? "Restoring..." : "Restore"),
+                    );
+                  }),
+        )
+      : null,
+  );
+};
 
 // ---------------------------------------------------------------------------
 // SaveFileRow — one row in the active slot body
 // ---------------------------------------------------------------------------
+
+// Label column width — keeps values aligned vertically across rows
+const LABEL_WIDTH = "88px";
+
+/** Render a labeled info row (label column + value column) inside the tracked save block */
+function infoRow(
+  key: string,
+  label: string,
+  value: ReturnType<typeof createElement> | string | null,
+  valueColor = "#c7cdd3",
+): ReturnType<typeof createElement> | null {
+  if (value == null || value === "") return null;
+  return createElement("div", {
+    key,
+    style: { display: "flex", alignItems: "flex-start", fontSize: "11px", marginTop: "2px" },
+  },
+    createElement("span", {
+      style: { color: "#697075", width: LABEL_WIDTH, flexShrink: 0 },
+    }, label),
+    createElement("div", { style: { color: valueColor, flex: 1, minWidth: 0 } }, value),
+  );
+}
 
 function renderSaveFileRow(
   f: SaveFileStatus,
@@ -150,17 +355,61 @@ function renderSaveFileRow(
 ): ReturnType<typeof createElement> {
   const { color, label } = statusLabel(f.status, f.last_sync_at);
   const syncTime = lastSyncCheckAt || f.last_sync_at;
+  const lastSyncer = pickLastSyncer(f.device_syncs);
+  const conflictActive = f.status === "conflict" || !!conflict;
 
-  const details: string[] = [];
-  if (f.local_size != null) details.push(formatBytes(f.local_size));
-  if (f.local_mtime) details.push(`Changed ${formatRelativeTime(f.local_mtime)}`);
+  // Header value pieces (right-aligned meta: size + status)
+  const headerMeta: (ReturnType<typeof createElement> | null)[] = [];
+  if (f.local_size != null) {
+    headerMeta.push(createElement("span", {
+      key: "size",
+      style: { fontSize: "11px", color: "#8f98a0" },
+    }, formatBytes(f.local_size)));
+  }
+  headerMeta.push(createElement("span", {
+    key: "status",
+    className: "romm-save-status-label",
+    style: { color, fontSize: "11px", fontWeight: 600 },
+  }, label));
+
+  // Last synced value: "just now · steamdeck ✓"
+  const lastSyncedPieces: string[] = [];
+  if (syncTime) {
+    lastSyncedPieces.push(formatRelativeTime(syncTime) || "Never");
+  } else {
+    lastSyncedPieces.push("Never");
+  }
+  if (lastSyncer?.device_name) {
+    lastSyncedPieces.push(`${lastSyncer.device_name} \u2713`);
+  }
+  if (f.is_current === false) {
+    lastSyncedPieces.push("Newer version available on server");
+  }
+  const lastSyncedValue = lastSyncedPieces.join(" \u00B7 ");
+
+  // Server save value — two lines: "#18 · retroarch-mgba" / "<server_file_name>"
+  const serverValueLines: ReturnType<typeof createElement>[] = [];
+  if (f.server_save_id != null) {
+    const headerParts: string[] = [`#${f.server_save_id}`];
+    if (f.server_emulator) headerParts.push(f.server_emulator);
+    serverValueLines.push(createElement("div", {
+      key: "srv-head",
+      style: { color: "#c7cdd3" },
+    }, headerParts.join(" \u00B7 ")));
+    if (f.server_file_name) {
+      serverValueLines.push(createElement("div", {
+        key: "srv-fn",
+        style: { color: "#8f98a0", fontFamily: "monospace", wordBreak: "break-all" as const, marginTop: "1px" },
+      }, f.server_file_name));
+    }
+  }
 
   return createElement(DialogButton as any, {
     key: f.filename,
     style: {
       background: "transparent",
       border: "none",
-      padding: "6px 0",
+      padding: "8px 0",
       textAlign: "left" as const,
       width: "100%",
       cursor: "default",
@@ -169,45 +418,60 @@ function renderSaveFileRow(
     noFocusRing: false,
     onFocus: scrollFocusedToCenter,
   },
-    // Filename
+    // Header row: filename (left) + size + status badge (right)
     createElement("div", {
-      style: { fontSize: "12px", color: "#dcdedf", fontWeight: 500, marginBottom: "3px" },
-    }, f.filename),
-
-    // Status label · size · changed time
-    createElement("div", {
-      style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" as const },
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "8px",
+        marginBottom: "4px",
+      },
     },
-      createElement("span", {
-        className: "romm-save-status-label",
-        style: { color },
-      }, label),
-      details.length > 0
-        ? createElement("span", { style: { fontSize: "11px", color: "#8f98a0" } },
-            `\u00B7 ${details.join(" \u00B7 ")}`)
-        : null,
-      syncTime
-        ? createElement("span", { style: { fontSize: "11px", color: "#8f98a0" } },
-            `\u00B7 Synced ${formatRelativeTime(syncTime)}`)
-        : null,
+      createElement("div", {
+        style: {
+          fontSize: "13px",
+          color: "#dcdedf",
+          fontWeight: 600,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap" as const,
+          flex: 1,
+          minWidth: 0,
+        },
+      }, f.filename),
+      createElement("div", {
+        style: { display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 },
+      }, ...headerMeta),
     ),
 
-    // Device sync info (v4.7+)
-    ...renderDeviceSyncInfo(f),
-
-    // Conflict detail
-    (f.status === "conflict" || conflict)
+    // Conflict banner (prominent)
+    conflictActive
       ? createElement("div", {
-          style: { fontSize: "11px", color: "#d94126", fontWeight: 600, marginTop: "2px" },
-        }, "Conflict detected — resolve from the sync action")
+          style: { fontSize: "11px", color: "#d94126", fontWeight: 600, marginTop: "2px", marginBottom: "2px" },
+        }, "Conflict detected \u2014 resolve from the sync action")
       : null,
 
-    // Local path
+    // Info rows
+    infoRow("last-synced", "Last synced:", lastSyncedValue),
+    infoRow(
+      "last-updated",
+      "Last updated:",
+      f.server_updated_at ? formatTimestamp(f.server_updated_at) : null,
+      "#8f98a0",
+    ),
+    serverValueLines.length > 0
+      ? infoRow("server", "Server save:", createElement("div", {}, ...serverValueLines))
+      : null,
     f.local_path
-      ? createElement("div", {
-          className: "romm-panel-file-path",
-          style: { marginTop: "3px" },
-        }, f.local_path)
+      ? infoRow(
+          "path",
+          "Local path:",
+          createElement("span", {
+            style: { fontFamily: "monospace", wordBreak: "break-all" as const },
+          }, f.local_path),
+          "#5a6066",
+        )
       : null,
   );
 }
@@ -264,11 +528,28 @@ function computeSyncSummary(
 function renderActiveSlotBody(
   saveStatus: SaveStatus | null,
   conflicts: PendingConflict[],
+  romId: number,
+  slot: string,
+  supportsVersionHistory: boolean,
+  isOffline: boolean,
+  onVersionRestored: () => void,
 ): (ReturnType<typeof createElement> | null)[] {
   if (saveStatus && saveStatus.files.length > 0) {
     return saveStatus.files.map((f) => {
       const conflict = conflicts.find((c) => c.filename === f.filename);
-      return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
+      return createElement("div", { key: f.filename },
+        renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
+        supportsVersionHistory
+          ? createElement(VersionHistoryPanel, {
+              key: `vhp-${f.filename}`,
+              romId,
+              slot,
+              filename: f.filename,
+              isOffline,
+              onRestored: onVersionRestored,
+            })
+          : null,
+      );
     });
   }
   return [createElement("div", { key: "no-files", style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic" } },
@@ -280,6 +561,7 @@ function renderInactiveSlotBody(
   slotFiles: SlotSaveFile[] | null,
   switching: boolean,
   switchError: string | null,
+  isOffline: boolean,
   handleActivate: () => void,
 ): (ReturnType<typeof createElement> | null)[] {
   const children: (ReturnType<typeof createElement> | null)[] = [];
@@ -302,9 +584,15 @@ function renderInactiveSlotBody(
         style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto" },
         noFocusRing: false,
         onFocus: scrollFocusedToCenter,
-        disabled: switching,
+        disabled: switching || isOffline,
         onClick: handleActivate,
       }, switching ? "Switching..." : "Activate Slot"),
+      isOffline
+        ? createElement("div", {
+            key: "offline-hint",
+            style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const, marginTop: "4px" },
+          }, "Offline \u2014 slot switching unavailable")
+        : null,
       switchError
         ? createElement("div", {
             key: "switch-error",
@@ -325,8 +613,11 @@ interface SlotPanelProps {
   // Active slot data (only set when isActive === true)
   saveStatus: SaveStatus | null;
   conflicts: PendingConflict[];
+  supportsVersionHistory: boolean;
+  isOffline: boolean;
   // Callbacks
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
+  onVersionRestored: () => void;
 }
 
 const SlotPanel: FC<SlotPanelProps> = ({
@@ -336,7 +627,10 @@ const SlotPanel: FC<SlotPanelProps> = ({
   defaultExpanded,
   saveStatus,
   conflicts,
+  supportsVersionHistory,
+  isOffline,
   onSlotSwitched,
+  onVersionRestored,
 }) => {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [slotFiles, setSlotFiles] = useState<SlotSaveFile[] | null>(null);
@@ -457,8 +751,8 @@ const SlotPanel: FC<SlotPanelProps> = ({
   let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
   if (expanded) {
     bodyChildren = isActive
-      ? renderActiveSlotBody(saveStatus, conflicts)
-      : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, handleActivate);
+      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, supportsVersionHistory, isOffline, onVersionRestored)
+      : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate);
   }
 
   const bodyEl = expanded
@@ -490,6 +784,28 @@ export const SavesTab: FC<SavesTabProps> = ({
   const [newSlotError, setNewSlotError] = useState<string | null>(null);
   const newSlotErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
+  const [supportsVersionHistory, setSupportsVersionHistory] = useState(false);
+  // Bumped to invalidate VersionHistoryPanel caches after a restore
+  const [versionHistoryKey, setVersionHistoryKey] = useState(0);
+
+  useEffect(() => {
+    // Skip while offline — preserve last-known capability so we don't flicker
+    // the UI off if the server is briefly unreachable. Re-fetches on reconnect
+    // via the isOffline dep.
+    if (isOffline) return;
+    savesSupportsVersionHistory()
+      .then((supported) => setSupportsVersionHistory(!!supported))
+      .catch(() => setSupportsVersionHistory(false));
+  }, [isOffline]);
+
+  const handleVersionRestored = () => {
+    setVersionHistoryKey((k) => k + 1);
+    // Trigger parent refresh of saveStatus so the tracked save row reflects
+    // the new tracked_save_id / server fields without leaving the page.
+    globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
+      detail: { type: "save_sync", rom_id: romId },
+    }));
+  };
 
   useEffect(() => {
     const onConnectionChanged = (e: Event) => {
@@ -644,14 +960,17 @@ export const SavesTab: FC<SavesTabProps> = ({
       .map((slot) => {
         const isActive = activeSlot !== null && slot.slot === activeSlot;
         return createElement(SlotPanel, {
-          key: `panel-${slot.slot}`,
+          key: `panel-${slot.slot}-${versionHistoryKey}`,
           romId,
           slot,
           isActive,
           defaultExpanded: isActive,
           saveStatus: isActive ? saveStatus : null,
           conflicts: isActive ? conflicts : [],
+          supportsVersionHistory,
+          isOffline,
           onSlotSwitched,
+          onVersionRestored: handleVersionRestored,
         });
       }),
 

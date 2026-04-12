@@ -86,11 +86,16 @@ def _server_save(
     updated_at="2026-02-17T06:00:00Z",
     file_size_bytes=1024,
     slot=_SERVER_SAVE_SENTINEL,
+    file_name_no_tags=None,
 ):
+    if file_name_no_tags is None:
+        # Strip extension to approximate RomM's file_name_no_tags
+        file_name_no_tags = filename.rsplit(".", 1)[0] if "." in filename else filename
     result = {
         "id": save_id,
         "rom_id": rom_id,
         "file_name": filename,
+        "file_name_no_tags": file_name_no_tags,
         "updated_at": updated_at,
         "file_size_bytes": file_size_bytes,
         "emulator": "retroarch",
@@ -3715,3 +3720,390 @@ class TestSwitchSlot:
         # Must be "" (legacy key), NOT "default"
         assert "" in slot_names
         assert "default" not in slot_names
+
+
+# ---------------------------------------------------------------------------
+# TestSupportsVersionHistory
+# ---------------------------------------------------------------------------
+
+
+class TestSupportsVersionHistory:
+    """Tests for SaveService.supports_version_history — capability check."""
+
+    def test_returns_false_on_v46(self, tmp_path):
+        """Returns False when the API adapter does not support device sync (v4.6)."""
+        svc, fake = make_service(tmp_path)
+        assert fake._supports_device_sync is False
+        assert svc.supports_version_history() is False
+
+    def test_returns_true_on_v47(self, tmp_path):
+        """Returns True when the API adapter supports device sync (v4.7+)."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        assert svc.supports_version_history() is True
+
+
+# ---------------------------------------------------------------------------
+# TestListFileVersions
+# ---------------------------------------------------------------------------
+
+
+class TestListFileVersions:
+    """Tests for SaveService.list_file_versions."""
+
+    def _setup_state(self, svc, tracked_id: int | None) -> None:
+        """Populate save state with a tracked save id for rom 42, pokemon.srm."""
+        svc._save_sync_state["saves"]["42"] = {
+            "system": "gba",
+            "active_slot": "default",
+            "files": {
+                "pokemon.srm": {"tracked_save_id": tracked_id},
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_v46(self, tmp_path):
+        """Returns empty list on v4.6 (no version history support)."""
+        svc, fake = make_service(tmp_path)
+        # v4.6: _supports_device_sync is False
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_happy_path_excludes_tracked(self, tmp_path):
+        """Returns older versions, excluding the currently-tracked save."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        # tracked save
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        # older version
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
+        # different base name — should not appear
+        fake.saves[60] = {
+            "id": 60,
+            "rom_id": 42,
+            "file_name": "other.srm",
+            "file_name_no_tags": "other",
+            "updated_at": "2026-03-05T10:00:00Z",
+            "file_size_bytes": 512,
+            "slot": "default",
+            "download_path": "/saves/other.srm",
+        }
+        self._setup_state(svc, tracked_id=100)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert len(result) == 1
+        assert result[0]["id"] == 50
+        assert result[0]["updated_at"] == "2026-03-01T10:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_matches_by_file_name_no_tags(self, tmp_path):
+        """Saves with different file_name but same file_name_no_tags are included."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        # tracked: timestamped filename from initial POST
+        fake.saves[100] = _server_save(
+            save_id=100,
+            rom_id=42,
+            slot="default",
+            updated_at="2026-03-10T10:00:00Z",
+            filename="pokemon [2026-03-10_10-00-00].srm",
+            file_name_no_tags="pokemon",
+        )
+        # another device's upload: different filename, same base
+        fake.saves[50] = _server_save(
+            save_id=50,
+            rom_id=42,
+            slot="default",
+            updated_at="2026-03-01T10:00:00Z",
+            filename="pokemon [2026-03-01_10-00-00].srm",
+            file_name_no_tags="pokemon",
+        )
+        self._setup_state(svc, tracked_id=100)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert len(result) == 1
+        assert result[0]["id"] == 50
+
+    @pytest.mark.asyncio
+    async def test_sorted_newest_first(self, tmp_path):
+        """Versions are sorted by updated_at descending."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        fake.saves[30] = _server_save(save_id=30, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
+        self._setup_state(svc, tracked_id=100)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert len(result) == 2
+        assert result[0]["id"] == 50  # newer of the two old versions first
+        assert result[1]["id"] == 30
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_older_versions(self, tmp_path):
+        """Returns empty list when there are no versions other than the tracked one."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        self._setup_state(svc, tracked_id=100)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_no_tracked_save_returns_empty(self, tmp_path):
+        """When no tracked_save_id in state, returns empty — can't determine base name."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
+        # No state at all (tracked_id is None)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_empty(self, tmp_path):
+        """Returns empty list when the server call fails."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        fake.fail_on_next(Exception("network error"))
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_result_shape(self, tmp_path):
+        """Each entry contains the required fields: id, updated_at, file_size_bytes, device_syncs."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        fake.saves[50] = {
+            "id": 50,
+            "rom_id": 42,
+            "file_name": "pokemon [2026-03-01_10-00-00].srm",
+            "file_name_no_tags": "pokemon",
+            "emulator": "retroarch-mgba",
+            "updated_at": "2026-03-01T10:00:00Z",
+            "file_size_bytes": 2048,
+            "device_syncs": [
+                {"device_id": "abc", "device_name": "steamdeck", "is_current": True, "last_synced_at": None}
+            ],
+            "slot": "default",
+            "download_path": "/saves/pokemon.srm",
+        }
+        self._setup_state(svc, tracked_id=100)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert len(result) == 1
+        entry = result[0]
+        assert entry["id"] == 50
+        assert entry["file_name"] == "pokemon [2026-03-01_10-00-00].srm"
+        assert entry["emulator"] == "retroarch-mgba"
+        assert entry["updated_at"] == "2026-03-01T10:00:00Z"
+        assert entry["file_size_bytes"] == 2048
+        assert len(entry["device_syncs"]) == 1
+        assert entry["device_syncs"][0]["device_name"] == "steamdeck"
+
+
+# ---------------------------------------------------------------------------
+# TestRollbackToVersion
+# ---------------------------------------------------------------------------
+
+
+class TestRollbackToVersion:
+    """Tests for SaveService.rollback_to_version — the core rollback flow."""
+
+    def _setup_state(self, svc, tmp_path, tracked_id: int, last_sync_hash: str | None = None) -> None:
+        _install_rom(svc, tmp_path)
+        svc._save_sync_state["saves"]["42"] = {
+            "system": "gba",
+            "active_slot": "default",
+            "files": {
+                "pokemon.srm": {
+                    "tracked_save_id": tracked_id,
+                    "last_sync_hash": last_sync_hash,
+                },
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_returns_unsupported_on_v46(self, tmp_path):
+        """Returns unsupported when server does not support version history."""
+        svc, _fake = make_service(tmp_path)
+        # v4.6: _supports_device_sync is False
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        assert result == {"status": "unsupported"}
+
+    @pytest.mark.asyncio
+    async def test_returns_not_found_when_rom_not_installed(self, tmp_path):
+        """Returns not_found when the ROM is not in installed_roms."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        # rom 999 is not installed
+        result = await svc.rollback_to_version(999, "default", "pokemon.srm", 50)
+        assert result == {"status": "not_found"}
+
+    @pytest.mark.asyncio
+    async def test_returns_not_found_when_save_id_missing(self, tmp_path):
+        """Returns not_found when target save_id is not in the server response."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        # Request save_id=999, which doesn't exist
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 999)
+        assert result == {"status": "not_found"}
+
+    @pytest.mark.asyncio
+    async def test_proceeds_even_with_newer_foreign_save(self, tmp_path):
+        """Rollback is not blocked when a newer save exists in the slot.
+
+        Gate E was removed — rollback is an explicit user action.  The newer
+        save warning is surfaced through the separate newer-in-slot conflict
+        flow, not by blocking the rollback.
+        """
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        self._setup_state(svc, tmp_path, tracked_id=100)
+        _create_save(tmp_path)
+        # tracked save
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        # newer save from another device — should NOT block rollback
+        fake.saves[200] = _server_save(save_id=200, rom_id=42, slot="default", updated_at="2026-03-20T10:00:00Z")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_tracked_missing_blocked_without_force(self, tmp_path):
+        """Returns tracked_missing when the currently tracked save is gone from the server."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        self._setup_state(svc, tmp_path, tracked_id=999)
+        _create_save(tmp_path)
+        # Tracked save 999 does NOT exist on server
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        assert result == {"status": "tracked_missing"}
+
+    @pytest.mark.asyncio
+    async def test_tracked_missing_bypassed_by_force(self, tmp_path):
+        """force=True bypasses the tracked_missing guard."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        self._setup_state(svc, tmp_path, tracked_id=999)
+        _create_save(tmp_path)
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50, force=True)
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_unsynced_changes_blocked_without_force(self, tmp_path):
+        """Returns unsynced_changes when local file differs from last_sync_hash and force=False."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        save_file = _create_save(tmp_path, content=b"\xff" * 1024)
+        local_hash = _file_md5(str(save_file))
+        # Set a different hash as the "last synced" hash
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="aabbcc001122334455667788")
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "unsynced_changes"
+        assert result["local_hash"] == local_hash
+        assert result["tracked_hash"] == "aabbcc001122334455667788"
+
+    @pytest.mark.asyncio
+    async def test_force_overrides_unsynced_check(self, tmp_path):
+        """force=True skips the unsynced changes check and proceeds with download."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        _create_save(tmp_path, content=b"\xff" * 1024)
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="aabbcc001122334455667788")
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50, force=True)
+
+        assert result["status"] == "ok"
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert any(c[1][0] == 50 for c in download_calls)
+
+    @pytest.mark.asyncio
+    async def test_happy_path_downloads_and_updates_state(self, tmp_path):
+        """Happy path: rollback downloads the target save and updates file sync state."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        # tracked (no change since last sync)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        # older version to roll back to
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+        # Verify download was called with save_id=50
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert any(c[1][0] == 50 for c in download_calls)
+        # State updated: tracked_save_id should now point to the rolled-back save
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state["tracked_save_id"] == 50
+
+    @pytest.mark.asyncio
+    async def test_no_local_file_no_unsynced_block(self, tmp_path):
+        """When local file doesn't exist, unsynced check is skipped."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        # Set a last_sync_hash but no local file
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="somehash")
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_no_state_entry_no_unsynced_block(self, tmp_path):
+        """When there's no last_sync_hash in state, unsynced check is skipped."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        _create_save(tmp_path, content=b"\xff" * 1024)
+        # No last_sync_hash (first time syncing)
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=None)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_server_error_returns_not_found(self, tmp_path):
+        """Returns not_found when the server call fails."""
+        svc, fake = make_service(tmp_path)
+        fake._supports_device_sync = True
+        _install_rom(svc, tmp_path)
+        fake.fail_on_next(Exception("network error"))
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "not_found"
