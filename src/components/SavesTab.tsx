@@ -209,6 +209,92 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
 
   const versionCount = versions?.length ?? 0;
 
+  const renderVersionRow = (v: SaveVersionEntry): ReturnType<typeof createElement> => {
+    const lastSyncer = pickLastSyncer(v.device_syncs);
+    const deviceName = lastSyncer?.device_name ?? null;
+    const isThisRestoring = restoring === v.id;
+
+    // Line 1: #id · emulator · size
+    const headerParts: string[] = [`#${v.id}`];
+    if (v.emulator) headerParts.push(v.emulator);
+    if (v.file_size_bytes != null) headerParts.push(formatBytes(v.file_size_bytes));
+
+    // Line 2: Last updated: <timestamp>[ · <device>]
+    const lastUpdatedParts: string[] = [formatTimestamp(v.updated_at)];
+    if (deviceName) lastUpdatedParts.push(`${deviceName} \u2713`);
+
+    return createElement("div", {
+      key: `ver-${v.id}`,
+      style: {
+        display: "flex",
+        alignItems: "flex-start",
+        gap: "8px",
+        padding: "6px 0",
+        borderBottom: "1px solid rgba(255,255,255,0.06)",
+      },
+    },
+      // Info column (grows)
+      createElement("div", { style: { flex: 1, minWidth: 0 } },
+        // Line 1: #id · emulator · size
+        createElement("div", {
+          style: { fontSize: "12px", color: "#c7cdd3", fontWeight: 600 },
+        }, headerParts.join(" \u00B7 ")),
+        // Line 2: last updated + device
+        createElement("div", {
+          style: {
+            fontSize: "11px",
+            color: "#8f98a0",
+            marginTop: "2px",
+          },
+        },
+          createElement("span", { style: { color: "#697075" } }, "Last updated: "),
+          lastUpdatedParts.join(" \u00B7 "),
+        ),
+        // Line 3: server filename (technical, bottom)
+        createElement("div", {
+          style: {
+            fontSize: "11px",
+            color: "#8f98a0",
+            fontFamily: "monospace",
+            wordBreak: "break-all" as const,
+            marginTop: "2px",
+          },
+        }, v.file_name),
+      ),
+      // Restore button (fixed right, disabled when offline)
+      createElement(DialogButton as any, {
+        style: {
+          padding: "2px 8px",
+          minWidth: "auto",
+          fontSize: "11px",
+          width: "auto",
+          flexShrink: 0,
+        },
+        noFocusRing: false,
+        onFocus: scrollFocusedToCenter,
+        disabled: isThisRestoring || restoring !== null || isOffline,
+        onClick: () => { handleRestore(v, false); },
+      }, isThisRestoring ? "Restoring..." : "Restore"),
+    );
+  };
+
+  const renderBody = (): ReturnType<typeof createElement> | ReturnType<typeof createElement>[] => {
+    if (isOffline) {
+      return createElement("div", {
+        style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const },
+      }, "Offline \u2014 versions unavailable");
+    }
+    if (loading) {
+      return createElement("div", { style: { fontSize: "11px", color: "#8f98a0" } }, "Loading...");
+    }
+    if (versionCount === 0) {
+      return createElement("div", {
+        style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const },
+      }, "No older versions available");
+    }
+    return (versions ?? []).map(renderVersionRow);
+  };
+
   return createElement("div", {
     key: `history-${filename}`,
     style: { marginTop: "4px", marginLeft: "8px" },
@@ -240,84 +326,7 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
 
     // Version list (lazy-loaded)
     expanded
-      ? createElement("div", { style: { marginTop: "4px" } },
-          isOffline
-            ? createElement("div", {
-                style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const },
-              }, "Offline \u2014 versions unavailable")
-            : loading
-              ? createElement("div", { style: { fontSize: "11px", color: "#8f98a0" } }, "Loading...")
-              : versionCount === 0
-                ? createElement("div", { style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const } }, "No older versions available")
-                : (versions ?? []).map((v) => {
-                    const lastSyncer = pickLastSyncer(v.device_syncs);
-                    const deviceName = lastSyncer?.device_name ?? null;
-                    const isThisRestoring = restoring === v.id;
-
-                    // Line 1: #id · emulator · size
-                    const headerParts: string[] = [`#${v.id}`];
-                    if (v.emulator) headerParts.push(v.emulator);
-                    if (v.file_size_bytes != null) headerParts.push(formatBytes(v.file_size_bytes));
-
-                    // Line 2: Last updated: <timestamp>[ · <device>]
-                    const lastUpdatedParts: string[] = [formatTimestamp(v.updated_at)];
-                    if (deviceName) lastUpdatedParts.push(`${deviceName} \u2713`);
-
-                    return createElement("div", {
-                      key: `ver-${v.id}`,
-                      style: {
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: "8px",
-                        padding: "6px 0",
-                        borderBottom: "1px solid rgba(255,255,255,0.06)",
-                      },
-                    },
-                      // Info column (grows)
-                      createElement("div", { style: { flex: 1, minWidth: 0 } },
-                        // Line 1: #id · emulator · size
-                        createElement("div", {
-                          style: { fontSize: "12px", color: "#c7cdd3", fontWeight: 600 },
-                        }, headerParts.join(" \u00B7 ")),
-                        // Line 2: last updated + device
-                        createElement("div", {
-                          style: {
-                            fontSize: "11px",
-                            color: "#8f98a0",
-                            marginTop: "2px",
-                          },
-                        },
-                          createElement("span", { style: { color: "#697075" } }, "Last updated: "),
-                          lastUpdatedParts.join(" \u00B7 "),
-                        ),
-                        // Line 3: server filename (technical, bottom)
-                        createElement("div", {
-                          style: {
-                            fontSize: "11px",
-                            color: "#8f98a0",
-                            fontFamily: "monospace",
-                            wordBreak: "break-all" as const,
-                            marginTop: "2px",
-                          },
-                        }, v.file_name),
-                      ),
-                      // Restore button (fixed right, disabled when offline)
-                      createElement(DialogButton as any, {
-                        style: {
-                          padding: "2px 8px",
-                          minWidth: "auto",
-                          fontSize: "11px",
-                          width: "auto",
-                          flexShrink: 0,
-                        },
-                        noFocusRing: false,
-                        onFocus: scrollFocusedToCenter,
-                        disabled: isThisRestoring || restoring !== null || isOffline,
-                        onClick: () => { handleRestore(v, false); },
-                      }, isThisRestoring ? "Restoring..." : "Restore"),
-                    );
-                  }),
-        )
+      ? createElement("div", { style: { marginTop: "4px" } }, renderBody())
       : null,
   );
 };
