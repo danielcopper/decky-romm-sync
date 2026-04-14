@@ -12,6 +12,7 @@ import {
   showModal,
   ToggleField,
 } from "@decky/ui";
+import { toaster } from "@decky/api";
 import {
   getSettings,
   saveSettings,
@@ -425,7 +426,13 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
                           try {
                             const r = await migrateRetroDeckFiles(strategy);
                             setMigrateResult(r.message);
-                            if (r.success) clearMigration();
+                            if (r.success) {
+                              clearMigration();
+                              toaster.toast({
+                                title: "RomM Sync",
+                                body: r.message || "Migration complete.",
+                              });
+                            }
                           } catch { setMigrateResult("Migration failed"); }
                           setMigrating(false);
                         }}
@@ -436,6 +443,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
                   setMigrateResult(result.message);
                   if (result.success) {
                     clearMigration();
+                    toaster.toast({
+                      title: "RomM Sync",
+                      body: result.message || "Migration complete.",
+                    });
                   }
                 } catch {
                   setMigrateResult("Migration failed");
@@ -495,7 +506,13 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
                           try {
                             const r = await migrateSaveSortFiles(strategy);
                             setSaveSortResult(r.message);
-                            if (r.success) clearSaveSortMigration();
+                            if (r.success) {
+                              clearSaveSortMigration();
+                              toaster.toast({
+                                title: "RomM Sync",
+                                body: r.message || "Migration complete.",
+                              });
+                            }
                           } catch { setSaveSortResult("Migration failed"); }
                           setSaveSortMigrating(false);
                         }}
@@ -506,6 +523,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
                   setSaveSortResult(result.message);
                   if (result.success) {
                     clearSaveSortMigration();
+                    toaster.toast({
+                      title: "RomM Sync",
+                      body: result.message || "Migration complete.",
+                    });
                   }
                 } catch {
                   setSaveSortResult("Migration failed");
