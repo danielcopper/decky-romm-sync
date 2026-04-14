@@ -34,6 +34,7 @@ from domain.save_path import resolve_save_dir
 from domain.save_sync import determine_sync_action, match_local_to_server_saves
 from lib.errors import RommApiError, RommConflictError, classify_error
 from services.protocols import (
+    CoreNameProviderFn,
     CoreResolverFn,
     RetryStrategy,
     RommApiProtocol,
@@ -84,6 +85,17 @@ class SaveService:
     get_active_core:
         Callable resolving the active RetroArch core for a system/game.
         Returns ``(core_so, label)`` tuple; either may be None if unresolved.
+        This is an ES-DE question (``which core runs this ROM?``).
+    get_core_name:
+        Callable returning the RetroArch canonical ``corename`` field from
+        a core's ``.info`` file for a given ``core_so`` (e.g. ``"mgba_libretro"``
+        → ``"mGBA"``). Optional. When ``sort_savefiles_enable`` is active on
+        RetroArch, this is the authoritative name used for the per-core save
+        subdirectory — it is NOT the same as the ES-DE UI label returned by
+        ``get_active_core`` (see the Config-Source-Parsers wiki page for the
+        one-parser-per-source rationale). When ``None`` or when resolution
+        fails at runtime, SaveService warns and falls back to the parent
+        directory path; see ``_resolve_retroarch_corename``.
     get_retroarch_save_sorting:
         Callable returning ``(sort_by_content, sort_by_core)`` booleans from retroarch.cfg.
     """
@@ -104,6 +116,7 @@ class SaveService:
         get_saves_path: SavesPathProvider,
         get_roms_path: RomsPathProvider,
         get_active_core: CoreResolverFn,
+        get_core_name: CoreNameProviderFn | None = None,
         plugin_version: str = "0.0.0",
         emit: EventEmitter | None = None,
     ) -> None:
@@ -118,6 +131,7 @@ class SaveService:
         self._get_saves_path = get_saves_path
         self._get_roms_path = get_roms_path
         self._get_active_core = get_active_core
+        self._get_core_name = get_core_name
         self._plugin_version = plugin_version
         self._emit = emit
 
@@ -225,6 +239,35 @@ class SaveService:
     # ROM / path helpers
     # ------------------------------------------------------------------
 
+    def _resolve_retroarch_corename(self, system: str, rom_filename: str) -> str | None:
+        """Resolve the RetroArch ``corename`` for a system/ROM.
+
+        Asks ES-DE (via ``get_active_core``) **which** core is active for
+        this ROM, then asks the RetroArch ``.info`` parser (via
+        ``get_core_name``) **what** RetroArch calls that core in its own
+        subsystem — which is the authoritative name used for per-core save
+        subdirectories when ``sort_savefiles_enable`` is active.
+
+        One parser per source: the ES-DE label (second element of the
+        ``get_active_core`` tuple) is NOT a valid substitute for the
+        RetroArch corename. See the Config-Source-Parsers wiki page and
+        the reference implementation in ``MigrationService``.
+
+        Returns ``None`` when either callback is missing, the active core
+        cannot be determined, or the ``.info`` file doesn't yield a
+        usable corename. Callers are responsible for choosing the right
+        behavior when ``None`` is returned (e.g. warn and fall back for
+        critical-path SaveService flows; skip and warn for one-shot
+        migrations).
+        """
+        if self._get_active_core is None or self._get_core_name is None:
+            return None
+        core_so, _label = self._get_active_core(system, rom_filename)
+        if not core_so:
+            return None
+        corename = self._get_core_name(core_so)
+        return corename or None
+
     def _get_rom_save_info(self, rom_id: int) -> dict | None:
         """Get save-related info for an installed ROM.
 
@@ -252,6 +295,29 @@ class SaveService:
             sort_by_core = sort_state.get("sort_by_core", False)
         else:
             sort_by_content, sort_by_core = True, False  # RetroDECK defaults
+
+        # When sort-by-core is active, RetroArch writes per-core subdirs named
+        # by the .info ``corename`` field. Resolve it via the dedicated parser.
+        # See docs: Config-Source-Parsers wiki page ("one parser per source").
+        # Decision: warn-and-fallback (not fail-loud like MigrationService).
+        # SaveService is the critical-path sync flow — every game launch
+        # depends on it. Fail-loud would take down save sync entirely on any
+        # .info hiccup. MigrationService can afford strictness (one-shot),
+        # SaveService cannot (continuous). See issue #232 for history.
+        core_name: str | None = None
+        if sort_by_core:
+            core_name = self._resolve_retroarch_corename(system, os.path.basename(file_path))
+            if core_name is None:
+                self._logger.warning(
+                    "SaveService: unable to resolve RetroArch corename for "
+                    "%s/%s while sort_by_core is enabled. Falling back to the "
+                    "parent save directory, which will not match what RetroArch "
+                    "reads at runtime. Check that the core's .info file is "
+                    "readable under the RetroDECK Flatpak cores directory.",
+                    system,
+                    os.path.basename(file_path),
+                )
+
         saves_dir = resolve_save_dir(
             file_path,
             saves_base,
@@ -259,6 +325,7 @@ class SaveService:
             roms_base=roms_base,
             sort_by_content=sort_by_content,
             sort_by_core=sort_by_core,
+            core_name=core_name,
         )
 
         return {

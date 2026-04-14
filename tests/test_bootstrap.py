@@ -198,3 +198,17 @@ class TestWireServices:
         # Callback is stored as _get_core_name on the service
         assert migration_service._get_core_name is get_core_name_mock
         deps["loop"].close()
+
+    def test_save_sync_service_receives_get_core_name(self, tmp_path):
+        """Regression test for #232: SaveService must receive get_core_name.
+
+        Without this callback, SaveService cannot resolve the RetroArch
+        .info ``corename`` when ``sort_by_core`` is active, and silently
+        builds save paths that RetroArch will not read.
+        """
+        deps = self._make_deps(tmp_path)
+        get_core_name_mock = deps["get_core_name"]
+        result = wire_services(WiringConfig(**deps))
+        save_sync_service = result["save_sync_service"]
+        assert save_sync_service._get_core_name is get_core_name_mock
+        deps["loop"].close()

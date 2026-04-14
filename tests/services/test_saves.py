@@ -1546,6 +1546,137 @@ class TestGetRomSaveInfo:
 
         assert result is None
 
+    # ------------------------------------------------------------------
+    # Regression tests for issue #232 — SaveService must resolve the
+    # RetroArch ``corename`` via the .info parser when sort_by_core is
+    # active, and must fall back with a warning when it cannot.
+    # ------------------------------------------------------------------
+
+    def test_default_sort_only_by_content_no_core_subdir(self, tmp_path):
+        """sort_by_core=False (RetroDECK default) → no core subdir."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            get_core_name=lambda core_so: "mGBA",
+        )
+        _install_rom(svc, tmp_path)
+        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
+
+        result = svc._get_rom_save_info(42)
+
+        assert result is not None
+        assert result["saves_dir"].endswith("saves/gba")
+        assert "/mGBA" not in result["saves_dir"]
+
+    def test_sort_by_core_appends_retroarch_corename(self, tmp_path):
+        """sort_by_core=True with resolvable corename → saves_dir ends in /{system}/{corename}."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            get_core_name=lambda core_so: "mGBA",
+        )
+        _install_rom(svc, tmp_path)
+        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+
+        result = svc._get_rom_save_info(42)
+
+        assert result is not None
+        assert result["saves_dir"].endswith("saves/gba/mGBA")
+
+    def test_sort_by_core_uses_corename_not_es_de_label(self, tmp_path):
+        """The RetroArch .info corename (``Snes9x``) must be used, not the ES-DE label (``Snes9x - Current``)."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x - Current"),
+            get_core_name=lambda core_so: "Snes9x",
+        )
+        _install_rom(svc, tmp_path, system="snes", file_name="mario.sfc")
+        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+
+        result = svc._get_rom_save_info(42)
+
+        assert result is not None
+        assert result["saves_dir"].endswith("saves/snes/Snes9x")
+        assert "Snes9x - Current" not in result["saves_dir"]
+
+    def test_sort_by_core_falls_back_when_corename_none(self, tmp_path, caplog):
+        """sort_by_core=True but corename unresolvable → warn + fall back to parent dir."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            get_core_name=lambda core_so: None,  # .info unreadable / field missing
+        )
+        _install_rom(svc, tmp_path)
+        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+
+        with caplog.at_level("WARNING"):
+            result = svc._get_rom_save_info(42)
+
+        assert result is not None
+        assert result["saves_dir"].endswith("saves/gba")
+        assert "/mGBA" not in result["saves_dir"]
+        assert any("unable to resolve RetroArch corename" in rec.message for rec in caplog.records)
+
+    def test_sort_by_core_falls_back_when_get_core_name_missing(self, tmp_path, caplog):
+        """Constructed without get_core_name → still warns and falls back."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            # get_core_name intentionally omitted (defaults to None)
+        )
+        _install_rom(svc, tmp_path)
+        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+
+        with caplog.at_level("WARNING"):
+            result = svc._get_rom_save_info(42)
+
+        assert result is not None
+        assert result["saves_dir"].endswith("saves/gba")
+        assert any("unable to resolve RetroArch corename" in rec.message for rec in caplog.records)
+
+    def test_sort_by_core_falls_back_when_active_core_unresolved(self, tmp_path, caplog):
+        """sort_by_core=True but get_active_core returns (None, None) → warn + fall back."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: (None, None),
+            get_core_name=lambda core_so: "mGBA",
+        )
+        _install_rom(svc, tmp_path)
+        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+
+        with caplog.at_level("WARNING"):
+            result = svc._get_rom_save_info(42)
+
+        assert result is not None
+        assert result["saves_dir"].endswith("saves/gba")
+        assert any("unable to resolve RetroArch corename" in rec.message for rec in caplog.records)
+
+    def test_resolve_retroarch_corename_happy_path(self, tmp_path):
+        """Direct test of the helper: both callbacks resolve → corename returned."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x - Current"),
+            get_core_name=lambda core_so: "Snes9x",
+        )
+        assert svc._resolve_retroarch_corename("snes", "mario.sfc") == "Snes9x"
+
+    def test_resolve_retroarch_corename_returns_none_when_core_so_empty(self, tmp_path):
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: (None, None),
+            get_core_name=lambda core_so: "Snes9x",
+        )
+        assert svc._resolve_retroarch_corename("snes", "mario.sfc") is None
+
+    def test_resolve_retroarch_corename_returns_none_when_empty_string(self, tmp_path):
+        """Empty-string corename from .info is treated as None (dead branch in domain guard)."""
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
+            get_core_name=lambda core_so: "",
+        )
+        assert svc._resolve_retroarch_corename("snes", "mario.sfc") is None
+
 
 # ---------------------------------------------------------------------------
 # TestUploadSpecialChars
