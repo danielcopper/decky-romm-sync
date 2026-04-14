@@ -296,6 +296,7 @@ class MigrationService:
                 state_updater()
                 if count_key:
                     counts[count_key] = counts.get(count_key, 0) + 1
+                self._logger.info(f"Migration overwrite: {old_path} -> {new_path}")
             except (OSError, shutil.Error) as e:
                 errors.append(f"{label}: {e}")
                 self._logger.error(f"Migration overwrite failed: {old_path}: {e}")
