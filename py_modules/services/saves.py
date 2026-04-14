@@ -96,8 +96,6 @@ class SaveService:
         one-parser-per-source rationale). When ``None`` or when resolution
         fails at runtime, SaveService warns and falls back to the parent
         directory path; see ``_resolve_retroarch_corename``.
-    get_retroarch_save_sorting:
-        Callable returning ``(sort_by_content, sort_by_core)`` booleans from retroarch.cfg.
     """
 
     _LOG_LEVELS: ClassVar[dict[str, int]] = {"debug": 0, "info": 1, "warn": 2, "error": 3}
@@ -239,7 +237,7 @@ class SaveService:
     # ROM / path helpers
     # ------------------------------------------------------------------
 
-    def _resolve_retroarch_corename(self, system: str, rom_filename: str) -> str | None:
+    def _resolve_retroarch_corename(self, system: str, rom_filename: str) -> tuple[str | None, str | None]:
         """Resolve the RetroArch ``corename`` for a system/ROM.
 
         Asks ES-DE (via ``get_active_core``) **which** core is active for
@@ -253,20 +251,24 @@ class SaveService:
         RetroArch corename. See the Config-Source-Parsers wiki page and
         the reference implementation in ``MigrationService``.
 
-        Returns ``None`` when either callback is missing, the active core
-        cannot be determined, or the ``.info`` file doesn't yield a
-        usable corename. Callers are responsible for choosing the right
-        behavior when ``None`` is returned (e.g. warn and fall back for
-        critical-path SaveService flows; skip and warn for one-shot
-        migrations).
+        Returns ``(corename, core_so)``. Either element may be ``None``
+        when resolution fails at that step: ``core_so`` is ``None`` when
+        ES-DE cannot determine the active core, ``corename`` is ``None``
+        when ``.info`` parsing returns nothing (or when ``get_core_name``
+        is not injected). Returning the tuple — rather than just
+        ``corename`` — lets callers include ``core_so`` in diagnostic
+        logs so users can identify which ``.info`` file is at fault.
+        Callers choose their own fallback strategy (e.g. warn and fall
+        back for critical-path SaveService flows; skip and warn for
+        one-shot migrations).
         """
-        if self._get_active_core is None or self._get_core_name is None:
-            return None
+        if self._get_core_name is None:
+            return (None, None)
         core_so, _label = self._get_active_core(system, rom_filename)
         if not core_so:
-            return None
+            return (None, None)
         corename = self._get_core_name(core_so)
-        return corename or None
+        return (corename or None, core_so)
 
     def _get_rom_save_info(self, rom_id: int) -> dict | None:
         """Get save-related info for an installed ROM.
@@ -306,16 +308,19 @@ class SaveService:
         # SaveService cannot (continuous). See issue #232 for history.
         core_name: str | None = None
         if sort_by_core:
-            core_name = self._resolve_retroarch_corename(system, os.path.basename(file_path))
+            rom_filename = os.path.basename(file_path)
+            core_name, core_so = self._resolve_retroarch_corename(system, rom_filename)
             if core_name is None:
                 self._logger.warning(
                     "SaveService: unable to resolve RetroArch corename for "
-                    "%s/%s while sort_by_core is enabled. Falling back to the "
-                    "parent save directory, which will not match what RetroArch "
-                    "reads at runtime. Check that the core's .info file is "
-                    "readable under the RetroDECK Flatpak cores directory.",
+                    "%s/%s (core_so=%s) while sort_by_core is enabled. "
+                    "Falling back to the parent save directory, which will "
+                    "not match what RetroArch reads at runtime. Check that "
+                    "the core's .info file is readable under the RetroDECK "
+                    "Flatpak cores directory.",
                     system,
-                    os.path.basename(file_path),
+                    rom_filename,
+                    core_so if core_so else "unresolved",
                 )
 
         saves_dir = resolve_save_dir(
