@@ -215,6 +215,11 @@ class Plugin:
     async def dismiss_save_sort_migration(self):
         return self._migration_service.dismiss_save_sort_migration()
 
+    async def refresh_migration_state(self):
+        self._migration_service.detect_retrodeck_path_change()
+        self._migration_service.detect_save_sort_change()
+        return {"success": True}
+
     async def _unload(self):  # Decky lifecycle — must be async
         self._sync_service.shutdown()
         self._download_service.shutdown()

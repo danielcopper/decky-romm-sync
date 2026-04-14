@@ -186,6 +186,7 @@ export interface SaveSortMigrationStatus {
 export const getSaveSortMigrationStatus = callable<[], SaveSortMigrationStatus>("get_save_sort_migration_status");
 export const migrateSaveSortFiles = callable<[string | null], MigrationResult>("migrate_save_sort_files");
 export const dismissSaveSortMigration = callable<[], { success: boolean }>("dismiss_save_sort_migration");
+export const refreshMigrationState = callable<[], { success: boolean }>("refresh_migration_state");
 
 // Delete operations
 export const deleteLocalSaves = callable<[number], { success: boolean; deleted_count: number; message: string }>("delete_local_saves");

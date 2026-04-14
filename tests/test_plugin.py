@@ -683,3 +683,24 @@ class TestPruneStaleRegistry:
         # Should not crash, state file should NOT be written
         state_path = tmp_path / "state.json"
         assert not state_path.exists()
+
+
+class TestRefreshMigrationState:
+    @pytest.mark.asyncio
+    async def test_calls_both_detect_methods(self, plugin):
+        plugin._migration_service = MagicMock()
+        plugin._migration_service.detect_retrodeck_path_change = MagicMock()
+        plugin._migration_service.detect_save_sort_change = MagicMock()
+        result = await plugin.refresh_migration_state()
+        plugin._migration_service.detect_retrodeck_path_change.assert_called_once_with()
+        plugin._migration_service.detect_save_sort_change.assert_called_once_with()
+        assert result == {"success": True}
+
+    @pytest.mark.asyncio
+    async def test_propagates_exceptions(self, plugin):
+        plugin._migration_service = MagicMock()
+        plugin._migration_service.detect_retrodeck_path_change = MagicMock(side_effect=RuntimeError("boom"))
+        plugin._migration_service.detect_save_sort_change = MagicMock()
+        with pytest.raises(RuntimeError, match="boom"):
+            await plugin.refresh_migration_state()
+        plugin._migration_service.detect_save_sort_change.assert_not_called()

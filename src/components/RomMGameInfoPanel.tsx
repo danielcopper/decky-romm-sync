@@ -31,6 +31,8 @@ import {
   getSaveSlots,
   isSaveTrackingConfigured,
   debugLog,
+  refreshMigrationState,
+  logError,
 } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
@@ -134,6 +136,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortPending(getSaveSortMigrationState().pending));
     return () => { unsub(); unsubSaveSort(); };
   }, []);
+
+  useEffect(() => {
+    refreshMigrationState().catch((e) => logError(`Failed to refresh migration state: ${e}`));
+  }, [appId]);
 
   useEffect(() => {
     let cancelled = false;

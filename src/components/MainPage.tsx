@@ -22,6 +22,8 @@ import {
   syncApplyDelta,
   syncCancelPreview,
   clearSyncCache,
+  refreshMigrationState,
+  logError,
 } from "../api/backend";
 import { getSyncProgress } from "../utils/syncProgress";
 import { getDownloadState } from "../utils/downloadStore";
@@ -109,6 +111,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   useEffect(() => {
+    refreshMigrationState().catch((e) => logError(`Failed to refresh migration state: ${e}`));
     getSyncStats().then(setStats);
     testConnection().then((r) => setConnected(r.success));
     getSettings().then((s) => {
