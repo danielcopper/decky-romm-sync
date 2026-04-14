@@ -53,7 +53,6 @@ class RetroDeckPathsAdapter:
             # Missing file is the expected fallback path (fresh install,
             # no RetroDECK yet) — don't spam the log on every read.
             self._cached_config = None
-            self._cache_time = now
             return None
         except (OSError, json.JSONDecodeError) as exc:
             self._logger.warning(f"Failed to load RetroDECK config at {config_path}: {exc}")
