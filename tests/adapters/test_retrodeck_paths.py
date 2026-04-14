@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from unittest.mock import patch
 
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 
@@ -107,3 +108,52 @@ class TestTTLCache:
 
         # Picked up on the next call — no need to wait out the TTL.
         assert adapter.get_bios_path() == "/picked/up"
+
+
+class TestLoadConfigLogging:
+    def test_load_config_logs_warning_on_json_error(self, tmp_path, caplog):
+        """Invalid JSON triggers a warning log and falls back to the
+        defaults — the failure is no longer silently swallowed."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "retrodeck.json").write_text("not valid json")
+        adapter = RetroDeckPathsAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+
+        with caplog.at_level(logging.WARNING):
+            result = adapter.get_bios_path()
+
+        assert result == os.path.join(str(tmp_path), "retrodeck", "bios")
+        assert any("Failed to load RetroDECK config" in rec.message for rec in caplog.records)
+
+    def test_load_config_logs_warning_on_permission_error(self, tmp_path, caplog):
+        """PermissionError on the config file triggers a warning log and
+        falls back to the defaults."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "retrodeck.json"
+        config_file.write_text(json.dumps({"paths": {"bios_path": "/should/not/be/read"}}))
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == str(config_file):
+                raise PermissionError(f"denied: {path}")
+            return real_open(path, *args, **kwargs)
+
+        adapter = RetroDeckPathsAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        with patch("builtins.open", side_effect=fake_open), caplog.at_level(logging.WARNING):
+            result = adapter.get_bios_path()
+
+        assert result == os.path.join(str(tmp_path), "retrodeck", "bios")
+        assert any("Failed to load RetroDECK config" in rec.message for rec in caplog.records)
+
+    def test_load_config_does_not_log_on_missing_file(self, tmp_path, caplog):
+        """A missing ``retrodeck.json`` is the expected fresh-install
+        fallback path and must NOT spam the log on every read."""
+        adapter = RetroDeckPathsAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+
+        with caplog.at_level(logging.WARNING):
+            result = adapter.get_bios_path()
+
+        assert result == os.path.join(str(tmp_path), "retrodeck", "bios")
+        assert not any("Failed to load RetroDECK config" in rec.message for rec in caplog.records)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from unittest.mock import patch
 
 from adapters.retroarch_config import RetroArchConfigAdapter
 
@@ -85,3 +86,69 @@ class TestRetroArchSaveSorting:
         sort_by_content, sort_by_core = adapter.get_retroarch_save_sorting()
         assert sort_by_content is True  # default
         assert sort_by_core is True
+
+    def test_cfg_line_order_does_not_matter(self, tmp_path):
+        """``sort_savefiles_enable`` appears before ``sort_savefiles_by_content_enable``
+        — parsing order does not change the result."""
+        cfg_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retroarch"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "retroarch.cfg").write_text(
+            'sort_savefiles_enable = "true"\nsort_savefiles_by_content_enable = "false"\n'
+        )
+        adapter = _make_adapter(tmp_path)
+        sort_by_content, sort_by_core = adapter.get_retroarch_save_sorting()
+        assert sort_by_content is False
+        assert sort_by_core is True
+
+
+class TestOsErrorHandling:
+    def test_permission_error_logs_and_returns_defaults(self, tmp_path, caplog):
+        """The only candidate file raises PermissionError — adapter logs a
+        warning and returns RetroDECK defaults instead of crashing."""
+        cfg_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retroarch"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        cfg_file = cfg_dir / "retroarch.cfg"
+        cfg_file.write_text('sort_savefiles_enable = "true"\n')
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if "retroarch.cfg" in str(path):
+                raise PermissionError(f"denied: {path}")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fake_open), caplog.at_level(logging.WARNING):
+            adapter = _make_adapter(tmp_path)
+            sort_by_content, sort_by_core = adapter.get_retroarch_save_sorting()
+
+        assert sort_by_content is True  # RetroDECK default
+        assert sort_by_core is False
+        assert any("Failed to read" in rec.message for rec in caplog.records)
+
+    def test_permission_error_on_first_candidate_tries_second(self, tmp_path, caplog):
+        """First candidate raises PermissionError; second candidate exists with
+        readable content — adapter falls through and reads the second file."""
+        # First (RetroDECK) candidate is the one we'll deny
+        first_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retroarch"
+        first_dir.mkdir(parents=True, exist_ok=True)
+        first_file = first_dir / "retroarch.cfg"
+        first_file.write_text('sort_savefiles_enable = "false"\n')
+
+        # Second (standalone Flatpak) candidate with the value we expect to read
+        second_dir = tmp_path / ".var" / "app" / "org.libretro.RetroArch" / "config" / "retroarch"
+        second_dir.mkdir(parents=True, exist_ok=True)
+        (second_dir / "retroarch.cfg").write_text('sort_savefiles_enable = "true"\n')
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == str(first_file):
+                raise PermissionError(f"denied: {path}")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fake_open), caplog.at_level(logging.WARNING):
+            adapter = _make_adapter(tmp_path)
+            _, sort_by_core = adapter.get_retroarch_save_sorting()
+
+        assert sort_by_core is True
+        assert any("Failed to read" in rec.message for rec in caplog.records)

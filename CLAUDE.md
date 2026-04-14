@@ -71,6 +71,9 @@ py_modules/
   adapters/
     persistence.py                        # PersistenceAdapter — settings/state/cache JSON I/O (atomic writes)
     steam_config.py                       # SteamConfigAdapter — VDF read/write, grid dir, Steam Input
+    retroarch_core_info.py                # RetroArchCoreInfoAdapter — reads RetroArch core .info files
+    retrodeck_paths.py                    # RetroDeckPathsAdapter — reads retrodeck.json for path resolution
+    retroarch_config.py                   # RetroArchConfigAdapter — reads retroarch.cfg for RetroArch runtime settings
     romm/
       http.py                             # RommHttpAdapter — HTTP client for RomM API
       version_router.py                   # VersionRouter — proxy selecting v46/v47 SaveApi by server version
@@ -81,7 +84,7 @@ py_modules/
   domain/
     bios.py                               # BIOS status formatting and computation
     es_de_config.py                       # CoreResolver + GamelistXmlEditor classes (core resolution, gamelist.xml)
-    retrodeck_config.py                   # RetroDECK path resolution (roms, saves, BIOS, states)
+    retroarch_core_info.py                # Pure parser for RetroArch .info file format
     save_conflicts.py                     # Save file conflict detection and resolution logic
     state_migrations.py                   # Schema migration functions for state files
   lib/

@@ -81,7 +81,7 @@ class RetroArchCoreInfoAdapter:
                     text = f.read()
             except FileNotFoundError:
                 continue
-            except OSError as exc:
+            except (OSError, UnicodeDecodeError) as exc:
                 self._logger.warning(f"Failed to read {info_path}: {exc}")
                 continue
             parsed = parse_core_info(text)

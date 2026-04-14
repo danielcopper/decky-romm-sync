@@ -55,4 +55,7 @@ class RetroArchConfigAdapter:
                 return (sort_by_content, sort_by_core)
             except FileNotFoundError:
                 continue
+            except (OSError, UnicodeDecodeError) as exc:
+                self._logger.warning(f"Failed to read {cfg_path}: {exc}")
+                continue
         return (sort_by_content, sort_by_core)

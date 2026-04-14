@@ -269,7 +269,7 @@ class MigrationService:
             if count_key:
                 counts[count_key] = counts.get(count_key, 0) + 1
             self._logger.info(f"Migrated {kind}: {old_path} -> {new_path}")
-        except Exception as e:
+        except (OSError, shutil.Error) as e:
             errors.append(f"{label}: {e}")
             self._logger.error(f"Migration failed: {old_path}: {e}")
 
@@ -296,7 +296,7 @@ class MigrationService:
                 state_updater()
                 if count_key:
                     counts[count_key] = counts.get(count_key, 0) + 1
-            except Exception as e:
+            except (OSError, shutil.Error) as e:
                 errors.append(f"{label}: {e}")
                 self._logger.error(f"Migration overwrite failed: {old_path}: {e}")
         else:
@@ -437,7 +437,7 @@ class MigrationService:
             )
         )
 
-    def _resolve_retroarch_corename(self, system: str, rom_filename: str) -> str | None:
+    def _resolve_retroarch_corename(self, system: str, rom_filename: str) -> tuple[str | None, str | None]:
         """Resolve the RetroArch save subdirectory name for a system/ROM.
 
         Asks ES-DE (via ``get_active_core``) **which** core is active,
@@ -446,17 +446,19 @@ class MigrationService:
         is what ``sort_savefiles_enable`` uses when naming save
         subdirectories.
 
-        Returns ``None`` (fail loud, no ES-DE label fallback) if either
-        provider is missing or unable to resolve. The caller is
-        responsible for skipping affected save files and logging.
+        Returns a ``(corename, core_so)`` tuple. ``corename`` is ``None``
+        (fail loud, no ES-DE label fallback) if either provider is
+        missing or unable to resolve. ``core_so`` is the underlying
+        ES-DE core ``.so`` basename when known (useful for diagnostics
+        when ``corename`` is ``None``), otherwise ``None``.
         """
         if self._get_active_core is None or self._get_core_name is None:
-            return None
+            return (None, None)
         core_so, _label = self._get_active_core(system, rom_filename)
         if not core_so:
-            return None
+            return (None, None)
         corename = self._get_core_name(core_so)
-        return corename or None
+        return (corename or None, core_so)
 
     def _collect_save_sorting_items(self, old_settings: dict, new_settings: dict) -> list:
         """Collect save files that need migration due to sort setting change."""
@@ -496,16 +498,18 @@ class MigrationService:
             return
         core_name: str | None = None
         if need_core:
-            core_name = self._resolve_retroarch_corename(system, os.path.basename(file_path))
+            core_name, core_so = self._resolve_retroarch_corename(system, os.path.basename(file_path))
             if core_name is None:
                 # Fail loud — cannot resolve the RetroArch corename for this ROM's
                 # active core, so we can't build the correct sort-by-core path.
                 # Skip this item and warn the user rather than silently corrupting
                 # the migration with the wrong destination directory.
                 self._logger.warning(
-                    "Skipping save sort migration for %s/%s: unable to resolve RetroArch corename from .info",
+                    "Skipping save sort migration for %s/%s: unable to resolve "
+                    "RetroArch corename from .info (core_so=%s)",
                     system,
                     os.path.basename(file_path),
+                    core_so,
                 )
                 return
         old_dir = resolve_save_dir(

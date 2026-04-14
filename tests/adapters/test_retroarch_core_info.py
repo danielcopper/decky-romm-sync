@@ -186,7 +186,7 @@ class TestOsErrorHandling:
             assert adapter.get_corename("snes9x_libretro") == "FromUser"
         assert any("Failed to read" in rec.message for rec in caplog.records)
 
-    def test_all_candidates_permission_error_returns_none(self, tmp_path, caplog):
+    def test_permission_error_on_info_file_in_all_candidate_dirs_returns_none(self, tmp_path, caplog):
         """Every candidate raises OSError — returns None and logs warnings."""
         real_open = open
 
@@ -198,3 +198,25 @@ class TestOsErrorHandling:
         with patch("builtins.open", side_effect=fake_open), caplog.at_level(logging.WARNING):
             adapter = _make_adapter(tmp_path)
             assert adapter.get_corename("snes9x_libretro") is None
+
+    def test_unicode_decode_error_logs_and_tries_next_candidate(self, tmp_path, monkeypatch, caplog):
+        """First candidate has non-UTF-8 bytes — adapter logs a warning and
+        falls through to the second candidate."""
+        # Repoint the system candidate to a tmp-based dir we can populate
+        system_cores = tmp_path / "system_cores"
+        system_cores.mkdir()
+        # Non-UTF-8 bytes — reading with encoding="utf-8" must raise UnicodeDecodeError
+        (system_cores / "snes9x_libretro.info").write_bytes(b"\xff\xfe\x00corename")
+
+        # Second (per-user) candidate is well-formed
+        user_cores = _user_cores_dir(tmp_path)
+        user_cores.mkdir(parents=True)
+        (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
+
+        monkeypatch.setattr(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", str(system_cores))
+
+        with caplog.at_level(logging.WARNING):
+            adapter = _make_adapter(tmp_path)
+            assert adapter.get_corename("snes9x_libretro") == "FromUser"
+
+        assert any("Failed to read" in rec.message for rec in caplog.records)
