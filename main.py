@@ -12,7 +12,9 @@ import decky
 from bootstrap import WiringConfig, bootstrap, wire_services
 
 from adapters.persistence import PersistenceAdapter
-from adapters.retrodeck_config import RetroDeckConfigAdapter
+from adapters.retroarch_config import RetroArchConfigAdapter
+from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
+from adapters.retrodeck_paths import RetroDeckPathsAdapter
 
 
 class Plugin:
@@ -112,7 +114,9 @@ class Plugin:
         self._romm_api = adapters["romm_api"]
         self._steam_config = adapters["steam_config"]
         self._sgdb_adapter = adapters["sgdb_adapter"]
-        self._retrodeck_config: RetroDeckConfigAdapter = adapters["retrodeck_config"]
+        self._retrodeck_paths: RetroDeckPathsAdapter = adapters["retrodeck_paths"]
+        self._retroarch_config: RetroArchConfigAdapter = adapters["retroarch_config"]
+        self._retroarch_core_info: RetroArchCoreInfoAdapter = adapters["retroarch_core_info"]
 
         # ── 3. Load state ───────────────────────────────────────────────────
         self._state = {
@@ -149,11 +153,12 @@ class Plugin:
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
                 runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
                 emit=decky.emit,
-                get_saves_path=self._retrodeck_config.get_saves_path,
-                get_roms_path=self._retrodeck_config.get_roms_path,
-                get_bios_path=self._retrodeck_config.get_bios_path,
-                get_retrodeck_home=self._retrodeck_config.get_retrodeck_home,
-                get_retroarch_save_sorting=self._retrodeck_config.get_retroarch_save_sorting,
+                get_saves_path=self._retrodeck_paths.get_saves_path,
+                get_roms_path=self._retrodeck_paths.get_roms_path,
+                get_bios_path=self._retrodeck_paths.get_bios_path,
+                get_retrodeck_home=self._retrodeck_paths.get_retrodeck_home,
+                get_retroarch_save_sorting=self._retroarch_config.get_retroarch_save_sorting,
+                get_core_name=self._retroarch_core_info.get_corename,
                 save_state=self._save_state,
                 save_settings_to_disk=self._save_settings_to_disk,
                 save_metadata_cache=self._save_metadata_cache,
@@ -387,7 +392,7 @@ class Plugin:
 
     async def set_system_core(self, platform_slug, core_label):
         """Set system-wide core override. Pass empty string to reset to default."""
-        retrodeck_home = self._retrodeck_config.get_retrodeck_home()
+        retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
         if not retrodeck_home:
             return {"success": False, "message": "RetroDECK home not found"}
         try:
@@ -408,7 +413,7 @@ class Plugin:
 
     async def set_game_core(self, platform_slug, rom_path, core_label):
         """Set per-game core override. Pass empty string to reset to platform default."""
-        retrodeck_home = self._retrodeck_config.get_retrodeck_home()
+        retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
         if not retrodeck_home:
             return {"success": False, "message": "RetroDECK home not found"}
         try:

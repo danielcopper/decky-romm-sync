@@ -21,7 +21,9 @@ forbidden_modules =
     adapters.steam_config
     adapters.steamgriddb
     adapters.persistence
-    adapters.retrodeck_config
+    adapters.retrodeck_paths
+    adapters.retroarch_config
+    adapters.retroarch_core_info
 
 # Adapters must not import services
 [importlinter:contract:no-services-in-adapters]

@@ -355,6 +355,19 @@ class CoreResolverFn(Protocol):
     def __call__(self, system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]: ...
 
 
+class CoreNameProviderFn(Protocol):
+    """Return the RetroArch canonical ``corename`` for a core shared object.
+
+    Implemented by :class:`adapters.retroarch_core_info.RetroArchCoreInfoAdapter`.
+    ``core_so`` is the full ``.so`` basename including the ``_libretro``
+    suffix (e.g. ``"snes9x_libretro"``). Returns ``None`` when the ``.info``
+    file is missing or lacks a ``corename`` field — callers must fail loud,
+    not fall back to ES-DE labels.
+    """
+
+    def __call__(self, core_so: str) -> str | None: ...
+
+
 class SyncStateRef(Protocol):
     """Return the current sync state value (used by ArtworkService)."""
 

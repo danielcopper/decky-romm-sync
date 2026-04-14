@@ -320,12 +320,9 @@ export default definePlugin(() => {
       old_settings: data.old_settings,
       new_settings: data.new_settings,
     });
-    const coreChanged = data.old_settings.sort_by_core !== data.new_settings.sort_by_core;
     toaster.toast({
       title: "RomM Sync",
-      body: coreChanged
-        ? "RetroArch save sorting changed. Manual migration recommended — check Settings."
-        : "RetroArch save sorting changed. Go to Settings to migrate save files.",
+      body: "RetroArch save sorting changed. Go to Settings to migrate save files.",
     });
   });
 

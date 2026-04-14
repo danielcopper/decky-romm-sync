@@ -16,7 +16,19 @@ def _active_core(system_name: str, rom_filename: str | None = None) -> tuple[str
     return (None, None)
 
 
-def _make_service(tmp_path, *, sort_settings=(True, False), installed_roms=None, state_overrides=None):
+def _no_corename(core_so: str) -> str | None:
+    return None
+
+
+def _make_service(
+    tmp_path,
+    *,
+    sort_settings=(True, False),
+    installed_roms=None,
+    state_overrides=None,
+    active_core=_active_core,
+    get_core_name=_no_corename,
+):
     """Create a MigrationService with sensible defaults for sort migration tests.
 
     Returns (service, save_state_mock) so callers can assert on save_state calls.
@@ -47,7 +59,8 @@ def _make_service(tmp_path, *, sort_settings=(True, False), installed_roms=None,
         get_bios_path=lambda: str(tmp_path / "bios"),
         get_retroarch_save_sorting=lambda: sort_settings,
         get_roms_path=lambda: roms_path,
-        get_active_core=_active_core,
+        get_active_core=active_core,
+        get_core_name=get_core_name,
     )
     return svc, save_state_mock
 
@@ -433,3 +446,217 @@ class TestMigrateSaveSortFiles:
 
         assert result["success"] is False
         assert "No save sorting migration needed" in result["message"]
+
+
+class TestResolveRetroArchCorename:
+    """Unit tests for MigrationService._resolve_retroarch_corename.
+
+    The method asks ES-DE for the active core shared object and then
+    asks the RetroArch ``.info`` parser for the canonical corename. It
+    must never fall back to the ES-DE display label — fail-loud is the
+    contract (see Config Source Parsers wiki).
+    """
+
+    def test_happy_path_returns_retroarch_corename(self, tmp_path):
+        """ES-DE returns (core_so, label); .info lookup returns the
+        canonical corename; method returns the corename (NOT the label)."""
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            # ES-DE label is "Snes9x - Current" — intentionally different
+            # from the RetroArch corename to cover the #208 regression.
+            return ("snes9x_libretro", "Snes9x - Current")
+
+        def get_core_name(core_so: str) -> str | None:
+            assert core_so == "snes9x_libretro"
+            return "Snes9x"
+
+        svc, _ = _make_service(tmp_path, active_core=active_core, get_core_name=get_core_name)
+        assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") == "Snes9x"
+
+    def test_active_core_returns_none_returns_none(self, tmp_path):
+        """ES-DE cannot resolve the active core — method returns None."""
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            return (None, None)
+
+        def get_core_name(core_so: str) -> str | None:
+            # Should never be called.
+            raise AssertionError("get_core_name called despite unresolved core")
+
+        svc, _ = _make_service(tmp_path, active_core=active_core, get_core_name=get_core_name)
+        assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") is None
+
+    def test_core_name_returns_none_returns_none_no_label_fallback(self, tmp_path):
+        """ES-DE gives us a core_so but the .info lookup fails — method
+        returns None (NOT the ES-DE label, which is the old bug)."""
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            return ("oddcore_libretro", "Some ES-DE Label")
+
+        def get_core_name(core_so: str) -> str | None:
+            return None
+
+        svc, _ = _make_service(tmp_path, active_core=active_core, get_core_name=get_core_name)
+        assert svc._resolve_retroarch_corename("odd", "Game.rom") is None
+
+    def test_core_name_returns_empty_string_returns_none(self, tmp_path):
+        """.info has ``corename = ""`` — adapter already coerces to None,
+        but we also defend at the service layer with ``or None``."""
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            return ("blank_libretro", "Blank Label")
+
+        def get_core_name(core_so: str) -> str | None:
+            return ""
+
+        svc, _ = _make_service(tmp_path, active_core=active_core, get_core_name=get_core_name)
+        assert svc._resolve_retroarch_corename("blank", "Game.rom") is None
+
+    def test_no_core_name_callback_returns_none(self, tmp_path):
+        """Service constructed without ``get_core_name`` — method returns None."""
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            return ("snes9x_libretro", "Snes9x - Current")
+
+        svc = MigrationService(
+            state={"installed_roms": {}, "save_sort_settings": None},
+            loop=asyncio.get_event_loop(),
+            logger=logging.getLogger("test"),
+            save_state=MagicMock(),
+            emit=MagicMock(),
+            get_bios_files_index=lambda: {},
+            get_active_core=active_core,
+            # get_core_name intentionally omitted
+        )
+        assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") is None
+
+    def test_no_active_core_callback_returns_none(self, tmp_path):
+        """Service constructed without ``get_active_core`` — method returns None."""
+        svc = MigrationService(
+            state={"installed_roms": {}, "save_sort_settings": None},
+            loop=asyncio.get_event_loop(),
+            logger=logging.getLogger("test"),
+            save_state=MagicMock(),
+            emit=MagicMock(),
+            get_bios_files_index=lambda: {},
+            get_core_name=lambda core_so: "Snes9x",
+        )
+        assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") is None
+
+
+class TestSortByCoreMigrationEndToEnd:
+    """End-to-end scenarios for the #208 fix.
+
+    With sort_by_core enabled, RetroArch writes saves into a subdirectory
+    named after the ``corename`` field of the core's .info file. For
+    Snes9x this is ``Snes9x`` — not the ES-DE display label
+    ``"Snes9x - Current"``. The migration must use the corename.
+    """
+
+    def test_uses_retroarch_corename_not_es_de_label(self, tmp_path):
+        """Sort by content -> sort by core migration uses ``Snes9x``, not
+        ``Snes9x - Current``, as the target subdirectory."""
+        roms_path = tmp_path / "roms"
+        saves_path = tmp_path / "saves"
+        roms_path.mkdir()
+        saves_path.mkdir()
+
+        # Old state: sort_by_content -> saves live at saves/snes/<ROM>.srm
+        rom_file = roms_path / "snes" / "Zelda.sfc"
+        rom_file.parent.mkdir(parents=True)
+        rom_file.write_text("rom")
+        old_save_dir = saves_path / "snes"
+        old_save_dir.mkdir(parents=True)
+        (old_save_dir / "Zelda.srm").write_text("save data")
+
+        installed_roms = {
+            "1": {
+                "system": "snes",
+                "file_path": str(rom_file),
+                "platform_slug": "snes",
+            }
+        }
+        old_settings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings = {"sort_by_content": False, "sort_by_core": True}
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            return ("snes9x_libretro", "Snes9x - Current")
+
+        def get_core_name(core_so: str) -> str | None:
+            return "Snes9x"
+
+        svc, _ = _make_service(
+            tmp_path,
+            installed_roms=installed_roms,
+            state_overrides={
+                "installed_roms": installed_roms,
+                "save_sort_settings_previous": old_settings,
+                "save_sort_settings": new_settings,
+            },
+            active_core=active_core,
+            get_core_name=get_core_name,
+        )
+        svc._get_saves_path = lambda: str(saves_path)
+        svc._get_roms_path = lambda: str(roms_path)
+
+        items = svc._collect_save_sorting_items(old_settings, new_settings)
+
+        # One item produced, destination path contains "Snes9x" (not "Snes9x - Current")
+        assert len(items) == 1
+        _label, _old_path, new_path, _updater, _kind = items[0]
+        assert os.sep + "Snes9x" + os.sep in new_path
+        assert "Snes9x - Current" not in new_path
+
+    def test_skips_rom_and_warns_when_corename_unresolved(self, tmp_path, caplog):
+        """When ``.info`` lookup returns None for a ROM that needs a
+        corename, the ROM is skipped and a warning is logged. The item
+        is not present in the returned migration list."""
+        roms_path = tmp_path / "roms"
+        saves_path = tmp_path / "saves"
+        roms_path.mkdir()
+        saves_path.mkdir()
+
+        rom_file = roms_path / "odd" / "Mystery.rom"
+        rom_file.parent.mkdir(parents=True)
+        rom_file.write_text("rom")
+        old_save_dir = saves_path / "odd"
+        old_save_dir.mkdir(parents=True)
+        (old_save_dir / "Mystery.srm").write_text("save")
+
+        installed_roms = {
+            "1": {
+                "system": "odd",
+                "file_path": str(rom_file),
+                "platform_slug": "snes",  # triggers .srm extension
+            }
+        }
+        old_settings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings = {"sort_by_content": False, "sort_by_core": True}
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            return ("oddcore_libretro", "Oddcore Label")
+
+        def get_core_name(core_so: str) -> str | None:
+            return None
+
+        svc, _ = _make_service(
+            tmp_path,
+            installed_roms=installed_roms,
+            state_overrides={
+                "installed_roms": installed_roms,
+                "save_sort_settings_previous": old_settings,
+                "save_sort_settings": new_settings,
+            },
+            active_core=active_core,
+            get_core_name=get_core_name,
+        )
+        svc._get_saves_path = lambda: str(saves_path)
+        svc._get_roms_path = lambda: str(roms_path)
+
+        with caplog.at_level(logging.WARNING):
+            items = svc._collect_save_sorting_items(old_settings, new_settings)
+
+        assert items == []
+        assert any("unable to resolve RetroArch corename" in rec.getMessage() for rec in caplog.records), (
+            "Expected a warning about unresolved corename"
+        )

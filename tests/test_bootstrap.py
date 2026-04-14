@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 from bootstrap import WiringConfig, bootstrap, wire_services
 
 from adapters.persistence import PersistenceAdapter
+from adapters.retroarch_config import RetroArchConfigAdapter
+from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
+from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.api_router import ApiRouter
 from adapters.romm.http import RommHttpAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -97,6 +100,22 @@ class TestBootstrap:
         assert "romm_api" in result
         assert isinstance(result["romm_api"], ApiRouter)
 
+    def test_returns_split_retrodeck_adapters(self, tmp_path):
+        """Bootstrap instantiates all three split adapters (paths, cfg, core_info)."""
+        result = bootstrap(
+            settings_dir=str(tmp_path / "settings"),
+            runtime_dir=str(tmp_path / "runtime"),
+            plugin_dir=str(tmp_path / "plugin"),
+            user_home=str(tmp_path / "home"),
+            logger=logging.getLogger("test"),
+            settings={},
+        )
+        assert isinstance(result["retrodeck_paths"], RetroDeckPathsAdapter)
+        assert isinstance(result["retroarch_config"], RetroArchConfigAdapter)
+        assert isinstance(result["retroarch_core_info"], RetroArchCoreInfoAdapter)
+        # Old bundled key must no longer be present.
+        assert "retrodeck_config" not in result
+
 
 class TestWireServices:
     def _make_deps(self, tmp_path):
@@ -131,6 +150,7 @@ class TestWireServices:
             "get_bios_path": MagicMock(return_value=str(tmp_path / "retrodeck" / "bios")),
             "get_retrodeck_home": MagicMock(return_value=str(tmp_path / "retrodeck")),
             "get_retroarch_save_sorting": MagicMock(return_value=(True, False)),
+            "get_core_name": MagicMock(return_value="Snes9x"),
             "save_state": MagicMock(),
             "save_settings_to_disk": MagicMock(),
             "save_metadata_cache": MagicMock(),
@@ -167,4 +187,14 @@ class TestWireServices:
         assert "migration_service" in result
         assert "game_detail_service" in result
         assert "rom_removal_service" in result
+        deps["loop"].close()
+
+    def test_migration_service_receives_get_core_name(self, tmp_path):
+        """MigrationService must receive the get_core_name callback from wire_services."""
+        deps = self._make_deps(tmp_path)
+        get_core_name_mock = deps["get_core_name"]
+        result = wire_services(WiringConfig(**deps))
+        migration_service = result["migration_service"]
+        # Callback is stored as _get_core_name on the service
+        assert migration_service._get_core_name is get_core_name_mock
         deps["loop"].close()

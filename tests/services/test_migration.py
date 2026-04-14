@@ -72,6 +72,7 @@ def plugin():
         get_retroarch_save_sorting=MagicMock(return_value=(True, False)),
         get_roms_path=MagicMock(return_value=""),
         get_active_core=MagicMock(return_value=(None, None)),
+        get_core_name=MagicMock(return_value=None),
     )
     return p
 
@@ -160,7 +161,7 @@ class TestPathChangeDetection:
         assert len(_create_task_calls) == 1
 
     def test_empty_current_home_no_action(self, plugin, tmp_path):
-        """If retrodeck_config returns empty string, do nothing."""
+        """If ``retrodeck_paths`` returns empty string, do nothing."""
         from unittest.mock import MagicMock
 
         import decky

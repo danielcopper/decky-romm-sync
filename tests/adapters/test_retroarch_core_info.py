@@ -1,0 +1,200 @@
+"""Tests for adapters.retroarch_core_info.RetroArchCoreInfoAdapter."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
+
+_SNES9X_INFO = (
+    "# Software Information\n"
+    'display_name = "Nintendo - SNES / SFC (Snes9x)"\n'
+    'corename = "Snes9x"\n'
+    'supported_extensions = "smc|sfc|swc|fig|bs|st"\n'
+)
+
+
+def _user_cores_dir(user_home: Path) -> Path:
+    return (
+        user_home
+        / ".local"
+        / "share"
+        / "flatpak"
+        / "app"
+        / "net.retrodeck.retrodeck"
+        / "current"
+        / "active"
+        / "files"
+        / "retrodeck"
+        / "components"
+        / "retroarch"
+        / "rd_extras"
+        / "cores"
+    )
+
+
+def _make_adapter(user_home: Path) -> RetroArchCoreInfoAdapter:
+    return RetroArchCoreInfoAdapter(user_home=str(user_home), logger=logging.getLogger("test"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_system_dir():
+    """Point the system-wide candidate path at a non-existent location so
+    tests only see files placed under ``tmp_path``.
+
+    The adapter's default _SYSTEM_CORES_DIR is the Flatpak system install
+    which may or may not exist on the developer machine. Pinning it to a
+    non-existent path per test keeps results deterministic.
+    """
+    with patch.object(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", "/nonexistent/system/cores"):
+        yield
+
+
+class TestGetCorename:
+    def test_happy_path_user_path(self, tmp_path):
+        """File in the per-user Flatpak dir is found and parsed."""
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True)
+        (cores / "snes9x_libretro.info").write_text(_SNES9X_INFO)
+
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("snes9x_libretro") == "Snes9x"
+
+    def test_file_not_found_returns_none(self, tmp_path):
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("missing_libretro") is None
+
+    def test_missing_corename_field_returns_none(self, tmp_path):
+        """File exists but has no ``corename`` key — returns None."""
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True)
+        (cores / "oddcore_libretro.info").write_text('display_name = "Oddcore"\n')
+
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("oddcore_libretro") is None
+
+    def test_empty_corename_returns_none(self, tmp_path):
+        """File exists with ``corename = ""`` — returns None (empty is not a name)."""
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True)
+        (cores / "blank_libretro.info").write_text('corename = ""\n')
+
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("blank_libretro") is None
+
+
+class TestGetCoreInfo:
+    def test_returns_full_dict(self, tmp_path):
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True)
+        (cores / "snes9x_libretro.info").write_text(_SNES9X_INFO)
+
+        adapter = _make_adapter(tmp_path)
+        info = adapter.get_core_info("snes9x_libretro")
+        assert info is not None
+        assert info["corename"] == "Snes9x"
+        assert info["display_name"] == "Nintendo - SNES / SFC (Snes9x)"
+        assert info["supported_extensions"] == "smc|sfc|swc|fig|bs|st"
+
+    def test_missing_file_returns_none(self, tmp_path):
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_core_info("missing_libretro") is None
+
+
+class TestCaching:
+    def test_cache_hit_avoids_second_read(self, tmp_path):
+        """After a successful read the file can be deleted — cache returns the same result."""
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True)
+        info_file = cores / "snes9x_libretro.info"
+        info_file.write_text(_SNES9X_INFO)
+
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("snes9x_libretro") == "Snes9x"
+
+        # Delete the file — cached value should still be returned.
+        info_file.unlink()
+        assert adapter.get_corename("snes9x_libretro") == "Snes9x"
+
+    def test_cache_negative(self, tmp_path):
+        """After returning None once, subsequent calls return None even if
+        a real file appears later."""
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("snes9x_libretro") is None
+
+        # Now create the file — cache should still return None.
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True)
+        (cores / "snes9x_libretro.info").write_text(_SNES9X_INFO)
+        assert adapter.get_corename("snes9x_libretro") is None
+
+
+class TestCandidatePathFallback:
+    def test_falls_back_to_user_candidate(self, tmp_path):
+        """First candidate (system) missing, second (user) present — still resolves."""
+        cores = _user_cores_dir(tmp_path)
+        cores.mkdir(parents=True)
+        (cores / "mgba_libretro.info").write_text('corename = "mGBA"\n')
+
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("mgba_libretro") == "mGBA"
+
+    def test_first_candidate_used_when_present(self, tmp_path, monkeypatch):
+        """If the first candidate dir has the file, the second isn't consulted."""
+        # Repoint the first candidate to a tmp-based "system" dir we can populate.
+        system_cores = tmp_path / "system_cores"
+        system_cores.mkdir()
+        (system_cores / "snes9x_libretro.info").write_text('corename = "FromSystem"\n')
+
+        # Put a different corename at the user-level path so we can tell them apart.
+        user_cores = _user_cores_dir(tmp_path)
+        user_cores.mkdir(parents=True)
+        (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
+
+        monkeypatch.setattr(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", str(system_cores))
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_corename("snes9x_libretro") == "FromSystem"
+
+
+class TestOsErrorHandling:
+    def test_permission_error_continues_to_next_candidate(self, tmp_path, monkeypatch, caplog):
+        """PermissionError on first candidate is logged and skipped; adapter
+        tries the next candidate."""
+        system_cores = tmp_path / "system_cores"
+        system_cores.mkdir()
+        (system_cores / "snes9x_libretro.info").write_text('corename = "FromSystem"\n')
+
+        user_cores = _user_cores_dir(tmp_path)
+        user_cores.mkdir(parents=True)
+        (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
+
+        monkeypatch.setattr(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", str(system_cores))
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path).startswith(str(system_cores)):
+                raise PermissionError(f"denied: {path}")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fake_open), caplog.at_level(logging.WARNING):
+            adapter = _make_adapter(tmp_path)
+            assert adapter.get_corename("snes9x_libretro") == "FromUser"
+        assert any("Failed to read" in rec.message for rec in caplog.records)
+
+    def test_all_candidates_permission_error_returns_none(self, tmp_path, caplog):
+        """Every candidate raises OSError — returns None and logs warnings."""
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if "snes9x_libretro.info" in str(path):
+                raise PermissionError(f"denied: {path}")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=fake_open), caplog.at_level(logging.WARNING):
+            adapter = _make_adapter(tmp_path)
+            assert adapter.get_corename("snes9x_libretro") is None

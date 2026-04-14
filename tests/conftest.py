@@ -16,12 +16,12 @@ sys.path.insert(0, _tests_root)
 
 
 class _DeckyMock(MagicMock):
-    """MagicMock that keeps retrodeck_config and es_de_config in sync when
-    DECKY_USER_HOME or DECKY_PLUGIN_DIR are reassigned in tests.
+    """MagicMock that keeps ``domain.es_de_config`` in sync when
+    DECKY_PLUGIN_DIR is reassigned in tests.
 
-    Without this, tests that do ``decky.DECKY_USER_HOME = str(tmp_path)``
-    would update the mock attribute but not the domain module's cached value,
-    which is now stored via configure() rather than read lazily.
+    Without this, tests that do ``decky.DECKY_PLUGIN_DIR = str(tmp_path)``
+    would update the mock attribute but not the domain module's cached
+    value, which is stored via ``configure()`` rather than read lazily.
     """
 
     def __setattr__(self, name, value):
@@ -64,13 +64,12 @@ def _make_testable_plugin():
 
 
 @pytest.fixture(autouse=True)
-def _reset_retrodeck_config_user_home():
-    """Reset retrodeck_config and es_de_config module-level state between every test.
+def _reset_es_de_config_user_home():
+    """Reset ``es_de_config`` module-level state between every test.
 
-    Calls configure() with the mock decky values so that services using these
-    modules work without explicit configure() calls in test bodies.
-    Tests that need a specific user_home can set decky.DECKY_USER_HOME = str(tmp_path),
-    which will automatically call retrodeck_config.configure() via _DeckyMock.
+    Calls ``configure()`` with the mock decky values so that services
+    using this module work without explicit ``configure()`` calls in
+    test bodies.
     """
     from domain import es_de_config
 

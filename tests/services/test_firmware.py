@@ -121,7 +121,7 @@ class TestFirmwareDestPath:
             assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "scph5501.bin")
 
     def test_uses_dynamic_bios_path(self, fw, tmp_path):
-        """Uses retrodeck_config.get_bios_path() for the base directory."""
+        """Uses ``retrodeck_paths.get_bios_path()`` for the base directory."""
 
         sd_bios = "/run/media/deck/Emulation/retrodeck/bios"
         with patch.object(fw, "_get_bios_path", return_value=sd_bios):

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         BiosPathProvider,
+        CoreNameProviderFn,
         CoreResolverFn,
         EventEmitter,
         RetroArchSaveSortingProvider,
@@ -50,6 +51,7 @@ class MigrationService:
         get_retroarch_save_sorting: RetroArchSaveSortingProvider | None = None,
         get_roms_path: RomsPathProvider | None = None,
         get_active_core: CoreResolverFn | None = None,
+        get_core_name: CoreNameProviderFn | None = None,
     ) -> None:
         self._state = state
         self._loop = loop
@@ -63,6 +65,7 @@ class MigrationService:
         self._get_retroarch_save_sorting = get_retroarch_save_sorting
         self._get_roms_path = get_roms_path
         self._get_active_core = get_active_core
+        self._get_core_name = get_core_name
 
     def detect_retrodeck_path_change(self) -> None:
         """Check if RetroDECK home path changed since last run."""
@@ -434,12 +437,26 @@ class MigrationService:
             )
         )
 
-    def _resolve_core_name(self, system: str, rom_filename: str) -> str | None:
-        """Resolve the RetroArch core directory name for a system/ROM."""
-        if not self._get_active_core:
+    def _resolve_retroarch_corename(self, system: str, rom_filename: str) -> str | None:
+        """Resolve the RetroArch save subdirectory name for a system/ROM.
+
+        Asks ES-DE (via ``get_active_core``) **which** core is active,
+        then asks the RetroArch ``.info`` parser (via ``get_core_name``)
+        **what** RetroArch calls that core in its own subsystem — which
+        is what ``sort_savefiles_enable`` uses when naming save
+        subdirectories.
+
+        Returns ``None`` (fail loud, no ES-DE label fallback) if either
+        provider is missing or unable to resolve. The caller is
+        responsible for skipping affected save files and logging.
+        """
+        if self._get_active_core is None or self._get_core_name is None:
             return None
-        _core_so, label = self._get_active_core(system, rom_filename)
-        return label or None
+        core_so, _label = self._get_active_core(system, rom_filename)
+        if not core_so:
+            return None
+        corename = self._get_core_name(core_so)
+        return corename or None
 
     def _collect_save_sorting_items(self, old_settings: dict, new_settings: dict) -> list:
         """Collect save files that need migration due to sort setting change."""
@@ -477,7 +494,20 @@ class MigrationService:
         platform_slug = entry.get("platform_slug", "")
         if not system or not file_path:
             return
-        core_name = self._resolve_core_name(system, os.path.basename(file_path)) if need_core else None
+        core_name: str | None = None
+        if need_core:
+            core_name = self._resolve_retroarch_corename(system, os.path.basename(file_path))
+            if core_name is None:
+                # Fail loud — cannot resolve the RetroArch corename for this ROM's
+                # active core, so we can't build the correct sort-by-core path.
+                # Skip this item and warn the user rather than silently corrupting
+                # the migration with the wrong destination directory.
+                self._logger.warning(
+                    "Skipping save sort migration for %s/%s: unable to resolve RetroArch corename from .info",
+                    system,
+                    os.path.basename(file_path),
+                )
+                return
         old_dir = resolve_save_dir(
             file_path,
             saves_base,

@@ -473,13 +473,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
               <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.9)" }}>
                 {saveSortMigration.saves_count ?? 0} save file(s) to migrate
               </div>
-              {saveSortMigration.old_settings && saveSortMigration.new_settings &&
-                saveSortMigration.old_settings.sort_by_core !== saveSortMigration.new_settings.sort_by_core && (
-                <div style={{ fontSize: "11px", color: "#d4a72c", marginTop: "6px" }}>
-                  Note: Sort-by-core migration may not resolve all paths correctly.
-                  Manual migration is recommended — check your saves directory.
-                </div>
-              )}
             </div>
           </PanelSectionRow>
           <PanelSectionRow>

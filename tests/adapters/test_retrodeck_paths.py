@@ -1,4 +1,4 @@
-"""Tests for adapters.retrodeck_config.RetroDeckConfigAdapter."""
+"""Tests for adapters.retrodeck_paths.RetroDeckPathsAdapter."""
 
 from __future__ import annotations
 
@@ -7,17 +7,17 @@ import logging
 import os
 import time
 
-from adapters.retrodeck_config import RetroDeckConfigAdapter
+from adapters.retrodeck_paths import RetroDeckPathsAdapter
 
 
-def _make_adapter(tmp_path, config: dict | None = None) -> RetroDeckConfigAdapter:
+def _make_adapter(tmp_path, config: dict | None = None) -> RetroDeckPathsAdapter:
     """Create adapter with optional retrodeck.json config."""
     user_home = str(tmp_path)
     if config is not None:
         config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
         config_dir.mkdir(parents=True, exist_ok=True)
         (config_dir / "retrodeck.json").write_text(json.dumps(config))
-    return RetroDeckConfigAdapter(user_home=user_home, logger=logging.getLogger("test"))
+    return RetroDeckPathsAdapter(user_home=user_home, logger=logging.getLogger("test"))
 
 
 class TestPathResolution:
@@ -41,6 +41,10 @@ class TestPathResolution:
         adapter = _make_adapter(tmp_path, {"paths": {"saves_path": "/custom/saves"}})
         assert adapter.get_saves_path() == "/custom/saves"
 
+    def test_saves_path_fallback(self, tmp_path):
+        adapter = _make_adapter(tmp_path)
+        assert adapter.get_saves_path() == os.path.join(str(tmp_path), "retrodeck", "saves")
+
     def test_retrodeck_home_from_config(self, tmp_path):
         adapter = _make_adapter(tmp_path, {"paths": {"rd_home_path": "/custom/home"}})
         assert adapter.get_retrodeck_home() == "/custom/home"
@@ -61,7 +65,7 @@ class TestPathResolution:
         config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
         config_dir.mkdir(parents=True, exist_ok=True)
         (config_dir / "retrodeck.json").write_text("not valid json")
-        adapter = RetroDeckConfigAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        adapter = RetroDeckPathsAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
         assert adapter.get_bios_path() == os.path.join(str(tmp_path), "retrodeck", "bios")
 
 
@@ -83,32 +87,23 @@ class TestTTLCache:
         (config_dir / "retrodeck.json").write_text(json.dumps({"paths": {"bios_path": "/second"}}))
         assert adapter.get_bios_path() == "/second"
 
+    def test_failed_load_is_retried(self, tmp_path):
+        """A failed load is not cached — later successful loads are picked up immediately.
 
-class TestRetroArchSaveSorting:
-    def test_defaults_when_no_cfg(self, tmp_path):
-        adapter = _make_adapter(tmp_path)
-        sort_by_content, sort_by_core = adapter.get_retroarch_save_sorting()
-        assert sort_by_content is True
-        assert sort_by_core is False
+        The TTL cache only stores positive results. When ``_load_config``
+        returns None the cache stays empty, so the next call re-reads
+        the file. This lets the adapter recover automatically when a
+        missing ``retrodeck.json`` is created at runtime, without
+        waiting for the 30-second TTL.
+        """
+        adapter = _make_adapter(tmp_path)  # no config — returns fallback
+        fallback = os.path.join(str(tmp_path), "retrodeck", "bios")
+        assert adapter.get_bios_path() == fallback
 
-    def test_reads_sort_by_content_false(self, tmp_path):
-        cfg_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retroarch"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        (cfg_dir / "retroarch.cfg").write_text(
-            'sort_savefiles_by_content_enable = "false"\nsort_savefiles_enable = "false"\n'
-        )
-        adapter = _make_adapter(tmp_path)
-        sort_by_content, sort_by_core = adapter.get_retroarch_save_sorting()
-        assert sort_by_content is False
-        assert sort_by_core is False
+        # Drop a valid config file
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "retrodeck.json").write_text(json.dumps({"paths": {"bios_path": "/picked/up"}}))
 
-    def test_reads_sort_by_core_true(self, tmp_path):
-        cfg_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retroarch"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        (cfg_dir / "retroarch.cfg").write_text(
-            'sort_savefiles_by_content_enable = "true"\nsort_savefiles_enable = "true"\n'
-        )
-        adapter = _make_adapter(tmp_path)
-        sort_by_content, sort_by_core = adapter.get_retroarch_save_sorting()
-        assert sort_by_content is True
-        assert sort_by_core is True
+        # Picked up on the next call — no need to wait out the TTL.
+        assert adapter.get_bios_path() == "/picked/up"
