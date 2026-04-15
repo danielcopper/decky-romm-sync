@@ -212,3 +212,69 @@ class TestWireServices:
         save_sync_service = result["save_sync_service"]
         assert save_sync_service._get_core_name is get_core_name_mock
         deps["loop"].close()
+
+    def test_save_sync_service_receives_migration_detect_sort_change(self, tmp_path):
+        """Regression test for #238: SaveService must receive
+        ``migration_service.detect_save_sort_change`` via its
+        ``detect_sort_change`` constructor parameter.
+
+        Without this wiring, post_exit_sync could run with stale sort
+        state and download stale server content to the wrong layout,
+        causing real user progress to be destroyed during the next
+        migration step.
+        """
+        deps = self._make_deps(tmp_path)
+        result = wire_services(WiringConfig(**deps))
+        save_sync_service = result["save_sync_service"]
+        migration_service = result["migration_service"]
+        # Bound method equality: same function + same bound instance.
+        # ``is`` fails because Python creates a fresh bound method object
+        # on each attribute access.
+        assert save_sync_service._detect_sort_change == migration_service.detect_save_sort_change
+        # Also check it's the actual migration instance, not some other.
+        assert save_sync_service._detect_sort_change.__self__ is migration_service  # type: ignore[union-attr]
+        deps["loop"].close()
+
+    def test_save_sync_and_migration_share_state_reference(self, tmp_path):
+        """Regression test for #238: SaveService and MigrationService must
+        observe the same state dict by reference.
+
+        Without shared state, ``detect_save_sort_change`` would mutate
+        MigrationService's local copy while SaveService reads its own
+        stale copy — defeating the detect-first invariant.
+        """
+        deps = self._make_deps(tmp_path)
+        result = wire_services(WiringConfig(**deps))
+        save_sync_service = result["save_sync_service"]
+        migration_service = result["migration_service"]
+        assert save_sync_service._state is deps["state"]
+        assert migration_service._state is deps["state"]
+        assert save_sync_service._state is migration_service._state
+        deps["loop"].close()
+
+    def test_save_sync_detect_sort_change_mutates_shared_state(self, tmp_path):
+        """Functional check for #238: invoking the wired detect callback
+        from SaveService updates state that SaveService subsequently
+        reads.
+
+        The wired callback writes current sort settings into
+        ``_state["save_sort_settings"]`` on first run. SaveService and
+        MigrationService must see that write through the same live dict.
+        """
+        deps = self._make_deps(tmp_path)
+        # The default mock returns (True, False); no prior state seeded.
+        assert "save_sort_settings" not in deps["state"]
+        result = wire_services(WiringConfig(**deps))
+        save_sync_service = result["save_sync_service"]
+
+        # Invoke the bound detect callback SaveService received.
+        save_sync_service._detect_sort_change()  # type: ignore[misc]
+
+        # State now has the current sort settings written through the
+        # shared dict — SaveService will read this on its next
+        # _get_rom_save_info call.
+        assert deps["state"]["save_sort_settings"] == {
+            "sort_by_content": True,
+            "sort_by_core": False,
+        }
+        deps["loop"].close()

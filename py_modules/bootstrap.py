@@ -172,6 +172,29 @@ def wire_services(cfg: WiringConfig) -> dict:
     dict with keys ``save_sync_service``, ``playtime_service``,
     ``sync_service``, ``download_service``, and ``firmware_service``.
     """
+    # MigrationService is constructed before SaveService so that
+    # save_sync_service can receive a bound reference to
+    # ``migration_service.detect_save_sort_change``. SaveService must observe
+    # fresh sort state before computing saves_dir (#238).
+    # ``get_bios_files_index`` is a lambda that defers the ``firmware_service``
+    # lookup to call time, so it is safe to reference here even though
+    # ``firmware_service`` is constructed later in this function.
+    migration_service = MigrationService(
+        state=cfg.state,
+        loop=cfg.loop,
+        logger=cfg.logger,
+        save_state=cfg.save_state,
+        emit=cfg.emit,
+        get_bios_files_index=lambda: firmware_service.bios_files_index,
+        get_retrodeck_home=cfg.get_retrodeck_home,
+        get_saves_path=cfg.get_saves_path,
+        get_bios_path=cfg.get_bios_path,
+        get_retroarch_save_sorting=cfg.get_retroarch_save_sorting,
+        get_roms_path=cfg.get_roms_path,
+        get_active_core=_es_de_config.get_active_core,
+        get_core_name=cfg.get_core_name,
+    )
+
     save_sync_service = SaveService(
         romm_api=cfg.romm_api,
         retry=cfg.http_adapter,
@@ -187,6 +210,8 @@ def wire_services(cfg: WiringConfig) -> dict:
         get_core_name=cfg.get_core_name,
         plugin_version=_read_plugin_version(cfg.plugin_dir),
         emit=cfg.emit,
+        # SaveService must observe fresh sort state before computing saves_dir (#238).
+        detect_sort_change=migration_service.detect_save_sort_change,
     )
 
     playtime_service = PlaytimeService(
@@ -311,22 +336,6 @@ def wire_services(cfg: WiringConfig) -> dict:
         loop=cfg.loop,
         logger=cfg.logger,
         log_debug=cfg.log_debug,
-    )
-
-    migration_service = MigrationService(
-        state=cfg.state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        save_state=cfg.save_state,
-        emit=cfg.emit,
-        get_bios_files_index=lambda: firmware_service.bios_files_index,
-        get_retrodeck_home=cfg.get_retrodeck_home,
-        get_saves_path=cfg.get_saves_path,
-        get_bios_path=cfg.get_bios_path,
-        get_retroarch_save_sorting=cfg.get_retroarch_save_sorting,
-        get_roms_path=cfg.get_roms_path,
-        get_active_core=_es_de_config.get_active_core,
-        get_core_name=cfg.get_core_name,
     )
 
     game_detail_service = GameDetailService(

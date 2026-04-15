@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -98,28 +98,39 @@ class TestDetectSaveSortChange:
     def test_change_emits_event(self, tmp_path):
         """Settings changed — emits event, stores old + new."""
         old = {"sort_by_content": True, "sort_by_core": False}
+        # AsyncMock returns a coroutine when called — required because
+        # detect_save_sort_change schedules the emit coroutine via
+        # asyncio.run_coroutine_threadsafe, which validates that its
+        # first arg is an actual coroutine (#238 review finding 1).
         svc, save_state_mock = _make_service(
             tmp_path,
             sort_settings=(False, True),
             state_overrides={"save_sort_settings": old},
         )
+        svc._emit = AsyncMock()
 
-        _tasks = []
+        # Stub run_coroutine_threadsafe at the module level so we can
+        # observe scheduling without needing a running event loop. The
+        # stub closes the coroutine to avoid "never awaited" warnings.
+        scheduled: list = []
 
-        def _close_task(coro):
+        def fake_schedule(coro, loop):
             coro.close()
-            _tasks.append(coro)
+            scheduled.append(coro)
             return MagicMock()
 
-        mock_loop = MagicMock()
-        mock_loop.create_task = _close_task
-        svc._loop = mock_loop
+        import services.migration as migration_module
 
-        svc.detect_save_sort_change()
+        original = migration_module.asyncio.run_coroutine_threadsafe
+        migration_module.asyncio.run_coroutine_threadsafe = fake_schedule  # type: ignore[assignment]
+        try:
+            svc.detect_save_sort_change()
+        finally:
+            migration_module.asyncio.run_coroutine_threadsafe = original  # type: ignore[assignment]
 
         assert svc._state["save_sort_settings"] == {"sort_by_content": False, "sort_by_core": True}
         assert svc._state["save_sort_settings_previous"] == old
-        assert len(_tasks) == 1
+        assert len(scheduled) == 1
         save_state_mock.assert_called_once()
 
     def test_no_callback_noop(self, tmp_path):

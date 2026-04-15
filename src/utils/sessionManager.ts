@@ -114,13 +114,10 @@ async function handleGameStop(): Promise<void> {
     .then(() => logInfo(`Achievement sync complete for romId=${romId}`))
     .catch((e) => logError(`Achievement sync failed for romId=${romId}: ${e}`));
 
-  // Post-exit save sync — backend handles settings check + connectivity.
-  // IMPORTANT: save-sync MUST run before refreshMigrationState below. If the
-  // user changed RetroArch sort settings mid-game and we migrate first, the
-  // newest-wins resolver would delete the stale orphan locally — but since
-  // save-sync has not yet run, the newest progress would only live on disk.
-  // Uploading to RomM first gives us a safety net: even if local migration
-  // goes sideways, the server holds the authoritative latest version.
+  // Post-exit save sync — backend reads the previous save-sort layout when a
+  // migration is pending (#238), so this call is order-independent wrt
+  // refreshMigrationState below. The ordering here is incidental, not
+  // load-bearing.
   try {
     const result = await postExitSync(romId);
     if (result.offline) {
@@ -141,11 +138,10 @@ async function handleGameStop(): Promise<void> {
     logError(`Post-exit sync failed: ${e}`);
   }
 
-  // Post-game migration detection — runs AFTER save-sync above (ordering is
-  // load-bearing, see comment on the save-sync block). Runs unconditionally:
-  // refreshMigrationState only reads config files + state and emits events on
-  // genuine change — it does not touch user save files. Actual migration runs
-  // only when the user explicitly clicks the migrate button in Settings.
+  // Post-game migration detection — runs unconditionally. refreshMigrationState
+  // only reads config files + state and emits events on genuine change; it
+  // does not touch user save files. Actual migration runs only when the user
+  // explicitly clicks the migrate button in Settings.
   refreshMigrationState()
     .then(({ retrodeck, save_sort }) => {
       setMigrationStatus(retrodeck);

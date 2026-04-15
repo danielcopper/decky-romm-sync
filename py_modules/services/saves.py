@@ -48,6 +48,7 @@ _NO_MIGRATION = object()  # sentinel: no slot migration requested
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
     from domain.save_sync import MatchedSave
     from services.protocols import EventEmitter
@@ -96,6 +97,19 @@ class SaveService:
         one-parser-per-source rationale). When ``None`` or when resolution
         fails at runtime, SaveService warns and falls back to the parent
         directory path; see ``_resolve_retroarch_corename``.
+    detect_sort_change:
+        Optional synchronous callback that refreshes save-sort state from
+        the live RetroArch config (wired to
+        ``MigrationService.detect_save_sort_change`` in ``bootstrap``).
+        Save-sync MUST see fresh save-sort state before computing
+        ``saves_dir`` — otherwise a direct-Steam-launch with no pre-launch
+        detect trigger would silently download stale server content to the
+        wrong layout and destroy real user progress during the subsequent
+        migration (#238). ``pre_launch_sync`` and ``post_exit_sync`` invoke
+        this callback once at their entry point. ``None`` disables the
+        call (used only in unit tests where state is seeded explicitly);
+        failures are logged and swallowed so save-sync degrades
+        gracefully to the previously-known state.
     """
 
     _LOG_LEVELS: ClassVar[dict[str, int]] = {"debug": 0, "info": 1, "warn": 2, "error": 3}
@@ -117,6 +131,7 @@ class SaveService:
         get_core_name: CoreNameProviderFn | None = None,
         plugin_version: str = "0.0.0",
         emit: EventEmitter | None = None,
+        detect_sort_change: Callable[[], None] | None = None,
     ) -> None:
         self._romm_api = romm_api
         self._retry = retry
@@ -132,6 +147,7 @@ class SaveService:
         self._get_core_name = get_core_name
         self._plugin_version = plugin_version
         self._emit = emit
+        self._detect_sort_change = detect_sort_change
 
     # ------------------------------------------------------------------
     # Debug logging helper
@@ -289,9 +305,14 @@ class SaveService:
 
         # Use domain save path resolution.
         # Read sort settings from state (populated by MigrationService at startup).
+        # When a save-sort migration is pending, prefer the *previous* layout:
+        # RetroArch caches its runtime save-path at game-load time, so the
+        # session that just ended still wrote to the old directory. Reading
+        # the current settings here would point sync at the wrong location
+        # and risk downloading stale server content to the new layout (#238).
         saves_base = self._get_saves_path()
         roms_base = self._get_roms_path()
-        sort_state = self._state.get("save_sort_settings")
+        sort_state = self._pending_sort_settings() or self._state.get("save_sort_settings")
         if sort_state:
             sort_by_content = sort_state.get("sort_by_content", True)
             sort_by_core = sort_state.get("sort_by_core", False)
@@ -341,9 +362,21 @@ class SaveService:
             "file_path": file_path,
         }
 
+    def _pending_sort_settings(self) -> dict | None:
+        """Return previous save-sort settings if a migration is pending, else None.
+
+        Rejects empty dicts to avoid the half-state where ``_get_rom_save_info``'s
+        ``or`` fallback would treat ``{}`` as "no pending migration" (and read
+        current settings) while ``_is_save_sort_changed`` would treat the same
+        ``{}`` as "pending" (and gate sync). Both call sites must agree on
+        what counts as pending — see #238 review finding 3.
+        """
+        prev = self._state.get("save_sort_settings_previous")
+        return prev if prev else None
+
     def _is_save_sort_changed(self) -> bool:
         """Check if a save sort migration is pending (detected by MigrationService)."""
-        return self._state.get("save_sort_settings_previous") is not None
+        return self._pending_sort_settings() is not None
 
     # ------------------------------------------------------------------
     # File Helpers
@@ -902,7 +935,22 @@ class SaveService:
         errors: list[str] = []
         conflicts: list[SaveConflict | dict] = []
 
+        # During a pending save-sort migration the local layout is ambiguous —
+        # the session that just ended may have written to the previous layout,
+        # while the new layout may hold stale or no content. Downloading the
+        # server copy in that window would land a file with mtime=now at the
+        # new layout, which the mtime-naive migration resolver would then
+        # prefer over the real user progress at the previous layout (#238).
+        # Upload-only mode during pending migration keeps sync as a safety net
+        # without risking data loss. Downloads resume once the user resolves
+        # the migration.
+        pending_migration = self._is_save_sort_changed()
+
         for m in match_result.matched:
+            if pending_migration and m.local_file is None and m.server_save is not None:
+                self._log_debug(f"_sync_rom_saves({rom_id}): skipping server_only {m.filename} — migration pending")
+                continue
+
             # Check for newer-in-slot before normal sync
             if self._check_newer_in_slot(m, files_state, rom_id, save_state, conflicts):
                 continue  # Skip normal sync
@@ -1244,10 +1292,41 @@ class SaveService:
             "new_label": active_label or (active_core.replace("_libretro", "") if active_core else None),
         }
 
+    async def _refresh_save_sort_state(self, where: str) -> None:
+        """Refresh save-sort state from the live RetroArch config.
+
+        Save-sync must observe fresh save-sort state before computing
+        ``saves_dir``. This call ensures ``detect_save_sort_change`` has
+        run at least once before we read state, closing the race where
+        another frontend detect trigger arrives after our backend entry
+        point. Without this, a direct-Steam-launch with no pre-detect
+        would silently download stale server content to the wrong
+        layout and destroy real user progress during the subsequent
+        migration (#238).
+
+        Graceful degradation: if detect fails (e.g. retroarch.cfg is
+        temporarily unreadable) we log and continue with the
+        previously-known state — save-sync must not abort because of a
+        config read error.
+        """
+        if self._detect_sort_change is None:
+            return
+        try:
+            await self._loop.run_in_executor(None, self._detect_sort_change)
+        except Exception as e:
+            self._logger.warning(
+                "%s: detect_sort_change failed (%s) — proceeding with stale state",
+                where,
+                e,
+            )
+
     async def pre_launch_sync(self, rom_id: int) -> dict:
         """Download newer saves from server before game launch."""
         if not self._is_save_sync_enabled():
             return {"success": True, "message": "Save sync disabled", "synced": 0}
+
+        # Refresh save-sort state before the migration gate — see #238.
+        await self._refresh_save_sort_state("pre_launch_sync")
 
         if self._is_save_sort_changed():
             return {
@@ -1293,6 +1372,9 @@ class SaveService:
             self._logger.info("post_exit_sync skipped: sync_after_exit disabled")
             return {"success": True, "message": "Post-exit sync disabled", "synced": 0}
 
+        # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+        await self._refresh_save_sort_state("post_exit_sync")
+
         try:
             await self._loop.run_in_executor(None, self._romm_api.heartbeat)
         except Exception:
@@ -1330,6 +1412,12 @@ class SaveService:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""
         if not self._is_save_sync_enabled():
             return {"success": False, "message": _SYNC_DISABLED_MSG, "synced": 0}
+
+        # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+        # Manual sync paths must observe fresh sort state too: a user could
+        # edit retroarch.cfg outside of a session and then trigger a manual
+        # sync before any detect has fired.
+        await self._refresh_save_sort_state("sync_rom_saves")
 
         if not self._save_sync_state.get("device_id"):
             reg = self.ensure_device_registered()
@@ -1853,6 +1941,12 @@ class SaveService:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
         if not self._is_save_sync_enabled():
             return {"success": False, "message": _SYNC_DISABLED_MSG, "synced": 0, "conflicts": 0}
+
+        # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+        # Manual sync paths must observe fresh sort state too: a user could
+        # edit retroarch.cfg outside of a session and then trigger a manual
+        # sync before any detect has fired.
+        await self._refresh_save_sort_state("sync_all_saves")
 
         if not self._save_sync_state.get("device_id"):
             reg = self.ensure_device_registered()

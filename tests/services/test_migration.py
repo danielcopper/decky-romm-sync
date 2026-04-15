@@ -605,3 +605,112 @@ class TestMigrateSaveFiles:
 
         assert status["pending"] is True
         assert status["saves_count"] == 1
+
+
+class TestResolveSaveSortConflict:
+    """Regression lock for _resolve_save_sort_conflict's mtime-naive behavior.
+
+    This test documents current mtime-naive behavior. It is deliberately NOT a
+    semantic "correctness" test — #238 works around this limitation
+    structurally at the save-sync layer (SaveService reads the previous
+    layout when a migration is pending and skips server_only downloads so
+    the mtime-naive resolver never sees a freshly-downloaded stale file).
+    If you improve the resolver to be hash-aware, delete or rewrite this
+    test rather than bypass it.
+    """
+
+    def test_resolve_save_sort_conflict_newest_mtime_wins_regression(self, plugin, tmp_path):
+        """Newer mtime wins; older file is removed. Freezes current behavior (#238)."""
+        # Stale file at the "old" path (older mtime).
+        old_path = str(tmp_path / "old_saves" / "game.srm")
+        new_path = str(tmp_path / "new_saves" / "game.srm")
+        os.makedirs(os.path.dirname(old_path))
+        os.makedirs(os.path.dirname(new_path))
+        with open(old_path, "wb") as f:
+            f.write(b"stale content")
+        with open(new_path, "wb") as f:
+            f.write(b"fresh content")
+
+        # Force deterministic mtimes: old is older, new is newer.
+        old_mtime = 1_700_000_000.0
+        new_mtime = 1_700_000_500.0
+        os.utime(old_path, (old_mtime, old_mtime))
+        os.utime(new_path, (new_mtime, new_mtime))
+
+        counts: dict[str, int] = {}
+        errors: list = []
+        state_updates: list[str] = []
+
+        plugin._migration_service._resolve_save_sort_conflict(
+            label="gba/game.srm",
+            old_path=old_path,
+            new_path=new_path,
+            state_updater=lambda: state_updates.append("called"),
+            counts=counts,
+            count_key="save",
+            errors=errors,
+        )
+
+        # New (newer mtime) is kept; old (stale) is removed.
+        assert os.path.exists(new_path)
+        assert not os.path.exists(old_path)
+        with open(new_path, "rb") as f:
+            assert f.read() == b"fresh content"
+        assert counts["save"] == 1
+        assert state_updates == ["called"]
+        assert errors == []
+
+
+class TestDetectSaveSortChangeThreadSafety:
+    """Regression tests for #238 review finding 1: ``detect_save_sort_change``
+    is called from a worker thread (via ``SaveService._refresh_save_sort_state``
+    → ``run_in_executor``) and must schedule the emit coroutine in a
+    thread-safe manner. ``loop.create_task`` is NOT thread-safe — it must
+    be ``asyncio.run_coroutine_threadsafe``.
+    """
+
+    async def test_detect_save_sort_change_is_thread_safe_when_called_from_executor(self, plugin):
+        """detect_save_sort_change must be safe to call from a worker thread (#238).
+
+        Drive the call via ``loop.run_in_executor`` and verify the emit
+        coroutine is scheduled on the loop and runs without exception.
+        Before the fix, this would call ``loop.create_task`` from a
+        worker thread, which is undefined behavior.
+        """
+        loop = asyncio.get_event_loop()
+        plugin._migration_service._loop = loop
+
+        # Initial state: a populated OLD layout. Detect should observe a
+        # change and emit ``save_sort_changed``.
+        plugin._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
+        plugin._migration_service._get_retroarch_save_sorting = MagicMock(return_value=(True, True))
+
+        # Capture emit calls. Use an asyncio.Queue so the test can await
+        # the emission from the loop thread regardless of which thread
+        # scheduled it.
+        emit_queue: asyncio.Queue = asyncio.Queue()
+
+        async def fake_emit(event_name: str, payload: dict) -> None:
+            await emit_queue.put((event_name, payload))
+
+        plugin._migration_service._emit = fake_emit
+
+        # Run detect_save_sort_change on a worker thread.
+        await loop.run_in_executor(None, plugin._migration_service.detect_save_sort_change)
+
+        # Wait (with a generous timeout) for the emit coroutine that was
+        # scheduled via run_coroutine_threadsafe to actually run.
+        event = await asyncio.wait_for(emit_queue.get(), timeout=2.0)
+        assert event[0] == "save_sort_changed"
+        assert event[1]["old_settings"] == {"sort_by_content": True, "sort_by_core": False}
+        assert event[1]["new_settings"] == {"sort_by_content": True, "sort_by_core": True}
+
+        # State is updated via the shared dict — visible to whoever holds it.
+        assert plugin._state["save_sort_settings_previous"] == {
+            "sort_by_content": True,
+            "sort_by_core": False,
+        }
+        assert plugin._state["save_sort_settings"] == {
+            "sort_by_content": True,
+            "sort_by_core": True,
+        }

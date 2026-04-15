@@ -7,6 +7,7 @@ Also detects RetroArch save sorting setting changes and migrates affected save f
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 from typing import TYPE_CHECKING
@@ -15,7 +16,6 @@ from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
 
 if TYPE_CHECKING:
-    import asyncio
     import logging
     from collections.abc import Callable
 
@@ -393,7 +393,16 @@ class MigrationService:
     # ---------------------------------------------------------------------------
 
     def detect_save_sort_change(self) -> None:
-        """Check if RetroArch save sorting settings changed since last run."""
+        """Check if RetroArch save sorting settings changed since last run.
+
+        May be called from a worker thread (via
+        ``SaveService._refresh_save_sort_state`` → ``run_in_executor``) or
+        from the loop thread. Use ``asyncio.run_coroutine_threadsafe`` to
+        schedule the emit coroutine: it is explicitly thread-safe and
+        also works correctly when invoked from the loop thread itself.
+        ``loop.create_task`` is NOT thread-safe and races with loop
+        internals on CPython (#238 review).
+        """
         if self._get_retroarch_save_sorting is None:
             return
         sort_by_content, sort_by_core = self._get_retroarch_save_sorting()
@@ -409,11 +418,15 @@ class MigrationService:
         self._state["save_sort_settings"] = current
         self._save_state()
         self._logger.warning(f"RetroArch save sorting changed: {stored} -> {current}")
-        self._loop.create_task(
+        # Fire-and-forget: thread-safe schedule of the emit coroutine on
+        # the plugin event loop. We deliberately do not await or .result()
+        # the future — this mirrors the previous create_task semantics.
+        asyncio.run_coroutine_threadsafe(
             self._emit(
                 "save_sort_changed",
                 {"old_settings": stored, "new_settings": current},
-            )
+            ),
+            self._loop,
         )
 
     def _resolve_retroarch_corename(self, system: str, rom_filename: str) -> tuple[str | None, str | None]:
