@@ -114,28 +114,8 @@ tests/
 
 ## Current State
 
-**Latest release**: v0.13.0 on main
-
-Working:
-- Full sync engine (fetch ROMs, create shortcuts, apply cover art)
-- On-demand ROM downloads with progress tracking
-- BIOS file management per platform with per-core annotations
-- Game detail page injection (custom PlaySection, GameInfoPanel, metadata)
-- SteamGridDB artwork (hero, logo, wide grid) — on-demand from game detail page
-- SGDB API key management with verify button
-- Per-platform sync toggles, per-platform removal
-- Steam collections
-- Toast notifications
-- Bidirectional save file sync (RetroArch .srm saves)
-- Three-way conflict detection with 4 resolution modes
-- Game session detection and playtime tracking (via RomM notes)
-- Save sync settings QAM page
-- Per-platform and per-game core switching (ES-DE gamelist.xml integration)
-- RetroDECK path migration (internal SSD ↔ SD card)
-- Native Steam metadata display (descriptions, genres, release date, controller support)
-- RetroAchievements integration with tabbed game detail page
-
-Roadmap and open work tracked on the [GitHub Projects board](https://github.com/users/danielcopper/projects/2).
+Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub Releases.
+Roadmap and open work: [GitHub Projects board](https://github.com/users/danielcopper/projects/2).
 
 ## Development
 

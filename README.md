@@ -7,7 +7,6 @@
 [![Reliability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
 [![Security](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
 [![Downloads](https://img.shields.io/github/downloads/danielcopper/decky-romm-sync/total.svg)](https://github.com/danielcopper/decky-romm-sync/releases)
-[![License](https://img.shields.io/github/license/danielcopper/decky-romm-sync)](LICENSE)
 
 # decky-romm-sync
 
