@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import shutil
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from domain.save_extensions import get_save_extensions
@@ -216,27 +215,6 @@ class MigrationService:
             if os.path.exists(new_path) and os.path.exists(old_path):
                 conflict_set.add(label)
         return sorted(conflict_set)
-
-    @staticmethod
-    def _build_conflict_details(items: list) -> list[dict]:
-        """Return details for items where both source and destination exist."""
-        details = []
-        for label, old_path, new_path, _updater, _kind in items:
-            if os.path.exists(new_path) and os.path.exists(old_path):
-                old_stat = os.stat(old_path)
-                new_stat = os.stat(new_path)
-                details.append(
-                    {
-                        "filename": label,
-                        "old_path": old_path,
-                        "old_size": old_stat.st_size,
-                        "old_mtime": datetime.fromtimestamp(old_stat.st_mtime, tz=UTC).isoformat(),
-                        "new_path": new_path,
-                        "new_size": new_stat.st_size,
-                        "new_mtime": datetime.fromtimestamp(new_stat.st_mtime, tz=UTC).isoformat(),
-                    }
-                )
-        return sorted(details, key=lambda d: d["filename"])
 
     def _migrate_single_item(self, label, old_path, new_path, state_updater, kind, conflict_strategy, counts, errors):
         """Migrate a single file/directory item. Updates counts and errors in place."""
@@ -563,28 +541,77 @@ class MigrationService:
             return {"pending": False}
         return await self._loop.run_in_executor(None, self._get_save_sort_migration_status_io, old, new)
 
+    def _resolve_save_sort_conflict(
+        self,
+        label: str,
+        old_path: str,
+        new_path: str,
+        state_updater,
+        counts: dict,
+        count_key: str,
+        errors: list,
+    ) -> None:
+        """Newest-wins resolution for a save-sort conflict.
+
+        RetroArch does not migrate saves when its sort setting changes. If a
+        user flips ``sort_savefiles_enable`` mid-game via the Quick Menu and
+        then saves in-game, the new progress is written to the new layout
+        while the old location still holds pre-change content. The file at
+        the newer mtime contains actual user progress; the older one is
+        stale and must be cleaned up. Save-sync has already uploaded the
+        newest version to RomM before this runs, so even if local migration
+        fails the server still holds the authoritative copy.
+        """
+        try:
+            old_mtime = os.path.getmtime(old_path)
+            new_mtime = os.path.getmtime(new_path)
+        except OSError as e:
+            errors.append(f"{label}: {e}")
+            self._logger.error(f"Save-sort conflict mtime read failed: {old_path}: {e}")
+            return
+
+        if new_mtime >= old_mtime:
+            # Destination is newer — keep it, delete the stale orphan at old_path.
+            try:
+                os.remove(old_path)
+                state_updater()
+                counts[count_key] = counts.get(count_key, 0) + 1
+                self._logger.info(f"Save-sort conflict: kept newer {new_path}, removed stale {old_path}")
+            except OSError as e:
+                errors.append(f"{label}: {e}")
+                self._logger.error(f"Save-sort orphan cleanup failed: {old_path}: {e}")
+            return
+
+        # Source is newer — atomically overwrite destination.
+        try:
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            os.replace(old_path, new_path)
+            state_updater()
+            counts[count_key] = counts.get(count_key, 0) + 1
+            self._logger.info(f"Save-sort conflict: moved newer {old_path} -> {new_path}")
+        except OSError as e:
+            errors.append(f"{label}: {e}")
+            self._logger.error(f"Save-sort overwrite failed: {old_path}: {e}")
+
     def _migrate_save_sort_files_io(
         self, old_settings: dict, new_settings: dict, conflict_strategy: str | None
     ) -> dict:
+        # conflict_strategy is retained for backwards-compatibility with the
+        # callable signature but is unused for save-sort migration — conflicts
+        # are resolved in place via newest-wins (see _resolve_save_sort_conflict).
+        del conflict_strategy
         items = self._collect_save_sorting_items(old_settings, new_settings)
         if not items:
             self._state.pop("save_sort_settings_previous", None)
             self._save_state()
             return {"success": True, "message": "No save files to migrate", "saves_moved": 0}
-        if conflict_strategy is None:
-            conflict_details = self._build_conflict_details(items)
-            if conflict_details:
-                return {
-                    "success": False,
-                    "needs_confirmation": True,
-                    "conflict_count": len(conflict_details),
-                    "conflicts": conflict_details,
-                    "message": f"{len(conflict_details)} save file(s) exist at both old and new locations",
-                }
         counts: dict[str, int] = {"rom": 0, "bios": 0, "save": 0}
         errors: list[str] = []
-        for label, old_path, new_path, updater, kind in items:
-            self._migrate_single_item(label, old_path, new_path, updater, kind, conflict_strategy, counts, errors)
+        for label, old_path, new_path, updater, _kind in items:
+            if os.path.exists(old_path) and os.path.exists(new_path):
+                self._resolve_save_sort_conflict(label, old_path, new_path, updater, counts, "save", errors)
+            else:
+                self._migrate_single_item(label, old_path, new_path, updater, "save", None, counts, errors)
         if not errors:
             self._state.pop("save_sort_settings_previous", None)
             self._save_state()

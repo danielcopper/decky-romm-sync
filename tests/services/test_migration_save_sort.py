@@ -348,8 +348,9 @@ class TestMigrateSaveSortFiles:
         assert "save_sort_settings_previous" not in svc._state
 
     @pytest.mark.asyncio
-    async def test_conflicts_return_confirmation(self, tmp_path):
-        """Save at both old and new location — returns needs_confirmation without moving."""
+    async def test_conflict_destination_newer_deletes_old(self, tmp_path):
+        """Mid-game setting change edge case: newer file at destination wins,
+        stale orphan at old location is removed."""
         roms_path = tmp_path / "roms"
         saves_path = tmp_path / "saves"
         roms_path.mkdir()
@@ -359,15 +360,19 @@ class TestMigrateSaveSortFiles:
         rom_file.parent.mkdir(parents=True)
         rom_file.write_text("rom")
 
-        # Save exists at old location
+        # Old (stale) save at old location
         old_save_dir = saves_path / "gba"
         old_save_dir.mkdir(parents=True)
         old_save = old_save_dir / "Pokemon.srm"
-        old_save.write_text("old save")
+        old_save.write_text("stale pre-change")
 
-        # Save also exists at new location
+        # New (fresh) save at new location
         new_save = saves_path / "Pokemon.srm"
-        new_save.write_text("new save")
+        new_save.write_text("fresh in-game save")
+
+        # Make new_save newer than old_save
+        os.utime(str(old_save), (1_000_000, 1_000_000))
+        os.utime(str(new_save), (2_000_000, 2_000_000))
 
         installed_roms = {
             "1": {
@@ -392,23 +397,244 @@ class TestMigrateSaveSortFiles:
 
         result = await svc.migrate_save_sort_files()
 
+        assert result["success"] is True
+        assert result["saves_moved"] == 1
+        # Destination (newer) preserved unchanged, old orphan deleted.
+        assert new_save.read_text() == "fresh in-game save"
+        assert not old_save.exists()
+        assert "save_sort_settings_previous" not in svc._state
+
+    @pytest.mark.asyncio
+    async def test_conflict_source_newer_overwrites(self, tmp_path):
+        """Rare case: source is newer than destination — atomically overwrite."""
+        roms_path = tmp_path / "roms"
+        saves_path = tmp_path / "saves"
+        roms_path.mkdir()
+        saves_path.mkdir()
+
+        rom_file = roms_path / "gba" / "Pokemon.gba"
+        rom_file.parent.mkdir(parents=True)
+        rom_file.write_text("rom")
+
+        old_save_dir = saves_path / "gba"
+        old_save_dir.mkdir(parents=True)
+        old_save = old_save_dir / "Pokemon.srm"
+        old_save.write_text("newer save at source")
+
+        new_save = saves_path / "Pokemon.srm"
+        new_save.write_text("older stale at destination")
+
+        # Source newer than destination
+        os.utime(str(new_save), (1_000_000, 1_000_000))
+        os.utime(str(old_save), (2_000_000, 2_000_000))
+
+        installed_roms = {
+            "1": {
+                "system": "gba",
+                "file_path": str(rom_file),
+                "platform_slug": "gba",
+            }
+        }
+        old_settings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        svc, _ = _make_service(
+            tmp_path,
+            installed_roms=installed_roms,
+            state_overrides={
+                "installed_roms": installed_roms,
+                "save_sort_settings_previous": old_settings,
+                "save_sort_settings": new_settings,
+            },
+        )
+        svc._get_saves_path = lambda: str(saves_path)
+        svc._get_roms_path = lambda: str(roms_path)
+
+        result = await svc.migrate_save_sort_files()
+
+        assert result["success"] is True
+        assert result["saves_moved"] == 1
+        # New file was overwritten with the source contents, old removed.
+        assert new_save.read_text() == "newer save at source"
+        assert not old_save.exists()
+        assert "save_sort_settings_previous" not in svc._state
+
+    @pytest.mark.asyncio
+    async def test_conflict_mtime_read_oserror_records_error(self, tmp_path, monkeypatch):
+        """OSError during mtime read — conflict added to errors, no mutations."""
+        roms_path = tmp_path / "roms"
+        saves_path = tmp_path / "saves"
+        roms_path.mkdir()
+        saves_path.mkdir()
+
+        rom_file = roms_path / "gba" / "Pokemon.gba"
+        rom_file.parent.mkdir(parents=True)
+        rom_file.write_text("rom")
+
+        old_save_dir = saves_path / "gba"
+        old_save_dir.mkdir(parents=True)
+        old_save = old_save_dir / "Pokemon.srm"
+        old_save.write_text("old")
+        new_save = saves_path / "Pokemon.srm"
+        new_save.write_text("new")
+
+        installed_roms = {
+            "1": {
+                "system": "gba",
+                "file_path": str(rom_file),
+                "platform_slug": "gba",
+            }
+        }
+        old_settings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        svc, _ = _make_service(
+            tmp_path,
+            installed_roms=installed_roms,
+            state_overrides={
+                "installed_roms": installed_roms,
+                "save_sort_settings_previous": old_settings,
+                "save_sort_settings": new_settings,
+            },
+        )
+        svc._get_saves_path = lambda: str(saves_path)
+        svc._get_roms_path = lambda: str(roms_path)
+
+        real_getmtime = os.path.getmtime
+
+        def boom(path):
+            if path == str(old_save):
+                raise OSError("mtime read failed")
+            return real_getmtime(path)
+
+        monkeypatch.setattr("services.migration.os.path.getmtime", boom)
+
+        result = await svc.migrate_save_sort_files()
+
         assert result["success"] is False
-        assert result["needs_confirmation"] is True
-        assert result["conflict_count"] == 1
-        # conflicts is now a list of dicts with file details
-        conflicts = result["conflicts"]
-        assert len(conflicts) == 1
-        detail = conflicts[0]
-        assert detail["filename"] == "Pokemon.srm"
-        assert detail["old_size"] == len(b"old save")
-        assert detail["new_size"] == len(b"new save")
-        assert "old_mtime" in detail
-        assert "new_mtime" in detail
-        assert "old_path" in detail
-        assert "new_path" in detail
+        assert len(result["errors"]) == 1
+        assert "mtime read failed" in result["errors"][0]
         # Files untouched
-        assert old_save.exists()
-        assert new_save.read_text() == "new save"
+        assert old_save.read_text() == "old"
+        assert new_save.read_text() == "new"
+        # state_previous must be preserved when errors occur — users must still see
+        # the migration prompt on the next detect pass
+        assert "save_sort_settings_previous" in svc._state
+        assert svc._state["save_sort_settings_previous"] == old_settings
+
+    @pytest.mark.asyncio
+    async def test_conflict_remove_oserror_records_error(self, tmp_path, monkeypatch):
+        """Destination-wins cleanup fails — error recorded, no crash."""
+        roms_path = tmp_path / "roms"
+        saves_path = tmp_path / "saves"
+        roms_path.mkdir()
+        saves_path.mkdir()
+
+        rom_file = roms_path / "gba" / "Pokemon.gba"
+        rom_file.parent.mkdir(parents=True)
+        rom_file.write_text("rom")
+
+        old_save_dir = saves_path / "gba"
+        old_save_dir.mkdir(parents=True)
+        old_save = old_save_dir / "Pokemon.srm"
+        old_save.write_text("stale")
+        new_save = saves_path / "Pokemon.srm"
+        new_save.write_text("fresh")
+
+        os.utime(str(old_save), (1_000_000, 1_000_000))
+        os.utime(str(new_save), (2_000_000, 2_000_000))
+
+        installed_roms = {
+            "1": {
+                "system": "gba",
+                "file_path": str(rom_file),
+                "platform_slug": "gba",
+            }
+        }
+        old_settings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        svc, _ = _make_service(
+            tmp_path,
+            installed_roms=installed_roms,
+            state_overrides={
+                "installed_roms": installed_roms,
+                "save_sort_settings_previous": old_settings,
+                "save_sort_settings": new_settings,
+            },
+        )
+        svc._get_saves_path = lambda: str(saves_path)
+        svc._get_roms_path = lambda: str(roms_path)
+
+        def boom_remove(path):
+            raise OSError("remove failed")
+
+        monkeypatch.setattr("services.migration.os.remove", boom_remove)
+
+        result = await svc.migrate_save_sort_files()
+
+        assert result["success"] is False
+        assert len(result["errors"]) == 1
+        assert "remove failed" in result["errors"][0]
+        # state_previous must be preserved when errors occur — users must still see
+        # the migration prompt on the next detect pass
+        assert "save_sort_settings_previous" in svc._state
+        assert svc._state["save_sort_settings_previous"] == old_settings
+
+    @pytest.mark.asyncio
+    async def test_conflict_replace_oserror_records_error(self, tmp_path, monkeypatch):
+        """Source-wins overwrite fails — error recorded, no crash."""
+        roms_path = tmp_path / "roms"
+        saves_path = tmp_path / "saves"
+        roms_path.mkdir()
+        saves_path.mkdir()
+
+        rom_file = roms_path / "gba" / "Pokemon.gba"
+        rom_file.parent.mkdir(parents=True)
+        rom_file.write_text("rom")
+
+        old_save_dir = saves_path / "gba"
+        old_save_dir.mkdir(parents=True)
+        old_save = old_save_dir / "Pokemon.srm"
+        old_save.write_text("source newer")
+        new_save = saves_path / "Pokemon.srm"
+        new_save.write_text("destination older")
+
+        os.utime(str(new_save), (1_000_000, 1_000_000))
+        os.utime(str(old_save), (2_000_000, 2_000_000))
+
+        installed_roms = {
+            "1": {
+                "system": "gba",
+                "file_path": str(rom_file),
+                "platform_slug": "gba",
+            }
+        }
+        old_settings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        svc, _ = _make_service(
+            tmp_path,
+            installed_roms=installed_roms,
+            state_overrides={
+                "installed_roms": installed_roms,
+                "save_sort_settings_previous": old_settings,
+                "save_sort_settings": new_settings,
+            },
+        )
+        svc._get_saves_path = lambda: str(saves_path)
+        svc._get_roms_path = lambda: str(roms_path)
+
+        def boom_replace(src, dst):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr("services.migration.os.replace", boom_replace)
+
+        result = await svc.migrate_save_sort_files()
+
+        assert result["success"] is False
+        assert len(result["errors"]) == 1
+        assert "replace failed" in result["errors"][0]
+        # state_previous must be preserved when errors occur — users must still see
+        # the migration prompt on the next detect pass
+        assert "save_sort_settings_previous" in svc._state
+        assert svc._state["save_sort_settings_previous"] == old_settings
 
     @pytest.mark.asyncio
     async def test_clears_previous_on_success(self, tmp_path):
