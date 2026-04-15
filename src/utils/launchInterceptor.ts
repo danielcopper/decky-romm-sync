@@ -7,7 +7,9 @@
 
 import { toaster } from "@decky/api";
 import { isRomMAppId } from "../patches/gameDetailPatch";
-import { getInstalledRom, getSaveStatus, getSaveSyncSettings, logInfo, logError } from "../api/backend";
+import { getInstalledRom, getSaveStatus, getSaveSyncSettings, refreshMigrationState, logInfo, logError } from "../api/backend";
+import { setMigrationStatus } from "./migrationStore";
+import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 
 let gameActionHook: { unregister: () => void } | null = null;
 
@@ -18,6 +20,16 @@ export function registerLaunchInterceptor(): void {
 
       const appId = parseInt(appIdStr, 10);
       if (isNaN(appId) || !isRomMAppId(appId)) return;
+
+      // Fire-and-forget migration refresh — picks up RetroArch sort setting
+      // changes made via the in-game Quick Menu before the previous session.
+      // Must not block the launch: the user pressing Play means "launch now".
+      refreshMigrationState()
+        .then(({ retrodeck, save_sort }) => {
+          setMigrationStatus(retrodeck);
+          setSaveSortMigrationStatus(save_sort);
+        })
+        .catch((e) => logError(`Pre-launch migration refresh failed: ${e}`));
 
       // Check if ROM is installed
       try {
