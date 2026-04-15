@@ -13,9 +13,12 @@ import {
   recordSessionEnd,
   getAppIdRomIdMap,
   syncAchievementsAfterSession,
+  refreshMigrationState,
   logInfo,
   logError,
 } from "../api/backend";
+import { setMigrationStatus } from "./migrationStore";
+import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { isNewerInSlotConflict, isPendingConflict } from "../types";
 import type { PendingConflict, NewerInSlotConflict } from "../types";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
@@ -111,15 +114,19 @@ async function handleGameStop(): Promise<void> {
     .then(() => logInfo(`Achievement sync complete for romId=${romId}`))
     .catch((e) => logError(`Achievement sync failed for romId=${romId}: ${e}`));
 
-  // Post-exit save sync — backend handles settings check + connectivity
+  // Post-exit save sync — backend handles settings check + connectivity.
+  // IMPORTANT: save-sync MUST run before refreshMigrationState below. If the
+  // user changed RetroArch sort settings mid-game and we migrate first, the
+  // newest-wins resolver would delete the stale orphan locally — but since
+  // save-sync has not yet run, the newest progress would only live on disk.
+  // Uploading to RomM first gives us a safety net: even if local migration
+  // goes sideways, the server holds the authoritative latest version.
   try {
     const result = await postExitSync(romId);
     if (result.offline) {
       toaster.toast({ title: "RomM Save Sync", body: "Server offline — saves will sync next time" });
       window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-      return;
-    }
-    if (result.success) {
+    } else if (result.success) {
       if (result.synced && result.synced > 0) {
         toaster.toast({ title: "RomM Save Sync", body: "Saves uploaded to RomM" });
       }
@@ -133,6 +140,18 @@ async function handleGameStop(): Promise<void> {
   } catch (e) {
     logError(`Post-exit sync failed: ${e}`);
   }
+
+  // Post-game migration detection — runs AFTER save-sync above (ordering is
+  // load-bearing, see comment on the save-sync block). Runs unconditionally:
+  // refreshMigrationState only reads config files + state and emits events on
+  // genuine change — it does not touch user save files. Actual migration runs
+  // only when the user explicitly clicks the migrate button in Settings.
+  refreshMigrationState()
+    .then(({ retrodeck, save_sort }) => {
+      setMigrationStatus(retrodeck);
+      setSaveSortMigrationStatus(save_sort);
+    })
+    .catch((e) => logError(`Post-exit migration refresh failed: ${e}`));
 }
 
 function notifyConflicts(conflicts: (PendingConflict | NewerInSlotConflict)[]): void {
