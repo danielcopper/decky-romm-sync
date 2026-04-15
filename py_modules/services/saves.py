@@ -887,6 +887,19 @@ class SaveService:
         """
         return pending_migration and m.local_file is None and m.server_save is not None
 
+    def _log_match_debug(self, m, rom_id: int) -> None:
+        """Emit a debug line describing how a single match will be handled.
+
+        Extracted from ``_sync_rom_saves`` so the per-match log-line ternaries
+        don't inflate the parent's cognitive complexity (Sonar S3776).
+        """
+        method_label = f" [{m.match_method}]" if m.match_method not in ("filename", "local_only") else ""
+        local_label = "yes" if m.local_file else "no"
+        server_label = m.server_save.get("id") if m.server_save else "none"
+        self._log_debug(
+            f"_sync_rom_saves({rom_id}): {m.filename}{method_label} local={local_label} server={server_label}"
+        )
+
     def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
         """Sync saves for a single ROM (always bidirectional).
 
@@ -966,11 +979,7 @@ class SaveService:
             if self._check_newer_in_slot(m, files_state, rom_id, save_state, conflicts):
                 continue  # Skip normal sync
 
-            method_label = f" [{m.match_method}]" if m.match_method not in ("filename", "local_only") else ""
-            self._log_debug(
-                f"_sync_rom_saves({rom_id}): {m.filename}{method_label} "
-                f"local={'yes' if m.local_file else 'no'} server={m.server_save.get('id') if m.server_save else 'none'}"
-            )
+            self._log_match_debug(m, rom_id)
             if self._process_single_file_sync(
                 rom_id, rom_id_str, m.filename, m.local_file, m.server_save, saves_dir, system, errors, conflicts
             ):
