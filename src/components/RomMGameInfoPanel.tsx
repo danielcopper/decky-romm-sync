@@ -37,8 +37,8 @@ import {
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
 import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, PendingConflict, Achievement, AchievementProgress, EarnedAchievement, SaveSlotSummary } from "../types";
-import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
-import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
+import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
+import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 
 interface RomMGameInfoPanelProps {
@@ -138,7 +138,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   }, []);
 
   useEffect(() => {
-    refreshMigrationState().catch((e) => logError(`Failed to refresh migration state: ${e}`));
+    refreshMigrationState()
+      .then(({ retrodeck, save_sort }) => {
+        setMigrationStatus(retrodeck);
+        setSaveSortMigrationStatus(save_sort);
+      })
+      .catch((e) => logError(`Failed to refresh migration state: ${e}`));
   }, [appId]);
 
   useEffect(() => {

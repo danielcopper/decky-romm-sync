@@ -218,7 +218,10 @@ class Plugin:
     async def refresh_migration_state(self):
         self._migration_service.detect_retrodeck_path_change()
         self._migration_service.detect_save_sort_change()
-        return {"success": True}
+        return {
+            "retrodeck": await self._migration_service.get_migration_status(),
+            "save_sort": await self._migration_service.get_save_sort_migration_status(),
+        }
 
     async def _unload(self):  # Decky lifecycle — must be async
         self._sync_service.shutdown()

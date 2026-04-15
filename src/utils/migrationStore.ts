@@ -2,9 +2,10 @@
  * Module-level migration state store.
  *
  * Updated by:
- *   - retrodeck_path_changed event from backend (listener in index.tsx)
- *   - getMigrationStatus() callable on plugin load
- *   - ConnectionSettings.tsx after successful migration
+ *   - plugin load init in index.tsx (getMigrationStatus callable)
+ *   - refreshMigrationState return value in MainPage, RomMGameInfoPanel,
+ *     launchInterceptor, sessionManager
+ *   - clearMigration() from SettingsPage after successful migration
  *
  * Read by:
  *   - MainPage.tsx and ConnectionSettings.tsx

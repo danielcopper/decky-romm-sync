@@ -2,9 +2,10 @@
  * Module-level save sort migration state store.
  *
  * Updated by:
- *   - save_sort_changed event from backend (listener in index.tsx)
- *   - getSaveSortMigrationStatus() callable on plugin load
- *   - SettingsPage.tsx after successful migration
+ *   - plugin load init in index.tsx (getSaveSortMigrationStatus callable)
+ *   - refreshMigrationState return value in MainPage, RomMGameInfoPanel,
+ *     launchInterceptor, sessionManager
+ *   - clearSaveSortMigration() from SettingsPage after successful migration
  *
  * Read by:
  *   - MainPage.tsx, SettingsPage.tsx, RomMGameInfoPanel.tsx

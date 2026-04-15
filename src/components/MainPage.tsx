@@ -27,8 +27,8 @@ import {
 } from "../api/backend";
 import { getSyncProgress } from "../utils/syncProgress";
 import { getDownloadState } from "../utils/downloadStore";
-import { getMigrationState, onMigrationChange } from "../utils/migrationStore";
-import { getSaveSortMigrationState, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
+import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
+import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
 import type { MigrationStatus } from "../api/backend";
@@ -111,7 +111,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   useEffect(() => {
-    refreshMigrationState().catch((e) => logError(`Failed to refresh migration state: ${e}`));
+    refreshMigrationState()
+      .then(({ retrodeck, save_sort }) => {
+        setMigrationStatus(retrodeck);
+        setSaveSortMigrationStatus(save_sort);
+      })
+      .catch((e) => logError(`Failed to refresh migration state: ${e}`));
     getSyncStats().then(setStats);
     testConnection().then((r) => setConnected(r.success));
     getSettings().then((s) => {

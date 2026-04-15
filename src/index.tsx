@@ -298,28 +298,19 @@ export default definePlugin(() => {
     }
   );
 
-  const pathChangedListener = addEventListener<
-    [{ old_path: string; new_path: string }]
-  >("retrodeck_path_changed", (data) => {
-    setMigrationStatus({
-      pending: true,
-      old_path: data.old_path,
-      new_path: data.new_path,
-    });
-    toaster.toast({
-      title: "RomM Sync",
-      body: "RetroDECK location changed. Go to Settings to migrate files.",
-    });
-  });
+  const pathChangedListener = addEventListener<[{ old_path: string; new_path: string }]>(
+    "retrodeck_path_changed",
+    () => {
+      toaster.toast({
+        title: "RomM Sync",
+        body: "RetroDECK location changed. Go to Settings to migrate files.",
+      });
+    },
+  );
 
   const saveSortChangedListener = addEventListener<
     [{ old_settings: { sort_by_content: boolean; sort_by_core: boolean }; new_settings: { sort_by_content: boolean; sort_by_core: boolean } }]
-  >("save_sort_changed", (data) => {
-    setSaveSortMigrationStatus({
-      pending: true,
-      old_settings: data.old_settings,
-      new_settings: data.new_settings,
-    });
+  >("save_sort_changed", () => {
     toaster.toast({
       title: "RomM Sync",
       body: "RetroArch save sorting changed. Go to Settings to migrate save files.",
