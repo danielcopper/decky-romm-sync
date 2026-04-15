@@ -876,6 +876,17 @@ class SaveService:
             "slot": slot,
         }
 
+    @staticmethod
+    def _should_skip_server_only_during_migration(m, pending_migration: bool) -> bool:
+        """Return True if this match is a server-only download that must be skipped during pending migration.
+
+        During a pending save-sort migration we run in upload-only mode so that
+        no freshly-downloaded file lands on disk with ``mtime=now`` — otherwise
+        the mtime-naive migration resolver could prefer the stale download over
+        the real user progress at the other layout (#238).
+        """
+        return pending_migration and m.local_file is None and m.server_save is not None
+
     def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
         """Sync saves for a single ROM (always bidirectional).
 
@@ -947,7 +958,7 @@ class SaveService:
         pending_migration = self._is_save_sort_changed()
 
         for m in match_result.matched:
-            if pending_migration and m.local_file is None and m.server_save is not None:
+            if self._should_skip_server_only_during_migration(m, pending_migration):
                 self._log_debug(f"_sync_rom_saves({rom_id}): skipping server_only {m.filename} — migration pending")
                 continue
 
