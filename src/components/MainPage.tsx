@@ -52,6 +52,24 @@ function formatChanges(pairs: [number, string][]): string {
   return pairs.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`).join(", ");
 }
 
+function formatLastSync(iso: string | null): string {
+  if (!iso) return "Never";
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+  } catch {
+    return iso;
+  }
+}
+
 function formatPreviewDescription(s: SyncPreviewSummary): string {
   const sections: string[] = [];
   const romChanges = formatChanges([[s.new_count, "added"], [s.changed_count, "updated"], [s.remove_count, "removed"]]);
@@ -271,24 +289,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     const maxLen = 40 - step.length;
     const truncated = msg.length > maxLen ? msg.slice(0, maxLen - 1) + "\u2026" : msg;
     return step + truncated;
-  };
-
-  const formatLastSync = (iso: string | null): string => {
-    if (!iso) return "Never";
-    try {
-      const d = new Date(iso);
-      const now = new Date();
-      const diffMs = now.getTime() - d.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
-      if (diffMins < 1) return "Just now";
-      if (diffMins < 60) return `${diffMins}m ago`;
-      const diffHours = Math.floor(diffMins / 60);
-      if (diffHours < 24) return `${diffHours}h ago`;
-      const diffDays = Math.floor(diffHours / 24);
-      return `${diffDays}d ago`;
-    } catch {
-      return iso;
-    }
   };
 
   const activeDownloads = downloads.filter(d => d.status === "queued" || d.status === "downloading");
