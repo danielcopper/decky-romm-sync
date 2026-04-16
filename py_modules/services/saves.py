@@ -2440,3 +2440,150 @@ class SaveService:
             "deleted_count": total_deleted,
             "message": f"Deleted {total_deleted} save file(s) from {rom_count} ROM(s)",
         }
+
+    # ------------------------------------------------------------------
+    # Slot deletion
+    # ------------------------------------------------------------------
+
+    async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict:
+        """Return info about what deleting a slot would do, for the confirmation modal."""
+        rom_id = int(rom_id)
+        slot = str(slot).strip() if slot else ""
+
+        if not self._is_save_sync_enabled():
+            return {"success": False, "reason": "disabled"}
+
+        if not self._get_rom_save_info(rom_id):
+            return {"success": False, "reason": "not_installed"}
+
+        rom_id_str = str(rom_id)
+        save_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
+        slots_dict: dict[str, dict] = save_state.get("slots", {})
+
+        if slot not in slots_dict:
+            return {"success": False, "reason": "not_found"}
+
+        slot_info = slots_dict[slot]
+        source = slot_info.get("source", "server")
+        active_slot = save_state.get("active_slot")
+        is_active = slot == (active_slot or "")
+
+        # Server save count
+        server_save_ids: list[int] = []
+        if source == "server":
+            device_id = self._get_server_device_id()
+            try:
+                server_saves: list[dict] = await self._loop.run_in_executor(
+                    None,
+                    lambda: self._retry.with_retry(
+                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
+                    ),
+                )
+                server_save_ids = [s["id"] for s in server_saves]
+            except Exception as e:
+                self._log_debug(f"get_slot_delete_info: failed to list saves for slot '{slot}': {e}")
+
+        # Local tracked files pointing to server saves in this slot
+        files_state = save_state.get("files", {})
+        local_filenames: list[str] = []
+        if server_save_ids:
+            id_set = set(server_save_ids)
+            for filename, fstate in files_state.items():
+                if fstate.get("tracked_save_id") in id_set:
+                    local_filenames.append(filename)
+
+        return {
+            "success": True,
+            "slot": slot,
+            "source": source,
+            "server_save_count": len(server_save_ids),
+            "server_save_ids": server_save_ids,
+            "local_file_count": len(local_filenames),
+            "local_filenames": local_filenames,
+            "is_active": is_active,
+        }
+
+    async def delete_slot(self, rom_id: int, slot: str) -> dict:
+        """Delete a save slot and all its saves (local state + server if applicable)."""
+        rom_id = int(rom_id)
+        slot = str(slot).strip() if slot else ""
+
+        if not self._is_save_sync_enabled():
+            return {"success": False, "reason": "disabled"}
+
+        if not self._get_rom_save_info(rom_id):
+            return {"success": False, "reason": "not_installed"}
+
+        rom_id_str = str(rom_id)
+        save_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
+        slots_dict: dict[str, dict] = save_state.get("slots", {})
+
+        if slot not in slots_dict:
+            return {"success": False, "reason": "not_found"}
+
+        active_slot = save_state.get("active_slot")
+        if slot == (active_slot or ""):
+            return {
+                "success": False,
+                "reason": "active_slot",
+                "message": "Cannot delete the active slot. Switch to a different slot first.",
+            }
+
+        slot_info = slots_dict[slot]
+        source = slot_info.get("source", "server")
+
+        deleted_server_saves = 0
+        cleaned_files = 0
+        deleted_ids: set[int] = set()
+
+        # Delete server saves if this is a server-backed slot
+        if source == "server":
+            device_id = self._get_server_device_id()
+            try:
+                server_saves: list[dict] = await self._loop.run_in_executor(
+                    None,
+                    lambda: self._retry.with_retry(
+                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
+                    ),
+                )
+                save_ids = [s["id"] for s in server_saves]
+                if save_ids:
+                    await self._loop.run_in_executor(
+                        None,
+                        lambda: self._retry.with_retry(
+                            lambda: self._romm_api.delete_server_saves(save_ids),
+                        ),
+                    )
+                    deleted_ids = set(save_ids)
+                    deleted_server_saves = len(save_ids)
+            except RommApiError as e:
+                self._logger.warning(f"delete_slot: server delete failed for slot '{slot}': {e}")
+                return {
+                    "success": False,
+                    "reason": "server_error",
+                    "message": f"Failed to delete server saves: {e}",
+                }
+            except Exception as e:
+                self._logger.warning(f"delete_slot: unexpected error for slot '{slot}': {e}")
+                return {
+                    "success": False,
+                    "reason": "server_error",
+                    "message": f"Failed to delete server saves: {e}",
+                }
+
+        # Clean up local state
+        files_state = save_state.get("files", {})
+        if deleted_ids:
+            to_remove = [fn for fn, fs in files_state.items() if fs.get("tracked_save_id") in deleted_ids]
+            for fn in to_remove:
+                del files_state[fn]
+                cleaned_files += 1
+
+        del slots_dict[slot]
+        self.save_state()
+
+        return {
+            "success": True,
+            "deleted_server_saves": deleted_server_saves,
+            "cleaned_files": cleaned_files,
+        }

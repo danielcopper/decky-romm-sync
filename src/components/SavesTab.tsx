@@ -13,8 +13,8 @@
 import { useState, useEffect, useRef, createElement, FC, ChangeEvent } from "react";
 import { ConfirmModal, DialogButton, Focusable, TextField, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
-import { getSlotSaves, switchSlot, debugLog, savesSupportsVersionHistory, savesListFileVersions, savesRollbackToVersion } from "../api/backend";
-import type { SaveVersionEntry, RollbackStatus } from "../api/backend";
+import { getSlotSaves, switchSlot, debugLog, savesListFileVersions, savesRollbackToVersion, getSlotDeleteInfo, deleteSlot } from "../api/backend";
+import type { ServerCapabilities, SaveVersionEntry, RollbackStatus, SlotDeleteInfo } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import type { SaveStatus, PendingConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse, DeviceSyncInfo } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -29,6 +29,7 @@ interface SavesTabProps {
   activeSlot: string | null;
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
+  capabilities: ServerCapabilities;
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
 }
 
@@ -539,7 +540,7 @@ function renderActiveSlotBody(
   conflicts: PendingConflict[],
   romId: number,
   slot: string,
-  supportsVersionHistory: boolean,
+  capabilities: ServerCapabilities,
   isOffline: boolean,
   onVersionRestored: () => void,
 ): (ReturnType<typeof createElement> | null)[] {
@@ -548,7 +549,7 @@ function renderActiveSlotBody(
       const conflict = conflicts.find((c) => c.filename === f.filename);
       return createElement("div", { key: f.filename },
         renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
-        supportsVersionHistory
+        capabilities.version_history
           ? createElement(VersionHistoryPanel, {
               key: `vhp-${f.filename}`,
               romId,
@@ -572,6 +573,10 @@ function renderInactiveSlotBody(
   switchError: string | null,
   isOffline: boolean,
   handleActivate: () => void,
+  handleDelete: () => void,
+  deleting: boolean,
+  slotSource: "server" | "local",
+  capabilities: ServerCapabilities,
 ): (ReturnType<typeof createElement> | null)[] {
   const children: (ReturnType<typeof createElement> | null)[] = [];
 
@@ -586,8 +591,15 @@ function renderInactiveSlotBody(
       "No saves in this slot"));
   }
 
+  // Delete button: always shown for local-only slots, requires slot_deletion capability for server slots
+  const showDeleteButton = slotSource === "local" || capabilities.slot_deletion;
+
   children.push(
-    createElement("div", { key: "activate-row", style: { marginTop: "10px" } },
+    createElement(Focusable as any, {
+      key: "activate-row",
+      "flow-children": "right",
+      style: { marginTop: "10px", display: "flex", gap: "8px", alignItems: "center" },
+    },
       createElement(DialogButton as any, {
         key: "activate-btn",
         style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto" },
@@ -596,19 +608,29 @@ function renderInactiveSlotBody(
         disabled: switching || isOffline,
         onClick: handleActivate,
       }, switching ? "Switching..." : "Activate Slot"),
-      isOffline
-        ? createElement("div", {
-            key: "offline-hint",
-            style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const, marginTop: "4px" },
-          }, "Offline \u2014 slot switching unavailable")
-        : null,
-      switchError
-        ? createElement("div", {
-            key: "switch-error",
-            style: { fontSize: "11px", color: "#d94126", marginTop: "4px" },
-          }, switchError)
+      showDeleteButton
+        ? createElement(DialogButton as any, {
+            key: "delete-btn",
+            style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto", color: "#d94126" },
+            noFocusRing: false,
+            onFocus: scrollFocusedToCenter,
+            disabled: deleting || switching,
+            onClick: handleDelete,
+          }, deleting ? "Loading..." : "Delete Slot")
         : null,
     ),
+    isOffline
+      ? createElement("div", {
+          key: "offline-hint",
+          style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const, marginTop: "4px" },
+        }, "Offline \u2014 slot switching unavailable")
+      : null,
+    switchError
+      ? createElement("div", {
+          key: "switch-error",
+          style: { fontSize: "11px", color: "#d94126", marginTop: "4px" },
+        }, switchError)
+      : null,
   );
 
   return children;
@@ -622,11 +644,12 @@ interface SlotPanelProps {
   // Active slot data (only set when isActive === true)
   saveStatus: SaveStatus | null;
   conflicts: PendingConflict[];
-  supportsVersionHistory: boolean;
+  capabilities: ServerCapabilities;
   isOffline: boolean;
   // Callbacks
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
   onVersionRestored: () => void;
+  onSlotDeleted: () => void;
 }
 
 const SlotPanel: FC<SlotPanelProps> = ({
@@ -636,16 +659,18 @@ const SlotPanel: FC<SlotPanelProps> = ({
   defaultExpanded,
   saveStatus,
   conflicts,
-  supportsVersionHistory,
+  capabilities,
   isOffline,
   onSlotSwitched,
   onVersionRestored,
+  onSlotDeleted,
 }) => {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [slotFiles, setSlotFiles] = useState<SlotSaveFile[] | null>(null);
   const [loadingSlot, setLoadingSlot] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const switchErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const slotName = slot.slot;
@@ -696,6 +721,61 @@ const SlotPanel: FC<SlotPanelProps> = ({
       switchErrorTimerRef.current = setTimeout(() => setSwitchError(null), 5000);
     } finally {
       setSwitching(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const info: SlotDeleteInfo = await getSlotDeleteInfo(romId, slotName);
+      if (!info.success) {
+        if (info.reason === "active_slot" || info.is_active) {
+          toaster.toast({ title: "RomM Sync", body: "Cannot delete the active slot. Switch to a different slot first." });
+        } else {
+          toaster.toast({ title: "RomM Sync", body: info.message ?? "Cannot delete this slot" });
+        }
+        return;
+      }
+
+      // Build confirmation message
+      const lines: string[] = [];
+      if (info.source === "server" && (info.server_save_count ?? 0) > 0) {
+        const n = info.server_save_count ?? 0;
+        lines.push(`This will permanently delete ${n} save${n === 1 ? "" : "s"} from slot '${info.slot}' on the RomM server.`);
+      } else {
+        lines.push(`This will remove slot '${info.slot}' from your local configuration.`);
+      }
+      if ((info.local_file_count ?? 0) > 0) {
+        const n = info.local_file_count ?? 0;
+        lines.push(`${n} tracked file${n === 1 ? "" : "s"} will be unlinked.`);
+      }
+      lines.push("This cannot be undone.");
+
+      showModal(createElement(ConfirmModal, {
+        strTitle: "Delete Slot",
+        strDescription: lines.join("\n\n"),
+        strOKButtonText: "Delete",
+        strCancelButtonText: "Cancel",
+        onOK: async () => {
+          try {
+            const result = await deleteSlot(romId, slotName);
+            if (result.success) {
+              toaster.toast({ title: "RomM Sync", body: `Slot '${slotName}' deleted` });
+              onSlotDeleted();
+            } else {
+              toaster.toast({ title: "RomM Sync", body: result.message ?? "Failed to delete slot" });
+            }
+          } catch (e) {
+            debugLog(`SavesTab: deleteSlot error: ${e}`);
+            toaster.toast({ title: "RomM Sync", body: "An error occurred while deleting the slot" });
+          }
+        },
+      }));
+    } catch (e) {
+      debugLog(`SavesTab: getSlotDeleteInfo error: ${e}`);
+      toaster.toast({ title: "RomM Sync", body: "Failed to load slot info" });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -760,8 +840,8 @@ const SlotPanel: FC<SlotPanelProps> = ({
   let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
   if (expanded) {
     bodyChildren = isActive
-      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, supportsVersionHistory, isOffline, onVersionRestored)
-      : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate);
+      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, capabilities, isOffline, onVersionRestored)
+      : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting, slot.source, capabilities);
   }
 
   const bodyEl = expanded
@@ -788,29 +868,25 @@ export const SavesTab: FC<SavesTabProps> = ({
   activeSlot,
   availableSlots,
   slotsLoading,
+  capabilities,
   onSlotSwitched,
 }) => {
   const [newSlotError, setNewSlotError] = useState<string | null>(null);
   const newSlotErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
-  const [supportsVersionHistory, setSupportsVersionHistory] = useState(false);
   // Bumped to invalidate VersionHistoryPanel caches after a restore
   const [versionHistoryKey, setVersionHistoryKey] = useState(0);
-
-  useEffect(() => {
-    // Skip while offline — preserve last-known capability so we don't flicker
-    // the UI off if the server is briefly unreachable. Re-fetches on reconnect
-    // via the isOffline dep.
-    if (isOffline) return;
-    savesSupportsVersionHistory()
-      .then((supported) => setSupportsVersionHistory(!!supported))
-      .catch(() => setSupportsVersionHistory(false));
-  }, [isOffline]);
 
   const handleVersionRestored = () => {
     setVersionHistoryKey((k) => k + 1);
     // Trigger parent refresh of saveStatus so the tracked save row reflects
     // the new tracked_save_id / server fields without leaving the page.
+    globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
+      detail: { type: "save_sync", rom_id: romId },
+    }));
+  };
+
+  const handleSlotDeleted = () => {
     globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
       detail: { type: "save_sync", rom_id: romId },
     }));
@@ -976,10 +1052,11 @@ export const SavesTab: FC<SavesTabProps> = ({
           defaultExpanded: isActive,
           saveStatus: isActive ? saveStatus : null,
           conflicts: isActive ? conflicts : [],
-          supportsVersionHistory,
+          capabilities,
           isOffline,
           onSlotSwitched,
           onVersionRestored: handleVersionRestored,
+          onSlotDeleted: handleSlotDeleted,
         });
       }),
 

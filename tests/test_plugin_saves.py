@@ -1075,6 +1075,33 @@ async def test_delete_platform_saves(plugin, tmp_path):
 # ============================================================================
 
 
+class TestGetServerCapabilitiesCallable:
+    """Integration tests for the get_server_capabilities callable."""
+
+    @pytest.mark.asyncio
+    async def test_returns_all_false_on_v46(self, plugin):
+        """get_server_capabilities returns all-false dict on v4.6."""
+        result = await plugin.get_server_capabilities()
+        assert result == {
+            "device_sync": False,
+            "version_history": False,
+            "slot_deletion": False,
+            "device_management": False,
+        }
+
+    @pytest.mark.asyncio
+    async def test_returns_all_true_on_v47(self, plugin):
+        """get_server_capabilities returns all-true dict when device sync is supported."""
+        plugin._fake_api._supports_device_sync = True
+        result = await plugin.get_server_capabilities()
+        assert result == {
+            "device_sync": True,
+            "version_history": True,
+            "slot_deletion": True,
+            "device_management": True,
+        }
+
+
 class TestSavesVersionHistoryCallables:
     """Integration tests for the three version history callables."""
 

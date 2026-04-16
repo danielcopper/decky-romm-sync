@@ -131,6 +131,31 @@ export const getSaveSlots = callable<[number], { success: boolean; slots: SaveSl
 export const setGameSlot = callable<[number, string], { success: boolean; active_slot?: string; message?: string }>("set_game_slot");
 export const getSlotSaves = callable<[number, string], SlotSavesResponse>("get_slot_saves");
 export const switchSlot = callable<[number, string], SwitchSlotResponse>("switch_slot");
+
+export interface SlotDeleteInfo {
+  success: boolean;
+  slot?: string;
+  source?: "server" | "local";
+  server_save_count?: number;
+  server_save_ids?: number[];
+  local_file_count?: number;
+  local_filenames?: string[];
+  is_active?: boolean;
+  reason?: string;
+  message?: string;
+}
+
+export interface DeleteSlotResult {
+  success: boolean;
+  deleted_server_saves?: number;
+  cleaned_files?: number;
+  reason?: string;
+  message?: string;
+}
+
+export const getSlotDeleteInfo = callable<[number, string], SlotDeleteInfo>("get_slot_delete_info");
+export const deleteSlot = callable<[number, string], DeleteSlotResult>("delete_slot");
+
 export const isSaveTrackingConfigured = callable<[number], { configured: boolean; active_slot: string | null }>("is_save_tracking_configured");
 export const getSaveSetupInfo = callable<[number], SaveSetupInfo>("get_save_setup_info");
 export const confirmSlotChoice = callable<[number, string, string | null], { success: boolean; needs_conflict_resolution?: boolean; message: string }>("confirm_slot_choice");
@@ -192,7 +217,17 @@ export const deleteLocalSaves = callable<[number], { success: boolean; deleted_c
 export const deletePlatformSaves = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_saves");
 export const deletePlatformBios = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_bios");
 
-// Save version history callables (v4.7+ only — gated by supportsVersionHistory)
+// Server capabilities — fetched once by RomMGameInfoPanel and passed to children
+export interface ServerCapabilities {
+  device_sync: boolean;
+  version_history: boolean;
+  slot_deletion: boolean;
+  device_management: boolean;
+}
+
+export const getServerCapabilities = callable<[], ServerCapabilities>("get_server_capabilities");
+
+// Save version history callables (v4.7+ only — gated by capabilities.version_history)
 export interface SaveVersionEntry {
   id: number;
   file_name: string;

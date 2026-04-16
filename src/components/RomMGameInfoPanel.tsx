@@ -30,10 +30,12 @@ import {
   getAchievementProgress,
   getSaveSlots,
   isSaveTrackingConfigured,
+  getServerCapabilities,
   debugLog,
   refreshMigrationState,
   logError,
 } from "../api/backend";
+import type { ServerCapabilities } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
 import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, PendingConflict, Achievement, AchievementProgress, EarnedAchievement, SaveSlotSummary } from "../types";
@@ -69,6 +71,7 @@ interface PanelState {
   activeSlot: string | null;
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
+  capabilities: ServerCapabilities;
 }
 
 /** Format a Unix timestamp (seconds) as a release date string (e.g. "15 Mar 2003") */
@@ -102,6 +105,13 @@ function refreshSlotState(
 }
 
 export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
+  const defaultCapabilities: ServerCapabilities = {
+    device_sync: false,
+    version_history: false,
+    slot_deletion: false,
+    device_management: false,
+  };
+
   const [state, setState] = useState<PanelState>({
     loading: true,
     romId: null,
@@ -126,6 +136,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     activeSlot: "default",
     availableSlots: [],
     slotsLoading: false,
+    capabilities: defaultCapabilities,
   });
   const romIdRef = useRef<number | null>(null);
   const [migrationPending, setMigrationPending] = useState(getMigrationState().pending);
@@ -231,6 +242,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
           activeSlot: "default",
           availableSlots: [],
           slotsLoading: false,
+          capabilities: defaultCapabilities,
         });
 
         // Check if save slot tracking is configured for this game
@@ -269,6 +281,17 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
             getRomMetadata(romId).then((meta) => {
               if (!cancelled && meta) {
                 setState((prev) => ({ ...prev, metadata: meta }));
+              }
+            }).catch(() => {}),
+          );
+        }
+
+        // Server capabilities (for save sync feature gating)
+        if (cached.save_sync_enabled) {
+          bgPromises.push(
+            getServerCapabilities().then((caps) => {
+              if (!cancelled) {
+                setState((prev) => ({ ...prev, capabilities: caps }));
               }
             }).catch(() => {}),
           );
@@ -1015,6 +1038,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         activeSlot: state.activeSlot,
         availableSlots: state.availableSlots,
         slotsLoading: state.slotsLoading,
+        capabilities: state.capabilities,
         onSlotSwitched: (newSlot, newStatus) => {
           setState((prev) => ({
             ...prev,

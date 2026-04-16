@@ -4591,3 +4591,247 @@ class TestRollbackToVersion:
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
 
         assert result["status"] == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# TestDeleteSlot
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteSlot:
+    """Tests for SaveService.delete_slot and get_slot_delete_info."""
+
+    def _setup_state_with_slots(
+        self,
+        svc,
+        tmp_path,
+        *,
+        active_slot="default",
+        extra_slots=None,
+        files_state=None,
+    ):
+        """Set up a ROM with slot state for deletion tests."""
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        _install_rom(svc, tmp_path)
+
+        slots = {
+            "default": {"source": "server", "count": 1, "latest_updated_at": "2026-03-24T10:00:00"},
+        }
+        if extra_slots:
+            slots.update(extra_slots)
+
+        svc._save_sync_state["saves"]["42"] = {
+            "active_slot": active_slot,
+            "slot_confirmed": True,
+            "slots": slots,
+            "files": files_state or {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_slot_delete_info_server_slot(self, tmp_path):
+        """Server slot returns save count and tracked file info."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"save1": {"source": "server", "count": 3, "latest_updated_at": None}},
+            files_state={
+                "pokemon.srm": {"tracked_save_id": 10, "last_sync_hash": "abc"},
+                "zelda.srm": {"tracked_save_id": 11, "last_sync_hash": "def"},
+                "unrelated.srm": {"tracked_save_id": 99, "last_sync_hash": "ghi"},
+            },
+        )
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, filename="pokemon.srm", slot="save1")
+        fake.saves[11] = _server_save(save_id=11, rom_id=42, filename="zelda.srm", slot="save1")
+        fake.saves[12] = _server_save(save_id=12, rom_id=42, filename="extra.srm", slot="save1")
+
+        result = await svc.get_slot_delete_info(42, "save1")
+
+        assert result["success"] is True
+        assert result["server_save_count"] == 3
+        assert set(result["server_save_ids"]) == {10, 11, 12}
+        assert result["local_file_count"] == 2
+        assert set(result["local_filenames"]) == {"pokemon.srm", "zelda.srm"}
+        assert result["is_active"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_slot_delete_info_local_only_slot(self, tmp_path):
+        """Local-only slot returns zero server saves."""
+        svc, _fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"local1": {"source": "local", "count": 0, "latest_updated_at": None}},
+        )
+
+        result = await svc.get_slot_delete_info(42, "local1")
+
+        assert result["success"] is True
+        assert result["source"] == "local"
+        assert result["server_save_count"] == 0
+        assert result["local_file_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_get_slot_delete_info_active_slot(self, tmp_path):
+        """Info for the active slot still returns data (is_active=True)."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(svc, tmp_path, active_slot="default")
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+
+        result = await svc.get_slot_delete_info(42, "default")
+
+        assert result["success"] is True
+        assert result["is_active"] is True
+        assert result["server_save_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_slot_delete_info_nonexistent_slot(self, tmp_path):
+        """Non-existent slot returns not_found."""
+        svc, _fake = make_service(tmp_path)
+        self._setup_state_with_slots(svc, tmp_path)
+
+        result = await svc.get_slot_delete_info(42, "nonexistent")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_server_saves_success(self, tmp_path):
+        """Deleting a server slot removes server saves and cleans up state."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"save1": {"source": "server", "count": 2, "latest_updated_at": None}},
+            files_state={
+                "pokemon.srm": {"tracked_save_id": 10, "last_sync_hash": "abc"},
+                "zelda.srm": {"tracked_save_id": 11, "last_sync_hash": "def"},
+            },
+        )
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, filename="pokemon.srm", slot="save1")
+        fake.saves[11] = _server_save(save_id=11, rom_id=42, filename="zelda.srm", slot="save1")
+
+        result = await svc.delete_slot(42, "save1")
+
+        assert result["success"] is True
+        assert result["deleted_server_saves"] == 2
+        assert result["cleaned_files"] == 2
+        # Slot removed from state
+        assert "save1" not in svc._save_sync_state["saves"]["42"]["slots"]
+        # File entries cleaned
+        assert "pokemon.srm" not in svc._save_sync_state["saves"]["42"]["files"]
+        assert "zelda.srm" not in svc._save_sync_state["saves"]["42"]["files"]
+        # delete_server_saves called with correct IDs
+        delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
+        assert len(delete_calls) == 1
+        assert set(delete_calls[0][1][0]) == {10, 11}
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_local_only_success(self, tmp_path):
+        """Deleting a local-only slot skips server calls."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"local1": {"source": "local", "count": 0, "latest_updated_at": None}},
+        )
+
+        result = await svc.delete_slot(42, "local1")
+
+        assert result["success"] is True
+        assert result["deleted_server_saves"] == 0
+        assert "local1" not in svc._save_sync_state["saves"]["42"]["slots"]
+        # No server calls made
+        delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
+        assert len(delete_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_blocks_active_slot(self, tmp_path):
+        """Cannot delete the active slot."""
+        svc, _fake = make_service(tmp_path)
+        self._setup_state_with_slots(svc, tmp_path, active_slot="default")
+
+        result = await svc.delete_slot(42, "default")
+
+        assert result["success"] is False
+        assert result["reason"] == "active_slot"
+        # Slot still exists
+        assert "default" in svc._save_sync_state["saves"]["42"]["slots"]
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_server_error(self, tmp_path):
+        """Server error leaves slot intact (no partial cleanup)."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"save1": {"source": "server", "count": 1, "latest_updated_at": None}},
+        )
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, filename="pokemon.srm", slot="save1")
+        # First list_saves call succeeds, then delete_server_saves fails
+        original_delete = fake.delete_server_saves
+
+        def fail_delete(save_ids):
+            raise RommApiError(500, "Server error")
+
+        fake.delete_server_saves = fail_delete
+
+        result = await svc.delete_slot(42, "save1")
+
+        assert result["success"] is False
+        assert result["reason"] == "server_error"
+        # Slot NOT removed from state (rollback on failure)
+        assert "save1" in svc._save_sync_state["saves"]["42"]["slots"]
+
+        fake.delete_server_saves = original_delete
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_cleans_up_tracked_files(self, tmp_path):
+        """Only file entries pointing to deleted saves are removed; unrelated entries preserved."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"save1": {"source": "server", "count": 2, "latest_updated_at": None}},
+            files_state={
+                "pokemon.srm": {"tracked_save_id": 10, "last_sync_hash": "abc"},
+                "zelda.srm": {"tracked_save_id": 11, "last_sync_hash": "def"},
+                "unrelated.srm": {"tracked_save_id": 99, "last_sync_hash": "ghi"},
+            },
+        )
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, filename="pokemon.srm", slot="save1")
+        fake.saves[11] = _server_save(save_id=11, rom_id=42, filename="zelda.srm", slot="save1")
+
+        result = await svc.delete_slot(42, "save1")
+
+        assert result["success"] is True
+        files = svc._save_sync_state["saves"]["42"]["files"]
+        assert "pokemon.srm" not in files
+        assert "zelda.srm" not in files
+        assert "unrelated.srm" in files
+        assert files["unrelated.srm"]["tracked_save_id"] == 99
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_not_installed_rom(self, tmp_path):
+        """ROM not installed returns failure."""
+        svc, _fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        # Don't install any ROM
+
+        result = await svc.delete_slot(42, "default")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_installed"
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_sync_disabled(self, tmp_path):
+        """Save sync disabled returns failure."""
+        svc, _fake = make_service(tmp_path)
+        # save_sync_enabled defaults to False
+
+        result = await svc.delete_slot(42, "default")
+
+        assert result["success"] is False
+        assert result["reason"] == "disabled"

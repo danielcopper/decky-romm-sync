@@ -170,6 +170,8 @@ class FakeSaveApi:
         self.call_log.append(("list_saves", (rom_id,), {"device_id": device_id, "slot": slot}))
         self._check_fail()
         saves = [s for s in self.saves.values() if s.get("rom_id") == rom_id]
+        if slot is not None:
+            saves = [s for s in saves if s.get("slot") == slot]
         if device_id:
             # Simulate server adding device_syncs when device_id is provided
             for s in saves:

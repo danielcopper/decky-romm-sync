@@ -606,6 +606,12 @@ class Plugin:
     async def switch_slot(self, rom_id, new_slot):
         return await self._save_sync_service.switch_slot(rom_id, new_slot)
 
+    async def get_slot_delete_info(self, rom_id, slot):
+        return await self._save_sync_service.get_slot_delete_info(rom_id, slot)
+
+    async def delete_slot(self, rom_id, slot):
+        return await self._save_sync_service.delete_slot(rom_id, slot)
+
     async def is_save_tracking_configured(self, rom_id):
         return self._save_sync_service.is_save_tracking_configured(rom_id)
 
@@ -640,6 +646,19 @@ class Plugin:
     async def delete_platform_saves(self, platform_slug):
         return self._save_sync_service.delete_platform_saves(platform_slug)
 
+    async def get_server_capabilities(self):
+        # All v4.7+ features share the same gate today. When a feature
+        # requires a different minimum version, add a dedicated
+        # service-level check and map it here.
+        v47 = self._save_sync_service.supports_version_history()
+        return {
+            "device_sync": v47,
+            "version_history": v47,
+            "slot_deletion": v47,
+            "device_management": v47,
+        }
+
+    # Deprecated: use get_server_capabilities instead. Kept for backward compat.
     async def saves_supports_version_history(self):
         return self._save_sync_service.supports_version_history()
 
