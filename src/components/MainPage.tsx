@@ -52,6 +52,31 @@ function formatChanges(pairs: [number, string][]): string {
   return pairs.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`).join(", ");
 }
 
+const ConnectionIndicator: FC<{ connected: boolean | null }> = ({ connected }) => {
+  if (connected === null) {
+    return (
+      <>
+        <Spinner width={14} height={14} />
+        <span style={{ fontSize: "12px", opacity: 0.7 }}>Checking...</span>
+      </>
+    );
+  }
+  if (connected) {
+    return (
+      <>
+        <FaCheckCircle style={{ color: "#59bf40", fontSize: "14px" }} />
+        <span style={{ fontSize: "12px" }}>Connected</span>
+      </>
+    );
+  }
+  return (
+    <>
+      <FaTimesCircle style={{ color: "#d4343c", fontSize: "14px" }} />
+      <span style={{ fontSize: "12px" }}>Not connected</span>
+    </>
+  );
+};
+
 function formatProgressText(progress: SyncProgress | null): string {
   if (!progress) return "Syncing...";
   const step = progress.step && progress.totalSteps
@@ -303,22 +328,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             label="Connection"
           >
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              {connected === null ? (
-                <>
-                  <Spinner width={14} height={14} />
-                  <span style={{ fontSize: "12px", opacity: 0.7 }}>Checking...</span>
-                </>
-              ) : connected ? (
-                <>
-                  <FaCheckCircle style={{ color: "#59bf40", fontSize: "14px" }} />
-                  <span style={{ fontSize: "12px" }}>Connected</span>
-                </>
-              ) : (
-                <>
-                  <FaTimesCircle style={{ color: "#d4343c", fontSize: "14px" }} />
-                  <span style={{ fontSize: "12px" }}>Not connected</span>
-                </>
-              )}
+              <ConnectionIndicator connected={connected} />
             </div>
           </Field>
         </PanelSectionRow>
