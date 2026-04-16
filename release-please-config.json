@@ -6,6 +6,7 @@
       "package-name": "decky-romm-sync",
       "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
       "extra-files": [
         {
           "type": "json",
