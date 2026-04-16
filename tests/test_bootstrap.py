@@ -10,8 +10,8 @@ from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
-from adapters.romm.api_router import ApiRouter
 from adapters.romm.http import RommHttpAdapter
+from adapters.romm.romm_api import RommApi
 from adapters.steam_config import SteamConfigAdapter
 from services.achievements import AchievementsService
 from services.downloads import DownloadService
@@ -98,7 +98,7 @@ class TestBootstrap:
             settings={},
         )
         assert "romm_api" in result
-        assert isinstance(result["romm_api"], ApiRouter)
+        assert isinstance(result["romm_api"], RommApi)
 
     def test_returns_split_retrodeck_adapters(self, tmp_path):
         """Bootstrap instantiates all three split adapters (paths, cfg, core_info)."""
@@ -130,7 +130,7 @@ class TestWireServices:
             "sync_stats": {},
             "downloaded_bios": {},
         }
-        romm_api = MagicMock(spec=ApiRouter)
+        romm_api = MagicMock(spec=RommApi)
         return {
             "http_adapter": http_adapter,
             "romm_api": romm_api,

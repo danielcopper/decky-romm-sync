@@ -25,7 +25,6 @@ class FakeSaveApi:
         self._next_note_id = 2000
         self._fail_on_next: Exception | None = None
         self.heartbeat_raises: Exception | None = None
-        self._supports_device_sync = False
         self._registered_devices: list[dict] = []
         self._next_device_id = 1
 
@@ -112,9 +111,6 @@ class FakeSaveApi:
             self.saves.pop(sid, None)
         return {"deleted": len(save_ids)}
 
-    def supports_device_sync(self) -> bool:
-        return self._supports_device_sync
-
     def register_device(self, name: str, platform: str, client: str, version: str) -> dict:
         self.call_log.append(("register_device", (name, platform, client, version), {}))
         self._check_fail()
@@ -132,10 +128,31 @@ class FakeSaveApi:
         device_id: str | None = None,
         optimistic: bool = True,
     ) -> None:
-        raise NotImplementedError
+        self.call_log.append(
+            ("download_save_content", (save_id, dest_path), {"device_id": device_id, "optimistic": optimistic})
+        )
+        self._check_fail()
+
+        self.downloaded_files[save_id] = dest_path
+
+        # If we have uploaded content for this save, copy it
+        if save_id in self.uploaded_files:
+            import os
+            import shutil
+
+            src = self.uploaded_files[save_id]
+            if os.path.isfile(src):
+                shutil.copy2(src, dest_path)
+                return
+
+        # Write default content so the file exists
+        with open(dest_path, "wb") as f:
+            f.write(b"\x00" * 1024)
 
     def confirm_download(self, save_id: int, device_id: str) -> dict:
-        raise NotImplementedError
+        self.call_log.append(("confirm_download", (save_id, device_id), {}))
+        self._check_fail()
+        return {"status": "ok"}
 
     def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
         self.call_log.append(("get_save_summary", (rom_id,), {"device_id": device_id}))

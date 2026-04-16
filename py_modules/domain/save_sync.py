@@ -274,7 +274,7 @@ def match_local_to_server_saves(
     result = MatchResult()
 
     # Filter server saves to active slot (when slot is configured).
-    # Saves with slot=None (v4.6 / pre-slot) are included in any active slot.
+    # Saves with slot=None (pre-slot) are included in any active slot.
     # Treat empty string same as None (legacy/no-slot mode).
     if active_slot:
         filtered_saves = [ss for ss in server_saves if ss.get("slot") == active_slot or ss.get("slot") is None]
@@ -317,7 +317,7 @@ def check_server_changed_v47(device_sync_info: dict | None) -> bool | None:
     ----------
     device_sync_info:
         A single device sync record from the server's device_syncs array,
-        or None if not available (v4.6 / no device registered).
+        or None if not available (no device registered).
 
     Returns
     -------
@@ -350,9 +350,9 @@ def determine_sync_action(
     server_save:
         Server save metadata dict, or None if no server save exists.
     device_sync_info:
-        v4.7 device sync record (has "is_current" key), or None for v4.6 fallback.
+        Device sync record (has "is_current" key), or None when unavailable.
     file_state:
-        Per-file sync state dict (used for v4.6 fallback via check_server_changes_fast).
+        Per-file sync state dict (used for timestamp fallback via check_server_changes_fast).
         Only needed when device_sync_info is None.
 
     Returns
@@ -373,10 +373,10 @@ def determine_sync_action(
     if v47_result is not None:
         server_changed = v47_result
     else:
-        # Priority 2: v4.6 fast-path using file_state
+        # Priority 2: Timestamp fast-path using file_state (when device_syncs unavailable)
         if file_state is not None:
-            v46_result = check_server_changes_fast(file_state, server_save)
-            server_changed = v46_result if v46_result is not None else True
+            ts_result = check_server_changes_fast(file_state, server_save)
+            server_changed = ts_result if ts_result is not None else True
         else:
             # Priority 3: no info at all — safe default: assume server changed
             server_changed = True

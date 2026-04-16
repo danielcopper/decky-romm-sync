@@ -124,7 +124,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState("");
-  const [versionWarning, setVersionWarning] = useState("");
   const [loading, setLoading] = useState(false);
   const [allowInsecureSsl, setAllowInsecureSsl] = useState(false);
 
@@ -229,13 +228,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const handleTest = async () => {
     setLoading(true);
     setStatus("");
-    setVersionWarning("");
     try {
       const result = await testConnection();
       setStatus(result.message);
-      if (result.version_warning) {
-        setVersionWarning(result.version_warning);
-      }
     } catch {
       setStatus("Connection test failed");
     }
@@ -565,11 +560,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         {status && (
           <PanelSectionRow>
             <Field label={status} />
-          </PanelSectionRow>
-        )}
-        {versionWarning && (
-          <PanelSectionRow>
-            <Field label={versionWarning} />
           </PanelSectionRow>
         )}
       </PanelSection>

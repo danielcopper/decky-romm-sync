@@ -197,7 +197,7 @@ function computeSaveSyncDisplay(saveStatus: SaveStatus | null): { status: "synce
   return { status: "none", label: "No saves" };
 }
 
-import { setRommConnectionState } from "../utils/connectionState";
+import { setRommConnectionState, getVersionError, setVersionError } from "../utils/connectionState";
 
 /** Extract BIOS fields from a bios_status response into an InfoState partial. */
 function extractBiosInfo(b: BiosStatus): Partial<InfoState> {
@@ -473,6 +473,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       try {
         const result = await Promise.race([testConnection(), timeoutMs(5000)]);
         if (cancelled) return;
+        if (result.error_code === "version_error") {
+          setVersionError(result.message);
+          setRommConnectionState("offline");
+          setConnectionState("offline");
+          globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));
+          return;
+        }
         const connected = result.success;
         const connState = connected ? "connected" : "offline";
         setRommConnectionState(connState);
@@ -863,6 +870,23 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
           info.biosLabel,
         ),
       ),
+    );
+  }
+
+  // Version mismatch — replace entire play section with error message
+  const versionError = getVersionError();
+  if (versionError) {
+    return createElement(Focusable, {
+      "data-romm": "true",
+      className: `romm-play-section-row ${basicAppDetailsSectionStylerClasses?.PlaySection || ""}`.trim(),
+      style: {
+        padding: "16px 2.8vw",
+        background: "rgba(14, 20, 27, 0.33)",
+      },
+    } as any,
+      createElement("div", {
+        style: { fontSize: "13px", color: "rgba(255, 255, 255, 0.7)" },
+      }, versionError),
     );
   }
 

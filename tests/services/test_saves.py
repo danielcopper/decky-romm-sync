@@ -197,10 +197,12 @@ class TestDeviceRegistration:
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
         svc._save_sync_state["device_id"] = "existing"
         svc._save_sync_state["device_name"] = "deck"
+        svc._save_sync_state["server_device_id"] = "server-existing"
 
         result = svc.ensure_device_registered()
         assert result["device_id"] == "existing"
         assert result["device_name"] == "deck"
+        assert result["server_device_id"] == "server-existing"
 
     @pytest.mark.asyncio
     async def test_disabled_returns_failure(self, tmp_path):
@@ -216,12 +218,10 @@ class TestDeviceRegistration:
 # ---------------------------------------------------------------------------
 
 
-class TestDeviceRegistrationV47:
-    def test_registers_with_server_on_v47(self, tmp_path):
-        """v4.7: calls register_device and stores server_device_id."""
-        fake = FakeSaveApi()
-        fake._supports_device_sync = True
-        svc, _ = make_service(tmp_path, fake_api=fake)
+class TestDeviceRegistrationServer:
+    def test_registers_with_server(self, tmp_path):
+        """Calls register_device and stores server_device_id."""
+        svc, fake = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
 
         result = svc.ensure_device_registered()
@@ -235,32 +235,17 @@ class TestDeviceRegistrationV47:
         assert reg_calls[0][1][1] == "linux"  # platform
         assert reg_calls[0][1][2] == "decky-romm-sync"  # client
 
-    def test_falls_back_to_local_on_server_failure(self, tmp_path):
-        """v4.7: if register_device fails, falls back to local UUID."""
+    def test_returns_failure_on_server_error(self, tmp_path):
+        """If register_device fails, returns failure."""
         fake = FakeSaveApi()
-        fake._supports_device_sync = True
         fake.fail_on_next(Exception("server error"))
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
 
         result = svc.ensure_device_registered()
-        assert result["success"] is True
-        assert result["device_id"]  # got a local UUID
-        assert result.get("server_device_id") is None  # no server registration
+        assert result["success"] is False
+        assert result.get("error") == "registration_failed"
         assert svc._save_sync_state.get("server_device_id") is None
-
-    def test_v46_uses_local_uuid(self, tmp_path):
-        """v4.6: generates local UUID without server contact."""
-        svc, fake = make_service(tmp_path)  # default: supports_device_sync=False
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-
-        result = svc.ensure_device_registered()
-        assert result["success"] is True
-        assert result["device_id"]
-        assert result.get("server_device_id") is None
-        # No register_device call
-        reg_calls = [c for c in fake.call_log if c[0] == "register_device"]
-        assert len(reg_calls) == 0
 
     def test_returns_existing_with_server_device_id(self, tmp_path):
         """If already registered, returns existing IDs including server_device_id."""
@@ -274,13 +259,11 @@ class TestDeviceRegistrationV47:
         assert result["device_id"] == "existing-id"
         assert result.get("server_device_id") == "server-id-123"
 
-    def test_upgrades_local_uuid_to_server_on_v47(self, tmp_path):
-        """Local-only UUID gets upgraded to server registration when v4.7 becomes available."""
-        fake = FakeSaveApi()
-        fake._supports_device_sync = True
-        svc, _ = make_service(tmp_path, fake_api=fake)
+    def test_upgrades_local_uuid_to_server(self, tmp_path):
+        """Local-only UUID gets upgraded to server registration."""
+        svc, fake = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        # Simulate existing local-only UUID (from v4.6 or failed v4.7 registration)
+        # Simulate existing local-only UUID (from failed registration)
         svc._save_sync_state["device_id"] = "local-only-uuid"
         svc._save_sync_state["device_name"] = "deck"
         svc._save_sync_state["server_device_id"] = None
@@ -2354,25 +2337,6 @@ class TestV47SyncFlow:
         assert upload_calls[0][2]["device_id"] == "server-dev-123"
         assert upload_calls[0][2]["slot"] == "default"
 
-    def test_v46_does_not_pass_device_id(self, tmp_path):
-        """v4.6: no device_id or slot passed to API calls."""
-        svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "local-uuid"
-        # No server_device_id set
-        _install_rom(svc, tmp_path)
-        _create_save(tmp_path)
-
-        svc._sync_rom_saves(42)
-
-        list_calls = [c for c in fake.call_log if c[0] == "list_saves"]
-        assert list_calls[0][2]["device_id"] is None
-
-        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
-        if upload_calls:
-            assert upload_calls[0][2]["device_id"] is None
-            assert upload_calls[0][2]["slot"] is None
-
     def test_v47_skip_when_is_current(self, tmp_path):
         """v4.7: server says is_current=True, local unchanged → skip."""
         svc, fake = make_service(tmp_path)
@@ -2998,7 +2962,7 @@ class TestTrackedSaveIdMatching:
         _synced, errors, _conflicts = svc._sync_rom_saves(42)
         assert len(errors) == 0
         # No downloads should have occurred (files are in sync)
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
 
     @pytest.mark.asyncio
@@ -3228,7 +3192,7 @@ class TestTrackedSaveIdMatching:
         assert synced == 1  # only ONE download
 
         # Should download only once (the newest, id=18)
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 1
         assert download_calls[0][1][0] == 18  # save_id=18 (newest)
 
@@ -3318,7 +3282,7 @@ class TestOlderVersionSkipping:
         assert len(errors) == 0
         # Nothing should sync — local matches server (id=18), older versions ignored
         assert synced == 0
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
 
     def test_newer_unmatched_save_not_skipped(self, tmp_path):
@@ -3411,7 +3375,7 @@ class TestOlderVersionSkipping:
 
         _synced, _errors, _conflicts = svc._sync_rom_saves(42)
         # pokemon [old].srm in slot=portable is filtered out — no download
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
 
 
@@ -3599,7 +3563,7 @@ class TestResolveNewerInSlot:
         result = await svc.resolve_newer_in_slot(42, "pokemon.srm", "use_newer", 200)
         assert result["success"] is True
         # Verify download happened
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 1
         assert download_calls[0][1][0] == 200
         # dismissed_newer_save_id should be cleared
@@ -3932,7 +3896,7 @@ class TestSwitchSlot:
         # active_slot was updated
         assert svc._save_sync_state["saves"]["42"]["active_slot"] == "desktop"
         # The server save was downloaded
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) >= 1
 
     @pytest.mark.asyncio
@@ -3963,7 +3927,7 @@ class TestSwitchSlot:
         assert result["reason"] == "pending_uploads"
         assert "pokemon.srm" in result["files"]
         # No downloads should have happened
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
 
     @pytest.mark.asyncio
@@ -4055,7 +4019,7 @@ class TestSwitchSlot:
         assert result["success"] is True
         assert svc._save_sync_state["saves"]["42"]["active_slot"] == "newslot"
         # No downloads
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
         # Local file deleted (fresh start for empty slot)
         assert not save_path.exists()
@@ -4084,7 +4048,7 @@ class TestSwitchSlot:
         # File tracking state cleared so next play starts fresh
         assert svc._save_sync_state["saves"]["42"]["files"] == {}
         # No downloads happened
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
 
     @pytest.mark.asyncio
@@ -4107,7 +4071,7 @@ class TestSwitchSlot:
         assert result["success"] is True
         assert svc._save_sync_state["saves"]["42"]["active_slot"] == "target-slot"
         # Server save was downloaded (replaces local)
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) >= 1
 
     @pytest.mark.asyncio
@@ -4207,27 +4171,6 @@ class TestSwitchSlot:
 
 
 # ---------------------------------------------------------------------------
-# TestSupportsVersionHistory
-# ---------------------------------------------------------------------------
-
-
-class TestSupportsVersionHistory:
-    """Tests for SaveService.supports_version_history — capability check."""
-
-    def test_returns_false_on_v46(self, tmp_path):
-        """Returns False when the API adapter does not support device sync (v4.6)."""
-        svc, fake = make_service(tmp_path)
-        assert fake._supports_device_sync is False
-        assert svc.supports_version_history() is False
-
-    def test_returns_true_on_v47(self, tmp_path):
-        """Returns True when the API adapter supports device sync (v4.7+)."""
-        svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
-        assert svc.supports_version_history() is True
-
-
-# ---------------------------------------------------------------------------
 # TestListFileVersions
 # ---------------------------------------------------------------------------
 
@@ -4246,19 +4189,10 @@ class TestListFileVersions:
         }
 
     @pytest.mark.asyncio
-    async def test_returns_empty_on_v46(self, tmp_path):
-        """Returns empty list on v4.6 (no version history support)."""
-        svc, fake = make_service(tmp_path)
-        # v4.6: _supports_device_sync is False
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
-        result = await svc.list_file_versions(42, "default", "pokemon.srm")
-        assert result == []
-
-    @pytest.mark.asyncio
     async def test_happy_path_excludes_tracked(self, tmp_path):
         """Returns older versions, excluding the currently-tracked save."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         # tracked save
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
         # older version
@@ -4286,7 +4220,7 @@ class TestListFileVersions:
     async def test_matches_by_file_name_no_tags(self, tmp_path):
         """Saves with different file_name but same file_name_no_tags are included."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         # tracked: timestamped filename from initial POST
         fake.saves[100] = _server_save(
             save_id=100,
@@ -4316,7 +4250,7 @@ class TestListFileVersions:
     async def test_sorted_newest_first(self, tmp_path):
         """Versions are sorted by updated_at descending."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
         fake.saves[30] = _server_save(save_id=30, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
@@ -4332,7 +4266,7 @@ class TestListFileVersions:
     async def test_empty_when_no_older_versions(self, tmp_path):
         """Returns empty list when there are no versions other than the tracked one."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
         self._setup_state(svc, tracked_id=100)
 
@@ -4344,7 +4278,7 @@ class TestListFileVersions:
     async def test_no_tracked_save_returns_empty(self, tmp_path):
         """When no tracked_save_id in state, returns empty — can't determine base name."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
         # No state at all (tracked_id is None)
@@ -4357,7 +4291,7 @@ class TestListFileVersions:
     async def test_api_error_returns_empty(self, tmp_path):
         """Returns empty list when the server call fails."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         fake.fail_on_next(Exception("network error"))
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
@@ -4368,7 +4302,7 @@ class TestListFileVersions:
     async def test_result_shape(self, tmp_path):
         """Each entry contains the required fields: id, updated_at, file_size_bytes, device_syncs."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
         fake.saves[50] = {
             "id": 50,
@@ -4421,18 +4355,10 @@ class TestRollbackToVersion:
         }
 
     @pytest.mark.asyncio
-    async def test_returns_unsupported_on_v46(self, tmp_path):
-        """Returns unsupported when server does not support version history."""
-        svc, _fake = make_service(tmp_path)
-        # v4.6: _supports_device_sync is False
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
-        assert result == {"status": "unsupported"}
-
-    @pytest.mark.asyncio
     async def test_returns_not_found_when_rom_not_installed(self, tmp_path):
         """Returns not_found when the ROM is not in installed_roms."""
-        svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+        svc, _fake = make_service(tmp_path)
+
         # rom 999 is not installed
         result = await svc.rollback_to_version(999, "default", "pokemon.srm", 50)
         assert result == {"status": "not_found"}
@@ -4441,7 +4367,7 @@ class TestRollbackToVersion:
     async def test_returns_not_found_when_save_id_missing(self, tmp_path):
         """Returns not_found when target save_id is not in the server response."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         _install_rom(svc, tmp_path)
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
         # Request save_id=999, which doesn't exist
@@ -4457,7 +4383,7 @@ class TestRollbackToVersion:
         flow, not by blocking the rollback.
         """
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         self._setup_state(svc, tmp_path, tracked_id=100)
         _create_save(tmp_path)
         # tracked save
@@ -4473,7 +4399,7 @@ class TestRollbackToVersion:
     async def test_tracked_missing_blocked_without_force(self, tmp_path):
         """Returns tracked_missing when the currently tracked save is gone from the server."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         self._setup_state(svc, tmp_path, tracked_id=999)
         _create_save(tmp_path)
         # Tracked save 999 does NOT exist on server
@@ -4486,7 +4412,7 @@ class TestRollbackToVersion:
     async def test_tracked_missing_bypassed_by_force(self, tmp_path):
         """force=True bypasses the tracked_missing guard."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         self._setup_state(svc, tmp_path, tracked_id=999)
         _create_save(tmp_path)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
@@ -4498,7 +4424,7 @@ class TestRollbackToVersion:
     async def test_unsynced_changes_blocked_without_force(self, tmp_path):
         """Returns unsynced_changes when local file differs from last_sync_hash and force=False."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         save_file = _create_save(tmp_path, content=b"\xff" * 1024)
         local_hash = _file_md5(str(save_file))
         # Set a different hash as the "last synced" hash
@@ -4516,7 +4442,7 @@ class TestRollbackToVersion:
     async def test_force_overrides_unsynced_check(self, tmp_path):
         """force=True skips the unsynced changes check and proceeds with download."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         _create_save(tmp_path, content=b"\xff" * 1024)
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="aabbcc001122334455667788")
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
@@ -4525,14 +4451,14 @@ class TestRollbackToVersion:
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50, force=True)
 
         assert result["status"] == "ok"
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)
 
     @pytest.mark.asyncio
     async def test_happy_path_downloads_and_updates_state(self, tmp_path):
         """Happy path: rollback downloads the target save and updates file sync state."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
@@ -4545,7 +4471,7 @@ class TestRollbackToVersion:
 
         assert result["status"] == "ok"
         # Verify download was called with save_id=50
-        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)
         # State updated: tracked_save_id should now point to the rolled-back save
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
@@ -4555,7 +4481,7 @@ class TestRollbackToVersion:
     async def test_no_local_file_no_unsynced_block(self, tmp_path):
         """When local file doesn't exist, unsynced check is skipped."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         # Set a last_sync_hash but no local file
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="somehash")
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
@@ -4569,7 +4495,7 @@ class TestRollbackToVersion:
     async def test_no_state_entry_no_unsynced_block(self, tmp_path):
         """When there's no last_sync_hash in state, unsynced check is skipped."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         _create_save(tmp_path, content=b"\xff" * 1024)
         # No last_sync_hash (first time syncing)
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=None)
@@ -4584,7 +4510,7 @@ class TestRollbackToVersion:
     async def test_server_error_returns_not_found(self, tmp_path):
         """Returns not_found when the server call fails."""
         svc, fake = make_service(tmp_path)
-        fake._supports_device_sync = True
+
         _install_rom(svc, tmp_path)
         fake.fail_on_next(Exception("network error"))
 

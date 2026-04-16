@@ -14,7 +14,7 @@ import { useState, useEffect, useRef, createElement, FC, ChangeEvent } from "rea
 import { ConfirmModal, DialogButton, Focusable, TextField, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { getSlotSaves, switchSlot, debugLog, savesListFileVersions, savesRollbackToVersion, getSlotDeleteInfo, deleteSlot } from "../api/backend";
-import type { ServerCapabilities, SaveVersionEntry, RollbackStatus, SlotDeleteInfo } from "../api/backend";
+import type { SaveVersionEntry, RollbackStatus, SlotDeleteInfo } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import type { SaveStatus, PendingConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse, DeviceSyncInfo } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -29,7 +29,6 @@ interface SavesTabProps {
   activeSlot: string | null;
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
-  capabilities: ServerCapabilities;
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
 }
 
@@ -540,7 +539,6 @@ function renderActiveSlotBody(
   conflicts: PendingConflict[],
   romId: number,
   slot: string,
-  capabilities: ServerCapabilities,
   isOffline: boolean,
   onVersionRestored: () => void,
 ): (ReturnType<typeof createElement> | null)[] {
@@ -549,16 +547,14 @@ function renderActiveSlotBody(
       const conflict = conflicts.find((c) => c.filename === f.filename);
       return createElement("div", { key: f.filename },
         renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
-        capabilities.version_history
-          ? createElement(VersionHistoryPanel, {
-              key: `vhp-${f.filename}`,
-              romId,
-              slot,
-              filename: f.filename,
-              isOffline,
-              onRestored: onVersionRestored,
-            })
-          : null,
+        createElement(VersionHistoryPanel, {
+          key: `vhp-${f.filename}`,
+          romId,
+          slot,
+          filename: f.filename,
+          isOffline,
+          onRestored: onVersionRestored,
+        }),
       );
     });
   }
@@ -575,12 +571,10 @@ interface InactiveSlotBodyOpts {
   handleActivate: () => void;
   handleDelete: () => void;
   deleting: boolean;
-  slotSource: "server" | "local";
-  capabilities: ServerCapabilities;
 }
 
 function renderInactiveSlotBody(opts: InactiveSlotBodyOpts): (ReturnType<typeof createElement> | null)[] {
-  const { loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting, slotSource, capabilities } = opts;
+  const { loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting } = opts;
   const children: (ReturnType<typeof createElement> | null)[] = [];
 
   if (loadingSlot) {
@@ -594,8 +588,6 @@ function renderInactiveSlotBody(opts: InactiveSlotBodyOpts): (ReturnType<typeof 
       "No saves in this slot"));
   }
 
-  // Delete button: always shown for local-only slots, requires slot_deletion capability for server slots
-  const showDeleteButton = slotSource === "local" || capabilities.slot_deletion;
   const activateLabel = switching ? "Switching..." : "Activate Slot";
   const deleteLabel = deleting ? "Deleting..." : "Delete Slot";
 
@@ -613,16 +605,14 @@ function renderInactiveSlotBody(opts: InactiveSlotBodyOpts): (ReturnType<typeof 
         disabled: switching || isOffline,
         onClick: handleActivate,
       }, activateLabel),
-      showDeleteButton
-        ? createElement(DialogButton as any, {
-            key: "delete-btn",
-            style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto", color: "#d94126" },
-            noFocusRing: false,
-            onFocus: scrollFocusedToCenter,
-            disabled: deleting || switching,
-            onClick: handleDelete,
-          }, deleteLabel)
-        : null,
+      createElement(DialogButton as any, {
+        key: "delete-btn",
+        style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto", color: "#d94126" },
+        noFocusRing: false,
+        onFocus: scrollFocusedToCenter,
+        disabled: deleting || switching,
+        onClick: handleDelete,
+      }, deleteLabel),
     ),
     isOffline
       ? createElement("div", {
@@ -649,7 +639,6 @@ interface SlotPanelProps {
   // Active slot data (only set when isActive === true)
   saveStatus: SaveStatus | null;
   conflicts: PendingConflict[];
-  capabilities: ServerCapabilities;
   isOffline: boolean;
   // Callbacks
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
@@ -664,7 +653,6 @@ const SlotPanel: FC<SlotPanelProps> = ({
   defaultExpanded,
   saveStatus,
   conflicts,
-  capabilities,
   isOffline,
   onSlotSwitched,
   onVersionRestored,
@@ -845,8 +833,8 @@ const SlotPanel: FC<SlotPanelProps> = ({
   let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
   if (expanded) {
     bodyChildren = isActive
-      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, capabilities, isOffline, onVersionRestored)
-      : renderInactiveSlotBody({ loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting, slotSource: slot.source, capabilities });
+      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored)
+      : renderInactiveSlotBody({ loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting });
   }
 
   const bodyEl = expanded
@@ -873,7 +861,6 @@ export const SavesTab: FC<SavesTabProps> = ({
   activeSlot,
   availableSlots,
   slotsLoading,
-  capabilities,
   onSlotSwitched,
 }) => {
   const [newSlotError, setNewSlotError] = useState<string | null>(null);
@@ -1057,7 +1044,6 @@ export const SavesTab: FC<SavesTabProps> = ({
           defaultExpanded: isActive,
           saveStatus: isActive ? saveStatus : null,
           conflicts: isActive ? conflicts : [],
-          capabilities,
           isOffline,
           onSlotSwitched,
           onVersionRestored: handleVersionRestored,

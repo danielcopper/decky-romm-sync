@@ -737,8 +737,8 @@ class TestVersionDetection:
         assert plugin._romm_version == "4.7.0"
 
     @pytest.mark.asyncio
-    async def test_version_warning_for_old_version(self, plugin):
-        """Shows warning when RomM version is below minimum tested."""
+    async def test_old_version_rejected(self, plugin):
+        """Versions below 4.7.0 are rejected with version_error."""
         import asyncio
 
         _setup_plugin(plugin)
@@ -746,15 +746,13 @@ class TestVersionDetection:
         plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.5.0"}}
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
-        assert result["success"] is True
+        assert result["success"] is False
+        assert result["error_code"] == "version_error"
         assert result["romm_version"] == "4.5.0"
-        assert "version_warning" in result
-        assert "not been tested" in result["version_warning"]
-        assert "4.6.1" in result["version_warning"]
 
     @pytest.mark.asyncio
-    async def test_no_warning_for_supported_version(self, plugin):
-        """No warning for supported RomM versions."""
+    async def test_46_version_rejected(self, plugin):
+        """RomM 4.6.x is below the 4.7.0 minimum and is rejected."""
         import asyncio
 
         _setup_plugin(plugin)
@@ -762,12 +760,24 @@ class TestVersionDetection:
         plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.6.1"}}
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
-        assert result["success"] is True
-        assert "version_warning" not in result
+        assert result["success"] is False
+        assert result["error_code"] == "version_error"
 
     @pytest.mark.asyncio
-    async def test_development_version_no_warning(self, plugin):
-        """Development builds pass through without warning."""
+    async def test_47_version_accepted(self, plugin):
+        """RomM 4.7.0 meets the minimum version requirement."""
+        import asyncio
+
+        _setup_plugin(plugin)
+        plugin.loop = asyncio.get_event_loop()
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.7.0"}}
+        plugin._romm_api.list_platforms.return_value = []
+        result = await plugin.test_connection()
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_development_version_accepted(self, plugin):
+        """Development builds pass through without version check."""
         import asyncio
 
         _setup_plugin(plugin)
@@ -777,7 +787,6 @@ class TestVersionDetection:
         result = await plugin.test_connection()
         assert result["success"] is True
         assert result.get("romm_version") == "development"
-        assert "version_warning" not in result
 
     @pytest.mark.asyncio
     async def test_missing_version_in_heartbeat(self, plugin):
@@ -791,7 +800,6 @@ class TestVersionDetection:
         result = await plugin.test_connection()
         assert result["success"] is True
         assert plugin._romm_version is None
-        assert "version_warning" not in result
 
     @pytest.mark.asyncio
     async def test_version_cleared_on_connection_failure(self, plugin):

@@ -14,7 +14,6 @@ import os
 import socket
 import tempfile
 import time
-import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
@@ -521,12 +520,12 @@ class SaveService:
             )
             return result
 
-        # v4.6 fallback: existing slow-path logic
+        # Timestamp fallback: slow-path when device_syncs unavailable
         server_changed = self._check_server_changes(file_state, server_save, last_sync_hash)
         result = determine_action(local_changed, server_changed)
 
         self._log_debug(
-            f"_detect_conflict({rom_id}, {filename}): v4.6 path "
+            f"_detect_conflict({rom_id}, {filename}): timestamp fallback "
             f"local_hash={local_hash[:8] if local_hash else None}… "
             f"baseline={last_sync_hash[:8] if last_sync_hash else None}… "
             f"local_changed={local_changed} server_changed={server_changed} → {result}"
@@ -591,20 +590,15 @@ class SaveService:
         os.makedirs(saves_dir, exist_ok=True)
         tmp_path = local_path + ".tmp"
 
-        # Use v4.7 download_save_content with device_id (marks device as synced on server)
-        # Falls back to v4.6 download_save if download_save_content is not available
         device_id = self._get_server_device_id()
-        if device_id and self._romm_api.supports_device_sync():
-            self._retry.with_retry(
-                lambda: self._romm_api.download_save_content(
-                    server_save["id"],
-                    tmp_path,
-                    device_id=device_id,
-                    optimistic=True,
-                ),
-            )
-        else:
-            self._retry.with_retry(lambda: self._romm_api.download_save(server_save["id"], tmp_path))
+        self._retry.with_retry(
+            lambda: self._romm_api.download_save_content(
+                server_save["id"],
+                tmp_path,
+                device_id=device_id,
+                optimistic=True,
+            ),
+        )
 
         # Backup existing local save before overwriting
         if os.path.isfile(local_path):
@@ -662,7 +656,7 @@ class SaveService:
         # RomM's upload endpoint updates updated_at but NOT last_synced_at in
         # DeviceSaveSync, so is_current would be False on the next list_saves.
         upload_id = result.get("id")
-        if device_id and upload_id and self._romm_api.supports_device_sync():
+        if device_id and upload_id:
             try:
                 self._romm_api.confirm_download(upload_id, device_id)
             except Exception:
@@ -1186,18 +1180,14 @@ class SaveService:
     # ------------------------------------------------------------------
 
     def ensure_device_registered(self) -> dict:
-        """Ensure this device has a unique ID for save sync tracking.
-
-        v4.7+: Register with RomM server via register_device() API.
-        v4.6: Generate local UUID (no server registration).
-        """
+        """Ensure this device is registered with the RomM server for save sync tracking."""
         if not self._is_save_sync_enabled():
             return {"success": False, "device_id": "", "device_name": "", "disabled": True}
 
-        # Already fully registered (local + server, or local-only on v4.6)
+        # Already registered
         has_device_id = self._save_sync_state.get("device_id")
         has_server_id = self._save_sync_state.get("server_device_id")
-        if has_device_id and (has_server_id or not self._romm_api.supports_device_sync()):
+        if has_device_id and has_server_id:
             return {
                 "success": True,
                 "device_id": self._save_sync_state["device_id"],
@@ -1207,38 +1197,30 @@ class SaveService:
 
         hostname = socket.gethostname()
 
-        # Try v4.7 server registration (also upgrades local-only UUID to server-registered)
-        if self._romm_api.supports_device_sync():
-            try:
-                result = self._romm_api.register_device(
-                    name=hostname,
-                    platform="linux",
-                    client="decky-romm-sync",
-                    version=self._plugin_version,
-                )
-                server_device_id = result.get("id") or result.get("device_id")
-                if server_device_id:
-                    self._save_sync_state["device_id"] = str(server_device_id)
-                    self._save_sync_state["device_name"] = hostname
-                    self._save_sync_state["server_device_id"] = str(server_device_id)
-                    self.save_state()
-                    self._logger.info(f"Device registered with server: {server_device_id} ({hostname})")
-                    return {
-                        "success": True,
-                        "device_id": str(server_device_id),
-                        "device_name": hostname,
-                        "server_device_id": str(server_device_id),
-                    }
-            except Exception as e:
-                self._logger.warning(f"Server device registration failed, falling back to local: {e}")
+        try:
+            result = self._romm_api.register_device(
+                name=hostname,
+                platform="linux",
+                client="decky-romm-sync",
+                version=self._plugin_version,
+            )
+            server_device_id = result.get("id") or result.get("device_id")
+            if server_device_id:
+                self._save_sync_state["device_id"] = str(server_device_id)
+                self._save_sync_state["device_name"] = hostname
+                self._save_sync_state["server_device_id"] = str(server_device_id)
+                self.save_state()
+                self._logger.info(f"Device registered with server: {server_device_id} ({hostname})")
+                return {
+                    "success": True,
+                    "device_id": str(server_device_id),
+                    "device_name": hostname,
+                    "server_device_id": str(server_device_id),
+                }
+        except Exception as e:
+            self._logger.warning(f"Server device registration failed: {e}")
 
-        # v4.6 fallback or server registration failed
-        device_id = str(uuid.uuid4())
-        self._save_sync_state["device_id"] = device_id
-        self._save_sync_state["device_name"] = hostname
-        self.save_state()
-        self._logger.info(f"Device ID generated (local): {device_id} ({hostname})")
-        return {"success": True, "device_id": device_id, "device_name": hostname}
+        return {"success": False, "device_id": "", "device_name": "", "error": "registration_failed"}
 
     async def get_save_status(self, rom_id: int) -> dict:
         """Get save sync status for a ROM (local files, server saves, conflict state)."""
@@ -2140,26 +2122,14 @@ class SaveService:
 
         return {}
 
-    def supports_version_history(self) -> bool:
-        """Return True if the connected RomM server supports version history.
-
-        Version history requires RomM >= 4.7.0 (slot-based saves, per-device
-        sync tracking, and multiple server-side versions per filename).
-        """
-        return self._romm_api.supports_device_sync()
-
     async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
         """List older server-side versions of a save file.
 
         Returns versions strictly older than the currently-tracked save,
-        sorted newest-first. On v4.6 (no version history support), returns
-        an empty list.
+        sorted newest-first.
 
         Each entry contains: id, updated_at, file_size_bytes, device_syncs.
         """
-        if not self.supports_version_history():
-            return []
-
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
         device_id = self._get_server_device_id()
@@ -2253,15 +2223,11 @@ class SaveService:
         Returns a status dict:
         - ``{"status": "ok"}`` on success.
         - ``{"status": "not_found"}`` if the target save id is not on the server.
-        - ``{"status": "unsupported"}`` if the server is pre-4.7.
         - ``{"status": "unsynced_changes", "local_hash": ..., "tracked_hash": ...}``
           if local file has changed since last sync and ``force`` is False.
         - ``{"status": "tracked_missing"}`` if the currently-tracked save no
           longer exists on the server and ``force`` is False.
         """
-        if not self.supports_version_history():
-            return {"status": "unsupported"}
-
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
         save_id = int(save_id)

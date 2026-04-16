@@ -228,7 +228,16 @@ class Plugin:
         self._download_service.shutdown()
         decky.logger.info("RomM Sync plugin unloaded")
 
-    _MIN_TESTED_VERSION = "4.6.1"
+    _MIN_REQUIRED_VERSION = (4, 7, 0)
+
+    @staticmethod
+    def _meets_min_version(version_str: str) -> bool:
+        """Return True if *version_str* (e.g. ``'4.7.0'``) >= ``_MIN_REQUIRED_VERSION``."""
+        try:
+            parts = tuple(int(p) for p in version_str.split("."))
+        except (ValueError, AttributeError):
+            return False
+        return parts >= Plugin._MIN_REQUIRED_VERSION
 
     # ── Callables ──────────────────────────────────────────────────────
     # All methods below are exposed to the frontend via Decky's callable()
@@ -264,15 +273,25 @@ class Plugin:
                 resp["message"] = f"Server reachable but API request failed: {resp['message']}"
             return resp
 
+        # Enforce minimum version
+        version = self._romm_version
+        if version and version != "development" and not self._meets_min_version(version):
+            min_str = ".".join(str(v) for v in self._MIN_REQUIRED_VERSION)
+            return {
+                "success": False,
+                "message": (
+                    f"This plugin requires RomM {min_str} or newer. "
+                    f"Your server is running {self._romm_version}. "
+                    "Please update your RomM server to continue using this plugin."
+                ),
+                "error_code": "version_error",
+                "romm_version": self._romm_version,
+            }
+
         result = {"success": True, "message": "Connected to RomM"}
         if self._romm_version and self._romm_version != "development":
             result["message"] = f"Connected to RomM {self._romm_version}"
             result["romm_version"] = self._romm_version
-            if self._romm_version < self._MIN_TESTED_VERSION:
-                result["version_warning"] = (
-                    f"RomM {self._romm_version} has not been tested. "
-                    f"Minimum tested version: {self._MIN_TESTED_VERSION}."
-                )
         elif self._romm_version == "development":
             result["romm_version"] = self._romm_version
         return result
@@ -564,10 +583,7 @@ class Plugin:
     # ── Save Sync / Playtime delegation to services ──────────
 
     async def ensure_device_registered(self):
-        # Ensure RomM version is detected before device registration so that
-        # supports_device_sync() returns True on v4.7+ servers.  Without this,
-        # a plugin-start call to ensure_device_registered that runs before the
-        # first test_connection would fall back to local-only UUID generation.
+        # Ensure RomM version is detected before device registration.
         if not getattr(self, "_romm_version", None):
             try:
                 heartbeat = await self.loop.run_in_executor(None, self._romm_api.heartbeat)
@@ -575,8 +591,8 @@ class Plugin:
                     self._romm_version = heartbeat.get("SYSTEM", {}).get("VERSION")
                 if self._romm_version:
                     self._romm_api.set_version(self._romm_version)
-            except Exception:
-                pass
+            except Exception as e:
+                decky.logger.debug(f"ensure_device_registered: heartbeat failed (non-fatal): {e}")
         return self._save_sync_service.ensure_device_registered()
 
     async def get_save_status(self, rom_id):
@@ -645,22 +661,6 @@ class Plugin:
 
     async def delete_platform_saves(self, platform_slug):
         return self._save_sync_service.delete_platform_saves(platform_slug)
-
-    async def get_server_capabilities(self):
-        # All v4.7+ features share the same gate today. When a feature
-        # requires a different minimum version, add a dedicated
-        # service-level check and map it here.
-        v47 = self._save_sync_service.supports_version_history()
-        return {
-            "device_sync": v47,
-            "version_history": v47,
-            "slot_deletion": v47,
-            "device_management": v47,
-        }
-
-    # Deprecated: use get_server_capabilities instead. Kept for backward compat.
-    async def saves_supports_version_history(self):
-        return self._save_sync_service.supports_version_history()
 
     async def saves_list_file_versions(self, rom_id, slot, filename):
         return await self._save_sync_service.list_file_versions(rom_id, slot, filename)

@@ -25,17 +25,12 @@ class RommApiProtocol(Protocol):
     """Domain-oriented interface for all RomM server operations.
 
     Replaces raw HTTP path construction in services with semantic methods.
-    Concrete implementations (RommApiBase for v4.6, RommApiV47 for v4.7+)
-    handle URL building, version-specific quirks, and response parsing.
-
-    ApiRouter selects the active implementation based on detected server version.
+    Concrete implementation: ``adapters.romm.romm_api.RommApi``.
+    Requires RomM >= 4.7.0.
     """
 
     def set_version(self, version: str) -> None:
-        """Set the detected RomM server version.
-
-        Called after heartbeat to select the correct API implementation.
-        """
+        """Store the detected RomM server version string."""
         ...
 
     def heartbeat(self) -> dict:
@@ -148,7 +143,7 @@ class RommApiProtocol(Protocol):
     ) -> list[dict]:
         """List saves for a ROM.
 
-        On v4.7+, pass device_id to populate device_syncs in response,
+        Pass device_id to populate device_syncs in response,
         and slot to filter by save slot.
         """
         ...
@@ -166,7 +161,7 @@ class RommApiProtocol(Protocol):
     ) -> dict:
         """Upload or update a save file.
 
-        On v4.7+, pass device_id for sync tracking, slot for slot assignment,
+        Pass device_id for sync tracking, slot for slot assignment,
         and overwrite=True to force-upload over conflicts.
         Raises RommConflictError on 409 when overwrite=False and conflict detected.
         """
@@ -182,7 +177,6 @@ class RommApiProtocol(Protocol):
     ) -> None:
         """Download save content with optional device sync tracking.
 
-        Only available on RomM >= 4.7.0.
         When device_id is set, optimistic=True auto-marks device as synced;
         optimistic=False requires a manual confirm_download() call.
         """
@@ -192,14 +186,12 @@ class RommApiProtocol(Protocol):
         """Manually confirm a save download for device sync tracking.
 
         Only needed when download_save_content() was called with optimistic=False.
-        Only available on RomM >= 4.7.0.
         """
         ...
 
     def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
         """Fetch grouped save summary for a ROM with slot breakdown.
 
-        Only available on RomM >= 4.7.0.
         Uses /api/saves/summary — returns structured response grouped by slot.
         Pass device_id to include device sync status per save.
         """
@@ -208,8 +200,7 @@ class RommApiProtocol(Protocol):
     def download_save(self, save_id: int, dest_path: str) -> None:
         """Download a save file to a local path.
 
-        v4.6: Fetches metadata then downloads via download_path.
-        v4.7+: Downloads directly via /api/saves/{save_id}/content.
+        Downloads directly via /api/saves/{save_id}/content.
         """
         ...
 
@@ -224,7 +215,6 @@ class RommApiProtocol(Protocol):
         """Fetch full ROM detail including user notes.
 
         Used for playtime tracking. Notes are in the all_user_notes field.
-        v4.6: /api/roms/{id}/notes returns 500, so uses ROM detail endpoint.
         """
         ...
 
@@ -247,7 +237,6 @@ class RommApiProtocol(Protocol):
 
         Returns paginated response {"items": [...], "total": N}
         from /api/roms filtered by collection_id.
-        Available from RomM 4.7.0.
         """
         ...
 
@@ -256,7 +245,6 @@ class RommApiProtocol(Protocol):
 
         Returns paginated response {"items": [...], "total": N}
         from /api/roms filtered by virtual_collection_id.
-        Available from RomM 4.7.0.
         """
         ...
 
@@ -267,18 +255,9 @@ class RommApiProtocol(Protocol):
         """
         ...
 
-    def supports_device_sync(self) -> bool:
-        """Check if the connected RomM server supports device sync (v4.7+).
-
-        Returns True if device registration, slot-based saves, and
-        server-side conflict detection are available.
-        """
-        ...
-
     def register_device(self, name: str, platform: str, client: str, version: str) -> dict:
         """Register this client as a sync device on the RomM server.
 
-        Only available on RomM >= 4.7.0 (check supports_device_sync() first).
         Returns device dict with id, name, created_at.
         """
         ...

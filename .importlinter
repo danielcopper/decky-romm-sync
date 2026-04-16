@@ -14,10 +14,7 @@ source_modules =
     services
 forbidden_modules =
     adapters.romm.http
-    adapters.romm.api_base
-    adapters.romm.api_v46
-    adapters.romm.api_v47
-    adapters.romm.api_router
+    adapters.romm.romm_api
     adapters.steam_config
     adapters.steamgriddb
     adapters.persistence

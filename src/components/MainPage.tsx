@@ -30,6 +30,7 @@ import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
+import { getVersionError, setVersionError } from "../utils/connectionState";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
 import type { MigrationStatus } from "../api/backend";
 
@@ -70,6 +71,7 @@ function formatPreviewDescription(s: SyncPreviewSummary): string {
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [versionError, setVersionErrorState] = useState<string | null>(getVersionError());
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState("");
@@ -118,7 +120,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       })
       .catch((e) => logError(`Failed to refresh migration state: ${e}`));
     getSyncStats().then(setStats);
-    testConnection().then((r) => setConnected(r.success));
+    testConnection().then((r) => {
+      setConnected(r.success);
+      if (r.error_code === "version_error") {
+        setVersionError(r.message);
+        setVersionErrorState(r.message);
+      }
+    });
     getSettings().then((s) => {
       if (s.retroarch_input_check) {
         setRetroarchWarning(s.retroarch_input_check);
@@ -284,6 +292,16 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const activeDownloads = downloads.filter(d => d.status === "queued" || d.status === "downloading");
   const completedDownloads = downloads.filter(d => d.status === "completed" || d.status === "failed" || d.status === "cancelled");
   const hasDownloads = activeDownloads.length > 0 || completedDownloads.length > 0;
+
+  if (versionError) {
+    return (
+      <PanelSection>
+        <PanelSectionRow>
+          <Field label={versionError} />
+        </PanelSectionRow>
+      </PanelSection>
+    );
+  }
 
   return (
     <>

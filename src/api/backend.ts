@@ -6,7 +6,6 @@ export interface BackendResult {
   message: string;
   error_code?: RommErrorCode;
   romm_version?: string;
-  version_warning?: string;
 }
 
 export interface CachedGameDetail {
@@ -217,17 +216,7 @@ export const deleteLocalSaves = callable<[number], { success: boolean; deleted_c
 export const deletePlatformSaves = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_saves");
 export const deletePlatformBios = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_bios");
 
-// Server capabilities — fetched once by RomMGameInfoPanel and passed to children
-export interface ServerCapabilities {
-  device_sync: boolean;
-  version_history: boolean;
-  slot_deletion: boolean;
-  device_management: boolean;
-}
-
-export const getServerCapabilities = callable<[], ServerCapabilities>("get_server_capabilities");
-
-// Save version history callables (v4.7+ only — gated by capabilities.version_history)
+// Save version history callables
 export interface SaveVersionEntry {
   id: number;
   file_name: string;
@@ -244,7 +233,6 @@ export type RollbackStatus =
   | { status: "tracked_missing" }
   | { status: "unsynced_changes"; local_hash: string; tracked_hash: string };
 
-export const savesSupportsVersionHistory = callable<[], boolean>("saves_supports_version_history");
 export const savesListFileVersions = callable<[number, string, string], SaveVersionEntry[]>("saves_list_file_versions");
 export const savesRollbackToVersion = callable<[number, string, string, number, boolean], RollbackStatus>("saves_rollback_to_version");
 

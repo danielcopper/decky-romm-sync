@@ -730,3 +730,39 @@ class TestRefreshMigrationState:
         await plugin.refresh_migration_state()
         ordered = [name for name, _args, _kwargs in manager.mock_calls]
         assert ordered == ["detect_retrodeck_path_change", "detect_save_sort_change"]
+
+
+class TestMeetsMinVersion:
+    """Direct unit tests for Plugin._meets_min_version static method."""
+
+    def test_exact_minimum(self):
+        assert Plugin._meets_min_version("4.7.0") is True
+
+    def test_above_minimum(self):
+        assert Plugin._meets_min_version("4.8.0") is True
+
+    def test_below_minimum(self):
+        assert Plugin._meets_min_version("4.6.1") is False
+
+    def test_below_minimum_high_patch(self):
+        assert Plugin._meets_min_version("4.6.9") is False
+
+    def test_major_version_above(self):
+        assert Plugin._meets_min_version("5.0.0") is True
+
+    def test_two_part_version(self):
+        # (4, 7) < (4, 7, 0) in tuple comparison
+        assert Plugin._meets_min_version("4.7") is False
+
+    def test_four_part_version(self):
+        # (4, 7, 0, 1) >= (4, 7, 0)
+        assert Plugin._meets_min_version("4.7.0.1") is True
+
+    def test_malformed_string(self):
+        assert Plugin._meets_min_version("abc") is False
+
+    def test_empty_string(self):
+        assert Plugin._meets_min_version("") is False
+
+    def test_development_string(self):
+        assert Plugin._meets_min_version("development") is False

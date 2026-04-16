@@ -160,16 +160,16 @@ def _server_save(
 
 
 class TestDeviceRegistration:
-    """Tests for ensure_device_registered (local UUID generation)."""
+    """Tests for ensure_device_registered (server registration)."""
 
     @pytest.mark.asyncio
-    async def test_generates_local_uuid(self, plugin, tmp_path):
-        """First call generates a local UUID, no server call needed."""
+    async def test_registers_with_server(self, plugin, tmp_path):
+        """First call registers with server and stores device_id."""
         result = await plugin.ensure_device_registered()
 
         assert result["success"] is True
         assert result["device_id"]
-        assert len(result["device_id"]) == 36  # UUID format
+        assert result.get("server_device_id") is not None
         assert plugin._save_sync_state["device_id"] == result["device_id"]
 
         # Persisted to disk
@@ -180,15 +180,17 @@ class TestDeviceRegistration:
 
     @pytest.mark.asyncio
     async def test_already_registered_returns_cached(self, plugin):
-        """If device_id already set, returns immediately without generating new one."""
+        """If device_id and server_device_id already set, returns immediately."""
         plugin._save_sync_state["device_id"] = "existing-uuid"
         plugin._save_sync_state["device_name"] = "myhost"
+        plugin._save_sync_state["server_device_id"] = "server-uuid"
 
         result = await plugin.ensure_device_registered()
 
         assert result["success"] is True
         assert result["device_id"] == "existing-uuid"
         assert result["device_name"] == "myhost"
+        assert result["server_device_id"] == "server-uuid"
 
     @pytest.mark.asyncio
     async def test_sets_hostname_as_device_name(self, plugin):
@@ -201,12 +203,13 @@ class TestDeviceRegistration:
 
     @pytest.mark.asyncio
     async def test_generates_unique_ids(self, plugin):
-        """Each new registration generates a unique UUID."""
+        """Each new registration generates a unique device ID."""
         result1 = await plugin.ensure_device_registered()
         id1 = result1["device_id"]
 
-        # Reset state to force new generation
+        # Reset state to force new registration
         plugin._save_sync_state["device_id"] = None
+        plugin._save_sync_state["server_device_id"] = None
         result2 = await plugin.ensure_device_registered()
         id2 = result2["device_id"]
 
@@ -1075,68 +1078,12 @@ async def test_delete_platform_saves(plugin, tmp_path):
 # ============================================================================
 
 
-class TestGetServerCapabilitiesCallable:
-    """Integration tests for the get_server_capabilities callable."""
-
-    @pytest.mark.asyncio
-    async def test_returns_all_false_on_v46(self, plugin):
-        """get_server_capabilities returns all-false dict on v4.6."""
-        result = await plugin.get_server_capabilities()
-        assert result == {
-            "device_sync": False,
-            "version_history": False,
-            "slot_deletion": False,
-            "device_management": False,
-        }
-
-    @pytest.mark.asyncio
-    async def test_returns_all_true_on_v47(self, plugin):
-        """get_server_capabilities returns all-true dict when device sync is supported."""
-        plugin._fake_api._supports_device_sync = True
-        result = await plugin.get_server_capabilities()
-        assert result == {
-            "device_sync": True,
-            "version_history": True,
-            "slot_deletion": True,
-            "device_management": True,
-        }
-
-
 class TestSavesVersionHistoryCallables:
-    """Integration tests for the three version history callables."""
-
-    @pytest.mark.asyncio
-    async def test_saves_supports_version_history_false(self, plugin):
-        """saves_supports_version_history returns False on v4.6 (FakeSaveApi default)."""
-        result = await plugin.saves_supports_version_history()
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_saves_supports_version_history_true(self, plugin):
-        """saves_supports_version_history returns True when adapter supports device sync."""
-        plugin._fake_api._supports_device_sync = True
-        result = await plugin.saves_supports_version_history()
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_saves_list_file_versions_empty_on_v46(self, plugin, tmp_path):
-        """saves_list_file_versions returns empty list on v4.6."""
-        plugin._fake_api.saves[100] = {
-            "id": 100,
-            "rom_id": 42,
-            "file_name": "pokemon.srm",
-            "updated_at": "2026-03-01T00:00:00Z",
-            "file_size_bytes": 1024,
-            "slot": "default",
-            "download_path": "/saves/pokemon.srm",
-        }
-        result = await plugin.saves_list_file_versions(42, "default", "pokemon.srm")
-        assert result == []
+    """Integration tests for version history callables."""
 
     @pytest.mark.asyncio
     async def test_saves_list_file_versions_happy_path(self, plugin, tmp_path):
-        """saves_list_file_versions returns filtered older versions on v4.7+."""
-        plugin._fake_api._supports_device_sync = True
+        """saves_list_file_versions returns filtered older versions."""
         plugin._save_sync_state["saves"]["42"] = {
             "system": "gba",
             "active_slot": "default",
@@ -1167,15 +1114,8 @@ class TestSavesVersionHistoryCallables:
         assert result[0]["id"] == 50
 
     @pytest.mark.asyncio
-    async def test_saves_rollback_to_version_unsupported_on_v46(self, plugin, tmp_path):
-        """saves_rollback_to_version returns unsupported on v4.6."""
-        result = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50)
-        assert result == {"status": "unsupported"}
-
-    @pytest.mark.asyncio
     async def test_saves_rollback_to_version_happy_path(self, plugin, tmp_path):
         """saves_rollback_to_version downloads the target save on success."""
-        plugin._fake_api._supports_device_sync = True
         _install_rom(plugin, tmp_path)
 
         # Create local save file with content matching last_sync_hash
@@ -1215,13 +1155,12 @@ class TestSavesVersionHistoryCallables:
         result = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50)
 
         assert result["status"] == "ok"
-        download_calls = [c for c in plugin._fake_api.call_log if c[0] == "download_save"]
+        download_calls = [c for c in plugin._fake_api.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)
 
     @pytest.mark.asyncio
     async def test_saves_rollback_to_version_force_param(self, plugin, tmp_path):
         """saves_rollback_to_version passes force=True to service when specified."""
-        plugin._fake_api._supports_device_sync = True
         _install_rom(plugin, tmp_path)
 
         saves_dir = tmp_path / "retrodeck" / "saves" / "gba"

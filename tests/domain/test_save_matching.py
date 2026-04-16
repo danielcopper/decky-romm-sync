@@ -320,7 +320,7 @@ class TestSlotFiltering:
         assert server_only[0].server_save["id"] == 10
 
     def test_null_slot_server_save_visible_from_any_active_slot(self):
-        """Server save with slot=None should match from any active slot (v4.6 compat)."""
+        """Server save with slot=None should match from any active slot (pre-slot legacy)."""
         local = [_local()]
         server = [_server(10, fn="pokemon.srm", slot=None)]
         result = match_local_to_server_saves(local, server, {}, "desktop")

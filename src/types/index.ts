@@ -6,6 +6,8 @@ export type RommErrorCode =
   | "ssl_error"
   | "server_error"
   | "not_found_error"
+  | "unsupported_error"
+  | "version_error"
   | "config_error"
   | "disk_error"
   | "api_error"

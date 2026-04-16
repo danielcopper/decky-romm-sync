@@ -4,36 +4,9 @@
 
 A Decky Loader plugin that syncs a self-hosted RomM library into Steam as Non-Steam shortcuts. Games launch via RetroDECK. The QAM panel handles settings, sync, downloads, and BIOS management.
 
-## Architecture
+## Documentation
 
-```
-RomM Server <-HTTP-> Python Backend (main.py + services/ + adapters/)
-                          | callable() / emit()
-                   Frontend (TypeScript) <-> SteamClient.Apps API
-                          |
-                     Steam Library (shortcuts appear instantly)
-                          |
-                     bin/romm-launcher (bash) -> RetroDECK (flatpak)
-```
-
-**Backend layers** (dependency direction: services → protocols ← adapters):
-- **`main.py`** — Plugin entry point, callable routing, composition root
-- **`py_modules/services/`** — Business logic (9 services, depend on Protocols only)
-- **`py_modules/adapters/`** — I/O boundaries (HTTP, persistence, Steam VDF, save API)
-- **`py_modules/domain/`** — Domain logic (ES-DE config, RetroDECK path resolution)
-- **`py_modules/models/`** — Domain dataclasses
-- **`py_modules/lib/`** — Utilities (errors, certifi bundle)
-
-**Frontend** (`src/`): SteamClient shortcut CRUD, QAM panel UI, game detail page injection
-
-**Communication**: `callable()` for request/response, `decky.emit()` for backend-to-frontend events
-
-**Layer rules** (enforced by import-linter in CI):
-- Services must not import concrete adapter implementations (Protocols OK)
-- Adapters must not import services
-- Domain must not import services, adapters, or lib
-- Utilities must not import services, adapters, or domain
-- Services must be independent of each other
+The **GitHub Wiki** is the canonical source for architecture, file structure, and feature documentation. The wiki repo is checked out at `../decky-romm-sync.wiki/`. When making changes that affect architecture, data flows, or feature behavior, update the relevant wiki pages too.
 
 ## Key Technical Constraints
 
@@ -46,71 +19,8 @@ RomM Server <-HTTP-> Python Backend (main.py + services/ + adapters/)
 - **AddShortcut ignores most params**: `SteamClient.Apps.AddShortcut(name, exe, startDir, launchOptions)` ignores startDir and launchOptions (confirmed by MoonDeck plugin). Must use `Set*` calls (`SetShortcutName`, `SetShortcutExe`, `SetShortcutStartDir`, `SetAppLaunchOptions`) after a 500ms delay. Do NOT pass quoted exe paths — the API handles quoting internally.
 - **BIsModOrShortcut bypass DROPPED**: Phase 5.6 removed the bypass counter entirely. Shortcuts return `BIsModOrShortcut() = true` (natural state). We own the entire game detail UI via RomMPlaySection + future RomMGameInfoPanel. See `docs/game-detail-ui.md` section 2 for the rationale.
 - **Shortcut property re-sync**: Changing exe, startDir, or launchOptions on existing shortcuts may not take effect reliably. Full delete + recreate (re-sync) is required for changes to launch config.
-- **RomM 4.6.1 Save API**: `GET /api/saves/{id}/content` does not exist — use `download_path` from save metadata (URL-encode spaces/parens). No `content_hash` in SaveSchema — use hybrid timestamp + download-and-hash. `POST /api/saves` upserts by filename. `GET /api/roms/{id}/notes` returns 500 — read `all_user_notes` from ROM detail instead. `device_id` param is accepted but ignored. See wiki Save-File-Sync-Architecture for full details.
+- **RomM minimum version**: Requires RomM >= 4.7.0. Hard-rejected in `test_connection()` — plugin is inert until server is updated. `_MIN_REQUIRED_VERSION` tuple in `main.py`.
 - **Decky callables must be async**: Even if the method body is synchronous, Decky's callable framework requires `async def`. Do not remove `async` from callable methods in main.py.
-
-## File Structure
-
-```
-main.py                                   # Plugin entry point, callable routing, bootstrap
-py_modules/
-  bootstrap.py                            # Composition root — wires adapters and services
-  services/
-    protocols.py                          # Protocol interfaces (HttpAdapter, SteamConfigAdapter, SaveApiProtocol)
-    library.py                            # LibraryService — fetch ROMs, create shortcuts, artwork staging
-    saves.py                              # SaveService — upload/download .srm, conflict detection
-    playtime.py                           # PlaytimeService — session recording, RomM notes
-    downloads.py                          # DownloadService — ZIP extraction, M3U, queue, progress
-    firmware.py                           # FirmwareService — registry, downloads, per-core filtering
-    steamgrid.py                          # SteamGridService — SteamGridDB fetch, cache, icons
-    metadata.py                           # MetadataService — ROM metadata caching (TTL, app_id mapping)
-    achievements.py                       # AchievementsService — RetroAchievements progress, caching
-    game_detail.py                        # GameDetailService — game detail page data aggregation
-    migration.py                          # MigrationService — RetroDECK path change detection, file migration
-    _util.py                              # Shared service utilities (run_api_sync)
-  adapters/
-    persistence.py                        # PersistenceAdapter — settings/state/cache JSON I/O (atomic writes)
-    steam_config.py                       # SteamConfigAdapter — VDF read/write, grid dir, Steam Input
-    retroarch_core_info.py                # RetroArchCoreInfoAdapter — reads RetroArch core .info files
-    retrodeck_paths.py                    # RetroDeckPathsAdapter — reads retrodeck.json for path resolution
-    retroarch_config.py                   # RetroArchConfigAdapter — reads retroarch.cfg for RetroArch runtime settings
-    romm/
-      http.py                             # RommHttpAdapter — HTTP client for RomM API
-      version_router.py                   # VersionRouter — proxy selecting v46/v47 SaveApi by server version
-      save_api/
-        v46.py                            # SaveApiV46 — RomM 4.6.1 save API adapter
-        v47.py                            # SaveApiV47 — RomM 4.7.0 save API adapter
-  models/                                 # Domain dataclasses (currently empty — types inlined in services)
-  domain/
-    bios.py                               # BIOS status formatting and computation
-    es_de_config.py                       # CoreResolver + GamelistXmlEditor classes (core resolution, gamelist.xml)
-    retroarch_core_info.py                # Pure parser for RetroArch .info file format
-    save_conflicts.py                     # Save file conflict detection and resolution logic
-    state_migrations.py                   # Schema migration functions for state files
-  lib/
-    errors.py                             # Exception hierarchy (RommApiError, classify_error)
-  vdf/                                    # Vendored VDF library (binary VDF read/write)
-src/
-  index.tsx                               # Plugin entry, event listeners, QAM router
-  components/                             # React components (MainPage, ConnectionSettings, etc.)
-  patches/                                # Steam UI patches (game detail page, metadata)
-  api/backend.ts                          # callable() wrappers (typed)
-  types/                                  # TypeScript interfaces + Steam type declarations
-  utils/                                  # Shortcut management, sync, downloads, collections, sessions
-bin/romm-launcher                         # Bash launcher for RetroDECK
-defaults/config.json                      # 149 platform slug → RetroDECK system mappings
-tests/
-  conftest.py                             # Mock decky module, autouse fixture, test isolation
-  test_plugin.py                          # Plugin callable tests (main.py)
-  test_bootstrap.py                       # Bootstrap wiring tests
-  test_plugin_saves.py                    # Plugin-level save sync integration tests
-  fakes/                                  # Shared test doubles (FakeSaveApi)
-  services/                              # Service unit tests (1:1 with py_modules/services/)
-  adapters/                              # Adapter unit tests (1:1 with py_modules/adapters/)
-  domain/                                # Domain unit tests (1:1 with py_modules/domain/)
-  models/                                # Model unit tests (1:1 with py_modules/models/)
-  lib/                                   # Lib unit tests (1:1 with py_modules/lib/)
-```
 
 ## Current State
 

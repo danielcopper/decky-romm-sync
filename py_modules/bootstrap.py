@@ -12,14 +12,13 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
 
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
-from adapters.romm.api_router import ApiRouter
 from adapters.romm.http import RommHttpAdapter
+from adapters.romm.romm_api import RommApi
 from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from domain import es_de_config as _es_de_config
@@ -132,7 +131,7 @@ def bootstrap(
 
     persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
     http_adapter = RommHttpAdapter(settings, plugin_dir, logger)
-    romm_api = cast(RommApiProtocol, ApiRouter(http_adapter))
+    romm_api = RommApi(http_adapter)
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
     sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
 
