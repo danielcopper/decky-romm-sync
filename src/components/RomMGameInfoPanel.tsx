@@ -288,13 +288,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
         // Server capabilities (for save sync feature gating)
         if (cached.save_sync_enabled) {
-          bgPromises.push(
-            getServerCapabilities().then((caps) => {
-              if (!cancelled) {
-                setState((prev) => ({ ...prev, capabilities: caps }));
-              }
-            }).catch(() => {}),
-          );
+          const capsFetch = getServerCapabilities().then((caps) => {
+            if (!cancelled) setState((prev) => ({ ...prev, capabilities: caps }));
+          }).catch(() => {});
+          bgPromises.push(capsFetch);
         }
 
         await Promise.all(bgPromises);

@@ -566,18 +566,21 @@ function renderActiveSlotBody(
     "No save files tracked yet")];
 }
 
-function renderInactiveSlotBody(
-  loadingSlot: boolean,
-  slotFiles: SlotSaveFile[] | null,
-  switching: boolean,
-  switchError: string | null,
-  isOffline: boolean,
-  handleActivate: () => void,
-  handleDelete: () => void,
-  deleting: boolean,
-  slotSource: "server" | "local",
-  capabilities: ServerCapabilities,
-): (ReturnType<typeof createElement> | null)[] {
+interface InactiveSlotBodyOpts {
+  loadingSlot: boolean;
+  slotFiles: SlotSaveFile[] | null;
+  switching: boolean;
+  switchError: string | null;
+  isOffline: boolean;
+  handleActivate: () => void;
+  handleDelete: () => void;
+  deleting: boolean;
+  slotSource: "server" | "local";
+  capabilities: ServerCapabilities;
+}
+
+function renderInactiveSlotBody(opts: InactiveSlotBodyOpts): (ReturnType<typeof createElement> | null)[] {
+  const { loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting, slotSource, capabilities } = opts;
   const children: (ReturnType<typeof createElement> | null)[] = [];
 
   if (loadingSlot) {
@@ -593,6 +596,8 @@ function renderInactiveSlotBody(
 
   // Delete button: always shown for local-only slots, requires slot_deletion capability for server slots
   const showDeleteButton = slotSource === "local" || capabilities.slot_deletion;
+  const activateLabel = switching ? "Switching..." : "Activate Slot";
+  const deleteLabel = deleting ? "Deleting..." : "Delete Slot";
 
   children.push(
     createElement(Focusable as any, {
@@ -607,7 +612,7 @@ function renderInactiveSlotBody(
         onFocus: scrollFocusedToCenter,
         disabled: switching || isOffline,
         onClick: handleActivate,
-      }, switching ? "Switching..." : "Activate Slot"),
+      }, activateLabel),
       showDeleteButton
         ? createElement(DialogButton as any, {
             key: "delete-btn",
@@ -616,7 +621,7 @@ function renderInactiveSlotBody(
             onFocus: scrollFocusedToCenter,
             disabled: deleting || switching,
             onClick: handleDelete,
-          }, deleting ? "Loading..." : "Delete Slot")
+          }, deleteLabel)
         : null,
     ),
     isOffline
@@ -841,7 +846,7 @@ const SlotPanel: FC<SlotPanelProps> = ({
   if (expanded) {
     bodyChildren = isActive
       ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, capabilities, isOffline, onVersionRestored)
-      : renderInactiveSlotBody(loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting, slot.source, capabilities);
+      : renderInactiveSlotBody({ loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting, slotSource: slot.source, capabilities });
   }
 
   const bodyEl = expanded

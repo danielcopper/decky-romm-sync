@@ -2503,6 +2503,33 @@ class SaveService:
             "is_active": is_active,
         }
 
+    async def _delete_server_slot_saves(self, rom_id: int, slot: str) -> dict:
+        """Delete all server saves in a slot. Returns result dict with count and IDs."""
+        device_id = self._get_server_device_id()
+        try:
+            server_saves: list[dict] = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
+                ),
+            )
+            save_ids = [s["id"] for s in server_saves]
+            if save_ids:
+                await self._loop.run_in_executor(
+                    None,
+                    lambda: self._retry.with_retry(
+                        lambda: self._romm_api.delete_server_saves(save_ids),
+                    ),
+                )
+            return {"success": True, "count": len(save_ids), "ids": set(save_ids)}
+        except (RommApiError, Exception) as e:
+            self._logger.warning(f"delete_slot: server delete failed for slot '{slot}': {e}")
+            return {
+                "success": False,
+                "reason": "server_error",
+                "message": f"Failed to delete server saves: {e}",
+            }
+
     async def delete_slot(self, rom_id: int, slot: str) -> dict:
         """Delete a save slot and all its saves (local state + server if applicable)."""
         rom_id = int(rom_id)
@@ -2521,8 +2548,8 @@ class SaveService:
         if slot not in slots_dict:
             return {"success": False, "reason": "not_found"}
 
-        active_slot = save_state.get("active_slot")
-        if slot == (active_slot or ""):
+        effective_active = save_state.get("active_slot") or ""
+        if slot == effective_active:
             return {
                 "success": False,
                 "reason": "active_slot",
@@ -2536,42 +2563,14 @@ class SaveService:
         cleaned_files = 0
         deleted_ids: set[int] = set()
 
-        # Delete server saves if this is a server-backed slot
         if source == "server":
-            device_id = self._get_server_device_id()
-            try:
-                server_saves: list[dict] = await self._loop.run_in_executor(
-                    None,
-                    lambda: self._retry.with_retry(
-                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
-                    ),
-                )
-                save_ids = [s["id"] for s in server_saves]
-                if save_ids:
-                    await self._loop.run_in_executor(
-                        None,
-                        lambda: self._retry.with_retry(
-                            lambda: self._romm_api.delete_server_saves(save_ids),
-                        ),
-                    )
-                    deleted_ids = set(save_ids)
-                    deleted_server_saves = len(save_ids)
-            except RommApiError as e:
-                self._logger.warning(f"delete_slot: server delete failed for slot '{slot}': {e}")
-                return {
-                    "success": False,
-                    "reason": "server_error",
-                    "message": f"Failed to delete server saves: {e}",
-                }
-            except Exception as e:
-                self._logger.warning(f"delete_slot: unexpected error for slot '{slot}': {e}")
-                return {
-                    "success": False,
-                    "reason": "server_error",
-                    "message": f"Failed to delete server saves: {e}",
-                }
+            result = await self._delete_server_slot_saves(rom_id, slot)
+            if not result["success"]:
+                return result
+            deleted_server_saves = result["count"]
+            deleted_ids = result["ids"]
 
-        # Clean up local state
+        # Clean up tracked file entries pointing to deleted saves
         files_state = save_state.get("files", {})
         if deleted_ids:
             to_remove = [fn for fn, fs in files_state.items() if fs.get("tracked_save_id") in deleted_ids]
