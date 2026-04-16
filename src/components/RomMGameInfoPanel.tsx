@@ -40,7 +40,7 @@ import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, PendingConflict
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
-import { getVersionError } from "../utils/connectionState";
+import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 
 interface RomMGameInfoPanelProps {
   appId: number;
@@ -103,6 +103,9 @@ function refreshSlotState(
 }
 
 export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
+  // Subscribe to version error — re-renders when global state changes
+  const versionError = useVersionError();
+
   const [state, setState] = useState<PanelState>({
     loading: true,
     romId: null,
@@ -468,16 +471,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
       ...children.filter(Boolean),
     );
 
-  // --- Version mismatch — replace entire panel ---
-  const versionError = getVersionError();
+  // --- Version mismatch — replace entire panel with polished error card ---
   if (versionError) {
-    return createElement("div", {
-      "data-romm": "true",
-      style: { padding: "16px 2.8vw" },
-    },
-      createElement("div", {
-        style: { fontSize: "13px", color: "rgba(255, 255, 255, 0.7)" },
-      }, versionError),
+    return createElement(
+      "div",
+      { "data-romm": "true" },
+      createElement(VersionErrorCard, { message: versionError }),
     );
   }
 

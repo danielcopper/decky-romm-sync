@@ -30,7 +30,8 @@ import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
-import { getVersionError, setVersionError } from "../utils/connectionState";
+import { setVersionError } from "../utils/connectionState";
+import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
 import type { MigrationStatus } from "../api/backend";
 
@@ -71,7 +72,7 @@ function formatPreviewDescription(s: SyncPreviewSummary): string {
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
-  const [versionError, setVersionErrorState] = useState<string | null>(getVersionError());
+  const versionError = useVersionError();
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState("");
@@ -124,7 +125,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       setConnected(r.success);
       if (r.error_code === "version_error") {
         setVersionError(r.message);
-        setVersionErrorState(r.message);
+      } else if (r.success) {
+        setVersionError(null);
       }
     });
     getSettings().then((s) => {
@@ -294,13 +296,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const hasDownloads = activeDownloads.length > 0 || completedDownloads.length > 0;
 
   if (versionError) {
-    return (
-      <PanelSection>
-        <PanelSectionRow>
-          <Field label={versionError} />
-        </PanelSectionRow>
-      </PanelSection>
-    );
+    return <VersionErrorCard message={versionError} compact />;
   }
 
   return (

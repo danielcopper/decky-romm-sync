@@ -17,10 +17,11 @@ import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
-import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, logError, logInfo } from "./api/backend";
+import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, testConnection, logError, logInfo } from "./api/backend";
 import { createOrUpdateCollections, createOrUpdateRomMCollections, clearPlatformCollection, getHostname } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
+import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
@@ -111,6 +112,21 @@ export default definePlugin(() => {
         }
         initAttempt++;
       }
+    }
+  })();
+
+  // Early version check — populate version error state before any game detail page renders.
+  // Retries are handled by MainPage and RomMPlaySection via their own testConnection() calls.
+  (async () => {
+    try {
+      const result = await withTimeout(testConnection(), CALLABLE_TIMEOUT);
+      if (result.error_code === "version_error") {
+        setVersionError(result.message);
+      } else if (result.success) {
+        setVersionError(null);
+      }
+    } catch {
+      // Silent — other components will retry; don't block startup on connection failure
     }
   })();
 

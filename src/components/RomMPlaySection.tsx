@@ -197,7 +197,8 @@ function computeSaveSyncDisplay(saveStatus: SaveStatus | null): { status: "synce
   return { status: "none", label: "No saves" };
 }
 
-import { setRommConnectionState, getVersionError, setVersionError } from "../utils/connectionState";
+import { setRommConnectionState, setVersionError } from "../utils/connectionState";
+import { useVersionError } from "./VersionErrorCard";
 
 /** Extract BIOS fields from a bios_status response into an InfoState partial. */
 function extractBiosInfo(b: BiosStatus): Partial<InfoState> {
@@ -246,6 +247,9 @@ function refreshBiosInBackground(
 }
 
 export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
+  // Subscribe to version error — re-renders when global state changes
+  const versionError = useVersionError();
+
   // Read playtime from Steam's own overview synchronously (already written by metadataPatches)
   // This avoids an unnecessary render from setting it inside the async effect.
   const overview = appStore.GetAppOverviewByAppID(appId);
@@ -744,6 +748,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
     );
   };
 
+  // Version mismatch — render nothing (VersionErrorCard is shown in RomMGameInfoPanel instead)
+  if (versionError) {
+    return null;
+  }
+
   // Build info items array
   const infoItems: ReturnType<typeof createElement>[] = [];
 
@@ -870,23 +879,6 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
           info.biosLabel,
         ),
       ),
-    );
-  }
-
-  // Version mismatch — replace entire play section with error message
-  const versionError = getVersionError();
-  if (versionError) {
-    return createElement(Focusable, {
-      "data-romm": "true",
-      className: `romm-play-section-row ${basicAppDetailsSectionStylerClasses?.PlaySection || ""}`.trim(),
-      style: {
-        padding: "16px 2.8vw",
-        background: "rgba(14, 20, 27, 0.33)",
-      },
-    } as any,
-      createElement("div", {
-        style: { fontSize: "13px", color: "rgba(255, 255, 255, 0.7)" },
-      }, versionError),
     );
   }
 
