@@ -2445,23 +2445,32 @@ class SaveService:
     # Slot deletion
     # ------------------------------------------------------------------
 
+    def _validate_slot_operation(self, rom_id: int, slot: str) -> dict | tuple[str, dict, dict[str, dict]]:
+        """Shared validation for slot delete operations.
+
+        Returns an error dict on failure, or a (rom_id_str, save_state, slots_dict)
+        tuple on success.
+        """
+        if not self._is_save_sync_enabled():
+            return {"success": False, "reason": "disabled"}
+        if not self._get_rom_save_info(rom_id):
+            return {"success": False, "reason": "not_installed"}
+        rom_id_str = str(rom_id)
+        save_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
+        slots_dict: dict[str, dict] = save_state.get("slots", {})
+        if slot not in slots_dict:
+            return {"success": False, "reason": "not_found"}
+        return rom_id_str, save_state, slots_dict
+
     async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict:
         """Return info about what deleting a slot would do, for the confirmation modal."""
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
 
-        if not self._is_save_sync_enabled():
-            return {"success": False, "reason": "disabled"}
-
-        if not self._get_rom_save_info(rom_id):
-            return {"success": False, "reason": "not_installed"}
-
-        rom_id_str = str(rom_id)
-        save_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
-        slots_dict: dict[str, dict] = save_state.get("slots", {})
-
-        if slot not in slots_dict:
-            return {"success": False, "reason": "not_found"}
+        result = self._validate_slot_operation(rom_id, slot)
+        if isinstance(result, dict):
+            return result
+        _rom_id_str, save_state, slots_dict = result
 
         slot_info = slots_dict[slot]
         source = slot_info.get("source", "server")
@@ -2535,18 +2544,10 @@ class SaveService:
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
 
-        if not self._is_save_sync_enabled():
-            return {"success": False, "reason": "disabled"}
-
-        if not self._get_rom_save_info(rom_id):
-            return {"success": False, "reason": "not_installed"}
-
-        rom_id_str = str(rom_id)
-        save_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
-        slots_dict: dict[str, dict] = save_state.get("slots", {})
-
-        if slot not in slots_dict:
-            return {"success": False, "reason": "not_found"}
+        result = self._validate_slot_operation(rom_id, slot)
+        if isinstance(result, dict):
+            return result
+        _rom_id_str, save_state, slots_dict = result
 
         effective_active = save_state.get("active_slot") or ""
         if slot == effective_active:
