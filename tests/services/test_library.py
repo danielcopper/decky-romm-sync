@@ -7,7 +7,6 @@ import pytest
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.sync_state import SyncState
-from lib.errors import RommUnsupportedError
 
 # conftest.py patches decky before this import
 from main import Plugin
@@ -2066,6 +2065,8 @@ class TestReportRemovalSteamInputCleanup:
 
         result = await plugin.report_removal_results([10])
         assert result["success"] is True  # Should not crash
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -2517,36 +2518,6 @@ class TestSetAllCollectionsSync:
 # ---------------------------------------------------------------------------
 
 
-class TestGetCollectionsUnsupportedError:
-    """Tests for RommUnsupportedError handling in get_collections()."""
-
-    @pytest.mark.asyncio
-    async def test_returns_unsupported_error_response(self, plugin):
-        """When RommUnsupportedError is raised, returns a structured error."""
-        plugin._sync_service._loop = _make_loop_raising(RommUnsupportedError("Collections", "4.7.0"))
-
-        result = await plugin._sync_service.get_collections()
-
-        assert result["success"] is False
-        assert result["error_code"] == "unsupported_error"
-        assert "4.7.0" in result["message"]
-
-
-class TestSetAllCollectionsSyncUnsupportedError:
-    """Tests for RommUnsupportedError handling in set_all_collections_sync()."""
-
-    @pytest.mark.asyncio
-    async def test_returns_unsupported_error_response(self, plugin):
-        """When RommUnsupportedError is raised, returns a structured error."""
-        plugin._sync_service._loop = _make_loop_raising(RommUnsupportedError("Collections", "4.7.0"))
-
-        result = await plugin._sync_service.set_all_collections_sync(True)
-
-        assert result["success"] is False
-        assert result["error_code"] == "unsupported_error"
-        assert "4.7.0" in result["message"]
-
-
 # ---------------------------------------------------------------------------
 # TestFetchCollectionRoms
 # ---------------------------------------------------------------------------
@@ -2648,17 +2619,6 @@ class TestFetchCollectionRoms:
         roms, _ = await plugin._sync_service._fetch_collection_roms(set())
 
         assert "files" not in roms[0]
-
-    @pytest.mark.asyncio
-    async def test_handles_unsupported_error_gracefully(self, plugin):
-        """RommUnsupportedError is caught and empty results are returned."""
-        plugin._sync_service._settings["enabled_collections"] = {"1": True}
-        plugin._sync_service._loop = _make_loop_raising(RommUnsupportedError("Collections", "4.7.0"))
-
-        roms, memberships = await plugin._sync_service._fetch_collection_roms(set())
-
-        assert roms == []
-        assert memberships == {}
 
     @pytest.mark.asyncio
     async def test_handles_api_error_gracefully(self, plugin):

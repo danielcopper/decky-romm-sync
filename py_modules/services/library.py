@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from domain.shortcut_data import build_registry_entry, build_shortcuts_data
 from domain.sync_state import SyncState
-from lib.errors import RommUnsupportedError, classify_error
+from lib.errors import classify_error
 
 if TYPE_CHECKING:
     import logging
@@ -144,12 +144,6 @@ class LibraryService:
     async def get_collections(self):
         try:
             user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
-        except RommUnsupportedError:
-            return {
-                "success": False,
-                "message": "Collections require RomM 4.7.0 or newer",
-                "error_code": "unsupported_error",
-            }
         except Exception as e:
             self._logger.error(f"Failed to fetch collections: {e}")
             _code, _msg = classify_error(e)
@@ -200,12 +194,6 @@ class LibraryService:
         enabled = bool(enabled)
         try:
             user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
-        except RommUnsupportedError:
-            return {
-                "success": False,
-                "message": "Collections require RomM 4.7.0 or newer",
-                "error_code": "unsupported_error",
-            }
         except Exception as e:
             self._logger.error(f"Failed to fetch collections: {e}")
             _code, _msg = classify_error(e)
@@ -765,8 +753,6 @@ class LibraryService:
                     collection_memberships[coll_name] = coll_rom_ids
                     self._log_debug(f"  Collection '{coll_name}': {len(coll_rom_ids)} ROMs")
 
-        except RommUnsupportedError:
-            self._logger.info("Collections not supported on this RomM version")
         except Exception as e:
             self._logger.warning(f"Failed to fetch collection ROMs: {e}")
 

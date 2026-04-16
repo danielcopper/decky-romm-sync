@@ -142,7 +142,7 @@ def _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"\x00" * 1
 def _server_save(
     save_id=100, rom_id=42, filename="pokemon.srm", updated_at="2026-02-17T06:00:00Z", file_size_bytes=1024
 ):
-    """Helper: build a server save response dict (matches RomM 4.6.1 SaveSchema)."""
+    """Helper: build a server save response dict (matches RomM SaveSchema)."""
     return {
         "id": save_id,
         "rom_id": rom_id,

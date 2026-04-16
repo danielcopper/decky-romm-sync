@@ -486,7 +486,7 @@ class SaveService:
         return None
 
     def _detect_conflict(self, rom_id: int, filename: str, local_hash: str | None, server_save: dict) -> str:
-        """Hybrid conflict detection (no content_hash on RomM 4.6.1).
+        """Hybrid conflict detection.
 
         Returns: ``"skip"``, ``"download"``, ``"upload"``, or ``"conflict"``.
         """
