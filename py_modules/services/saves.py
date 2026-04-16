@@ -2531,7 +2531,7 @@ class SaveService:
                     ),
                 )
             return {"success": True, "count": len(save_ids), "ids": set(save_ids)}
-        except (RommApiError, Exception) as e:
+        except Exception as e:
             self._logger.warning(f"delete_slot: server delete failed for slot '{slot}': {e}")
             return {
                 "success": False,
