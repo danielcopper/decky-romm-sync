@@ -287,14 +287,16 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         }
 
         // Server capabilities (for save sync feature gating)
-        const handleCaps = (caps: ServerCapabilities) => {
-          if (!cancelled) setState((prev) => ({ ...prev, capabilities: caps }));
-        };
+        let fetchedCaps: ServerCapabilities | null = null;
         if (cached.save_sync_enabled) {
-          bgPromises.push(getServerCapabilities().then(handleCaps).catch(() => {}));
+          bgPromises.push(getServerCapabilities().then((c) => { fetchedCaps = c; }).catch(() => {}));
         }
 
         await Promise.all(bgPromises);
+
+        if (!cancelled && fetchedCaps) {
+          setState((prev) => ({ ...prev, capabilities: fetchedCaps! }));
+        }
       } catch (e) {
         debugLog(`RomMGameInfoPanel: loadData error: ${e}`);
         if (!cancelled) setState((prev) => ({ ...prev, loading: false, error: true }));
