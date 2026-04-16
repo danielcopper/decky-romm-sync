@@ -52,6 +52,18 @@ function formatChanges(pairs: [number, string][]): string {
   return pairs.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`).join(", ");
 }
 
+function formatProgressText(progress: SyncProgress | null): string {
+  if (!progress) return "Syncing...";
+  const step = progress.step && progress.totalSteps
+    ? `[${progress.step}/${progress.totalSteps}] `
+    : "";
+  const msg = progress.message || "Syncing...";
+  // Truncate to ~40 chars to prevent multi-line jumping in the QAM panel
+  const maxLen = 40 - step.length;
+  const truncated = msg.length > maxLen ? msg.slice(0, maxLen - 1) + "\u2026" : msg;
+  return step + truncated;
+}
+
 function formatLastSync(iso: string | null): string {
   if (!iso) return "Never";
   try {
@@ -141,11 +153,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     getSyncStats().then(setStats);
     testConnection().then((r) => {
       setConnected(r.success);
-      if (r.error_code === "version_error") {
-        setVersionError(r.message);
-      } else if (r.success) {
-        setVersionError(null);
-      }
+      setVersionError(r.error_code === "version_error" ? r.message : null);
     });
     getSettings().then((s) => {
       if (s.retroarch_input_check) {
@@ -278,18 +286,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const progressFraction = syncProgress?.total
     ? ((syncProgress.current ?? 0) / syncProgress.total) * 100
     : undefined;
-
-  const formatProgressText = (progress: SyncProgress | null): string => {
-    if (!progress) return "Syncing...";
-    const step = progress.step && progress.totalSteps
-      ? `[${progress.step}/${progress.totalSteps}] `
-      : "";
-    const msg = progress.message || "Syncing...";
-    // Truncate to ~40 chars to prevent multi-line jumping in the QAM panel
-    const maxLen = 40 - step.length;
-    const truncated = msg.length > maxLen ? msg.slice(0, maxLen - 1) + "\u2026" : msg;
-    return step + truncated;
-  };
 
   const activeDownloads = downloads.filter(d => d.status === "queued" || d.status === "downloading");
   const completedDownloads = downloads.filter(d => d.status === "completed" || d.status === "failed" || d.status === "cancelled");
