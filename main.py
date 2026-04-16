@@ -228,11 +228,11 @@ class Plugin:
         self._download_service.shutdown()
         decky.logger.info("RomM Sync plugin unloaded")
 
-    _MIN_REQUIRED_VERSION = (4, 7, 0)
+    _MIN_REQUIRED_VERSION = (4, 8, 1)
 
     @staticmethod
     def _meets_min_version(version_str: str) -> bool:
-        """Return True if *version_str* (e.g. ``'4.7.0'``) >= ``_MIN_REQUIRED_VERSION``."""
+        """Return True if *version_str* (e.g. ``'4.8.1'``) >= ``_MIN_REQUIRED_VERSION``."""
         try:
             parts = tuple(int(p) for p in version_str.split("."))
         except (ValueError, AttributeError):

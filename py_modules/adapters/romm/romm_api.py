@@ -1,4 +1,4 @@
-"""RomM API adapter — requires RomM >= 4.7.0.
+"""RomM API adapter — requires RomM >= 4.8.1.
 
 Single adapter covering the full RomM REST surface. All methods map
 directly to HTTP endpoints via RommHttpAdapter.
@@ -12,7 +12,7 @@ from adapters.romm.http import RommHttpAdapter
 
 
 class RommApi:
-    """Concrete RomM API adapter for RomM >= 4.7.0."""
+    """Concrete RomM API adapter for RomM >= 4.8.1."""
 
     def __init__(self, client: RommHttpAdapter) -> None:
         self._client = client

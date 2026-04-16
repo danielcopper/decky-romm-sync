@@ -97,11 +97,11 @@ class TestConnection:
     async def test_test_connection_sets_version_on_romm_api(self, plugin):
         plugin.loop = asyncio.get_event_loop()
         plugin.settings["romm_url"] = "http://romm.local"
-        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.7.0"}}
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
         plugin._romm_api.list_platforms.return_value = [{"id": 1, "slug": "n64"}]
         result = await plugin.test_connection()
         assert result["success"] is True
-        plugin._romm_api.set_version.assert_called_once_with("4.7.0")
+        plugin._romm_api.set_version.assert_called_once_with("4.8.1")
 
 
 class TestLogLevel:
@@ -736,27 +736,30 @@ class TestMeetsMinVersion:
     """Direct unit tests for Plugin._meets_min_version static method."""
 
     def test_exact_minimum(self):
-        assert Plugin._meets_min_version("4.7.0") is True
+        assert Plugin._meets_min_version("4.8.1") is True
 
     def test_above_minimum(self):
-        assert Plugin._meets_min_version("4.8.0") is True
+        assert Plugin._meets_min_version("4.9.0") is True
 
     def test_below_minimum(self):
         assert Plugin._meets_min_version("4.6.1") is False
 
-    def test_below_minimum_high_patch(self):
-        assert Plugin._meets_min_version("4.6.9") is False
+    def test_below_minimum_patch(self):
+        assert Plugin._meets_min_version("4.8.0") is False
+
+    def test_below_minimum_minor(self):
+        assert Plugin._meets_min_version("4.7.0") is False
 
     def test_major_version_above(self):
         assert Plugin._meets_min_version("5.0.0") is True
 
     def test_two_part_version(self):
-        # (4, 7) < (4, 7, 0) in tuple comparison
-        assert Plugin._meets_min_version("4.7") is False
+        # (4, 8) < (4, 8, 1) in tuple comparison
+        assert Plugin._meets_min_version("4.8") is False
 
     def test_four_part_version(self):
-        # (4, 7, 0, 1) >= (4, 7, 0)
-        assert Plugin._meets_min_version("4.7.0.1") is True
+        # (4, 8, 1, 1) >= (4, 8, 1)
+        assert Plugin._meets_min_version("4.8.1.1") is True
 
     def test_malformed_string(self):
         assert Plugin._meets_min_version("abc") is False

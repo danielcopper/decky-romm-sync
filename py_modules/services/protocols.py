@@ -26,7 +26,7 @@ class RommApiProtocol(Protocol):
 
     Replaces raw HTTP path construction in services with semantic methods.
     Concrete implementation: ``adapters.romm.romm_api.RommApi``.
-    Requires RomM >= 4.7.0.
+    Requires RomM >= 4.8.1.
     """
 
     def set_version(self, version: str) -> None:
