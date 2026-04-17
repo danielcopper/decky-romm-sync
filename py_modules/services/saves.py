@@ -1179,7 +1179,7 @@ class SaveService:
     # Public async API (callable endpoints)
     # ------------------------------------------------------------------
 
-    def ensure_device_registered(self) -> dict:
+    async def ensure_device_registered(self) -> dict:
         """Ensure this device is registered with the RomM server for save sync tracking."""
         if not self._is_save_sync_enabled():
             return {"success": False, "device_id": "", "device_name": "", "disabled": True}
@@ -1188,6 +1188,11 @@ class SaveService:
         has_device_id = self._save_sync_state.get("device_id")
         has_server_id = self._save_sync_state.get("server_device_id")
         if has_device_id and has_server_id:
+            with contextlib.suppress(Exception):
+                await self._loop.run_in_executor(
+                    None,
+                    lambda: self._romm_api.update_device(has_server_id, client_version=self._plugin_version),
+                )
             return {
                 "success": True,
                 "device_id": self._save_sync_state["device_id"],
@@ -1198,11 +1203,14 @@ class SaveService:
         hostname = socket.gethostname()
 
         try:
-            result = self._romm_api.register_device(
-                name=hostname,
-                platform="linux",
-                client="decky-romm-sync",
-                version=self._plugin_version,
+            result = await self._loop.run_in_executor(
+                None,
+                lambda: self._romm_api.register_device(
+                    name=hostname,
+                    platform="linux",
+                    client="decky-romm-sync",
+                    client_version=self._plugin_version,
+                ),
             )
             server_device_id = result.get("id") or result.get("device_id")
             if server_device_id:
@@ -1246,6 +1254,25 @@ class SaveService:
                 await self._emit("save_status_updated", result)
         except Exception as e:
             self._log_debug(f"Background save status check failed for rom {rom_id}: {e}")
+
+    async def list_devices(self) -> dict:
+        """List all devices registered with the RomM server for this user."""
+        if not self._is_save_sync_enabled():
+            return {"success": False, "devices": [], "disabled": True}
+        try:
+            own_id = self._get_server_device_id()
+            devices = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(lambda: self._romm_api.list_devices()),
+            )
+            own_id_str = str(own_id or "")
+            enriched = [
+                {**d, "is_current_device": bool(own_id_str) and (str(d.get("id") or "")) == own_id_str} for d in devices
+            ]
+            return {"success": True, "devices": enriched}
+        except Exception as e:
+            self._log_debug(f"list_devices failed: {e}")
+            return {"success": False, "devices": [], "error": "list_failed"}
 
     def check_core_change(self, rom_id: int) -> dict:
         """Check if emulator core changed since last sync for a ROM."""
@@ -1343,7 +1370,7 @@ class SaveService:
             return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
 
         if not self._save_sync_state.get("device_id"):
-            reg = self.ensure_device_registered()
+            reg = await self.ensure_device_registered()
             if not reg.get("success"):
                 return {"success": False, "message": _DEVICE_NOT_REGISTERED}
 
@@ -1384,7 +1411,7 @@ class SaveService:
             return {"success": False, "message": "Server offline", "synced": 0, "offline": True}
 
         if not self._save_sync_state.get("device_id"):
-            reg = self.ensure_device_registered()
+            reg = await self.ensure_device_registered()
             if not reg.get("success"):
                 return {"success": False, "message": _DEVICE_NOT_REGISTERED}
 
@@ -1422,7 +1449,7 @@ class SaveService:
         await self._refresh_save_sort_state("sync_rom_saves")
 
         if not self._save_sync_state.get("device_id"):
-            reg = self.ensure_device_registered()
+            reg = await self.ensure_device_registered()
             if not reg.get("success"):
                 return {"success": False, "message": _DEVICE_NOT_REGISTERED}
 
@@ -1951,7 +1978,7 @@ class SaveService:
         await self._refresh_save_sort_state("sync_all_saves")
 
         if not self._save_sync_state.get("device_id"):
-            reg = self.ensure_device_registered()
+            reg = await self.ensure_device_registered()
             if not reg.get("success"):
                 return {"success": False, "message": _DEVICE_NOT_REGISTERED}
 

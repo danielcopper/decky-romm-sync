@@ -178,16 +178,24 @@ class RommApi:
 
     # ── Devices ───────────────────────────────────────────────────────
 
-    def register_device(self, name: str, platform: str, client: str, version: str) -> dict:
+    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
         return self._client.post_json(
             "/api/devices",
             {
                 "name": name,
                 "platform": platform,
                 "client": client,
-                "version": version,
+                "client_version": client_version,
             },
         )
+
+    def list_devices(self) -> list[dict]:
+        result = self._client.request("/api/devices")
+        return result if isinstance(result, list) else []
+
+    def update_device(self, device_id: str, **fields) -> dict:
+        payload = {k: v for k, v in fields.items() if v is not None}
+        return self._client.put_json(f"/api/devices/{device_id}", payload)
 
     # ── Notes / Playtime ──────────────────────────────────────────────
 

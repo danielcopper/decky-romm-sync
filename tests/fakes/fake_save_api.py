@@ -111,14 +111,28 @@ class FakeSaveApi:
             self.saves.pop(sid, None)
         return {"deleted": len(save_ids)}
 
-    def register_device(self, name: str, platform: str, client: str, version: str) -> dict:
-        self.call_log.append(("register_device", (name, platform, client, version), {}))
+    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
+        self.call_log.append(("register_device", (name, platform, client, client_version), {}))
         self._check_fail()
         device_id = f"device-{self._next_device_id}"
         self._next_device_id += 1
         device = {"id": device_id, "name": name, "created_at": datetime.now(UTC).isoformat()}
         self._registered_devices.append(device)
         return device
+
+    def list_devices(self) -> list[dict]:
+        self.call_log.append(("list_devices", (), {}))
+        self._check_fail()
+        return list(self._registered_devices)
+
+    def update_device(self, device_id: str, **fields) -> dict:
+        self.call_log.append(("update_device", (device_id,), fields))
+        self._check_fail()
+        for device in self._registered_devices:
+            if str(device.get("id")) == str(device_id):
+                device.update({k: v for k, v in fields.items() if v is not None})
+                return dict(device)
+        return {"id": device_id, **{k: v for k, v in fields.items() if v is not None}}
 
     def download_save_content(
         self,

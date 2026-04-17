@@ -217,6 +217,39 @@ class TestDeviceRegistration:
 
 
 # ============================================================================
+# List Devices (Plugin callable integration)
+# ============================================================================
+
+
+class TestListDevices:
+    """Tests for list_devices callable wired through Plugin."""
+
+    @pytest.mark.asyncio
+    async def test_list_devices_returns_devices(self, plugin):
+        """list_devices callable routes through save service and returns enriched list."""
+        plugin._fake_api._registered_devices = [
+            {"id": "device-1", "name": "steamdeck"},
+        ]
+        plugin._save_sync_state["server_device_id"] = "device-1"
+
+        result = await plugin.list_devices()
+
+        assert result["success"] is True
+        assert len(result["devices"]) == 1
+        assert result["devices"][0]["is_current_device"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_devices_disabled_when_sync_off(self, plugin):
+        """Returns disabled=True when save sync is disabled."""
+        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+
+        result = await plugin.list_devices()
+
+        assert result["success"] is False
+        assert result.get("disabled") is True
+
+
+# ============================================================================
 # Pre-Launch Sync (Plugin callable integration)
 # ============================================================================
 

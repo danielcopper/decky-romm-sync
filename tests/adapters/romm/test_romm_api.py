@@ -178,7 +178,7 @@ class TestListCollections:
 
 
 class TestRegisterDevice:
-    def test_posts_to_devices_endpoint(self):
+    def test_uses_client_version_key(self):
         api, client = _make_api()
         client.post_json.return_value = {
             "id": "abc-123",
@@ -186,16 +186,79 @@ class TestRegisterDevice:
             "created_at": "2026-01-01T00:00:00Z",
         }
         result = api.register_device("steamdeck", "linux", "decky-romm-sync", "0.13.0")
+        _name, payload = client.post_json.call_args[0]
+        assert payload["client_version"] == "0.13.0"
+        assert "version" not in payload
+        assert result["id"] == "abc-123"
+
+    def test_posts_to_devices_endpoint(self):
+        api, client = _make_api()
+        client.post_json.return_value = {
+            "id": "abc-123",
+            "name": "steamdeck",
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+        api.register_device("steamdeck", "linux", "decky-romm-sync", "0.13.0")
         client.post_json.assert_called_once_with(
             "/api/devices",
             {
                 "name": "steamdeck",
                 "platform": "linux",
                 "client": "decky-romm-sync",
-                "version": "0.13.0",
+                "client_version": "0.13.0",
             },
         )
+
+
+class TestListDevices:
+    def test_returns_array(self):
+        api, client = _make_api()
+        client.request.return_value = [
+            {"id": "abc-123", "name": "steamdeck"},
+            {"id": "def-456", "name": "laptop"},
+        ]
+        result = api.list_devices()
+        client.request.assert_called_once_with("/api/devices")
+        assert len(result) == 2
+        assert result[0]["id"] == "abc-123"
+
+    def test_handles_non_list_response(self):
+        api, client = _make_api()
+        client.request.return_value = {"error": "unexpected"}
+        result = api.list_devices()
+        assert result == []
+
+    def test_handles_none_response(self):
+        api, client = _make_api()
+        client.request.return_value = None
+        result = api.list_devices()
+        assert result == []
+
+
+class TestUpdateDevice:
+    def test_sends_put_with_filtered_payload(self):
+        api, client = _make_api()
+        client.put_json.return_value = {"id": "abc-123", "client_version": "0.14.0"}
+        result = api.update_device("abc-123", client_version="0.14.0", name=None)
+        client.put_json.assert_called_once_with(
+            "/api/devices/abc-123",
+            {"client_version": "0.14.0"},
+        )
         assert result["id"] == "abc-123"
+
+    def test_excludes_none_fields(self):
+        api, client = _make_api()
+        client.put_json.return_value = {"id": "abc-123"}
+        api.update_device("abc-123", name=None, client_version=None, sync_enabled=None)
+        _url, payload = client.put_json.call_args[0]
+        assert payload == {}
+
+    def test_url_contains_device_id(self):
+        api, client = _make_api()
+        client.put_json.return_value = {"id": "xyz-999"}
+        api.update_device("xyz-999", client_version="1.0.0")
+        url = client.put_json.call_args[0][0]
+        assert "xyz-999" in url
 
 
 class TestSetVersion:

@@ -255,10 +255,27 @@ class RommApiProtocol(Protocol):
         """
         ...
 
-    def register_device(self, name: str, platform: str, client: str, version: str) -> dict:
+    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
         """Register this client as a sync device on the RomM server.
 
         Returns device dict with id, name, created_at.
+        """
+        ...
+
+    def list_devices(self) -> list[dict]:
+        """List all devices registered with the RomM server for the current user.
+
+        Returns a list of device dicts from /api/devices.
+        """
+        ...
+
+    def update_device(self, device_id: str, **fields) -> dict:
+        """Update a registered device's metadata on the RomM server.
+
+        Currently the plugin only sends ``client_version`` via the reconciliation
+        loop; the server accepts additional fields per its OpenAPI schema (name,
+        platform, client, ip_address, mac_address, hostname, sync_enabled) but
+        they are not exercised by this plugin.
         """
         ...
 

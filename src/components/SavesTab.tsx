@@ -129,6 +129,7 @@ interface VersionHistoryPanelProps {
   filename: string;
   isOffline: boolean;
   onRestored: () => void;
+  ourDeviceId: string;
 }
 
 const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
@@ -137,6 +138,7 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
   filename,
   isOffline,
   onRestored,
+  ourDeviceId,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [versions, setVersions] = useState<SaveVersionEntry[] | null>(null);
@@ -219,9 +221,12 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
     if (v.emulator) headerParts.push(v.emulator);
     if (v.file_size_bytes != null) headerParts.push(formatBytes(v.file_size_bytes));
 
-    // Line 2: Last updated: <timestamp>[ · <device>]
+    // Line 2: Last updated: <timestamp>[ · <device> (this/other device) ✓]
     const lastUpdatedParts: string[] = [formatTimestamp(v.updated_at)];
-    if (deviceName) lastUpdatedParts.push(`${deviceName} \u2713`);
+    if (deviceName) {
+      const deviceLabel = lastSyncer?.device_id === ourDeviceId ? "(this device)" : "(other device)";
+      lastUpdatedParts.push(`${deviceName} ${deviceLabel} \u2713`);
+    }
 
     return createElement("div", {
       key: `ver-${v.id}`,
@@ -361,6 +366,7 @@ function renderSaveFileRow(
   f: SaveFileStatus,
   conflict: PendingConflict | undefined,
   lastSyncCheckAt: string | null,
+  ourDeviceId: string,
 ): ReturnType<typeof createElement> {
   const { color, label } = statusLabel(f.status, f.last_sync_at);
   const syncTime = lastSyncCheckAt || f.last_sync_at;
@@ -389,7 +395,8 @@ function renderSaveFileRow(
     lastSyncedPieces.push("Never");
   }
   if (lastSyncer?.device_name) {
-    lastSyncedPieces.push(`${lastSyncer.device_name} \u2713`);
+    const deviceLabel = lastSyncer.device_id === ourDeviceId ? "(this device)" : "(other device)";
+    lastSyncedPieces.push(`${lastSyncer.device_name} ${deviceLabel} \u2713`);
   }
   if (f.is_current === false) {
     lastSyncedPieces.push("Newer version available on server");
@@ -541,12 +548,13 @@ function renderActiveSlotBody(
   slot: string,
   isOffline: boolean,
   onVersionRestored: () => void,
+  ourDeviceId: string,
 ): (ReturnType<typeof createElement> | null)[] {
   if (saveStatus && saveStatus.files.length > 0) {
     return saveStatus.files.map((f) => {
       const conflict = conflicts.find((c) => c.filename === f.filename);
       return createElement("div", { key: f.filename },
-        renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
+        renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at, ourDeviceId),
         createElement(VersionHistoryPanel, {
           key: `vhp-${f.filename}`,
           romId,
@@ -554,6 +562,7 @@ function renderActiveSlotBody(
           filename: f.filename,
           isOffline,
           onRestored: onVersionRestored,
+          ourDeviceId,
         }),
       );
     });
@@ -640,6 +649,7 @@ interface SlotPanelProps {
   saveStatus: SaveStatus | null;
   conflicts: PendingConflict[];
   isOffline: boolean;
+  ourDeviceId: string;
   // Callbacks
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
   onVersionRestored: () => void;
@@ -654,6 +664,7 @@ const SlotPanel: FC<SlotPanelProps> = ({
   saveStatus,
   conflicts,
   isOffline,
+  ourDeviceId,
   onSlotSwitched,
   onVersionRestored,
   onSlotDeleted,
@@ -833,7 +844,7 @@ const SlotPanel: FC<SlotPanelProps> = ({
   let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
   if (expanded) {
     bodyChildren = isActive
-      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored)
+      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored, ourDeviceId)
       : renderInactiveSlotBody({ loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting });
   }
 
@@ -1003,6 +1014,8 @@ export const SavesTab: FC<SavesTabProps> = ({
     );
   };
 
+  const ourDeviceId = saveStatus?.device_id ?? "";
+
   // --- Legacy mode: show save files directly (not in a slot panel) ---
   let legacyFilesSection: ReturnType<typeof createElement> | null = null;
   if (activeSlot === null) {
@@ -1010,7 +1023,7 @@ export const SavesTab: FC<SavesTabProps> = ({
       legacyFilesSection = createElement("div", { key: "legacy-files", style: { marginBottom: "12px" } },
         ...saveStatus.files.map((f) => {
           const conflict = conflicts.find((c) => c.filename === f.filename);
-          return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
+          return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at, ourDeviceId);
         }),
       );
     } else {
@@ -1045,6 +1058,7 @@ export const SavesTab: FC<SavesTabProps> = ({
           saveStatus: isActive ? saveStatus : null,
           conflicts: isActive ? conflicts : [],
           isOffline,
+          ourDeviceId,
           onSlotSwitched,
           onVersionRestored: handleVersionRestored,
           onSlotDeleted: handleSlotDeleted,

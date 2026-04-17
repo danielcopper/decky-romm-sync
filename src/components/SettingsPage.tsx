@@ -29,18 +29,34 @@ import {
   saveLogLevel,
   fixRetroarchInputDriver,
   ensureDeviceRegistered,
+  listDevices,
   getSaveSortMigrationStatus,
   migrateSaveSortFiles,
   dismissSaveSortMigration,
   logError,
 } from "../api/backend";
-import type { MigrationStatus, SaveSortMigrationStatus } from "../api/backend";
+import type { MigrationStatus, SaveSortMigrationStatus, RegisteredDevice } from "../api/backend";
 import { getMigrationState, setMigrationStatus, clearMigration, onMigrationChange } from "../utils/migrationStore";
 import { getSaveSortMigrationState, setSaveSortMigrationStatus as setStoreSaveSortStatus, clearSaveSortMigration, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import type { SaveSyncSettings as SaveSyncSettingsType, ConflictMode, RetroArchInputCheck } from "../types";
 
 // Module-level state survives component remounts (modal close can remount QAM)
 const pendingEdits: { url?: string; username?: string; password?: string } = {};
+
+/** Format a relative time string (e.g. "5m ago", "2h ago") from an ISO string */
+function formatRelativeTime(isoStr: string | null): string {
+  if (!isoStr) return "never";
+  const date = new Date(isoStr);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffMin < 1440) return `${Math.floor(diffMin / 60)}h ago`;
+  const d = date.getDate();
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${d} ${months[date.getMonth()]}`;
+}
 
 const MigrationConflictModal: FC<{
   conflictCount: number;
@@ -139,6 +155,11 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
 
+  // Registered devices state
+  const [registeredDevices, setRegisteredDevices] = useState<RegisteredDevice[] | null>(null);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+
   // Controller state
   const [steamInputMode, setSteamInputMode] = useState("default");
   const [steamInputStatus, setSteamInputStatus] = useState("");
@@ -196,6 +217,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
               }
             })
             .catch(() => {});
+          loadDevices();
         }
       })
       .catch((e) => logError(`Failed to load save sync settings: ${e}`));
@@ -211,6 +233,29 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
     return () => { unsubMigration(); unsubSaveSort(); };
   }, []);
+
+  const loadDevices = () => {
+    setDevicesLoading(true);
+    setDevicesError(null);
+    listDevices()
+      .then((result) => {
+        if (result.success) {
+          setRegisteredDevices(result.devices);
+        } else if (result.disabled) {
+          setRegisteredDevices(null);
+        } else {
+          setDevicesError(result.error ?? "Failed to load devices");
+          setRegisteredDevices([]);
+        }
+      })
+      .catch((e: unknown) => {
+        setDevicesError(e instanceof Error ? e.message : "Failed to load devices");
+        setRegisteredDevices([]);
+      })
+      .finally(() => {
+        setDevicesLoading(false);
+      });
+  };
 
   // Auto-save connection fields when a modal edit is confirmed
   const autoSaveSettings = async (field: "url" | "username" | "password", newValue: string) => {
@@ -247,6 +292,12 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
           detail: { type: "save_sync_settings", save_sync_enabled: updated.save_sync_enabled },
         }));
+        if (updated.save_sync_enabled) {
+          loadDevices();
+        } else {
+          setRegisteredDevices(null);
+          setDevicesError(null);
+        }
       }
     } catch (e) {
       logError(`Failed to save settings: ${e}`);
@@ -742,6 +793,47 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
           </PanelSectionRow>
         )}
       </PanelSection>
+      {saveSyncEnabled && (devicesLoading || registeredDevices !== null) && (
+        <PanelSection title="Registered Devices">
+          {devicesLoading && (
+            <PanelSectionRow>
+              <Field label="Loading..." />
+            </PanelSectionRow>
+          )}
+          {!devicesLoading && devicesError && (
+            <PanelSectionRow>
+              <Field label="Could not load devices" description={devicesError} />
+            </PanelSectionRow>
+          )}
+          {!devicesLoading && !devicesError && registeredDevices !== null && registeredDevices.length === 0 && (
+            <PanelSectionRow>
+              <Field label="No devices registered" />
+            </PanelSectionRow>
+          )}
+          {!devicesLoading && !devicesError && registeredDevices !== null && registeredDevices.map((device, i) => {
+            const clientLine = `${device.client ?? "unknown client"} v${device.client_version ?? "?"}`;
+            const parts: string[] = [clientLine];
+            if (device.platform) parts.push(device.platform);
+            parts.push(`last seen ${formatRelativeTime(device.last_seen)}`);
+            parts.push(`ID ${String(device.id ?? "").slice(0, 8) || "—"}`);
+            return (
+              <PanelSectionRow key={device.id || `idx-${i}`}>
+                <Field
+                  label={
+                    <span>
+                      {device.name ?? "(unnamed)"}
+                      {device.is_current_device && (
+                        <span style={{ color: "#6ab04c", marginLeft: "8px", fontSize: "12px" }}>(this device)</span>
+                      )}
+                    </span>
+                  }
+                  description={parts.join(" · ")}
+                />
+              </PanelSectionRow>
+            );
+          })}
+        </PanelSection>
+      )}
       <PanelSection title="Controller">
         <PanelSectionRow>
           <DropdownItem

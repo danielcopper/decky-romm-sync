@@ -184,7 +184,7 @@ class TestDeviceRegistration:
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
 
-        result = svc.ensure_device_registered()
+        result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result["device_id"]
         assert result["device_name"]
@@ -199,7 +199,7 @@ class TestDeviceRegistration:
         svc._save_sync_state["device_name"] = "deck"
         svc._save_sync_state["server_device_id"] = "server-existing"
 
-        result = svc.ensure_device_registered()
+        result = await svc.ensure_device_registered()
         assert result["device_id"] == "existing"
         assert result["device_name"] == "deck"
         assert result["server_device_id"] == "server-existing"
@@ -208,7 +208,7 @@ class TestDeviceRegistration:
     async def test_disabled_returns_failure(self, tmp_path):
         svc, _ = make_service(tmp_path)
         # save_sync_enabled defaults to False
-        result = svc.ensure_device_registered()
+        result = await svc.ensure_device_registered()
         assert result["success"] is False
         assert result.get("disabled") is True
 
@@ -219,12 +219,13 @@ class TestDeviceRegistration:
 
 
 class TestDeviceRegistrationServer:
-    def test_registers_with_server(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_registers_with_server(self, tmp_path):
         """Calls register_device and stores server_device_id."""
         svc, fake = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
 
-        result = svc.ensure_device_registered()
+        result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result.get("server_device_id") is not None
         assert svc._save_sync_state["server_device_id"] == result["server_device_id"]
@@ -235,19 +236,21 @@ class TestDeviceRegistrationServer:
         assert reg_calls[0][1][1] == "linux"  # platform
         assert reg_calls[0][1][2] == "decky-romm-sync"  # client
 
-    def test_returns_failure_on_server_error(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_returns_failure_on_server_error(self, tmp_path):
         """If register_device fails, returns failure."""
         fake = FakeSaveApi()
         fake.fail_on_next(Exception("server error"))
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
 
-        result = svc.ensure_device_registered()
+        result = await svc.ensure_device_registered()
         assert result["success"] is False
         assert result.get("error") == "registration_failed"
         assert svc._save_sync_state.get("server_device_id") is None
 
-    def test_returns_existing_with_server_device_id(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_returns_existing_with_server_device_id(self, tmp_path):
         """If already registered, returns existing IDs including server_device_id."""
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
@@ -255,11 +258,12 @@ class TestDeviceRegistrationServer:
         svc._save_sync_state["device_name"] = "deck"
         svc._save_sync_state["server_device_id"] = "server-id-123"
 
-        result = svc.ensure_device_registered()
+        result = await svc.ensure_device_registered()
         assert result["device_id"] == "existing-id"
         assert result.get("server_device_id") == "server-id-123"
 
-    def test_upgrades_local_uuid_to_server(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_upgrades_local_uuid_to_server(self, tmp_path):
         """Local-only UUID gets upgraded to server registration."""
         svc, fake = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
@@ -268,13 +272,126 @@ class TestDeviceRegistrationServer:
         svc._save_sync_state["device_name"] = "deck"
         svc._save_sync_state["server_device_id"] = None
 
-        result = svc.ensure_device_registered()
+        result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result.get("server_device_id") is not None
         assert svc._save_sync_state["server_device_id"] is not None
         # register_device was called
         reg_calls = [c for c in fake.call_log if c[0] == "register_device"]
         assert len(reg_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_ensure_device_registered_reconciles_client_version(self, tmp_path):
+        """Already-registered path calls update_device with current plugin_version."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "existing-id"
+        svc._save_sync_state["device_name"] = "deck"
+        svc._save_sync_state["server_device_id"] = "server-abc"
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        update_calls = [c for c in fake.call_log if c[0] == "update_device"]
+        assert len(update_calls) == 1
+        assert update_calls[0][1][0] == "server-abc"
+        assert update_calls[0][2].get("client_version") == "0.14.0"
+
+    @pytest.mark.asyncio
+    async def test_ensure_device_registered_reconcile_non_fatal(self, tmp_path):
+        """PUT raises, ensure_device_registered still returns success."""
+        fake = FakeSaveApi()
+        svc, _ = make_service(tmp_path, fake_api=fake)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "existing-id"
+        svc._save_sync_state["device_name"] = "deck"
+        svc._save_sync_state["server_device_id"] = "server-abc"
+
+        # Make update_device fail silently
+        fake.fail_on_next(Exception("network error"))
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"] == "existing-id"
+
+
+# ---------------------------------------------------------------------------
+# TestListDevices
+# ---------------------------------------------------------------------------
+
+
+class TestListDevices:
+    @pytest.mark.asyncio
+    async def test_list_devices_marks_own_device(self, tmp_path):
+        """own device_id present in state — is_current_device is True on matching entry."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["server_device_id"] = "device-1"
+
+        # Register two devices in fake
+        fake._registered_devices = [
+            {"id": "device-1", "name": "steamdeck"},
+            {"id": "device-2", "name": "laptop"},
+        ]
+
+        result = await svc.list_devices()
+
+        assert result["success"] is True
+        assert len(result["devices"]) == 2
+        own = next(d for d in result["devices"] if d["id"] == "device-1")
+        other = next(d for d in result["devices"] if d["id"] == "device-2")
+        assert own["is_current_device"] is True
+        assert other["is_current_device"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_devices_save_sync_disabled(self, tmp_path):
+        """Returns disabled=True when save sync is off."""
+        svc, _ = make_service(tmp_path)
+        # save_sync_enabled defaults to False
+
+        result = await svc.list_devices()
+
+        assert result == {"success": False, "devices": [], "disabled": True}
+
+    @pytest.mark.asyncio
+    async def test_list_devices_adapter_error(self, tmp_path):
+        """Adapter raises — returns error response."""
+        fake = FakeSaveApi()
+        svc, _ = make_service(tmp_path, fake_api=fake)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+
+        fake.fail_on_next(Exception("server unavailable"))
+        result = await svc.list_devices()
+
+        assert result == {"success": False, "devices": [], "error": "list_failed"}
+
+    @pytest.mark.asyncio
+    async def test_list_devices_no_own_id_all_false(self, tmp_path):
+        """No server_device_id in state — all is_current_device are False."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["server_device_id"] = None
+
+        fake._registered_devices = [{"id": "device-1", "name": "steamdeck"}]
+        result = await svc.list_devices()
+
+        assert result["success"] is True
+        assert result["devices"][0]["is_current_device"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_devices_handles_null_id(self, tmp_path):
+        """Device with id=None must not match own_id=None (avoid 'None'=='None' trap)."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["server_device_id"] = None
+
+        fake._registered_devices = [{"id": None, "name": "unknown"}]
+        result = await svc.list_devices()
+
+        assert result["success"] is True
+        # id=None and own_id=None must both resolve to "" — empty string never
+        # compares truthy, so is_current_device must be False
+        assert result["devices"][0]["is_current_device"] is False
 
 
 # ---------------------------------------------------------------------------
