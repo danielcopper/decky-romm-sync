@@ -2628,6 +2628,39 @@ class TestSaveSlots:
         assert result["active_slot"] == "default"
 
     @pytest.mark.asyncio
+    async def test_get_save_slots_latest_updated_at_from_server(self, tmp_path):
+        """latest_updated_at is populated from nested latest.updated_at, not a flat key."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state["server_device_id"] = "server-dev-1"
+
+        # Two saves in the default slot; the later one should win.
+        fake.saves[1] = {
+            "id": 1,
+            "rom_id": 123,
+            "file_name": "a.srm",
+            "updated_at": "2026-04-16T13:00:00",
+            "slot": "default",
+        }
+        fake.saves[2] = {
+            "id": 2,
+            "rom_id": 123,
+            "file_name": "b.srm",
+            "updated_at": "2026-04-17T20:00:00",
+            "slot": "default",
+        }
+
+        result = await svc.get_save_slots(123)
+        assert result["success"] is True
+        slot = next(s for s in result["slots"] if s["slot"] == "default")
+        assert slot["latest_updated_at"] == "2026-04-17T20:00:00"
+
+        # Also verify the value is persisted in state (not None)
+        persisted = svc._save_sync_state["saves"]["123"]["slots"]["default"]
+        assert persisted["latest_updated_at"] == "2026-04-17T20:00:00"
+
+    @pytest.mark.asyncio
     async def test_get_save_slots_disabled(self, tmp_path):
         svc, _ = make_service(tmp_path)
         result = await svc.get_save_slots(123)

@@ -177,11 +177,12 @@ class FakeSaveApi:
                 slot = s.get("slot")
                 slots.setdefault(slot, []).append(s)
         return {
+            "total_count": sum(len(saves) for saves in slots.values()),
             "slots": [
                 {
                     "slot": slot_name,  # None for legacy saves (no slot) — preserve as-is
                     "count": len(saves),
-                    "latest_updated_at": max((s.get("updated_at", "") for s in saves), default=None),
+                    "latest": max(saves, key=lambda s: s.get("updated_at", "")),
                 }
                 for slot_name, saves in slots.items()
             ],

@@ -1542,7 +1542,7 @@ class SaveService:
             merged[name] = {
                 "source": "server",
                 "count": s.get("count", 0),
-                "latest_updated_at": s.get("latest_updated_at"),
+                "latest_updated_at": (s.get("latest") or {}).get("updated_at"),
             }
 
         # Keep local slots that are NOT on server
