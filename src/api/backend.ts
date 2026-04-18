@@ -251,6 +251,7 @@ export interface SaveVersionEntry {
   updated_at: string;
   file_size_bytes: number | null;
   device_syncs: Array<{ device_id: string; device_name: string; is_current: boolean; last_synced_at: string | null }>;
+  uploaded_by_us?: boolean | null;
 }
 
 export type RollbackStatus =

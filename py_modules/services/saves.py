@@ -558,6 +558,7 @@ class SaveService:
                 "system": system,
                 "last_synced_core": core_so,
                 "active_slot": self._save_sync_state.get("settings", {}).get("default_slot", "default"),
+                "own_upload_ids": [],
             }
         save_entry = self._save_sync_state["saves"][rom_id_str]
         save_entry.setdefault("files", {})
@@ -635,6 +636,7 @@ class SaveService:
         game_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
         slot = game_state.get("active_slot", "default") if device_id else None
 
+        is_post = save_id is None
         result = self._retry.with_retry(
             lambda: self._romm_api.upload_save(
                 int(rom_id), file_path, emulator, save_id, device_id=device_id, slot=slot
@@ -644,6 +646,20 @@ class SaveService:
         self._update_file_sync_state(
             rom_id_str, filename, result, file_path, system, emulator_tag=emulator, core_so=core_so
         )
+
+        # Track saves we POSTed ourselves (new saves only, not updates).
+        # NOTE: This assumes POST = brand-new save. If RomM ever changes POST to
+        # upsert-by-filename semantics, this block would need revisiting.
+        if is_post:
+            new_id = result.get("id")
+            if new_id is not None:
+                # _update_file_sync_state (called above) guarantees the key exists.
+                rom_state = self._save_sync_state["saves"].setdefault(rom_id_str, {"own_upload_ids": []})
+                own_ids: list[int] = rom_state.get("own_upload_ids", [])
+                if new_id not in own_ids:
+                    own_ids.append(new_id)
+                    rom_state["own_upload_ids"] = own_ids
+                    self.save_state()
 
         # Promote local slot to server after successful upload
         if slot:
@@ -1005,6 +1021,7 @@ class SaveService:
         last_sync_at: str | None,
         status: str,
         server_device_id: str | None = None,
+        uploaded_by_us: bool | None = None,
     ) -> dict:
         """Build a file status dict for the frontend."""
         server_device_syncs = server.get("device_syncs", []) if server else []
@@ -1042,6 +1059,7 @@ class SaveService:
             "status": status,
             "device_syncs": device_syncs,
             "is_current": is_current,
+            "uploaded_by_us": uploaded_by_us,
         }
 
     def _get_save_status_io(self, rom_id: int, server_saves: list[dict]) -> dict:
@@ -1057,6 +1075,19 @@ class SaveService:
 
         save_state = self._save_sync_state["saves"].get(rom_id_str, {})
         files_state = save_state.get("files", {})
+
+        # own_upload_ids: None means missing key (legacy entry — unknown attribution).
+        raw_own_ids = save_state.get("own_upload_ids")
+        own_upload_ids: list[int] | None = raw_own_ids if isinstance(raw_own_ids, list) else None
+
+        def _uploaded_by_us(server_save: dict | None) -> bool | None:
+            """Three-way flag: True/False if we know, None if attribution unknown."""
+            if server_save is None or own_upload_ids is None:
+                return None
+            sid = server_save.get("id")
+            if sid is None:
+                return None
+            return sid in own_upload_ids
 
         # Match local files to server saves (same domain logic as _sync_rom_saves).
         # device_id is required so _find_newer_in_slot can distinguish foreign
@@ -1093,6 +1124,7 @@ class SaveService:
                         last_sync_at=files_state.get(m.filename, {}).get("last_sync_at"),
                         status=action,
                         server_device_id=server_device_id,
+                        uploaded_by_us=_uploaded_by_us(server),
                     )
                 )
             elif m.server_save:
@@ -1108,6 +1140,7 @@ class SaveService:
                         last_sync_at=None,
                         status="download",
                         server_device_id=server_device_id,
+                        uploaded_by_us=_uploaded_by_us(m.server_save),
                     )
                 )
             # Surface newer-in-slot warnings (another device uploaded a newer
@@ -2184,6 +2217,11 @@ class SaveService:
             return []
         base_name = tracked_save.get("file_name_no_tags") or tracked_save.get("file_name", "")
 
+        # Resolve own_upload_ids for attribution — None means legacy state (unknown).
+        rom_state = self._save_sync_state["saves"].get(rom_id_str, {})
+        raw = rom_state.get("own_upload_ids")
+        own_upload_ids: list[int] | None = raw if isinstance(raw, list) else None
+
         # Filter to saves with the same base name, excluding the tracked one
         versions = [
             {
@@ -2193,6 +2231,7 @@ class SaveService:
                 "updated_at": s.get("updated_at", ""),
                 "file_size_bytes": s.get("file_size_bytes"),
                 "device_syncs": s.get("device_syncs", []),
+                "uploaded_by_us": (s["id"] in own_upload_ids) if own_upload_ids is not None else None,
             }
             for s in server_saves
             if (s.get("file_name_no_tags") or s.get("file_name", "")) == base_name and s.get("id") != tracked_id

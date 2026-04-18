@@ -4449,6 +4449,53 @@ class TestListFileVersions:
         assert len(entry["device_syncs"]) == 1
         assert entry["device_syncs"][0]["device_name"] == "steamdeck"
 
+    @pytest.mark.asyncio
+    async def test_list_file_versions_populates_uploaded_by_us(self, tmp_path):
+        """uploaded_by_us is True for IDs in own_upload_ids, False for others."""
+        svc, fake = make_service(tmp_path)
+
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-05T10:00:00Z")
+        fake.saves[30] = _server_save(save_id=30, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
+
+        svc._save_sync_state["saves"]["42"] = {
+            "system": "gba",
+            "active_slot": "default",
+            "own_upload_ids": [50],
+            "files": {
+                "pokemon.srm": {"tracked_save_id": 100},
+            },
+        }
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert len(result) == 2
+        by_id = {v["id"]: v for v in result}
+        assert by_id[50]["uploaded_by_us"] is True
+        assert by_id[30]["uploaded_by_us"] is False
+
+    @pytest.mark.asyncio
+    async def test_list_file_versions_legacy_state_returns_none(self, tmp_path):
+        """When rom state has no own_upload_ids key, uploaded_by_us is None for all versions."""
+        svc, fake = make_service(tmp_path)
+
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-05T10:00:00Z")
+
+        svc._save_sync_state["saves"]["42"] = {
+            "system": "gba",
+            "active_slot": "default",
+            # own_upload_ids key intentionally absent — legacy state
+            "files": {
+                "pokemon.srm": {"tracked_save_id": 100},
+            },
+        }
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert len(result) == 1
+        assert result[0]["uploaded_by_us"] is None
+
 
 # ---------------------------------------------------------------------------
 # TestRollbackToVersion
@@ -4878,3 +4925,162 @@ class TestDeleteSlot:
 
         assert result["success"] is False
         assert result["reason"] == "disabled"
+
+
+# ---------------------------------------------------------------------------
+# TestOwnUploadIds
+# ---------------------------------------------------------------------------
+
+
+class TestOwnUploadIds:
+    """Tests for own_upload_ids tracking and the uploaded_by_us flag."""
+
+    @pytest.mark.asyncio
+    async def test_post_upload_appends_own_upload_id(self, tmp_path):
+        """After a POST upload (new save), the returned save_id is added to own_upload_ids."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        # No pre-existing server save — this will be a POST (save_id=None)
+        await svc.sync_rom_saves(42)
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        returned_id = upload_calls[0][2]["save_id"]  # save_id kwarg from upload_save call
+        # The save_id passed to upload_save should be None (POST path)
+        assert returned_id is None
+
+        rom_state = svc._save_sync_state["saves"]["42"]
+        own_ids = rom_state.get("own_upload_ids", [])
+        assert len(own_ids) == 1
+        # The id in the list must match what fake returned
+        new_save_id = next(iter(fake.saves.values()))["id"]
+        assert new_save_id in own_ids
+
+    @pytest.mark.asyncio
+    async def test_post_upload_idempotent_in_own_list(self, tmp_path):
+        """Calling _do_upload_save twice with the same resulting save_id does not duplicate."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        save_file = _create_save(tmp_path)
+
+        # Pre-populate own_upload_ids with the id that fake will return (1000)
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {},
+            "system": "gba",
+            "active_slot": "default",
+            "own_upload_ids": [1000],
+        }
+        # Fake will return the same id=1000 because filename matches existing
+        fake.saves[1000] = _server_save(save_id=1000, rom_id=42)
+
+        # Call internal upload with no server_save (POST path)
+        svc._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=None)
+
+        rom_state = svc._save_sync_state["saves"]["42"]
+        # Should still have exactly one entry for that id
+        assert rom_state["own_upload_ids"].count(1000) == 1
+
+    @pytest.mark.asyncio
+    async def test_put_upload_does_not_touch_own_list(self, tmp_path):
+        """Updating an existing tracked save (PUT path) does not modify own_upload_ids."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        save_file = _create_save(tmp_path)
+
+        # Pre-existing server save (id=100) — upload_save called with save_id=100 → PUT
+        fake.saves[100] = _server_save(save_id=100, rom_id=42)
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "old"}},
+            "system": "gba",
+            "active_slot": "default",
+            "own_upload_ids": [99],  # pre-existing unrelated id
+        }
+
+        server_save = fake.saves[100]
+        svc._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=server_save)
+
+        rom_state = svc._save_sync_state["saves"]["42"]
+        # own_upload_ids must not have changed (100 not added, 99 still there)
+        assert rom_state["own_upload_ids"] == [99]
+
+    @pytest.mark.asyncio
+    async def test_get_save_status_flags_own_uploads(self, tmp_path):
+        """Save 26 (ours) gets uploaded_by_us=True; save 27 (foreign) gets uploaded_by_us=False."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+
+        # Two server saves: 26 and 27
+        fake.saves[26] = _server_save(save_id=26, rom_id=42, filename="pokemon.srm")
+        fake.saves[27] = _server_save(save_id=27, rom_id=42, filename="pokemon2.srm")
+
+        # ROM state: own_upload_ids includes only 26
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {},
+            "system": "gba",
+            "active_slot": None,
+            "own_upload_ids": [26],
+        }
+
+        result = await svc.get_save_status(42)
+
+        files_by_id: dict[int, dict] = {f["server_save_id"]: f for f in result["files"] if f.get("server_save_id")}
+        assert files_by_id[26]["uploaded_by_us"] is True
+        assert files_by_id[27]["uploaded_by_us"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_save_status_legacy_rom_state_returns_none(self, tmp_path):
+        """When rom state exists but own_upload_ids key is absent, uploaded_by_us is None."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+
+        fake.saves[26] = _server_save(save_id=26, rom_id=42, filename="pokemon.srm")
+
+        # Legacy state: own_upload_ids key is absent
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {},
+            "system": "gba",
+            "active_slot": None,
+            # no own_upload_ids key
+        }
+
+        result = await svc.get_save_status(42)
+
+        files_by_id = {f["server_save_id"]: f for f in result["files"] if f.get("server_save_id")}
+        assert files_by_id[26]["uploaded_by_us"] is None
+
+    @pytest.mark.asyncio
+    async def test_rollback_to_foreign_version_preserves_own_upload_ids(self, tmp_path):
+        """Rolling back to a foreign save (not in own_upload_ids) does not modify own_upload_ids."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+
+        save_file = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_file))
+
+        # own save is 26, tracked is 26 (clean state)
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {
+                "pokemon.srm": {
+                    "tracked_save_id": 26,
+                    "last_sync_hash": local_hash,
+                }
+            },
+            "system": "gba",
+            "active_slot": "default",
+            "own_upload_ids": [26],
+        }
+        fake.saves[26] = _server_save(save_id=26, rom_id=42, slot="default")
+        # Foreign older version to roll back to
+        fake.saves[27] = _server_save(save_id=27, rom_id=42, slot="default", updated_at="2026-01-01T00:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 27)
+
+        assert result["status"] == "ok"
+        # own_upload_ids must be unchanged — 27 was not POSTed by us
+        rom_state = svc._save_sync_state["saves"]["42"]
+        assert rom_state["own_upload_ids"] == [26]

@@ -315,6 +315,7 @@ export interface SaveFileStatus {
   status: "skip" | "download" | "upload" | "conflict" | "synced" | "unknown";
   device_syncs?: DeviceSyncInfo[];
   is_current?: boolean;
+  uploaded_by_us?: boolean | null;
 }
 
 export interface PlaytimeEntry {

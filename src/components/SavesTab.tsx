@@ -76,6 +76,17 @@ function pickLastSyncer(syncs: DeviceSyncInfo[] | undefined): DeviceSyncInfo | n
   }, null);
 }
 
+/**
+ * Return an attribution label based on the uploaded_by_us flag, or null if unknown.
+ * NOTE: "this device" is really "this plugin installation" — if state.json is
+ * copied to another machine, the label would incorrectly claim local ownership.
+ */
+function attributionLabel(uploadedByUs: boolean | null | undefined): string | null {
+  if (uploadedByUs === true) return "(this device)";
+  if (uploadedByUs === false) return "(not this device)";
+  return null;
+}
+
 /** Map a save file status to color and label */
 function statusLabel(status: string, lastSyncAt: string | null): { color: string; label: string } {
   switch (status) {
@@ -129,7 +140,6 @@ interface VersionHistoryPanelProps {
   filename: string;
   isOffline: boolean;
   onRestored: () => void;
-  ourDeviceId: string;
 }
 
 const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
@@ -138,7 +148,6 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
   filename,
   isOffline,
   onRestored,
-  ourDeviceId,
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [versions, setVersions] = useState<SaveVersionEntry[] | null>(null);
@@ -221,11 +230,20 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
     if (v.emulator) headerParts.push(v.emulator);
     if (v.file_size_bytes != null) headerParts.push(formatBytes(v.file_size_bytes));
 
-    // Line 2: Last updated: <timestamp>[ · <device> (this/other device) ✓]
+    // Line 2: Last updated: <timestamp>[ · <device label> ✓]
+    // uploaded_by_us=true  → "<deviceName> (this device) ✓"
+    // uploaded_by_us=false → "(not this device) ✓"  (no device name — lastSyncer is our own record)
+    // uploaded_by_us=null  → "<deviceName> ✓" if device name known, else "✓"  (unknown / legacy)
     const lastUpdatedParts: string[] = [formatTimestamp(v.updated_at)];
-    if (deviceName) {
-      const deviceLabel = lastSyncer?.device_id === ourDeviceId ? "(this device)" : "(other device)";
-      lastUpdatedParts.push(`${deviceName} ${deviceLabel} \u2713`);
+    const attrLabel = attributionLabel(v.uploaded_by_us);
+    if (v.uploaded_by_us === true && deviceName) {
+      lastUpdatedParts.push(`${deviceName} ${attrLabel} \u2713`);
+    } else if (v.uploaded_by_us === true) {
+      lastUpdatedParts.push(`${attrLabel} \u2713`);
+    } else if (v.uploaded_by_us === false) {
+      lastUpdatedParts.push(`${attrLabel} \u2713`);
+    } else if (attrLabel === null) {
+      lastUpdatedParts.push(deviceName ? `${deviceName} \u2713` : `\u2713`);
     }
 
     return createElement("div", {
@@ -366,7 +384,6 @@ function renderSaveFileRow(
   f: SaveFileStatus,
   conflict: PendingConflict | undefined,
   lastSyncCheckAt: string | null,
-  ourDeviceId: string,
 ): ReturnType<typeof createElement> {
   const { color, label } = statusLabel(f.status, f.last_sync_at);
   const syncTime = lastSyncCheckAt || f.last_sync_at;
@@ -387,16 +404,25 @@ function renderSaveFileRow(
     style: { color, fontSize: "11px", fontWeight: 600 },
   }, label));
 
-  // Last synced value: "just now · steamdeck ✓"
+  // Last synced value: "just now · <attribution> ✓"
+  // uploaded_by_us=true  → "<deviceName> (this device) ✓"
+  // uploaded_by_us=false → "(not this device) ✓"  (no device name)
+  // uploaded_by_us=null  → "<deviceName> ✓" if device name known, else "✓"  (unknown / legacy)
   const lastSyncedPieces: string[] = [];
   if (syncTime) {
     lastSyncedPieces.push(formatRelativeTime(syncTime) || "Never");
   } else {
     lastSyncedPieces.push("Never");
   }
-  if (lastSyncer?.device_name) {
-    const deviceLabel = lastSyncer.device_id === ourDeviceId ? "(this device)" : "(other device)";
-    lastSyncedPieces.push(`${lastSyncer.device_name} ${deviceLabel} \u2713`);
+  const attrLabel = attributionLabel(f.uploaded_by_us);
+  if (f.uploaded_by_us === true && lastSyncer?.device_name) {
+    lastSyncedPieces.push(`${lastSyncer.device_name} ${attrLabel} \u2713`);
+  } else if (f.uploaded_by_us === true) {
+    lastSyncedPieces.push(`${attrLabel} \u2713`);
+  } else if (f.uploaded_by_us === false) {
+    lastSyncedPieces.push(`${attrLabel} \u2713`);
+  } else if (attrLabel === null) {
+    lastSyncedPieces.push(lastSyncer?.device_name ? `${lastSyncer.device_name} \u2713` : `\u2713`);
   }
   if (f.is_current === false) {
     lastSyncedPieces.push("Newer version available on server");
@@ -548,13 +574,12 @@ function renderActiveSlotBody(
   slot: string,
   isOffline: boolean,
   onVersionRestored: () => void,
-  ourDeviceId: string,
 ): (ReturnType<typeof createElement> | null)[] {
   if (saveStatus && saveStatus.files.length > 0) {
     return saveStatus.files.map((f) => {
       const conflict = conflicts.find((c) => c.filename === f.filename);
       return createElement("div", { key: f.filename },
-        renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at, ourDeviceId),
+        renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
         createElement(VersionHistoryPanel, {
           key: `vhp-${f.filename}`,
           romId,
@@ -562,7 +587,6 @@ function renderActiveSlotBody(
           filename: f.filename,
           isOffline,
           onRestored: onVersionRestored,
-          ourDeviceId,
         }),
       );
     });
@@ -649,7 +673,6 @@ interface SlotPanelProps {
   saveStatus: SaveStatus | null;
   conflicts: PendingConflict[];
   isOffline: boolean;
-  ourDeviceId: string;
   // Callbacks
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
   onVersionRestored: () => void;
@@ -664,7 +687,6 @@ const SlotPanel: FC<SlotPanelProps> = ({
   saveStatus,
   conflicts,
   isOffline,
-  ourDeviceId,
   onSlotSwitched,
   onVersionRestored,
   onSlotDeleted,
@@ -844,7 +866,7 @@ const SlotPanel: FC<SlotPanelProps> = ({
   let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
   if (expanded) {
     bodyChildren = isActive
-      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored, ourDeviceId)
+      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored)
       : renderInactiveSlotBody({ loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting });
   }
 
@@ -1014,8 +1036,6 @@ export const SavesTab: FC<SavesTabProps> = ({
     );
   };
 
-  const ourDeviceId = saveStatus?.device_id ?? "";
-
   // --- Legacy mode: show save files directly (not in a slot panel) ---
   let legacyFilesSection: ReturnType<typeof createElement> | null = null;
   if (activeSlot === null) {
@@ -1023,7 +1043,7 @@ export const SavesTab: FC<SavesTabProps> = ({
       legacyFilesSection = createElement("div", { key: "legacy-files", style: { marginBottom: "12px" } },
         ...saveStatus.files.map((f) => {
           const conflict = conflicts.find((c) => c.filename === f.filename);
-          return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at, ourDeviceId);
+          return renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at);
         }),
       );
     } else {
@@ -1058,7 +1078,6 @@ export const SavesTab: FC<SavesTabProps> = ({
           saveStatus: isActive ? saveStatus : null,
           conflicts: isActive ? conflicts : [],
           isOffline,
-          ourDeviceId,
           onSlotSwitched,
           onVersionRestored: handleVersionRestored,
           onSlotDeleted: handleSlotDeleted,
