@@ -10,6 +10,7 @@ import { isRomMAppId } from "../patches/gameDetailPatch";
 import { getInstalledRom, getSaveStatus, getSaveSyncSettings, refreshMigrationState, logInfo, logError } from "../api/backend";
 import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
+import { hasAnySaveConflict } from "./saveStatus";
 
 let gameActionHook: { unregister: () => void } | null = null;
 
@@ -54,7 +55,7 @@ export function registerLaunchInterceptor(): void {
           const settings = await getSaveSyncSettings();
           if (settings.conflict_mode === "ask_me") {
             const saveStatus = await getSaveStatus(rom.rom_id);
-            const hasConflict = saveStatus?.files?.some((f: any) => f.status === "conflict") ?? false;
+            const hasConflict = hasAnySaveConflict(saveStatus);
             if (hasConflict) {
               SteamClient.Apps.CancelGameAction(gameActionId);
               toaster.toast({

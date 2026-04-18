@@ -17,6 +17,7 @@ import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
+import { hasAnySaveConflict } from "./utils/saveStatus";
 import { getAllMetadataCache, getAppIdRomIdMap, ensureDeviceRegistered, getSaveSyncSettings, getAllPlaytime, getMigrationStatus, getSaveSortMigrationStatus, testConnection, logError, logInfo } from "./api/backend";
 import { createOrUpdateCollections, createOrUpdateRomMCollections, clearPlatformCollection, getHostname } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
@@ -336,7 +337,7 @@ export default definePlugin(() => {
   const saveStatusListener = addEventListener<[SaveStatus]>(
     "save_status_updated",
     (data: SaveStatus) => {
-      const hasConflict = data.files?.some((f) => f.status === "conflict") ?? false;
+      const hasConflict = hasAnySaveConflict(data);
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
         detail: { type: "save_sync", rom_id: data.rom_id, save_status: data, has_conflict: hasConflict },
       }));

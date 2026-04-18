@@ -1462,6 +1462,8 @@ class SaveService:
         msg = f"Uploaded {synced} save(s)"
         if errors:
             msg += f", {len(errors)} error(s)"
+        if conflicts:
+            msg += f", {len(conflicts)} conflict(s)"
         return {
             "success": len(errors) == 0,
             "message": msg,
@@ -1492,6 +1494,8 @@ class SaveService:
         msg = f"Synced {synced} save(s)"
         if errors:
             msg += f", {len(errors)} error(s)"
+        if conflicts:
+            msg += f", {len(conflicts)} conflict(s)"
         return {
             "success": len(errors) == 0,
             "message": msg,

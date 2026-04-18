@@ -23,6 +23,7 @@ import {
   basicAppDetailsSectionStylerClasses,
 } from "@decky/ui";
 import { hideNativePlaySection, showNativePlaySection } from "../utils/styleInjector";
+import { hasAnySaveConflict } from "../utils/saveStatus";
 import {
   getCachedGameDetail,
   startDownload,
@@ -158,7 +159,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
           setState("download");
         } else {
           // Check for conflicts from cached save status
-          const hasConflict = cached.save_status?.files?.some((f) => f.status === "conflict") ?? false;
+          const hasConflict = hasAnySaveConflict(cached.save_status);
           if (hasConflict) {
             debugLog(`CustomPlayButton: -> conflict (from cache)`);
             setState("conflict");

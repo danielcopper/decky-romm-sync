@@ -901,6 +901,32 @@ class TestSyncRomSaves:
         assert call_order.count("detect") == 1
         assert call_order.index("detect") < call_order.index("sync")
 
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_message_includes_conflict_count(self, tmp_path):
+        """Public sync_rom_saves must surface conflict count in its message.
+
+        Previously reported "Synced 0 save(s)" even with conflicts present,
+        which reads as success — user had no signal that manual intervention
+        was needed.
+        """
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "test-device"
+        _install_rom(svc, tmp_path)
+
+        # Stub _sync_rom_saves to return 1 conflict, 0 synced, 0 errors
+        def stub_sync(rom_id):
+            return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
+
+        svc._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.sync_rom_saves(42)
+
+        # success is still True — conflicts are legitimate state, not technical failure
+        assert result["success"] is True
+        assert "1 conflict(s)" in result["message"]
+        assert result["synced"] == 0
+
 
 # ---------------------------------------------------------------------------
 # TestSyncAllSaves
@@ -992,6 +1018,31 @@ class TestSyncAllSaves:
         # detect fired exactly once, before any per-ROM sync ran.
         assert call_order.count("detect") == 1
         assert call_order.index("detect") < call_order.index("sync")
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_success_stays_true_with_only_conflicts(self, tmp_path):
+        """Regression guard: success flag reflects errors only, not conflicts.
+
+        Conflicts are a legitimate state requiring user resolution — not a
+        technical failure. Frontend distinguishes via conflicts count; success
+        flag must stay reserved for actual errors.
+        """
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "test-device"
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+
+        # Stub internal sync to produce conflicts but no errors
+        def stub_sync(rom_id):
+            return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
+
+        svc._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.sync_all_saves()
+
+        assert result["success"] is True
+        assert result["conflicts"] >= 1
+        assert "conflict(s)" in result["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -1182,6 +1233,29 @@ class TestPostExitSync:
 
         assert result["success"] is True
         assert result["synced"] == 1
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_message_includes_conflict_count(self, tmp_path):
+        """post_exit_sync must surface conflict count in its message.
+
+        Previously "Uploaded 0 save(s)" even with conflicts — user has no
+        signal that sync is blocked on manual resolution.
+        """
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "test-device"
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id):
+            return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
+
+        svc._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is True
+        assert "1 conflict(s)" in result["message"]
+        assert result["synced"] == 0
 
 
 # ---------------------------------------------------------------------------

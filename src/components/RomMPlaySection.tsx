@@ -25,6 +25,7 @@ import {
 } from "@decky/ui";
 import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
+import { hasAnySaveConflict } from "../utils/saveStatus";
 import {
   getCachedGameDetail,
   _cachedGameDetailCache,
@@ -174,7 +175,7 @@ function getBiosLevel(bios: BiosStatus): "ok" | "partial" | "missing" {
 
 /** Compute save sync display status and label from a SaveStatus response */
 function computeSaveSyncDisplay(saveStatus: SaveStatus | null): { status: "synced" | "conflict" | "none"; label: string } {
-  const hasConflict = saveStatus?.files?.some((f) => f.status === "conflict") ?? false;
+  const hasConflict = hasAnySaveConflict(saveStatus);
   if (hasConflict) return { status: "conflict", label: "Conflict" };
 
   const hasLocalFiles = saveStatus?.files?.some((f) => f.local_path || f.status === "synced" || f.status === "upload") ?? false;
@@ -457,7 +458,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       try {
         const saveStatus = await getSaveStatus(romId);
         if (isCancelled) return;
-        const hasConflict = saveStatus?.files?.some((f: { status: string }) => f.status === "conflict") ?? false;
+        const hasConflict = hasAnySaveConflict(saveStatus);
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
           detail: { type: "save_sync", rom_id: romId, has_conflict: hasConflict },
         }));
