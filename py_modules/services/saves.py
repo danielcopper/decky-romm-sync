@@ -56,6 +56,24 @@ if TYPE_CHECKING:
 _SYNC_DISABLED_MSG = "Save sync is disabled"
 
 
+def _compute_uploaded_by_us(
+    server_save: dict | None,
+    own_upload_ids: list[int] | None,
+) -> bool | None:
+    """Three-way uploader attribution flag.
+
+    Returns True/False when own_upload_ids is known for this ROM (we can tell
+    whether this installation POSTed the save), or None for legacy ROM state
+    without the ``own_upload_ids`` field (attribution unknown).
+    """
+    if server_save is None or own_upload_ids is None:
+        return None
+    sid = server_save.get("id")
+    if sid is None:
+        return None
+    return sid in own_upload_ids
+
+
 class SaveService:
     """Bidirectional save file sync between local RetroDECK and RomM server.
 
@@ -647,19 +665,8 @@ class SaveService:
             rom_id_str, filename, result, file_path, system, emulator_tag=emulator, core_so=core_so
         )
 
-        # Track saves we POSTed ourselves (new saves only, not updates).
-        # NOTE: This assumes POST = brand-new save. If RomM ever changes POST to
-        # upsert-by-filename semantics, this block would need revisiting.
         if is_post:
-            new_id = result.get("id")
-            if new_id is not None:
-                # _update_file_sync_state (called above) guarantees the key exists.
-                rom_state = self._save_sync_state["saves"].setdefault(rom_id_str, {"own_upload_ids": []})
-                own_ids: list[int] = rom_state.get("own_upload_ids", [])
-                if new_id not in own_ids:
-                    own_ids.append(new_id)
-                    rom_state["own_upload_ids"] = own_ids
-                    self.save_state()
+            self._record_own_upload(rom_id_str, result.get("id"))
 
         # Promote local slot to server after successful upload
         if slot:
@@ -680,6 +687,23 @@ class SaveService:
 
         self._log_debug(f"Uploaded save: {filename} for rom {rom_id_str} (emulator={emulator})")
         return result
+
+    def _record_own_upload(self, rom_id_str: str, new_id: int | None) -> None:
+        """Track a save_id we POSTed ourselves for uploader attribution.
+
+        POST = brand-new save; PUT updates an existing tracked save without
+        changing ownership. Assumes POST is not upsert-by-filename on the
+        server — if RomM ever changes that, revisit this tracker.
+        """
+        if new_id is None:
+            return
+        rom_state = self._save_sync_state["saves"].setdefault(rom_id_str, {"own_upload_ids": []})
+        own_ids: list[int] = rom_state.get("own_upload_ids", [])
+        if new_id in own_ids:
+            return
+        own_ids.append(new_id)
+        rom_state["own_upload_ids"] = own_ids
+        self.save_state()
 
     def _sync_single_save_file(
         self,
@@ -1080,15 +1104,6 @@ class SaveService:
         raw_own_ids = save_state.get("own_upload_ids")
         own_upload_ids: list[int] | None = raw_own_ids if isinstance(raw_own_ids, list) else None
 
-        def _uploaded_by_us(server_save: dict | None) -> bool | None:
-            """Three-way flag: True/False if we know, None if attribution unknown."""
-            if server_save is None or own_upload_ids is None:
-                return None
-            sid = server_save.get("id")
-            if sid is None:
-                return None
-            return sid in own_upload_ids
-
         # Match local files to server saves (same domain logic as _sync_rom_saves).
         # device_id is required so _find_newer_in_slot can distinguish foreign
         # saves from our own.
@@ -1124,7 +1139,7 @@ class SaveService:
                         last_sync_at=files_state.get(m.filename, {}).get("last_sync_at"),
                         status=action,
                         server_device_id=server_device_id,
-                        uploaded_by_us=_uploaded_by_us(server),
+                        uploaded_by_us=_compute_uploaded_by_us(server, own_upload_ids),
                     )
                 )
             elif m.server_save:
@@ -1140,7 +1155,7 @@ class SaveService:
                         last_sync_at=None,
                         status="download",
                         server_device_id=server_device_id,
-                        uploaded_by_us=_uploaded_by_us(m.server_save),
+                        uploaded_by_us=_compute_uploaded_by_us(m.server_save, own_upload_ids),
                     )
                 )
             # Surface newer-in-slot warnings (another device uploaded a newer
@@ -1549,16 +1564,7 @@ class SaveService:
                 "latest_updated_at": (s.get("latest") or {}).get("updated_at"),
             }
 
-        # Keep local slots that are NOT on server
-        for name, info in persisted_slots.items():
-            if name not in merged:
-                if info.get("source") == "local":
-                    # Still local — keep it
-                    merged[name] = {"source": "local", "count": 0, "latest_updated_at": None}
-                # If it was "server" but is gone from server now — drop it
-                # (unless it's the active_slot)
-                elif info.get("source") == "server" and name == (active_slot or ""):
-                    merged[name] = {"source": "server", "count": 0, "latest_updated_at": None}
+        self._merge_persisted_slots(persisted_slots, merged, active_slot)
 
         # Persist merged slots in state
         game_entry = self._save_sync_state.setdefault("saves", {}).setdefault(rom_id_str, {})
@@ -1577,6 +1583,27 @@ class SaveService:
         ]
 
         return {"success": True, "slots": result_slots, "active_slot": active_slot}
+
+    @staticmethod
+    def _merge_persisted_slots(
+        persisted: dict[str, dict],
+        merged: dict[str, dict],
+        active_slot: str | None,
+    ) -> None:
+        """Add persisted local slots (or the active slot) that aren't on the server.
+
+        Mutates ``merged`` in place. Local slots are always kept. A persisted
+        server slot that's gone from the server is dropped unless it's the
+        active slot — we want to keep the UI functional until the user
+        explicitly switches away.
+        """
+        for name, info in persisted.items():
+            if name in merged:
+                continue
+            if info.get("source") == "local":
+                merged[name] = {"source": "local", "count": 0, "latest_updated_at": None}
+            elif info.get("source") == "server" and name == (active_slot or ""):
+                merged[name] = {"source": "server", "count": 0, "latest_updated_at": None}
 
     async def get_slot_saves(self, rom_id: int, slot: str) -> dict:
         """Fetch server save files for a specific slot.

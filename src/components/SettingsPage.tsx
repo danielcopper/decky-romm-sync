@@ -811,11 +811,12 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
             </PanelSectionRow>
           )}
           {!devicesLoading && !devicesError && registeredDevices !== null && registeredDevices.map((device, i) => {
-            const clientLine = `${device.client ?? "unknown client"} v${device.client_version ?? "?"}`;
-            const parts: string[] = [clientLine];
-            if (device.platform) parts.push(device.platform);
-            parts.push(`last seen ${formatRelativeTime(device.last_seen)}`);
-            parts.push(`ID ${String(device.id ?? "").slice(0, 8) || "—"}`);
+            const parts: string[] = [
+              `${device.client ?? "unknown client"} v${device.client_version ?? "?"}`,
+              ...(device.platform ? [device.platform] : []),
+              `last seen ${formatRelativeTime(device.last_seen)}`,
+              `ID ${String(device.id ?? "").slice(0, 8) || "—"}`,
+            ];
             return (
               <PanelSectionRow key={device.id || `idx-${i}`}>
                 <Field
