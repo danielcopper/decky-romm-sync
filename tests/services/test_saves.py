@@ -835,6 +835,7 @@ class TestSyncRomSaves:
         # Upload went through.
         assert any(c[0] == "upload_save" for c in fake.call_log)
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_sync_rom_saves_resolves_matched_pairs_during_pending_migration(self, tmp_path):
         """matched pairs (local + server) must still resolve normally during pending migration (#238)."""
         svc, fake = make_service(tmp_path)
@@ -1406,6 +1407,7 @@ class TestSaveStatus:
         assert "conflicts" in result
         assert result["conflicts"] == []
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_get_save_status_conflicts_populated_when_conflict_detected(self, tmp_path):
         """When local and server both exist but never synced, conflicts list is populated."""
@@ -1423,6 +1425,7 @@ class TestSaveStatus:
         assert result["conflicts"][0]["filename"] == "pokemon.srm"
         assert result["conflicts"][0]["rom_id"] == 42
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_get_save_status_conflicts_has_required_fields(self, tmp_path):
         """Conflict entries include all fields needed for resolution."""
@@ -3097,6 +3100,7 @@ class TestConfirmSlotChoice:
 class TestTrackedSaveIdMatching:
     """Tests that sync uses tracked_save_id to match server saves instead of filename."""
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_upload_uses_tracked_save_id_for_put(self, tmp_path):
         """When tracked_save_id exists, upload does PUT (update) not POST (new)."""
         svc, fake = make_service(tmp_path)
@@ -3232,6 +3236,7 @@ class TestTrackedSaveIdMatching:
         # The local filename should appear
         assert "pokemon.srm" in filenames
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_fallback_matches_newest_server_save_when_no_tracked_id(self, tmp_path):
         """When tracked_save_id is missing, match the newest server save in active slot."""
         svc, fake = make_service(tmp_path)
@@ -3331,6 +3336,7 @@ class TestTrackedSaveIdMatching:
         assert "pokemon [old].srm" not in filenames
         assert "pokemon [new].srm" not in filenames
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_fallback_skips_already_matched_server_saves(self, tmp_path):
         """Fallback should not match a server save already matched by another local file."""
         svc, fake = make_service(tmp_path)
@@ -3509,6 +3515,7 @@ class TestOlderVersionSkipping:
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_newer_unmatched_save_not_skipped(self, tmp_path):
         """If an unmatched server save is NEWER than the matched one, don't skip it."""
         svc, fake = make_service(tmp_path)
@@ -3639,6 +3646,7 @@ class TestNewerInSlotConflict:
         }
         return tracked
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_newer_in_slot_surfaces_conflict(self, tmp_path):
         """When a newer save from another device exists, a newer_in_slot conflict is surfaced."""
         svc, fake = make_service(tmp_path)
@@ -3697,6 +3705,7 @@ class TestNewerInSlotConflict:
         newer_conflicts = [c for c in conflicts if isinstance(c, dict) and c.get("type") == "newer_in_slot"]
         assert len(newer_conflicts) == 0
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_dismissed_does_not_suppress_even_newer_save(self, tmp_path):
         """A dismissed ID does NOT suppress a conflict from an even newer save."""
         svc, fake = make_service(tmp_path)
@@ -5113,6 +5122,7 @@ class TestOwnUploadIds:
         # own_upload_ids must not have changed (100 not added, 99 still there)
         assert rom_state["own_upload_ids"] == [99]
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_get_save_status_flags_own_uploads(self, tmp_path):
         """Save 26 (ours) gets uploaded_by_us=True; save 27 (foreign) gets uploaded_by_us=False."""

@@ -647,11 +647,8 @@ class Plugin:
     async def sync_all_saves(self):
         return await self._save_sync_service.sync_all_saves()
 
-    async def resolve_conflict(self, rom_id, filename, resolution, server_save_id=None, local_path=None):
-        return await self._save_sync_service.resolve_conflict(rom_id, filename, resolution, server_save_id, local_path)
-
-    async def resolve_newer_in_slot(self, rom_id, filename, resolution, newer_save_id):
-        return await self._save_sync_service.resolve_newer_in_slot(rom_id, filename, resolution, newer_save_id)
+    async def resolve_sync_conflict(self, rom_id, filename, action):
+        return await self._save_sync_service.resolve_sync_conflict(rom_id, filename, action)
 
     async def get_save_sync_settings(self):
         return self._save_sync_service.get_save_sync_settings()
