@@ -344,7 +344,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
               return;
             }
           } else if (result.synced && result.synced > 0) {
-            toaster.toast({ title: "RomM Save Sync", body: "Saves downloaded from RomM" });
+            toaster.toast({ title: "RomM Save Sync", body: "Saves synced with RomM" });
           }
         } catch (e) {
           debugLog(`CustomPlayButton: pre-launch sync failed: ${e}`);

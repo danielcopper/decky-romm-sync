@@ -124,7 +124,7 @@ async function handleGameStop(): Promise<void> {
       window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
     } else if (result.success) {
       if (result.synced && result.synced > 0) {
-        toaster.toast({ title: "RomM Save Sync", body: "Saves uploaded to RomM" });
+        toaster.toast({ title: "RomM Save Sync", body: "Saves synced with RomM" });
       }
       window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
     } else {
