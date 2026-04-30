@@ -745,6 +745,7 @@ class TestSyncRomSaves:
         saves_dir = tmp_path / "saves" / "gba"
         assert (saves_dir / "pokemon.srm").exists()
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_matching_saves_skip(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
@@ -3469,6 +3470,7 @@ class TestTrackedSaveIdMatching:
 class TestOlderVersionSkipping:
     """Older stacked versions in the same slot must not be downloaded."""
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_older_versions_skipped_during_sync(self, tmp_path):
         """After uploading to tracked id=18, older id=16/17 in same slot must not download."""
         svc, fake = make_service(tmp_path)
@@ -3671,6 +3673,7 @@ class TestNewerInSlotConflict:
         assert newer_conflicts[0]["filename"] == "pokemon.srm"
         assert newer_conflicts[0]["slot"] == "default"
 
+    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
     def test_newer_in_slot_skips_normal_sync(self, tmp_path):
         """When newer_in_slot conflict is surfaced, normal sync is skipped for that file."""
         svc, fake = make_service(tmp_path)

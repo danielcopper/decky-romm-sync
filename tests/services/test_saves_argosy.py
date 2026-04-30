@@ -218,47 +218,17 @@ class TestSyncRomSavesDispatch:
         saves_dir = tmp_path / "saves" / "gba"
         assert (saves_dir / "pokemon.srm").exists()
 
-    def test_sync_rom_saves_skip_when_deferred_unchanged(self, tmp_path):
-        """deferred matches current server.id+updated_at → Skip, no I/O."""
+    def test_sync_rom_saves_upload_put_when_local_diverged(self, tmp_path):
+        """is_current=true + local hash diverges from baseline → Upload (PUT)
+        against the existing tracked save id (Row 9)."""
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
-        _create_save(tmp_path, content=b"local content")
+        save_path = _create_save(tmp_path, content=b"diverged offline")
+        local_hash = _file_md5(str(save_path))
 
         ss = _server_save_with_syncs(
-            device_syncs=[{"device_id": "device-1", "is_current": False}],
-        )
-        fake.saves[100] = ss
-
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "deferred": {
-                        "server_save_id": 100,
-                        "server_updated_at": ss["updated_at"],
-                        "deferred_at": "2026-02-18T00:00:00Z",
-                    }
-                }
-            }
-        }
-
-        synced, errors, conflicts = svc._sync_rom_saves(42)
-
-        assert synced == 0
-        assert errors == []
-        assert conflicts == []
-        assert not any(c[0] in ("upload_save", "download_save_content", "download_save") for c in fake.call_log)
-
-    def test_sync_rom_saves_conflict_when_deferred_server_changed(self, tmp_path):
-        """deferred record exists but server.updated_at moved → Conflict re-fires."""
-        svc, fake = make_service(tmp_path)
-        _enable_sync_with_device(svc)
-        _install_rom(svc, tmp_path)
-        save_path = _create_save(tmp_path, content=b"local content")
-
-        ss = _server_save_with_syncs(
-            updated_at="2026-03-01T06:00:00Z",
-            device_syncs=[{"device_id": "device-1", "is_current": False}],
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
         )
         fake.saves[100] = ss
 
@@ -266,27 +236,124 @@ class TestSyncRomSavesDispatch:
             "files": {
                 "pokemon.srm": {
                     "tracked_save_id": 100,
-                    "last_sync_hash": "0" * 32,  # local diverges from baseline
-                    "last_sync_server_updated_at": "2026-02-01T00:00:00Z",
-                    "deferred": {
-                        "server_save_id": 100,
-                        "server_updated_at": "2026-02-01T00:00:00Z",
-                        "deferred_at": "2026-02-02T00:00:00Z",
-                    },
+                    "last_sync_hash": "0" * 32,  # baseline differs from current local
+                    "last_sync_server_updated_at": ss["updated_at"],
                 }
             }
         }
 
         synced, errors, conflicts = svc._sync_rom_saves(42)
 
+        assert synced == 1
+        assert errors == []
+        assert conflicts == []
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # PUT — save_id is the existing server save id
+        assert upload_calls[0][2]["save_id"] == 100
+
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state["last_sync_hash"] == local_hash
+
+    def test_sync_rom_saves_skip_with_adopt_baseline_writes_hash(self, tmp_path):
+        """is_current=true + local present + no baseline → Skip + adopt_baseline:
+        no I/O but state.last_sync_hash gets recorded as local_hash."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"first sync")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        fake.saves[100] = ss
+
+        # No file_state at all — no baseline yet.
+        svc._save_sync_state["saves"]["42"] = {"files": {}}
+
+        synced, errors, conflicts = svc._sync_rom_saves(42)
+
         assert synced == 0
         assert errors == []
-        assert len(conflicts) == 1
-        c = conflicts[0]
-        assert isinstance(c, dict)
-        assert c["type"] == "sync_conflict"
-        assert c["server_updated_at"] == "2026-03-01T06:00:00Z"
-        assert c["local_path"] == str(save_path)
+        assert conflicts == []
+        # No I/O initiated.
+        assert not any(c[0] in ("upload_save", "download_save_content", "download_save") for c in fake.call_log)
+        # Baseline now persisted.
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state["last_sync_hash"] == local_hash
+
+    def test_sync_rom_saves_recovery_download_when_no_local(self, tmp_path):
+        """Row 4 — is_current=true on the picked save but local file is gone →
+        Download to recover."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # No _create_save here — local file is absent.
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        fake.saves[100] = ss
+
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {
+                "pokemon.srm": {
+                    "tracked_save_id": 100,
+                    "last_sync_hash": "abc",
+                    "last_sync_server_updated_at": ss["updated_at"],
+                }
+            }
+        }
+
+        synced, errors, conflicts = svc._sync_rom_saves(42)
+
+        assert synced == 1
+        assert errors == []
+        assert conflicts == []
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert len(download_calls) == 1
+        assert download_calls[0][1][0] == 100
+        saves_dir = tmp_path / "saves" / "gba"
+        assert (saves_dir / "pokemon.srm").exists()
+
+    def test_dispatch_upload_put_targets_correct_save(self, tmp_path):
+        """Dispatcher PUT: target_save_id selects the right server save from
+        the candidate list and uploads against it."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local-edit")
+
+        ss = _server_save_with_syncs(
+            save_id=100,
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        fake.saves[100] = ss
+
+        # Build a state where compute_sync_action emits Upload(target_save_id=100)
+        # via Row 9 (is_current=true + diverged hash).
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {
+                "pokemon.srm": {
+                    "tracked_save_id": 100,
+                    "last_sync_hash": "0" * 32,
+                    "last_sync_server_updated_at": ss["updated_at"],
+                }
+            }
+        }
+
+        synced, errors, conflicts = svc._sync_rom_saves(42)
+
+        assert synced == 1
+        assert errors == []
+        assert conflicts == []
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # PUT — saved against the server save id provided by the algorithm.
+        assert upload_calls[0][2]["save_id"] == 100
+        # Local was not lost.
+        assert save_path.read_bytes() == b"local-edit"
 
     def test_sync_rom_saves_persists_last_sync_check_at(self, tmp_path):
         """Every sync run records last_sync_check_at on the rom-level entry."""

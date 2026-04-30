@@ -1023,6 +1023,7 @@ class SaveService:
         local_hash: str | None,
         saves_dir: str,
         system: str,
+        server_saves: list[dict],
         errors: list[str],
         conflicts: list[SaveConflict | dict],
     ) -> bool:
@@ -1034,21 +1035,37 @@ class SaveService:
         """
         try:
             if isinstance(action, Skip):
-                self._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
+                if action.adopt_baseline and local_hash is not None:
+                    # State-only mutation: write the current local_hash as the
+                    # baseline so future runs can detect drift. No I/O, no
+                    # synced count, no conflict.
+                    self._log_debug(f"_sync_rom_saves({rom_id}): skip + adopt_baseline {filename} ({action.reason})")
+                    self._adopt_baseline_hash(rom_id_str, filename, local_hash)
+                else:
+                    self._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
                 return False
             if isinstance(action, Upload):
-                # Argosy matrix only emits POST (target=None) right now.
-                # PUT-target uploads are reachable only via resolve_sync_conflict.
-                # An int target here is unreachable per the current decision matrix.
-                assert action.target_save_id is None, (
-                    f"compute_sync_action emitted Upload(target_save_id={action.target_save_id}) "
-                    f"but PUT-target uploads are unreachable in current matrix; "
-                    f"resolve_sync_conflict.keep_local has its own PUT path"
-                )
                 if local_path is None:
                     errors.append(f"{filename}: upload requested but no local file")
                     return False
-                self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, None)
+                if action.target_save_id is not None:
+                    # PUT path: re-upload to update the existing tracked save
+                    # (Row 9 — local diverged while is_current=true).
+                    server_save = next(
+                        (s for s in server_saves if s.get("id") == action.target_save_id),
+                        None,
+                    )
+                    if server_save is None:
+                        # Picked save vanished between read and dispatch — best-effort.
+                        self._log_debug(
+                            f"_dispatch_sync_action: target_save_id={action.target_save_id} "
+                            f"not in server_saves; skipping",
+                        )
+                        return False
+                    self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server_save)
+                else:
+                    # POST path: brand-new save in slot.
+                    self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, None)
                 return True
             if isinstance(action, Download):
                 self._do_download_save(action.server_save, saves_dir, filename, rom_id_str, system)
@@ -1064,6 +1081,20 @@ class SaveService:
         except Exception as e:
             self._handle_unexpected_error(e, filename, saves_dir, errors)
         return False
+
+    def _adopt_baseline_hash(self, rom_id_str: str, filename: str, local_hash: str) -> None:
+        """Persist ``local_hash`` as the file's ``last_sync_hash`` baseline.
+
+        Used by Skip(adopt_baseline=True) — the algorithm has detected that
+        we've observed an is_current=true situation with local content but no
+        baseline yet. Recording the baseline lets subsequent runs detect
+        offline-edit drift. State mutation only, no I/O.
+        """
+        saves = self._save_sync_state.setdefault("saves", {})
+        rom_entry = saves.setdefault(rom_id_str, {"files": {}})
+        files = rom_entry.setdefault("files", {})
+        file_state = files.setdefault(filename, {})
+        file_state["last_sync_hash"] = local_hash
 
     def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
         """Sync saves for a single ROM using the Argosy ``compute_sync_action`` model.
@@ -1143,6 +1174,7 @@ class SaveService:
                 local_hash=local_hash,
                 saves_dir=saves_dir,
                 system=system,
+                server_saves=server_in_slot,
                 errors=errors,
                 conflicts=conflicts,
             ):
@@ -1181,6 +1213,7 @@ class SaveService:
                 local_hash=None,
                 saves_dir=saves_dir,
                 system=system,
+                server_saves=group,
                 errors=errors,
                 conflicts=conflicts,
             ):
@@ -1275,11 +1308,15 @@ class SaveService:
         - ``Skip`` falls back to the newest in *candidates* so the status panel
           still shows a server reference where one exists (e.g. synced rows
           continue to display the server save's metadata).
-        - ``Upload`` (POST-as-new) has no server reference yet → ``None``.
+        - ``Upload(target_save_id=None)`` (POST-as-new) has no server reference
+          yet → ``None``.
+        - ``Upload(target_save_id=int)`` (PUT) targets an existing save in
+          *candidates* — fall back to the newest so the status panel still
+          shows the server-side metadata while the upload is pending.
         """
         if isinstance(action, Download | Conflict):
             return action.server_save
-        if isinstance(action, Upload):
+        if isinstance(action, Upload) and action.target_save_id is None:
             return None
         if not candidates:
             return None
@@ -1326,6 +1363,12 @@ class SaveService:
                 local_hash=local_hash,
             )
             handled_filenames.add(filename)
+            # Skip(adopt_baseline=True) is a state-hygiene side effect with no
+            # I/O — record the baseline even from this read-only path. The
+            # alternative ("only mutate from _sync_rom_saves") leaves state
+            # incomplete forever once observed; recording is the better default.
+            if isinstance(action, Skip) and action.adopt_baseline and local_hash is not None:
+                self._adopt_baseline_hash(rom_id_str, filename, local_hash)
             chosen_server = self._resolve_chosen_server(action, server_in_slot)
             status = self._status_from_action(action)
             file_statuses.append(
