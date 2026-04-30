@@ -439,6 +439,20 @@ class TestConfirmDownload:
         )
         assert result == {"ok": True}
 
+    def test_propagates_http_error(self):
+        """5xx from server propagates as RommServerError."""
+        from lib.errors import RommServerError
+
+        api, client = _make_api()
+        client.post_json.side_effect = RommServerError(
+            "HTTP 500: Server Error",
+            status_code=500,
+            url="/api/saves/99/downloaded",
+            method="POST",
+        )
+        with pytest.raises(RommServerError):
+            api.confirm_download(99, "device-abc")
+
 
 class TestGetSaveMetadata:
     def test_calls_save_by_id(self):

@@ -2607,6 +2607,123 @@ class TestV47SyncFlow:
         assert 100 in fake.downloaded_files
 
 
+# ---------------------------------------------------------------------------
+# TestConfirmDownloadAfterSync
+# ---------------------------------------------------------------------------
+
+
+class TestConfirmDownloadAfterSync:
+    """Verify the device's last_synced_at is registered with RomM after each
+    upload (PUT/POST) and download.
+
+    is_current is computed server-side as
+    ``device_save_sync.last_synced_at >= save.updated_at``. PUT/POST bump
+    ``save.updated_at`` to NOW but do NOT touch the calling device's
+    ``last_synced_at`` in every code path; we explicitly close that gap by
+    calling ``confirm_download``. For downloads, the optimistic query-param on
+    ``download_save_content`` upserts the row server-side before streaming.
+    """
+
+    def test_do_upload_save_post_calls_confirm_download(self, tmp_path):
+        """POST (no save_id) → confirm_download fires for the new save_id."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["server_device_id"] = "dev-1"
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+
+        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # FakeSaveApi mints a new save_id starting from 1000 on POST
+        new_save_id = next(iter(fake.saves.values()))["id"]
+
+        confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
+        assert len(confirm_calls) == 1
+        assert confirm_calls[0][1] == (new_save_id, "dev-1")
+
+    def test_do_upload_save_put_calls_confirm_download(self, tmp_path):
+        """PUT (existing save_id) → confirm_download fires for that save_id."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["server_device_id"] = "dev-1"
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+
+        # Pre-existing tracked server save
+        fake.saves[100] = _server_save(save_id=100, rom_id=42)
+        server_save = fake.saves[100]
+
+        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba", server_save=server_save)
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # PUT path: save_id kwarg passed to upload_save
+        assert upload_calls[0][2]["save_id"] == 100
+
+        confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
+        assert len(confirm_calls) == 1
+        assert confirm_calls[0][1] == (100, "dev-1")
+
+    def test_do_upload_save_skips_confirm_when_no_device_id(self, tmp_path):
+        """No registered device → confirm_download is not called (no-op)."""
+        svc, fake = make_service(tmp_path)
+        # server_device_id stays None — device not registered
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+
+        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+
+        confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
+        assert confirm_calls == []
+
+    def test_do_upload_save_swallows_confirm_download_error(self, tmp_path):
+        """confirm_download failure must NOT bubble — upload is reported successful."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["server_device_id"] = "dev-1"
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+
+        # Patch confirm_download to raise; the upload itself must still complete.
+        original_confirm = fake.confirm_download
+
+        def boom(save_id: int, device_id: str) -> dict:
+            fake.call_log.append(("confirm_download", (save_id, device_id), {}))
+            raise RommApiError("HTTP 500: Server Error", url="/api/saves/x/downloaded", method="POST")
+
+        fake.confirm_download = boom  # type: ignore[method-assign]
+        try:
+            result = svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+        finally:
+            fake.confirm_download = original_confirm  # type: ignore[method-assign]
+
+        # Upload completed, returned a result with id, AND the file_state was updated.
+        assert result.get("id") is not None
+        confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
+        assert len(confirm_calls) == 1
+        # File state still recorded the upload (not blocked by confirm failure)
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state.get("tracked_save_id") is not None
+
+    def test_do_download_save_passes_device_id_and_optimistic(self, tmp_path):
+        """download_save_content must pass device_id + optimistic=True so the
+        server upserts our DeviceSaveSync row before streaming. This makes a
+        follow-up confirm_download unnecessary for the download path.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["server_device_id"] = "dev-1"
+        saves_dir = str(tmp_path / "saves" / "gba")
+        os.makedirs(saves_dir, exist_ok=True)
+        server_save = _server_save(save_id=99)
+
+        svc._do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
+
+        dl_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert len(dl_calls) == 1
+        kwargs = dl_calls[0][2]
+        assert kwargs["device_id"] == "dev-1"
+        assert kwargs["optimistic"] is True
+
+
 class TestSaveSyncSettingsSlotAndCleanup:
     """Tests for default_slot and autocleanup_limit settings."""
 
