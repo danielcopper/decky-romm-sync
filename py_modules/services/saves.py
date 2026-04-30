@@ -22,16 +22,8 @@ from typing import TYPE_CHECKING, ClassVar
 from models.saves import SaveConflict
 
 from domain.emulator_tag import build_emulator_tag, detect_core_change
-from domain.save_conflicts import (
-    build_conflict_dict,
-    check_local_changes,
-    check_server_changes_fast,
-    determine_action,
-    resolve_conflict_by_mode,
-)
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
-from domain.save_sync import determine_sync_action
 from domain.sync_action import (
     Conflict,
     Download,
@@ -39,7 +31,7 @@ from domain.sync_action import (
     Upload,
     compute_sync_action,
 )
-from lib.errors import RommApiError, RommConflictError, classify_error
+from lib.errors import RommApiError, classify_error
 from services.protocols import (
     CoreNameProviderFn,
     CoreResolverFn,
@@ -56,7 +48,6 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-    from domain.save_sync import MatchedSave
     from services.protocols import EventEmitter
 
 
@@ -487,101 +478,6 @@ class SaveService:
                 with contextlib.suppress(OSError):
                     os.remove(tmp_path)
 
-    # ------------------------------------------------------------------
-    # Conflict Detection
-    # ------------------------------------------------------------------
-
-    def _check_server_changes(self, file_state: dict, server_save: dict, last_sync_hash: str) -> bool:
-        """Compare server metadata/hash against baseline to detect server modifications."""
-        fast = check_server_changes_fast(file_state, server_save)
-        if fast is not None:
-            return fast
-
-        # Slow path: timestamp changed or no stored timestamp — download and hash
-        server_updated_at = server_save.get("updated_at", "")
-        server_size = server_save.get("file_size_bytes")
-        try:
-            server_hash = self._retry.with_retry(self._get_server_save_hash, server_save)
-        except Exception:
-            server_hash = None
-        if server_hash and server_hash != last_sync_hash:
-            return True
-
-        # False alarm — update stored metadata
-        if file_state:
-            file_state["last_sync_server_updated_at"] = server_updated_at
-            if server_size is not None:
-                file_state["last_sync_server_size"] = server_size
-        return False
-
-    def _extract_device_sync_info(self, server_save: dict) -> dict | None:
-        """Extract this device's sync info from server save response.
-
-        Returns the device_syncs entry for our server_device_id, or None.
-        """
-        server_device_id = self._get_server_device_id()
-        if not server_device_id:
-            return None
-        device_syncs = server_save.get("device_syncs", [])
-        for sync in device_syncs:
-            if str(sync.get("device_id")) == server_device_id:
-                return sync
-        return None
-
-    def _detect_conflict(self, rom_id: int, filename: str, local_hash: str | None, server_save: dict) -> str:
-        """Hybrid conflict detection.
-
-        Returns: ``"skip"``, ``"download"``, ``"upload"``, or ``"conflict"``.
-        """
-        rom_id_str = str(int(rom_id))
-        save_state = self._save_sync_state["saves"].get(rom_id_str, {})
-        file_state = save_state.get("files", {}).get(filename, {})
-        last_sync_hash = file_state.get("last_sync_hash")
-
-        # Never synced before — state recovery
-        if not last_sync_hash:
-            if local_hash:
-                try:
-                    server_hash = self._retry.with_retry(self._get_server_save_hash, server_save)
-                except Exception:
-                    server_hash = None
-                if server_hash is None:
-                    return "conflict"  # Can't verify, ask user
-                return "skip" if local_hash == server_hash else "conflict"
-            return "download"
-
-        local_changed = check_local_changes(local_hash, last_sync_hash)
-
-        # v4.7: try device_syncs from server response
-        device_sync_info = self._extract_device_sync_info(server_save)
-        if device_sync_info is not None:
-            # Use v4.7 path — avoids expensive server hash download
-            result = determine_sync_action(local_changed, server_save, device_sync_info, file_state)
-            self._log_debug(
-                f"_detect_conflict({rom_id}, {filename}): v4.7 path "
-                f"local_changed={local_changed} is_current={device_sync_info.get('is_current')} → {result}"
-            )
-            return result
-
-        # Timestamp fallback: slow-path when device_syncs unavailable
-        server_changed = self._check_server_changes(file_state, server_save, last_sync_hash)
-        result = determine_action(local_changed, server_changed)
-
-        self._log_debug(
-            f"_detect_conflict({rom_id}, {filename}): timestamp fallback "
-            f"local_hash={local_hash[:8] if local_hash else None}… "
-            f"baseline={last_sync_hash[:8] if last_sync_hash else None}… "
-            f"local_changed={local_changed} server_changed={server_changed} → {result}"
-        )
-        return result
-
-    def _resolve_conflict_by_mode(self, local_mtime: float, server_save: dict) -> str:
-        """Wrapper: apply configured conflict resolution mode via domain function."""
-        settings = self._save_sync_state.get("settings", {})
-        mode = settings.get("conflict_mode", "ask_me")
-        tolerance = settings.get("clock_skew_tolerance_sec", 60)
-        return resolve_conflict_by_mode(mode, local_mtime, server_save, tolerance)
-
     def _update_file_sync_state(
         self,
         rom_id_str: str,
@@ -730,64 +626,6 @@ class SaveService:
         rom_state["own_upload_ids"] = own_ids
         self.save_state()
 
-    def _sync_single_save_file(
-        self,
-        rom_id: int,
-        filename: str,
-        local: dict | None,
-        server: dict | None,
-    ) -> tuple[str, str]:
-        """Determine and resolve the sync action for one save file.
-
-        Returns ``(action, local_hash)`` where action is the *resolved*
-        action after conflict-mode processing (may be ``"ask"``).
-        """
-        local_hash = ""
-        if local and server:
-            local_hash = self._file_md5(local["path"])
-            action = self._detect_conflict(rom_id, filename, local_hash, server)
-        elif local:
-            action = "upload"
-        elif server:
-            action = "download"
-        else:
-            return "none", local_hash
-
-        if action == "skip":
-            return "skip", local_hash
-
-        if action == "conflict":
-            assert server is not None
-            local_mtime = os.path.getmtime(local["path"]) if local else 0
-            resolution = self._resolve_conflict_by_mode(local_mtime, server)
-            if resolution == "ask":
-                return "ask", local_hash
-            action = resolution
-
-        return action, local_hash
-
-    def _handle_conflict_error(
-        self,
-        rom_id: int,
-        filename: str,
-        local: dict | None,
-        server: dict | None,
-        local_hash: str,
-        errors: list[str],
-        conflicts: list[SaveConflict | dict],
-    ) -> None:
-        """Handle a RommConflictError by recording a conflict or error entry."""
-        if local and server:
-            local_path = local["path"]
-            local_info = {
-                "path": local_path,
-                "mtime": os.path.getmtime(local_path) if os.path.isfile(local_path) else None,
-                "size": os.path.getsize(local_path) if os.path.isfile(local_path) else None,
-            }
-            conflicts.append(build_conflict_dict(rom_id, filename, local_info, local_hash, server))
-        else:
-            errors.append(f"{filename}: conflict without matching local+server")
-
     def _handle_unexpected_error(
         self,
         e: Exception,
@@ -801,163 +639,6 @@ class SaveService:
         tmp = os.path.join(saves_dir, filename + ".tmp")
         with contextlib.suppress(OSError):
             os.remove(tmp)
-
-    def _execute_sync_action(
-        self,
-        action: str,
-        rom_id: int,
-        rom_id_str: str,
-        filename: str,
-        local: dict | None,
-        server: dict | None,
-        local_hash: str,
-        saves_dir: str,
-        system: str,
-        errors: list[str],
-        conflicts: list[SaveConflict | dict],
-    ) -> bool:
-        """Execute a resolved sync action (download/upload). Returns True if synced."""
-        try:
-            if action == "download":
-                assert server is not None
-                self._do_download_save(server, saves_dir, filename, rom_id_str, system)
-                return True
-            if action == "upload" and local:
-                self._do_upload_save(rom_id, local["path"], filename, rom_id_str, system, server)
-                return True
-        except RommConflictError:
-            self._handle_conflict_error(rom_id, filename, local, server, local_hash, errors, conflicts)
-        except RommApiError as e:
-            _code, _msg = classify_error(e)
-            errors.append(f"{filename}: {_msg}")
-        except Exception as e:
-            self._handle_unexpected_error(e, filename, saves_dir, errors)
-        return False
-
-    def _process_single_file_sync(
-        self,
-        rom_id: int,
-        rom_id_str: str,
-        filename: str,
-        local: dict | None,
-        server: dict | None,
-        saves_dir: str,
-        system: str,
-        errors: list[str],
-        conflicts: list[SaveConflict | dict],
-    ) -> bool:
-        """Process sync for one save file. Returns True if a file was synced."""
-        t_file = time.time()
-        action, local_hash = self._sync_single_save_file(rom_id, filename, local, server)
-
-        self._log_debug(
-            f"[TIMING] _sync_rom_saves({rom_id}): detect {filename} -> {action} {time.time() - t_file:.3f}s"
-        )
-
-        if action in ("skip", "none"):
-            return False
-
-        if action == "ask":
-            if local and server:
-                local_path = local["path"]
-                local_info = {
-                    "path": local_path,
-                    "mtime": os.path.getmtime(local_path) if os.path.isfile(local_path) else None,
-                    "size": os.path.getsize(local_path) if os.path.isfile(local_path) else None,
-                }
-                conflicts.append(build_conflict_dict(rom_id, filename, local_info, local_hash, server))
-            return False
-
-        t_action = time.time()
-        result = self._execute_sync_action(
-            action,
-            rom_id,
-            rom_id_str,
-            filename,
-            local,
-            server,
-            local_hash,
-            saves_dir,
-            system,
-            errors,
-            conflicts,
-        )
-        self._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): {action} {filename} {time.time() - t_action:.3f}s")
-        return result
-
-    def _check_newer_in_slot(
-        self,
-        m: MatchedSave,
-        files_state: dict,
-        rom_id: int,
-        save_state: dict,
-        conflicts: list[SaveConflict | dict],
-    ) -> bool:
-        """Check if a matched save has a newer version in its slot from another device.
-
-        Returns True if the normal sync step should be skipped (conflict appended).
-        """
-        if not m.newer_save_in_slot:
-            return False
-        file_state = files_state.get(m.filename, {})
-        dismissed_id = file_state.get("dismissed_newer_save_id")
-        newer_id = m.newer_save_in_slot.get("id")
-        if dismissed_id is None or (newer_id is not None and newer_id > dismissed_id):
-            conflicts.append(
-                self._build_newer_in_slot_conflict(
-                    rom_id,
-                    m.filename,
-                    m.server_save,
-                    m.newer_save_in_slot,
-                    save_state.get("active_slot"),
-                )
-            )
-            return True
-        return False
-
-    @staticmethod
-    def _build_newer_in_slot_conflict(
-        rom_id: int,
-        filename: str,
-        tracked_save: dict | None,
-        newer_save: dict,
-        slot: str | None,
-    ) -> dict:
-        """Build a newer-in-slot conflict descriptor for the frontend."""
-        return {
-            "type": "newer_in_slot",
-            "rom_id": rom_id,
-            "filename": filename,
-            "tracked_save_id": tracked_save.get("id") if tracked_save else None,
-            "tracked_updated_at": tracked_save.get("updated_at") if tracked_save else None,
-            "newer_save_id": newer_save.get("id"),
-            "newer_updated_at": newer_save.get("updated_at"),
-            "slot": slot,
-        }
-
-    @staticmethod
-    def _should_skip_server_only_during_migration(m, pending_migration: bool) -> bool:
-        """Return True if this match is a server-only download that must be skipped during pending migration.
-
-        During a pending save-sort migration we run in upload-only mode so that
-        no freshly-downloaded file lands on disk with ``mtime=now`` — otherwise
-        the mtime-naive migration resolver could prefer the stale download over
-        the real user progress at the other layout (#238).
-        """
-        return pending_migration and m.local_file is None and m.server_save is not None
-
-    def _log_match_debug(self, m, rom_id: int) -> None:
-        """Emit a debug line describing how a single match will be handled.
-
-        Extracted from ``_sync_rom_saves`` so the per-match log-line ternaries
-        don't inflate the parent's cognitive complexity (Sonar S3776).
-        """
-        method_label = f" [{m.match_method}]" if m.match_method not in ("filename", "local_only") else ""
-        local_label = "yes" if m.local_file else "no"
-        server_label = m.server_save.get("id") if m.server_save else "none"
-        self._log_debug(
-            f"_sync_rom_saves({rom_id}): {m.filename}{method_label} local={local_label} server={server_label}"
-        )
 
     @staticmethod
     def _filter_server_saves_to_slot(server_saves: list[dict], active_slot: str | None) -> list[dict]:
@@ -1464,35 +1145,6 @@ class SaveService:
             "conflicts": conflicts,
             "save_sort_changed": self._is_save_sort_changed(),
         }
-
-    def _resolve_conflict_io(
-        self,
-        rom_id: int,
-        rom_id_str: str,
-        resolution: str,
-        conflict: dict,
-        saves_dir: str,
-        filename: str,
-        system: str,
-    ) -> dict | None:
-        """Sync helper for resolve_conflict — performs blocking I/O in executor."""
-        if resolution == "download":
-            server_save_id = conflict.get("server_save_id")
-            if not server_save_id:
-                return {"success": False, "message": "No server save ID"}
-            server_save = self._retry.with_retry(lambda: self._romm_api.get_save_metadata(server_save_id))
-            self._do_download_save(server_save, saves_dir, filename, rom_id_str, system)
-        else:  # upload
-            local_path = conflict.get("local_path")
-            if not local_path or not os.path.isfile(local_path):
-                return {"success": False, "message": "Local file not found"}
-            server_save = None
-            if conflict.get("server_save_id"):
-                with contextlib.suppress(Exception):
-                    ssid = conflict["server_save_id"]
-                    server_save = self._retry.with_retry(lambda: self._romm_api.get_save_metadata(ssid))
-            self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server_save)
-        return None  # Success — caller handles state update
 
     # ------------------------------------------------------------------
     # Public async API (callable endpoints)
@@ -2359,58 +2011,6 @@ class SaveService:
             "errors": total_errors,
         }
 
-    async def resolve_conflict(
-        self,
-        rom_id: int,
-        filename: str,
-        resolution: str,
-        server_save_id: int | None = None,
-        local_path: str | None = None,
-    ) -> dict:
-        """Resolve a pending save conflict. resolution: ``"upload"`` or ``"download"``."""
-        rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
-
-        if resolution not in ("upload", "download"):
-            return {"success": False, "message": f"Invalid resolution: {resolution}"}
-
-        # Build conflict from params passed by frontend
-        if not server_save_id:
-            return {"success": False, "message": "Missing server_save_id"}
-        conflict = {
-            "rom_id": rom_id,
-            "filename": filename,
-            "server_save_id": server_save_id,
-            "local_path": local_path,
-        }
-
-        info = self._get_rom_save_info(rom_id)
-        if not info:
-            return {"success": False, "message": "ROM not installed"}
-        system = info["system"]
-        saves_dir = info["saves_dir"]
-
-        try:
-            result = await self._loop.run_in_executor(
-                None,
-                self._resolve_conflict_io,
-                rom_id,
-                rom_id_str,
-                resolution,
-                conflict,
-                saves_dir,
-                filename,
-                system,
-            )
-            if result is not None:
-                return result
-
-            self.save_state()
-            return {"success": True, "message": f"Conflict resolved: {resolution}"}
-        except Exception as e:
-            self._logger.error(f"Conflict resolution failed: {e}")
-            return {"success": False, "message": "Conflict resolution failed"}
-
     async def resolve_sync_conflict(
         self,
         rom_id: int,
@@ -2558,51 +2158,6 @@ class SaveService:
         # Upload local content as a PUT against the existing server save.
         self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server)
         self.save_state()
-
-    async def resolve_newer_in_slot(self, rom_id: int, filename: str, resolution: str, newer_save_id: int) -> dict:
-        """Resolve a newer-in-slot conflict.
-
-        resolution: ``"use_newer"`` | ``"keep_current"`` | ``"dismiss"``
-        """
-        rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
-
-        if resolution == "use_newer":
-            info = self._get_rom_save_info(rom_id)
-            if not info:
-                return {"success": False, "message": "ROM save info not found"}
-            device_id = self._get_server_device_id()
-            server_saves = await self._loop.run_in_executor(
-                None,
-                lambda: self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id)),
-            )
-            newer_save = next((s for s in server_saves if s.get("id") == newer_save_id), None)
-            if not newer_save:
-                return {"success": False, "message": "Newer save not found on server"}
-            await self._loop.run_in_executor(
-                None,
-                self._do_download_save,
-                newer_save,
-                info["saves_dir"],
-                filename,
-                rom_id_str,
-                info["system"],
-            )
-            # Re-fetch live reference — _do_download_save replaced the dict
-            live_state = self._save_sync_state["saves"].get(rom_id_str, {}).get("files", {}).get(filename, {})
-            live_state.pop("dismissed_newer_save_id", None)
-            self.save_state()
-            return {"success": True, "message": "Downloaded newer save"}
-
-        if resolution == "dismiss":
-            files = self._save_sync_state.get("saves", {}).get(rom_id_str, {}).setdefault("files", {})
-            live_state = files.setdefault(filename, {})
-            live_state["dismissed_newer_save_id"] = newer_save_id
-            self.save_state()
-            return {"success": True, "message": "Dismissed"}
-
-        # keep_current
-        return {"success": True, "message": "Keeping current save"}
 
     # ------------------------------------------------------------------
     # Version History API
