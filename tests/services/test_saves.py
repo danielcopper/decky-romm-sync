@@ -4918,6 +4918,175 @@ class TestRollbackToVersion:
 
         assert result["status"] == "not_found"
 
+    # ------------------------------------------------------------------
+    # Cross-device propagation: rollback re-PUTs target so it becomes
+    # newest-in-slot and the rollback target wins on other devices' next sync.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_rollback_uploads_target_after_download(self, tmp_path):
+        """Rollback PUTs the target save_id after downloading so updated_at bumps server-side."""
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+        # Verify a PUT (upload_save with save_id=50) fired after download
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert any(c[2].get("save_id") == 50 for c in upload_calls), f"expected PUT to save_id=50, got {upload_calls!r}"
+
+    @pytest.mark.asyncio
+    async def test_rollback_calls_confirm_download_on_target(self, tmp_path):
+        """Rollback marks our device as current on the target save via confirm_download."""
+        svc, fake = make_service(tmp_path)
+        # device_id must be set for confirm_download to fire
+        svc._save_sync_state["server_device_id"] = "device-1"
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+        confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
+        assert any(c[1] == (50, "device-1") for c in confirm_calls), (
+            f"expected confirm_download(50, 'device-1'), got {confirm_calls!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_rollback_updates_tracked_id_and_hash(self, tmp_path):
+        """After rollback, local state has tracked_save_id=target and last_sync_hash matches downloaded content."""
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state["tracked_save_id"] == 50
+        # Hash should match the (re-uploaded) local file content
+        local_path = tmp_path / "saves" / "gba" / "pokemon.srm"
+        assert file_state["last_sync_hash"] == _file_md5(str(local_path))
+        # last_sync_server_updated_at reflects the post-PUT response (NOT the
+        # pre-PUT target.updated_at), confirming the bump propagated locally.
+        assert file_state["last_sync_server_updated_at"] != "2026-02-01T10:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_rollback_returns_put_failed_when_upload_raises(self, tmp_path):
+        """When the PUT step fails, status reflects put_failed and download survives.
+
+        Partial-rollback semantics: the local download already mutated state to
+        point at the target save_id, so the rollback IS locally complete. We
+        persist that state (saved on put_failed) so a restart doesn't leave a
+        state/file mismatch. Cross-device propagation is what failed; the user
+        can retry rollback_to_version idempotently.
+        """
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        # Track call sequence: download must succeed, then upload must fail.
+        original_upload = fake.upload_save
+
+        def failing_upload(*args, **kwargs):
+            raise Exception("PUT failed: server 500")
+
+        fake.upload_save = failing_upload  # type: ignore[method-assign]
+
+        try:
+            result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        finally:
+            fake.upload_save = original_upload  # type: ignore[method-assign]
+
+        assert result["status"] == "put_failed"
+        assert "PUT failed" in result.get("error", "")
+        # Download did happen
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert any(c[1][0] == 50 for c in download_calls)
+        # Local state still updated to point at target — save_state was called
+        # so disk file and state file remain consistent.
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state["tracked_save_id"] == 50
+
+    @pytest.mark.asyncio
+    async def test_rollback_ignores_confirm_download_failure(self, tmp_path):
+        """confirm_download failure is non-fatal — rollback still reports ok and updates state.
+
+        ``_do_upload_save`` swallows confirm_download errors (debug-logged).
+        From the rollback's perspective the PUT succeeded, so cross-device
+        propagation works (the next list_saves still picks our bumped
+        ``updated_at``). is_current may not be set on our device until the next
+        sync, but that's recoverable — the next compute_sync_action will
+        detect tracked_save_id==server.id and Skip.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state["server_device_id"] = "device-1"
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        original_confirm = fake.confirm_download
+
+        def failing_confirm(*args, **kwargs):
+            raise Exception("confirm_download network error")
+
+        fake.confirm_download = failing_confirm  # type: ignore[method-assign]
+
+        try:
+            result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        finally:
+            fake.confirm_download = original_confirm  # type: ignore[method-assign]
+
+        assert result["status"] == "ok"
+        # Upload still happened
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert any(c[2].get("save_id") == 50 for c in upload_calls)
+        # State updated
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state["tracked_save_id"] == 50
+
+    @pytest.mark.asyncio
+    async def test_rollback_to_already_tracked_save_is_idempotent(self, tmp_path):
+        """Rolling back to the currently-tracked save still PUTs (idempotent bump)."""
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        # Tracked save IS the target — rollback to currently-owned save
+        self._setup_state(svc, tmp_path, tracked_id=50, last_sync_hash=local_hash)
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "ok"
+        # PUT still fired (bumps updated_at, idempotent re-confirm)
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert any(c[2].get("save_id") == 50 for c in upload_calls)
+        # tracked_save_id still 50
+        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
+        assert file_state["tracked_save_id"] == 50
+
 
 # ---------------------------------------------------------------------------
 # TestDeleteSlot

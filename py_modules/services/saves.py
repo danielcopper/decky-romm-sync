@@ -2689,7 +2689,31 @@ class SaveService:
         info: dict,
         server_saves: list[dict],
     ) -> dict:
-        """Blocking I/O portion of rollback_to_version — runs in executor."""
+        """Blocking I/O portion of rollback_to_version — runs in executor.
+
+        Atomic flow that makes the rollback target authoritative cross-device:
+
+        1. Download id=save_id content → overwrite local file. ``_do_download_save``
+           already updates ``tracked_save_id`` / ``last_sync_hash`` to reflect the
+           target version locally.
+        2. PUT id=save_id with the same content (re-upload via ``_do_upload_save``).
+           RomM v4.8.1 fires the SQLAlchemy ``onupdate=utc_now`` hook, so
+           ``save.updated_at`` becomes NOW and id=save_id is now newest in the
+           slot — beating any newer foreign save that triggered the rollback.
+        3. ``_do_upload_save`` also calls ``confirm_download(save_id, device_id)``,
+           which sets our ``last_synced_at = save.updated_at`` so ``is_current``
+           evaluates true for us. Required because v4.8.1 PUT does NOT auto-upsert
+           sync rows.
+        4. ``_do_upload_save`` updates local sync state (``tracked_save_id``,
+           ``last_sync_hash``, ``last_sync_server_updated_at``) via
+           ``_update_file_sync_state`` to match the post-PUT server response.
+
+        After this, the next ``compute_sync_action`` run picks id=save_id (now
+        newest), our ``is_current=true``, hash matches → ``Skip(synced)``. Other
+        devices on their next sync see id=save_id as newest with their
+        ``is_current=false`` → ``Download`` → adopt our rollback. Cross-device
+        propagation works.
+        """
         # Find target save in server list (match by ID only — the target may
         # have a different file_name due to RomM timestamp tagging)
         target_save = next(
@@ -2716,8 +2740,39 @@ class SaveService:
                     "tracked_hash": last_sync_hash,
                 }
 
-        # Download the target version to replace local file
+        # Step 1: Download the target version to replace local file.
+        # ``_do_download_save`` already calls ``_update_file_sync_state`` so the
+        # local state already points at ``save_id`` even if step 2 fails.
         self._do_download_save(target_save, saves_dir, filename, rom_id_str, system)
+
+        # Step 2 + 3 + 4: PUT id=save_id with the same content to bump
+        # ``updated_at`` server-side, mark our device as current, and refresh
+        # the local sync state with the post-PUT server response. We reuse
+        # ``_do_upload_save`` (passing ``server_save=target_save`` makes it
+        # PUT to that save_id) — it handles confirm_download and state update
+        # in one call.
+        try:
+            self._do_upload_save(
+                rom_id=int(rom_id_str),
+                file_path=local_path,
+                filename=filename,
+                rom_id_str=rom_id_str,
+                system=system,
+                server_save=target_save,
+            )
+        except Exception as e:
+            # Download already mutated local state to reflect ``save_id``, so
+            # the rollback is locally complete — but cross-device propagation
+            # failed because ``updated_at`` was not bumped. Surface this so the
+            # caller can prompt the user to retry.
+            self._logger.error(
+                "_rollback_to_version_io: PUT to bump updated_at failed for rom=%s save=%s: %s",
+                rom_id_str,
+                save_id,
+                e,
+            )
+            return {"status": "put_failed", "error": str(e)}
+
         return {"status": "ok"}
 
     async def rollback_to_version(
@@ -2732,6 +2787,11 @@ class SaveService:
           if local file has changed since last sync and ``force`` is False.
         - ``{"status": "tracked_missing"}`` if the currently-tracked save no
           longer exists on the server and ``force`` is False.
+        - ``{"status": "put_failed", "error": ...}`` if the local download
+          succeeded but the server-side ``updated_at`` bump (re-PUT) failed.
+          Local file and local state are already pointing at the target, so
+          retrying ``rollback_to_version`` is safe and idempotent. Without a
+          successful re-PUT the rollback will not propagate cross-device.
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
@@ -2776,7 +2836,13 @@ class SaveService:
             server_saves,
         )
 
-        if result.get("status") == "ok":
+        # Persist on success AND on put_failed: in both paths
+        # ``_do_download_save`` already wrote the target content to disk and
+        # mutated in-memory state. Persisting on put_failed keeps disk-file
+        # and state-file consistent so a process restart doesn't leave the
+        # state pointing at the old tracked save while the file is the
+        # target content.
+        if result.get("status") in ("ok", "put_failed"):
             self.save_state()
 
         return result
