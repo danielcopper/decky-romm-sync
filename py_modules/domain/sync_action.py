@@ -1,35 +1,38 @@
-"""Argosy-style sync action computation (Phase 1 of save-sync rewrite).
+"""Pure decision logic for picking a single sync action per save file.
 
-Pure-domain decision logic mapped from a (local_file, server_saves_in_slot,
-files_state, device_id, local_hash) tuple to a single `SyncAction` outcome.
+Given (local_file, server_saves_in_slot, files_state, device_id, local_hash)
+this module returns one ``SyncAction`` describing what the service should do
+for that file: ``Skip``, ``Upload``, ``Download``, or ``Conflict``.
 
-Modeled after the official RomM clients (Argosy/Grout) with one notable
-adaptation: when our device's `device_syncs` entry says `is_current=true` but
-the local file's hash diverges from `last_sync_hash`, we emit ``Upload`` with
-a PUT target (the existing server save id) so the diverged local content is
-pushed up to the server. Argosy's pre-launch resolver returns ``Skip`` in
-this case and lets its post-session step do the upload; we collapse those
-two phases by uploading at the decision point. The end state is the same as
-Argosy's: the local content lands on the server.
+Why the design looks the way it does
+------------------------------------
+Newest-server-save-in-slot is picked deterministically by ``max(updated_at)``
+so concurrent decisions on the same data converge on the same target.
 
-Baseline-recovery behaviour
----------------------------
-``last_sync_hash`` is the only safety net against silent overwrite of locally
-edited content. When it is missing (first-ever sync, migrated state, or an
-intermediate state mutation that lost the field) we cannot meaningfully claim
-divergence:
+Hash-based divergence detection requires both a recorded baseline
+(``last_sync_hash``) AND a freshly computed ``local_hash``. Without the
+baseline we cannot meaningfully claim drift, so the decision falls back to
+either ``Skip(adopt_baseline=True)`` (so the next run has a baseline) or
+``Download`` (server wins) depending on ``is_current``.
 
-- ``is_current=true`` + local exists + no baseline → ``Skip`` with
-  ``adopt_baseline=True``: the service writes the current ``local_hash`` as
-  the baseline so subsequent runs can detect drift. No I/O.
-- ``is_current=false`` + local exists + no baseline → ``Download``: server
-  has clearly moved past us and we have nothing to claim divergence with,
-  so the server wins.
+When our device is flagged ``is_current=true`` but local diverges from the
+baseline, we emit ``Upload`` with a PUT target — the offline edit gets
+pushed at the decision point rather than being deferred to a later phase.
+No user prompt is needed because nobody else can have moved the server
+forward (we're still flagged current).
 
-Recovery
---------
-``is_current=true`` + no local file means our last upload disappeared from
-disk while the server still tracks it for us. We download to recover.
+When ``is_current=false`` AND local diverges, both sides moved
+independently — that is the only true ``Conflict`` and it requires a user
+choice via ``resolve_sync_conflict``.
+
+Recovery: ``is_current=true`` + no local file means our last upload is
+still tracked on the server but the local copy disappeared. We download to
+recover the canonical content.
+
+When our device has never touched the picked save (no entry in
+``device_syncs``) and the local file is present, we fall back to comparing
+local mtime against ``server.updated_at``: local-newer-or-equal means
+``Upload`` (POST a new save), older means ``Download``.
 
 No I/O. No imports from services or adapters. Stdlib only.
 """

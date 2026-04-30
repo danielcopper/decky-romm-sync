@@ -1,4 +1,9 @@
-"""Unit tests for domain.sync_action.compute_sync_action (Argosy-style)."""
+"""Unit tests for ``domain.sync_action.compute_sync_action``.
+
+Each test pins a specific (local_file, server_saves_in_slot, files_state,
+device_id, local_hash) input shape to the ``SyncAction`` outcome the service
+must dispatch. Pure-domain only — no I/O, no service fixtures.
+"""
 
 from __future__ import annotations
 

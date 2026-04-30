@@ -305,7 +305,7 @@ class TestPostExitSync:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
+    @pytest.mark.skip(reason="superseded by sync-action rewrite (Phase 2); deleted in Phase 3 cleanup")
     async def test_post_exit_sync_mid_session_sort_change_preserves_user_progress(self, plugin, tmp_path):
         """Mid-session sort change: save at previous layout must be uploaded, no stale download (#238)."""
         _install_rom(plugin, tmp_path)
@@ -807,7 +807,7 @@ class TestSyncRomSaves:
 class TestPendingConflicts:
     """Tests for conflict queue management."""
 
-    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
+    @pytest.mark.skip(reason="superseded by sync-action rewrite (Phase 2); deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_resolve_invalid_resolution(self, plugin):
         """Invalid resolution string is rejected."""
@@ -815,7 +815,7 @@ class TestPendingConflicts:
 
         assert result["success"] is False
 
-    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
+    @pytest.mark.skip(reason="superseded by sync-action rewrite (Phase 2); deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_resolve_missing_server_save_id(self, plugin):
         """Resolving without server_save_id returns failure."""
@@ -848,7 +848,7 @@ class TestRetryMRO:
 class TestResolveConflictEdgeCases:
     """Edge cases for resolve_conflict callable — tests that work without mixin methods."""
 
-    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
+    @pytest.mark.skip(reason="superseded by sync-action rewrite (Phase 2); deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_resolve_upload_without_server_save_id(self, plugin, tmp_path):
         """Resolving upload without server_save_id returns error."""
@@ -868,7 +868,7 @@ class TestResolveConflictEdgeCases:
         assert result["success"] is False
         assert "server_save_id" in result["message"].lower()
 
-    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
+    @pytest.mark.skip(reason="superseded by sync-action rewrite (Phase 2); deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_resolve_download_missing_server_save_id(self, plugin, tmp_path):
         """Resolving download when server_save_id is missing fails gracefully."""
@@ -885,7 +885,7 @@ class TestResolveConflictEdgeCases:
         assert result["success"] is False
         assert "server_save_id" in result["message"].lower()
 
-    @pytest.mark.skip(reason="superseded by Argosy model in Phase 2 rewrite; deleted in Phase 3 cleanup")
+    @pytest.mark.skip(reason="superseded by sync-action rewrite (Phase 2); deleted in Phase 3 cleanup")
     @pytest.mark.asyncio
     async def test_resolve_upload_local_file_deleted(self, plugin, tmp_path):
         """Resolving upload when local file was deleted fails gracefully."""

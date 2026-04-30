@@ -1050,7 +1050,7 @@ class SaveService:
                     return False
                 if action.target_save_id is not None:
                     # PUT path: re-upload to update the existing tracked save
-                    # (Row 9 — local diverged while is_current=true).
+                    # (local diverged while is_current=true).
                     server_save = next(
                         (s for s in server_saves if s.get("id") == action.target_save_id),
                         None,
@@ -1097,9 +1097,12 @@ class SaveService:
         file_state["last_sync_hash"] = local_hash
 
     def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
-        """Sync saves for a single ROM using the Argosy ``compute_sync_action`` model.
+        """Sync saves for a single ROM.
 
-        Returns ``(synced_count, errors_list, conflicts_list)``.
+        Iterates ``compute_sync_action`` decisions for every local file and
+        every server-only save in the active slot, dispatching each outcome
+        through ``_dispatch_sync_action``. Returns
+        ``(synced_count, errors_list, conflicts_list)``.
         """
         t_total = time.time()
         rom_id = int(rom_id)
@@ -1326,8 +1329,11 @@ class SaveService:
         """Sync helper for get_save_status — runs in executor.
 
         Read-only counterpart of ``_sync_rom_saves``: builds the per-file
-        status using the Argosy ``compute_sync_action`` decision but performs
-        no I/O against local or server saves.
+        status using the same ``compute_sync_action`` decisions but performs
+        no upload/download I/O. The one allowed mutation is recording an
+        adopted baseline hash when the action requests it
+        (``Skip(adopt_baseline=True)``) — that is pure state hygiene with no
+        network traffic.
         """
         rom_id_str = str(rom_id)
         local_files = self._find_save_files(rom_id)
@@ -2402,7 +2408,11 @@ class SaveService:
         filename: str,
         action: str,
     ) -> dict:
-        """Resolve a pending Argosy-style sync conflict.
+        """Resolve a pending sync conflict (true two-sided divergence).
+
+        Reached when ``compute_sync_action`` returned ``Conflict`` — the
+        server moved AND local diverged from baseline, so the user picked a
+        side via the conflict UI.
 
         ``action`` is one of:
 
