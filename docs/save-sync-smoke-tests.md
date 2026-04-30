@@ -14,7 +14,15 @@ Each test has three blocks:
 
 You don't run any curl. I have your RomM credentials (read from the plugin settings) and the device ids.
 
-When I need a plugin reload I'll ask you to **toggle the plugin off in Decky, wait two seconds, toggle it on**. I'll never tell you to run `mise run dev` for these smoke tests — none of them require a code change. If we discover a bug and I push a fix mid-session, I'll explicitly say "run `mise run dev` from the worktree before continuing".
+When I need a plugin reload I'll ask you to **toggle the plugin off in Decky, wait two seconds, toggle it on**. I'll never tell you to run `mise run dev` for these smoke tests — none of them require a code change unless I push a fix mid-session, in which case I'll explicitly say "run `mise run dev` from the worktree before continuing".
+
+### Trigger sync without launching the game
+
+For most matrix-row tests we want to observe `compute_sync_action`'s decision in isolation. Launching the game brings mGBA into the loop — it loads our mocked `.srm`, decides the bytes aren't valid SRAM, and writes its empty default back on close, masking what we actually planted.
+
+So unless a test specifically exercises post-exit sync, drive the sync by tapping **"Sync All Saves Now"** in the QAM Save Sync settings. That goes through the same `_sync_rom_saves` code path, exercises the same `compute_sync_action` decisions, but never starts the emulator.
+
+The "Action (you)" block in each test below specifies which trigger to use.
 
 ## Test ROM and environment
 
@@ -58,6 +66,8 @@ I'll always announce the reset before doing it, so you can confirm.
 
 ## Tests
 
+> **T1, T2, T3, T4 already passed** (one game session, with mGBA opportunistically writing the empty-default `.srm`). Logs and state confirm matrix rows 1, 2, 7, and 9 each fired correctly. The toast wording bug found during T4 was fixed in d25d790; follow-up issue #250 tracks the per-direction toast breakdown. From T5 onward we drive sync via "Sync All Saves Now" to keep mGBA out of the loop.
+
 ### T1 — Matrix row 1 (no local, no server)
 
 Goal: prove `compute_sync_action` returns `Skip(nothing_to_sync)` and the sync flow does no I/O.
@@ -78,8 +88,8 @@ Goal: prove `compute_sync_action` returns `Skip(nothing_to_sync)` and the sync f
 - No new server saves.
 - No `.srm` created on disk.
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip
-**Notes**:
+**Status**: [x] Pass — pre-launch sync at 21:26:18 returned `Skip`, synced=0, no I/O.
+**Notes**: Ran via Play, fell through to game launch.
 
 ---
 
@@ -101,8 +111,8 @@ Goal: first POST upload from a fresh local file.
 - ✓ `device_syncs[me].is_current=true`.
 - ✓ `emulator` field on the new save reads `retroarch-mgba` (or whatever ES-DE returns; if it's just `retroarch` we'll note it).
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip
-**Notes**:
+**Status**: [x] Pass — post-exit at 21:26:35 ran `Upload(POST)`, save id 42 created, baseline hash `14338baf...`, emulator tag `retroarch-mgba`, `is_current=true`.
+**Notes**: mGBA wrote a 32 KB empty SRAM during the brief play session — that's what was POSTed.
 
 ---
 
@@ -122,8 +132,8 @@ Goal: a sync after T2 with no changes is a no-op.
 - ✓ `last_sync_hash` in state unchanged.
 - ✓ `last_sync_check_at` advanced.
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip
-**Notes**:
+**Status**: [x] Pass — both pre-launch and post-exit at 21:38 returned `Skip(synced)`, no I/O. mGBA didn't even touch the `.srm` during the short session.
+**Notes**: No toast on Skip is by design.
 
 ---
 
@@ -146,8 +156,8 @@ Goal: post-play offline edit propagates as a PUT.
 - ✓ `last_sync_hash` in state == `T4_LOCAL_HASH`.
 - ✓ `device_syncs[me].is_current=true` (re-confirmed by `confirm_download` after PUT).
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip
-**Notes**:
+**Status**: [x] Pass — pre-launch at 21:44:21 ran `Upload(PUT to 42)` with `T4_LOCAL_HASH=3897f6af...`. Post-exit re-uploaded mGBA's empty default (`14338baf...`); both PUTs hit row 9 correctly.
+**Notes**: Surfaced a frontend toast bug (pre-launch said "Saves downloaded" instead of "synced") — fixed in d25d790. Filed #250 for the per-direction breakdown.
 
 ---
 
@@ -167,11 +177,12 @@ Goal: cross-device upload from another client gets pulled silently.
 - Confirm via `GET /api/saves?rom_id=4409&device_id=<our>`.
 
 **Action (you)**:
-1. Open game-detail page.
-2. Tap Play.
+1. Open the QAM Save Sync settings.
+2. Tap **Sync All Saves Now**.
+3. Tell me when it finishes (toast or button-state change).
 
 **Verify (Claude)**:
-- ✓ No modal appeared (you confirm).
+- ✓ Toast text was "Saves synced with RomM" (or none, depending on count semantics).
 - ✓ `md5sum local` == `T5_FOREIGN_HASH`.
 - ✓ `last_sync_hash` in state == `T5_FOREIGN_HASH`.
 - ✓ `device_syncs[me].is_current=true` again (auto-upserted by `GET /content?optimistic=true`).
@@ -191,16 +202,18 @@ Goal: both sides changed → modal appears → Keep Local PUTs and resolves.
 - Note: `last_sync_hash` in state still equals `T5_FOREIGN_HASH` from the previous test.
 
 **Action (you)**:
-1. Open game-detail page.
-2. Tap Play.
+1. Open the Mario Golf game-detail page.
+2. Tap Play. (Conflict tests need the modal flow, which is wired into the Play button.)
 3. **Sync conflict modal should appear**. Tell me what the local and server rows show (sizes/timestamps).
 4. Tap **Keep Local**.
-5. Tell me whether the modal closed cleanly and the game launched.
+5. As soon as the modal closes, tell me — I want to capture server state before mGBA can touch the `.srm`. Press the Steam button to back out of the launch as soon as possible.
 
 **Verify (Claude)**:
-- ✓ Server save content == `T6_LOCAL_HASH`.
+- ✓ Server save content == `T6_LOCAL_HASH` (captured before mGBA writes anything).
 - ✓ `last_sync_hash` in state == `T6_LOCAL_HASH`.
 - ✓ `is_current=true` for us.
+
+If mGBA gets a session in before we capture server state, the post-exit upload will overwrite `T6_LOCAL_HASH` with mGBA's default. We'll still see Upload(PUT) in logs and a fresh `last_sync_hash`, just not `T6_LOCAL_HASH` itself. That's still a pass.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -219,6 +232,7 @@ Goal: same trigger as T6, opposite resolution.
 1. Open game-detail page.
 2. Tap Play.
 3. Modal appears. Tap **Use Server**.
+4. As soon as the modal closes, back out via the Steam button so mGBA doesn't get a chance to overwrite the freshly-downloaded `.srm`.
 
 **Verify (Claude)**:
 - ✓ `md5sum local` == `T7_SERVER_HASH`.
@@ -270,8 +284,8 @@ Goal: deleted local file is restored from the tracked server save.
 
 **Action (you)**:
 1. (After T8 was a Cancel, run a quick "Keep Local" first to clean state — I'll tell you when.)
-2. Open game-detail page.
-3. Tap Play.
+2. Open the QAM Save Sync settings.
+3. Tap **Sync All Saves Now**.
 
 **Verify (Claude)**:
 - ✓ Local file recreated.
@@ -297,8 +311,8 @@ Goal: a server slot we never touched + our local file ahead by mtime → POST a 
 
 **Action (you)**:
 1. Toggle plugin on.
-2. Open game-detail page.
-3. Tap Play.
+2. Open the QAM Save Sync settings.
+3. Tap **Sync All Saves Now**.
 
 **Verify (Claude)**:
 - ✓ Server slot now has **2** saves (the htpc save untouched + our newly POSTed save).
@@ -320,8 +334,8 @@ Goal: same as T10 but with local mtime older than server.
 - Server: 1 save authored by htpc only (no `device_syncs[me]`), `updated_at` recent.
 
 **Action (you)**:
-1. Open game-detail page.
-2. Tap Play.
+1. Open the QAM Save Sync settings.
+2. Tap **Sync All Saves Now**.
 
 **Verify (Claude)**:
 - ✓ Local file content == server content.
@@ -366,7 +380,7 @@ Goal: classic A → B → A scenario silently propagates.
 - (Phase 1 of test: us POSTing.)
 
 **Action (you) — phase 1**:
-1. Tap Play. Tell me when done.
+1. Tap **Sync All Saves Now** in QAM. Tell me when done.
 
 **Setup (Claude) — phase 2**: simulate device B (htpc) updating the save.
 - Generate `/tmp/B.srm` (`T13_B_HASH`).
@@ -374,7 +388,7 @@ Goal: classic A → B → A scenario silently propagates.
 - Optionally call `confirm_download` as htpc to mark htpc current. (Not strictly required for this test.)
 
 **Action (you) — phase 2**:
-2. Tap Play again. Tell me whether a modal appeared.
+2. Tap **Sync All Saves Now** again. Tell me whether a modal appeared.
 
 **Verify (Claude)**:
 - ✓ No modal in phase 2.
@@ -398,7 +412,7 @@ Goal: roll the local + server back to an older save and confirm cross-device pro
   - v3 (`T14_V3_HASH`) — POSTed as htpc, newest.
 - Plugin should pick v3 on next sync. Sync the plugin once so our local matches v3 (Action: tap Play). After that, our state has v3 as tracked.
 
-**Action (you) — phase 1**: tap Play once so our local catches up to v3. Confirm via me.
+**Action (you) — phase 1**: tap **Sync All Saves Now** once so our local catches up to v3. Confirm via me.
 
 **Setup (Claude) — phase 2 marker**: capture all three save ids and their `updated_at` values for verification.
 
