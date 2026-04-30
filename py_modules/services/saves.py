@@ -232,6 +232,15 @@ class SaveService:
         for _rid, entry in self._save_sync_state.get("saves", {}).items():
             if "active_core" in entry:
                 entry["last_synced_core"] = entry.pop("active_core")
+        # Migrate: drop legacy "dismissed_newer_save_id" from per-file state.
+        # Was used by the removed newer-in-slot detection. Strip on load so the
+        # field disappears from user state files on the next save_state() call.
+        for _rid, entry in self._save_sync_state.get("saves", {}).items():
+            files = entry.get("files", {})
+            if isinstance(files, dict):
+                for file_state in files.values():
+                    if isinstance(file_state, dict):
+                        file_state.pop("dismissed_newer_save_id", None)
 
     def load_state(self) -> None:
         """Load save sync state from disk, merging with defaults."""

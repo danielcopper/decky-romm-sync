@@ -137,6 +137,45 @@ class TestStateManagement:
         svc, _ = make_service(tmp_path, save_sync_state=state)
         assert svc._save_sync_state["device_id"] == "existing-id"
 
+    def test_init_state_drops_legacy_dismissed_newer_save_id(self, tmp_path):
+        """v0.15.0 user state with the obsolete dismissed_newer_save_id field
+        gets the field stripped on init_state."""
+        state = SaveService.make_default_state()
+        state["saves"]["42"] = {
+            "files": {
+                "game.srm": {
+                    "tracked_save_id": 100,
+                    "last_sync_hash": "abc",
+                    "dismissed_newer_save_id": 200,  # legacy field
+                },
+                "game.rtc": {
+                    "tracked_save_id": 101,
+                    "dismissed_newer_save_id": 201,  # legacy field
+                },
+            }
+        }
+        svc, _ = make_service(tmp_path, save_sync_state=state)
+        files = svc._save_sync_state["saves"]["42"]["files"]
+        assert "dismissed_newer_save_id" not in files["game.srm"]
+        assert "dismissed_newer_save_id" not in files["game.rtc"]
+        # other fields preserved
+        assert files["game.srm"]["tracked_save_id"] == 100
+        assert files["game.srm"]["last_sync_hash"] == "abc"
+        assert files["game.rtc"]["tracked_save_id"] == 101
+
+    def test_init_state_skips_dismissed_migration_for_malformed_entries(self, tmp_path):
+        """Migration is defensive: non-dict file_state values don't crash init_state."""
+        state = SaveService.make_default_state()
+        state["saves"]["42"] = {
+            "files": {
+                "good.srm": {"tracked_save_id": 100, "dismissed_newer_save_id": 5},
+                "weird.srm": "not-a-dict",  # malformed entry
+            }
+        }
+        # Should not raise
+        svc, _ = make_service(tmp_path, save_sync_state=state)
+        assert "dismissed_newer_save_id" not in svc._save_sync_state["saves"]["42"]["files"]["good.srm"]
+
     def test_save_and_load_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["device_id"] = "test-device"
