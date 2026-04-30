@@ -2,96 +2,57 @@
 
 Hardware test plan for the `refactor/save-sync-rewrite` branch. Goal is to exercise every row of the [Decision Matrix](../../decky-romm-sync.wiki/Save-File-Sync-Architecture.md#decision-matrix) plus the rollback flow, conflict modal, per-rom lock, and state migration on a real Steam Deck against a real RomM server.
 
-This file is the source of truth for progress. Tick the status box at the bottom of each test as you go and write notes on anything unexpected — we will iterate on bugs from this list.
+This file is the source of truth for progress. Tick the status box at the bottom of each test as you go and write notes on anything unexpected. The session can be paused and resumed at any time — the next session reads this file to know exactly where to pick up.
 
-## How to use this document
+## How we work through this
 
-1. Pick the next un-ticked test in order. Order matters because some tests build on the state left by the previous one.
-2. Read the **Setup** block carefully and put the system in the exact state described.
-3. Run **Steps** and observe **Expected**.
-4. Write **Pass / Fail / Skip** at the bottom of the test. Add notes on anything off.
-5. If you fail a test or get blocked, stop and let me know — we'll triage and decide whether to keep going against the broken state or reset.
+Each test has three blocks:
 
-You can stop and resume any time. The next session reads this file to know exactly where you left off.
+- **Setup (Claude)** — the state-prep work I do: curl against RomM, edit `save_sync_state.json`, write/remove fake `.srm` content. I run these without prompting.
+- **Action (you)** — what you do on the Deck UI: tap Play, observe the modal, etc. I'll wait for you to report what happened.
+- **Verify (Claude)** — what I check after: re-read state, query server, compare hashes. I report back ✓ or ✗.
 
-## Conventions
+You don't run any curl. I have your RomM credentials (read from the plugin settings) and the device ids.
 
-### Plugin reload / rebuild
+When I need a plugin reload I'll ask you to **toggle the plugin off in Decky, wait two seconds, toggle it on**. I'll never tell you to run `mise run dev` for these smoke tests — none of them require a code change. If we discover a bug and I push a fix mid-session, I'll explicitly say "run `mise run dev` from the worktree before continuing".
 
-- **Reload plugin only**: Decky → decky-romm-sync → toggle off, wait 2 seconds, toggle on. Use this when you change `save_sync_state.json` on disk and want the plugin to re-read it. **Important: only modify `save_sync_state.json` while the plugin is unloaded.** The plugin writes the file from memory on shutdown and on every state mutation; concurrent edits will be lost.
-- **Rebuild + reload (`mise run dev`)**: run from `/home/deck/Repos/decky-romm-sync/.worktrees/refactor/save-sync-rewrite/` when you have changed source code (Python or TypeScript). I will flag with **REBUILD** any test that requires a code change. Tests below mostly do not — they only need a plugin reload at most.
+## Test ROM and environment
 
-### Paths
+Locked in:
 
-- **Plugin runtime**: `/home/deck/homebrew/plugins/decky-romm-sync/`
-- **State file**: `/home/deck/homebrew/data/decky-romm-sync/save_sync_state.json`
-- **Plugin logs**: `/home/deck/homebrew/data/decky-romm-sync/logs/` plus Decky's Loader log at `/tmp/plugin_loader_stdout.log`
-- **RetroDECK saves (internal SSD)**: `/home/deck/retrodeck/saves/<system>/<rom_name>.srm`
-- **RetroDECK saves (SD card)**: `/run/media/deck/Emulation/retrodeck/saves/<system>/<rom_name>.srm`
-- **RetroDECK ROMs**: same root as saves but `roms/<system>/<rom_name>.<ext>`
+- **ROM name**: Mario Golf - Advance Tour (USA)
+- **System**: gba
+- **rom_id**: `4409`
+- **Save filename**: `Mario Golf - Advance Tour (USA).srm`
+- **Save path**: `/run/media/deck/Emulation/retrodeck/saves/gba/Mario Golf - Advance Tour (USA).srm`
+- **State path** (RetroArch save state, not relevant to sync — sync only touches `.srm`): `/run/media/deck/Emulation/retrodeck/states/gba/`
+- **Active core (per ES-DE)**: mGBA — emulator tag will be `retroarch-mgba` after the first sync that resolves the core
+- **RomM server**: `http://192.168.178.83:8085` (v4.8.1)
+- **Our device**: `steamdeck` — id `81445610-e5a1-46b5-9389-9d159f99c21c`
+- **Simulated "other device"**: `htpc-livingroom` — id `0151fb4c-04ef-42e7-9e22-6e7499e4a94e` (also registered on this RomM, used to simulate B in cross-device flows)
 
-### Test ROM
+Plugin runtime files I edit on your behalf:
 
-Pick **one** ROM you can play through quickly and stick with it for all tests. Suggested: a GBA game, because save files are tiny and `mGBA` boots fast. Record below:
+- State: `/home/deck/homebrew/data/decky-romm-sync/save_sync_state.json`
+- Settings (read-only for me): `/home/deck/homebrew/settings/decky-romm-sync/settings.json`
 
-- ROM name: `___________________________________`
-- System: `___________________________________`
-- rom_id (RomM database id; visible in the RomM web UI URL or the plugin debug log): `_________`
-- save filename (e.g. `Mario Golf.srm`): `___________________________________`
-- save path on disk: `___________________________________`
-- emulator tag (look it up after the first sync — appears in the server save metadata, e.g. `retroarch-mgba`): `___________________________________`
+Initial baseline (verified just now):
 
-### Server-side manipulations
+- Server saves for rom 4409: **none** (cleaned up)
+- Plugin state for rom 4409: **empty** (`saves["4409"] = {}`)
+- Local save: `/run/media/deck/Emulation/retrodeck/saves/gba/Mario Golf - Advance Tour (USA).srm` does **not** exist; only a `.srm.bak` from a previous session is present (will leave it alone — sync ignores `.bak` files)
 
-You'll need to add, modify, or delete saves on the RomM server during tests. Two options:
+## Reset between tests
 
-**Option A — RomM web UI**: open `https://<your-romm>/library/<rom_id>` and use the Save Files panel. Easy for upload/delete; you cannot directly bump `updated_at`.
+When a test calls for a clean slate (state, local, server), I'll execute:
 
-**Option B — `curl`**: install `jq` if you don't have it. Set:
+1. Toggle plugin off (you).
+2. `jq 'del(.saves["4409"])' state.json | sponge state.json` (me).
+3. `rm -f /run/media/deck/Emulation/retrodeck/saves/gba/Mario\ Golf\ -\ Advance\ Tour\ \(USA\).srm` (me).
+4. `curl -X POST .../api/saves/delete -d '{"saves":[<all current ids>]}'` (me).
+5. Toggle plugin on (you).
 
-```bash
-export ROMM_URL="https://your-romm-server"
-export ROMM_USER="your-username"
-# Read once into the shell with: read -s ROMM_PASS && export ROMM_PASS
-```
-
-Helpful one-liners (run from a Konsole on the Deck):
-
-```bash
-# Login → cookie jar
-curl -s -c /tmp/romm-cookies.txt -X POST "$ROMM_URL/api/login" \
-  -d "username=$ROMM_USER&password=$ROMM_PASS"
-
-# List saves for a rom
-curl -s -b /tmp/romm-cookies.txt "$ROMM_URL/api/saves?rom_id=<ID>" | jq .
-
-# PUT (re-upload) — bumps updated_at
-curl -s -b /tmp/romm-cookies.txt -X PUT \
-  "$ROMM_URL/api/saves/<save_id>" -F "saveFile=@/path/to/local.srm"
-
-# Delete (bulk)
-curl -s -b /tmp/romm-cookies.txt -X POST \
-  "$ROMM_URL/api/saves/delete" -H "Content-Type: application/json" \
-  -d '{"saves":[<save_id>]}'
-
-# Get the device_syncs/is_current state for a save
-curl -s -b /tmp/romm-cookies.txt \
-  "$ROMM_URL/api/saves?rom_id=<ID>&device_id=<my_device_id>" \
-  | jq '.[].device_syncs'
-```
-
-### Reset to clean state
-
-When a test calls for a fresh slate:
-
-1. Toggle plugin off.
-2. Stop the plugin completely (`systemctl --user stop plugin_loader || true` is overkill; just toggling off is enough).
-3. Delete or rewrite the relevant `saves.<rom_id>` block in `save_sync_state.json`. To reset just one rom: `jq 'del(.saves["<rom_id>"])' save_sync_state.json | sponge save_sync_state.json` (or hand-edit).
-4. Delete or restore the local `.srm` file.
-5. On the RomM server, delete or restore server saves for the rom.
-6. Toggle plugin back on.
-
-A copy of a known-good state file lives at `/tmp/save_sync_state.backup.json` if you make one before starting.
+I'll always announce the reset before doing it, so you can confirm.
 
 ---
 
@@ -101,101 +62,89 @@ A copy of a known-good state file lives at `/tmp/save_sync_state.backup.json` if
 
 Goal: prove `compute_sync_action` returns `Skip(nothing_to_sync)` and the sync flow does no I/O.
 
-**Setup**:
-- Plugin state: no `saves.<rom_id>` entry, OR `saves.<rom_id>.files` empty. Reset rom state if needed.
-- Local: no `.srm` file at the expected path. `rm -f /home/deck/retrodeck/saves/<system>/<rom_name>.srm`.
-- Server: no saves for this rom. Delete via RomM UI if needed.
+**Setup (Claude)**:
+- Confirm `saves["4409"]` in state is empty or has no `files`.
+- Confirm no `.srm` at the save path.
+- Confirm `GET /api/saves?rom_id=4409` returns `[]`.
 
-**Steps**:
-1. Open the game-detail page in Decky.
-2. Tap Play.
+**Action (you)**:
+1. Open Decky → **Save Sync** is enabled (toggle in QAM if not).
+2. Open the Mario Golf game-detail page.
+3. Tap Play.
+4. Tell me what happened (toast text? game launched?).
 
-**Expected**:
-- Game launches normally.
-- No upload, no download.
-- Toast (if any) says nothing was synced.
-- `save_sync_state.json` after the sync still has no file entries for this rom.
+**Verify (Claude)**:
+- `save_sync_state.json` `saves["4409"].last_sync_check_at` advanced; no `files` entries created.
+- No new server saves.
+- No `.srm` created on disk.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
 
 ---
 
-### T2 — Matrix row 2 (local exists, no server)
+### T2 — Matrix row 2 (local exists, no server → POST)
 
 Goal: first POST upload from a fresh local file.
 
-**Setup**:
-- Plugin state: same as T1 (no entry).
-- Local: a real `.srm` exists. The simplest way: launch the game once, save in-game, exit — but to keep this test purely about the upload path, we want to test pre-launch sync, so create the file directly: `dd if=/dev/urandom of=/home/deck/retrodeck/saves/<system>/<rom_name>.srm bs=1024 count=32`. (32 KB random content; valid `.srm` content is not required for this test, only its existence and a stable hash.)
-- Server: no saves for this rom.
+**Setup (Claude)**:
+- Carry over from T1.
+- Write 32 KB random content to the save path. Capture MD5 as `T2_LOCAL_HASH`.
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
 2. Tap Play.
 
-**Expected**:
-- Pre-launch sync runs `Upload(POST)`.
-- Server now has one save in slot `default` (or whatever your `default_slot` setting is) with a timestamp-tagged filename like `<rom_name> [yyyy-MM-dd_HH-mm-ss].srm`.
-- `save_sync_state.json` has `saves.<rom_id>.files["<rom_name>.srm"]` populated with `tracked_save_id`, `last_sync_hash` matching the local MD5, and `last_sync_*` fields.
-- `device_syncs[me].is_current=true` on the new save (verify via `curl`).
-
-**Pass criteria**:
-- ✓ MD5 of local file equals `last_sync_hash` in state.
-- ✓ Server save id equals `tracked_save_id` and `last_sync_server_save_id` in state.
-- ✓ `is_current=true` for our device on the new save.
+**Verify (Claude)**:
+- ✓ Server now has one save in slot `default` with our timestamp-tagged filename.
+- ✓ State has `saves["4409"].files["Mario Golf - Advance Tour (USA).srm"]` with `tracked_save_id`, `last_sync_hash == T2_LOCAL_HASH`.
+- ✓ `device_syncs[me].is_current=true`.
+- ✓ `emulator` field on the new save reads `retroarch-mgba` (or whatever ES-DE returns; if it's just `retroarch` we'll note it).
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
 
 ---
 
-### T3 — Matrix row 7 (steady-state skip)
+### T3 — Matrix row 7 (steady-state Skip)
 
-Goal: prove a sync after T2 with no changes is a no-op.
+Goal: a sync after T2 with no changes is a no-op.
 
-**Setup**:
-- Carry over state from T2 (do **not** reset).
-- Local: untouched since T2.
-- Server: untouched since T2.
+**Setup (Claude)**: nothing — carry T2 state.
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
-2. Tap Play (or use Sync All Saves Now in QAM).
+2. Tap Play (or "Sync All Saves Now").
 
-**Expected**:
-- `compute_sync_action` returns `Skip(synced)`.
-- No upload, no download. Toast shows 0 synced.
-- `last_sync_check_at` in state advances; nothing else changes.
+**Verify (Claude)**:
+- ✓ No upload, no download.
+- ✓ Server save id and `updated_at` unchanged.
+- ✓ `last_sync_hash` in state unchanged.
+- ✓ `last_sync_check_at` advanced.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
 
 ---
 
-### T4 — Matrix row 9 (offline edit, server still trusts us → PUT)
+### T4 — Matrix row 9 (offline edit → PUT)
 
 Goal: post-play offline edit propagates as a PUT.
 
-**Setup**:
-- State carries over from T3.
-- Local: simulate a play session — `dd if=/dev/urandom of=/home/deck/retrodeck/saves/<system>/<rom_name>.srm bs=1024 count=32 conv=notrunc` (overwrites with new random content; size unchanged is fine).
-- Server: untouched.
+**Setup (Claude)**:
+- Overwrite the local file with new 32 KB random content (size unchanged).
+- Capture new MD5 as `T4_LOCAL_HASH`.
+- Note current server `updated_at` for the tracked save.
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
 2. Tap Play.
 
-**Expected**:
-- `compute_sync_action` → `Upload(PUT to <tracked_save_id>)`.
-- Server save id is unchanged (same id), `updated_at` advances to now.
-- `last_sync_hash` in state updated to the new local MD5.
-- `device_syncs[me].is_current=true` (because `confirm_download` runs after the PUT).
-
-**Pass criteria**:
-- ✓ `tracked_save_id` unchanged.
-- ✓ Server `updated_at` newer than before.
-- ✓ `is_current=true`.
+**Verify (Claude)**:
+- ✓ Server save id unchanged (PUT, not POST — same `tracked_save_id`).
+- ✓ Server `updated_at` advanced.
+- ✓ `last_sync_hash` in state == `T4_LOCAL_HASH`.
+- ✓ `device_syncs[me].is_current=true` (re-confirmed by `confirm_download` after PUT).
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -206,30 +155,26 @@ Goal: post-play offline edit propagates as a PUT.
 
 Goal: cross-device upload from another client gets pulled silently.
 
-**Setup**:
-- State carries over from T4.
-- Local: untouched.
-- Server: simulate another device pushing — easiest is a `curl` PUT with new content:
-  ```bash
-  dd if=/dev/urandom of=/tmp/foreign.srm bs=1024 count=32
-  curl -s -b /tmp/romm-cookies.txt -X PUT \
-    "$ROMM_URL/api/saves/<tracked_save_id>" -F "saveFile=@/tmp/foreign.srm"
+**Setup (Claude)**:
+- Generate 32 KB content for a "B" file. Save its MD5 as `T5_FOREIGN_HASH`.
+- PUT it onto our `tracked_save_id` using the htpc device_id (`device_id=0151fb4c-...`):
   ```
-  This bumps `updated_at` and leaves our `device_syncs[me]` row stale → `is_current=false` for us.
+  curl -u daniel:... -X PUT \
+    "$ROMM_URL/api/saves/<tracked_save_id>?device_id=0151fb4c-...&optimistic=true" \
+    -F "saveFile=@/tmp/B.srm"
+  ```
+- That bumps `updated_at` and leaves our (`steamdeck`) `device_syncs` row stale → `is_current=false` for us.
+- Confirm via `GET /api/saves?rom_id=4409&device_id=<our>`.
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
 2. Tap Play.
 
-**Expected**:
-- `compute_sync_action` → `Download(picked)`.
-- Local file content now equals `/tmp/foreign.srm` content.
-- `last_sync_hash` updated to MD5 of `/tmp/foreign.srm`.
-- `device_syncs[me].is_current=true` again (auto-upserted by `GET /content?optimistic=true`).
-
-**Pass criteria**:
-- ✓ `md5sum /home/deck/retrodeck/saves/<system>/<rom_name>.srm` equals `md5sum /tmp/foreign.srm`.
-- ✓ `is_current=true`.
+**Verify (Claude)**:
+- ✓ No modal appeared (you confirm).
+- ✓ `md5sum local` == `T5_FOREIGN_HASH`.
+- ✓ `last_sync_hash` in state == `T5_FOREIGN_HASH`.
+- ✓ `device_syncs[me].is_current=true` again (auto-upserted by `GET /content?optimistic=true`).
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -240,28 +185,22 @@ Goal: cross-device upload from another client gets pulled silently.
 
 Goal: both sides changed → modal appears → Keep Local PUTs and resolves.
 
-**Setup**:
-- State carries over from T5.
-- **Both** sides need to diverge from the new baseline:
-  - Local: `dd if=/dev/urandom of=/home/deck/retrodeck/saves/<system>/<rom_name>.srm bs=1024 count=32 conv=notrunc` (simulates an offline play).
-  - Server: another `curl` PUT with **different** content from another temp file (`dd if=/dev/urandom of=/tmp/foreign2.srm ...; curl -X PUT ...`).
-- After both: capture the local MD5 (`md5sum /home/deck/retrodeck/saves/<system>/<rom_name>.srm`) — call it `LOCAL_HASH`.
+**Setup (Claude)**:
+- Local: overwrite with new 32 KB random content (`T6_LOCAL_HASH`).
+- Server: PUT a different new content via htpc device_id (`T6_SERVER_HASH`). Now both diverge from baseline.
+- Note: `last_sync_hash` in state still equals `T5_FOREIGN_HASH` from the previous test.
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
 2. Tap Play.
+3. **Sync conflict modal should appear**. Tell me what the local and server rows show (sizes/timestamps).
+4. Tap **Keep Local**.
+5. Tell me whether the modal closed cleanly and the game launched.
 
-**Expected**:
-- Sync conflict modal appears with both rows shown.
-- Tap **Keep Local**.
-- Modal closes, sync continues, game launches.
-- Server save content now equals local content (server MD5 == `LOCAL_HASH`).
-- `last_sync_hash` == `LOCAL_HASH`.
-- `is_current=true` for our device.
-
-**Pass criteria**:
-- ✓ Modal showed both sides.
-- ✓ Server file matches what local was at modal time.
+**Verify (Claude)**:
+- ✓ Server save content == `T6_LOCAL_HASH`.
+- ✓ `last_sync_hash` in state == `T6_LOCAL_HASH`.
+- ✓ `is_current=true` for us.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -270,61 +209,51 @@ Goal: both sides changed → modal appears → Keep Local PUTs and resolves.
 
 ### T7 — Matrix row 12 (true conflict — Use Server)
 
-Goal: same conflict trigger as T6, opposite resolution.
+Goal: same trigger as T6, opposite resolution.
 
-**Setup**:
-- Carry over from T6, then re-create the conflict the same way:
-  - Local: overwrite with new random content (`dd ...`).
-  - Server: PUT a different new content via `curl` (`dd ...; curl -X PUT ...`).
-- Capture the **server**-side MD5 by downloading: `curl -s -b ... "$ROMM_URL/api/saves/<tracked_save_id>/content" -o /tmp/server_check.srm; md5sum /tmp/server_check.srm`. Call it `SERVER_HASH`.
+**Setup (Claude)**: re-create the conflict the same way.
+- Local overwrite (`T7_LOCAL_HASH`).
+- Server PUT via htpc (`T7_SERVER_HASH`).
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
 2. Tap Play.
+3. Modal appears. Tap **Use Server**.
 
-**Expected**:
-- Sync conflict modal appears.
-- Tap **Use Server**.
-- Local file content now equals server content (local MD5 == `SERVER_HASH`).
-- `last_sync_hash` == `SERVER_HASH`.
-
-**Pass criteria**:
-- ✓ Local file overwritten with server content.
-- ✓ State reflects new hash.
+**Verify (Claude)**:
+- ✓ `md5sum local` == `T7_SERVER_HASH`.
+- ✓ `last_sync_hash` in state == `T7_SERVER_HASH`.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
 
 ---
 
-### T8 — Matrix row 12 (true conflict — Cancel re-fires next time)
+### T8 — Matrix row 12 (true conflict — Cancel re-fires)
 
 Goal: Cancel does no I/O, no state change; conflict re-fires until user picks a side.
 
-**Setup**:
-- Re-create the same conflict as T6/T7 (overwrite local + curl PUT to server with different content).
-- Capture both `LOCAL_HASH` and `SERVER_HASH`.
+**Setup (Claude)**: re-create the conflict.
+- Local overwrite (`T8_LOCAL_HASH`).
+- Server PUT via htpc (`T8_SERVER_HASH`).
+- Capture pre-test `last_sync_hash` for comparison.
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
 2. Tap Play.
 3. Modal appears. Tap **Cancel**.
-4. Game launches (or sync skipped, depending on flow). Exit the game without saving.
-5. Open game-detail page again.
-6. Tap Play.
+4. Tell me whether the game launched anyway.
+5. Exit the game without saving (or just press the Steam button to back out).
+6. Open game-detail page again.
+7. Tap Play.
+8. Tell me whether the modal appeared again.
 
-**Expected** after step 3:
-- Modal closes immediately. No upload, no download.
-- Local file unchanged (`md5sum` still == `LOCAL_HASH`).
-- Server file unchanged (`SERVER_HASH`).
-- `last_sync_hash` in state is **still the old baseline** (the value from before T6 — NOT `LOCAL_HASH`, NOT `SERVER_HASH`).
+**Verify (Claude)** after step 3:
+- ✓ Local file unchanged (`md5sum` == `T8_LOCAL_HASH`).
+- ✓ Server file unchanged (`T8_SERVER_HASH`).
+- ✓ `last_sync_hash` in state == pre-test value (NOT T8_LOCAL_HASH, NOT T8_SERVER_HASH).
 
-**Expected** after step 6:
-- Modal appears again with the same two rows. (If another device intervened between steps 3 and 6, this may resolve to Skip / Download instead — that's OK and worth noting.)
-
-**Pass criteria**:
-- ✓ Cancel mutates nothing.
-- ✓ Conflict re-detected on the next sync.
+**Verify (Claude)** after step 7: modal expected to re-fire (matrix still produces row 12).
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -335,50 +264,46 @@ Goal: Cancel does no I/O, no state change; conflict re-fires until user picks a 
 
 Goal: deleted local file is restored from the tracked server save.
 
-**Setup**:
-- Pick whichever of T6 / T7 left the cleanest state. For simplicity, run T6 (Keep Local) again first if needed so we end with `is_current=true`, baseline matches local, server matches local.
-- Local: delete the file. `rm /home/deck/retrodeck/saves/<system>/<rom_name>.srm`.
-- Server: untouched.
-- Plugin state: untouched (`tracked_save_id`, `last_sync_hash` still point at the now-missing local).
+**Setup (Claude)**:
+- Resolve the lingering conflict from T8 first by either re-running T6 (Keep Local) setup or running T7 setup (Use Server). Let's go with Keep Local for predictability — that gets us back into matrix row 7 (synced) territory after the resolve.
+- Then: delete the local file. Note the server save and `last_sync_hash` from state.
 
-**Steps**:
-1. Open game-detail page.
-2. Tap Play.
+**Action (you)**:
+1. (After T8 was a Cancel, run a quick "Keep Local" first to clean state — I'll tell you when.)
+2. Open game-detail page.
+3. Tap Play.
 
-**Expected**:
-- `compute_sync_action` → `Download(picked)` (matrix row 4).
-- Local file recreated; content equals server content; MD5 equals `last_sync_hash` (unchanged from before).
-
-**Pass criteria**:
-- ✓ Local file restored.
-- ✓ `last_sync_hash` is unchanged (because content matches the baseline).
+**Verify (Claude)**:
+- ✓ Local file recreated.
+- ✓ MD5 of recreated local == server content MD5 == `last_sync_hash` in state.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
 
 ---
 
-### T10 — Matrix row 6a (POST when no entry + local newer)
+### T10 — Matrix row 6a (no entry + local newer → POST as new save)
 
-Goal: a foreign-only server slot with our local file ahead by mtime → POST a new save side-by-side.
+Goal: a server slot we never touched + our local file ahead by mtime → POST a new save side-by-side.
 
-**Setup**:
-- **Reset rom state**. Hand-edit `save_sync_state.json` to remove `saves.<rom_id>` (or use `jq` as in the Reset section).
-- Local: `dd if=/dev/urandom of=/home/deck/retrodeck/saves/<system>/<rom_name>.srm ...` and **`touch -d "now" ...`** to make sure mtime is fresh.
-- Server: from the previous tests there is at least one save (from another "device" via curl). Confirm via web UI or API that at least one save in the slot exists and that **our `device_id` is not in any of their `device_syncs` arrays** (because we wiped state, our recorded device_id is gone — but the server still has us by `server_device_id`. To get a true "no entry" condition, either delete and recreate the save via curl as a different user, OR delete our `device_syncs` row server-side via the SQL/admin tools if you have them).
+**Setup (Claude)**:
+- Reset rom state (delete `saves["4409"]` from state file). Plugin off, edit, plugin on.
+- Local: write new 32 KB random content. `touch -d "now"` it for fresh mtime.
+- Server: keep the existing save from T9 — but we need our `device_syncs` row gone for "no entry". Easiest path: **delete and re-create the server save as device htpc only**, with no steamdeck `device_syncs` row. I'll do that via:
+  1. Capture content via download.
+  2. Delete existing save.
+  3. POST new save with htpc device_id only.
+- After this the slot has 1 save with no entry for us.
 
-If you can't easily clear the server-side `device_syncs` row, mark this test SKIP and note it — `compute_sync_action` will fall into row 7/9/10 instead of row 6a in that case, which is the same output as previous tests.
-
-**Steps**:
-1. Toggle plugin back on.
+**Action (you)**:
+1. Toggle plugin on.
 2. Open game-detail page.
 3. Tap Play.
 
-**Expected**:
-- `compute_sync_action` → `Upload(POST)` because no entry on the picked save and local mtime ≥ server `updated_at`.
-- A second save now exists in the slot. Original foreign save is untouched.
-- New save id stored as `tracked_save_id` in state.
-- New save is newest (`updated_at`).
+**Verify (Claude)**:
+- ✓ Server slot now has **2** saves (the htpc save untouched + our newly POSTed save).
+- ✓ Our new save id stored as `tracked_save_id`. New save is newest (`updated_at`).
+- ✓ Original htpc save unchanged.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -389,18 +314,18 @@ If you can't easily clear the server-side `device_syncs` row, mark this test SKI
 
 Goal: same as T10 but with local mtime older than server.
 
-**Setup**:
+**Setup (Claude)**:
 - Reset rom state.
-- Local: `touch -d "1 hour ago" /home/deck/retrodeck/saves/<system>/<rom_name>.srm` so mtime is in the past. Content can be whatever.
-- Server: at least one save with `updated_at` recent. Either run T5's `curl PUT` again to bump it, or create a fresh save via the RomM UI.
+- Local: write 32 KB random content. `touch -d "1 hour ago"` so mtime is in the past.
+- Server: 1 save authored by htpc only (no `device_syncs[me]`), `updated_at` recent.
 
-**Steps**:
+**Action (you)**:
 1. Open game-detail page.
 2. Tap Play.
 
-**Expected**:
-- `compute_sync_action` → `Download(picked)`.
-- Local file overwritten with server content.
+**Verify (Claude)**:
+- ✓ Local file content == server content.
+- ✓ State updated with `last_sync_hash` == server-content MD5.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -411,26 +336,20 @@ Goal: same as T10 but with local mtime older than server.
 
 Goal: server reports `is_current=true` for our device but we have no `last_sync_hash` yet → state silently records the baseline.
 
-**Setup**:
-- Hand-edit `save_sync_state.json` to remove only the `last_sync_hash` field for this file (keep `tracked_save_id` and other fields):
-  ```bash
-  jq '.saves["<rom_id>"].files["<file>"] |= del(.last_sync_hash)' state.json | sponge state.json
-  ```
-- Local: any content — but capture its MD5 first (`LOCAL_HASH`).
-- Server: leave alone. Verify our `device_syncs[me].is_current=true` via `curl`.
+**Setup (Claude)**:
+- Bring rom 4409 to a synced state (run T2 if needed).
+- Plugin off. Strip `last_sync_hash` from `state.saves["4409"].files["Mario Golf - Advance Tour (USA).srm"]`.
+- Capture local MD5 as `T12_LOCAL_HASH`.
+- Confirm via curl that `device_syncs[me].is_current=true` for the tracked save.
+- Plugin on.
 
-**Steps**:
-1. Toggle plugin on.
-2. Open game-detail page (this triggers `_get_save_status_io`, which is enough to record the baseline — no Play required).
+**Action (you)**:
+1. Open game-detail page (`getSaveStatus` triggers; no Play tap needed).
+2. Tell me when the page is open and you see the SAVES tab.
 
-**Expected**:
-- `compute_sync_action` → `Skip(synced, adopt_baseline=True)`.
-- `save_sync_state.json` now has `last_sync_hash == LOCAL_HASH`.
-- No upload, no download.
-
-**Pass criteria**:
-- ✓ Baseline written without any I/O.
-- ✓ Subsequent Play taps run T3-style steady-state Skip.
+**Verify (Claude)**:
+- ✓ State now has `last_sync_hash == T12_LOCAL_HASH`.
+- ✓ No upload, no download (tracked save id and `updated_at` unchanged).
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -441,29 +360,26 @@ Goal: server reports `is_current=true` for our device but we have no `last_sync_
 
 Goal: classic A → B → A scenario silently propagates.
 
-This is two-device. If you only have one Deck, simulate device B with `curl` against the same RomM server using a different `device_id`. Easier path: keep running everything from the Deck and use `curl` as the second device.
+**Setup (Claude)**:
+- Reset rom state, local, server.
+- Local: write 32 KB random.
+- (Phase 1 of test: us POSTing.)
 
-**Setup**:
-- Reset state, local, and server for the rom.
-- Local: a `.srm` exists. POST it via the plugin (i.e. run T2). After this, our state knows the save and `is_current=true`.
+**Action (you) — phase 1**:
+1. Tap Play. Tell me when done.
 
-**Steps**:
-1. Simulate device B uploading newer content:
-   ```bash
-   dd if=/dev/urandom of=/tmp/B.srm bs=1024 count=32
-   curl -s -b /tmp/romm-cookies.txt -X PUT \
-     "$ROMM_URL/api/saves/<tracked_save_id>" -F "saveFile=@/tmp/B.srm"
-   ```
-2. Optionally also POST `confirm_download` as device B if you want B's `is_current=true`. For this test it's enough that **our** `is_current` flips to false (which the PUT alone does).
-3. On the Deck: open game-detail, tap Play.
+**Setup (Claude) — phase 2**: simulate device B (htpc) updating the save.
+- Generate `/tmp/B.srm` (`T13_B_HASH`).
+- PUT to our `tracked_save_id` with `device_id=<htpc>` and `optimistic=true`.
+- Optionally call `confirm_download` as htpc to mark htpc current. (Not strictly required for this test.)
 
-**Expected**:
-- Silent download. Local now matches `/tmp/B.srm`.
-- Modal does NOT appear (we did not edit local; only one side changed → matrix row 10, not row 12).
+**Action (you) — phase 2**:
+2. Tap Play again. Tell me whether a modal appeared.
 
-**Pass criteria**:
-- ✓ No modal.
-- ✓ `md5sum local` == `md5sum /tmp/B.srm`.
+**Verify (Claude)**:
+- ✓ No modal in phase 2.
+- ✓ Local content == `T13_B_HASH`.
+- ✓ State `last_sync_hash` == `T13_B_HASH`.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -472,44 +388,34 @@ This is two-device. If you only have one Deck, simulate device B with `curl` aga
 
 ### T14 — Rollback flow
 
-Goal: roll the local + server back to an older save id and confirm cross-device propagation.
+Goal: roll the local + server back to an older save and confirm cross-device propagation works.
 
-**Setup**:
-- Need at least 2 server saves in the slot for this rom so there's a "previous version" to roll to. Run T2 (POST) followed by T4 (PUT) followed by another local edit + sync — that gives you a couple of stacked versions, but PUT updates the same id, so you only get one save id with multiple `updated_at` bumps.
-- For real version history you need **multiple POSTed save ids**. Easiest: change `default_slot` setting between syncs OR manually create extra saves via curl POST using a unique slot, then move them. Or simply recognise that a single-save rollback doesn't really roll back content — you need history.
-- If `autocleanup_limit` is high enough and slots already keep history, RomM stores prior versions — check what the version-history UI in the SAVES tab shows for this rom. If it's empty, manually create older versions:
-  ```bash
-  for i in 1 2 3; do
-    dd if=/dev/urandom of=/tmp/v${i}.srm bs=1024 count=32
-    curl -s -b /tmp/romm-cookies.txt -X POST \
-      "$ROMM_URL/api/saves?rom_id=<ROM_ID>&emulator=<EMU>&slot=default" \
-      -F "saveFile=@/tmp/v${i}.srm"
-    sleep 2
-  done
-  ```
-  (Three increasing-timestamp saves in the same slot. Adjust `<EMU>` to your tag, e.g. `retroarch-mgba`.)
+**Setup (Claude)**:
+- Reset rom state, local, server.
+- Create three POSTed saves in slot `default` with increasing timestamps:
+  - v1 (`T14_V1_HASH`) — POSTed as our device, then immediately `confirm_download`.
+  - v2 (`T14_V2_HASH`) — POSTed as htpc.
+  - v3 (`T14_V3_HASH`) — POSTed as htpc, newest.
+- Plugin should pick v3 on next sync. Sync the plugin once so our local matches v3 (Action: tap Play). After that, our state has v3 as tracked.
 
-**Steps**:
+**Action (you) — phase 1**: tap Play once so our local catches up to v3. Confirm via me.
+
+**Setup (Claude) — phase 2 marker**: capture all three save ids and their `updated_at` values for verification.
+
+**Action (you) — phase 2**:
 1. Open game-detail → SAVES tab.
-2. Pick a non-newest version and tap **Rollback to this version**.
-3. Confirm any modal.
-4. Verify server: that picked save's `updated_at` is now NEWEST in the slot.
-5. Open game-detail again, tap Play.
-6. Open another machine's view (or `curl` from a fake "device B"): they should see the rolled-back save as newest and download it.
+2. Find the version-history list (or version picker — wherever rollback lives in the current UI).
+3. Pick **v1** (the oldest).
+4. Tap **Rollback to this version** (or whatever the button is named — tell me what you see).
+5. Confirm any "this will discard local changes" warning.
 
-**Expected**:
-- Step 2 returns `{"status": "ok"}` in plugin logs.
-- Server: picked save's `updated_at` ≥ all others in slot.
-- Local file content equals picked save's content.
-- `last_sync_hash` in state matches local content.
-- `device_syncs[me].is_current=true` for the picked save (because `confirm_download` ran).
-- After step 5: matrix row 7 `Skip(synced)` — no further sync needed.
-- Step 6 (other device): `Download(picked)` — they pull our rolled-back content silently.
+**Verify (Claude)**:
+- ✓ Server: v1's `updated_at` is now NEWEST in the slot (post-PUT bump).
+- ✓ Local: `md5sum` == `T14_V1_HASH`.
+- ✓ State: `last_sync_hash == T14_V1_HASH`, `tracked_save_id == v1.id`.
+- ✓ `device_syncs[me].is_current=true` on v1.
 
-**Pass criteria**:
-- ✓ Rollback ok.
-- ✓ Cross-device propagation works (newest is the rolled-back save).
-- ✓ Our device flagged current for that save.
+**Cross-device verification (Claude)**: simulate htpc opening the game (via `GET /api/saves?rom_id=4409&device_id=<htpc>`). htpc's `is_current` for v1 should be `false` → if we ran `compute_sync_action` for htpc, it'd return `Download(v1)`. (We don't actually run htpc — just confirm the server state is consistent.)
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -520,19 +426,19 @@ Goal: roll the local + server back to an older save id and confirm cross-device 
 
 Goal: simultaneous pre_launch_sync + sync_all serialise without races.
 
-**Setup**: any rom in a steady state.
+This is best-effort given manual timing.
 
-**Steps**:
-1. Open the QAM panel and the game-detail panel side by side (the QAM side panel can stay open while the game-detail page is foregrounded).
+**Setup (Claude)**: any rom in a steady state (carry over T14).
+
+**Action (you)**:
+1. Open the QAM panel and the Mario Golf game-detail page side by side (QAM stays open while game-detail is foregrounded).
 2. From game-detail, tap Play.
 3. Within ~200ms (best effort), tap **Sync All Saves Now** in the QAM.
+4. Tell me when both finish.
 
-**Expected**:
-- Both sync attempts complete.
-- No race-y log lines (look for two interleaved `_sync_rom_saves(<rom_id>)` log blocks for the same rom).
-- State consistent — no mismatched fields after both finish.
-
-This is best-effort given the manual timing. If you can reproduce a race, capture the log lines and we'll fix it.
+**Verify (Claude)**:
+- Plugin log under `~/homebrew/data/decky-romm-sync/logs/` (or `/tmp/plugin_loader_stdout.log`) shows two `_sync_rom_saves(4409)` log blocks for the same rom — but they should NOT interleave (one finishes before the other starts).
+- State file consistent (no half-written fields).
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
@@ -543,62 +449,50 @@ This is best-effort given the manual timing. If you can reproduce a race, captur
 
 Goal: the plugin loads state from before the rewrite without errors and silently drops the legacy field.
 
-**Setup**:
-- Toggle plugin off.
-- Hand-edit `save_sync_state.json` to inject the legacy field on at least one file:
-  ```bash
-  jq '.saves["<rom_id>"].files["<file>"].dismissed_newer_save_id = 999' state.json | sponge state.json
-  ```
-  Verify with `jq '.saves["<rom_id>"].files'` that the field is present.
-- Toggle plugin on.
+**Setup (Claude)**:
+- Plugin off.
+- Inject `dismissed_newer_save_id: 999` into one file entry under `saves["4409"].files["Mario Golf - Advance Tour (USA).srm"]`.
+- Verify field is present in the JSON file.
+- Plugin on.
 
-**Steps**:
-1. Watch logs at startup — no errors related to state load.
-2. Trigger any sync (open game-detail page is enough to write state again).
-3. Re-read `save_sync_state.json`.
+**Action (you)**:
+1. Open game-detail page (triggers a state read + write).
+2. Tell me when the page is loaded.
 
-**Expected**:
-- Field `dismissed_newer_save_id` is **gone** from the file after the next state write.
-- No errors logged.
-- All other fields preserved.
-
-**Pass criteria**:
-- ✓ Field removed.
-- ✓ Plugin functions normally afterwards.
+**Verify (Claude)**:
+- ✓ Field `dismissed_newer_save_id` is gone from the state file after the next state write.
+- ✓ Plugin logs show no errors related to state load.
+- ✓ All other fields preserved.
 
 **Status**: [ ] Pass / [ ] Fail / [ ] Skip
 **Notes**:
 
 ---
 
-## After all tests
-
-If everything passes:
-- Note any cosmetic issues (toast wording, modal layout) for follow-ups.
-- Push the branch and open a PR back to `main`.
-- We can close out tasks #10 and #11 in the project tracker.
-
-If anything fails:
-- Don't keep going against a broken state — let me know which test failed and we'll triage. Most failures are reproducible from the setup blocks here.
-
-## Quick reference — which test triggers which matrix row
+## Quick reference — matrix coverage
 
 | Matrix row | Test |
 |---|---|
 | 1 | T1 |
 | 2 | T2 |
-| 3 | (covered implicitly by T11 reset path; explicit test deferred) |
+| 3 | covered implicitly during T11 reset path |
 | 4 | T9 |
-| 5 | (covered implicitly when state is reset and server has saves; deferred) |
+| 5 | covered implicitly during T13 reset paths |
 | 6a | T10 |
 | 6b | T11 |
 | 7 | T3 |
 | 8 | T12 |
 | 9 | T4 |
 | 10 | T5, T13 |
-| 11 | (deferred — needs no-baseline + is_current=false setup; rare) |
+| 11 | deferred (rare; needs no-baseline + is_current=false setup, hard to reach naturally) |
 | 12 (Conflict — Keep Local) | T6 |
 | 12 (Conflict — Use Server) | T7 |
 | 12 (Conflict — Cancel) | T8 |
 
 Plus T14 (rollback), T15 (lock), T16 (migration).
+
+## When all tests pass
+
+- Note any cosmetic issues (toast wording, modal layout) for follow-ups.
+- Open a PR from `refactor/save-sync-rewrite` → `main`.
+- Mark project-tracker tasks #10 and #11 done.
