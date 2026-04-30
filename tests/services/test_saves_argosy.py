@@ -1,7 +1,7 @@
 """Phase 2 tests for the Argosy-style sync rewrite.
 
 Covers the new dispatch path through ``compute_sync_action`` in
-``_sync_rom_saves`` / ``_get_save_status_io`` plus the three-action
+``_sync_rom_saves`` / ``_get_save_status_io`` plus the two-action
 ``resolve_sync_conflict`` callable. Per-rom-lock serialization is exercised
 end-to-end via concurrent ``sync_rom_saves`` calls.
 
@@ -496,15 +496,6 @@ class TestResolveSyncConflict:
         fake.saves[100] = ss
         fake.uploaded_files[100] = str(save_path)
 
-        # Seed a deferred record so we can verify it gets cleared.
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "deferred": {"server_save_id": 100, "server_updated_at": ss["updated_at"]},
-                }
-            }
-        }
-
         result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="keep_local")
 
         assert result["success"] is True
@@ -514,7 +505,6 @@ class TestResolveSyncConflict:
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert file_state["tracked_save_id"] == 100
         assert file_state["last_sync_hash"] == local_hash
-        assert "deferred" not in file_state
 
     @pytest.mark.asyncio
     async def test_resolve_keep_local_hash_mismatch_uploads_put(self, tmp_path):
@@ -534,14 +524,6 @@ class TestResolveSyncConflict:
         fake.saves[100] = ss
         fake.uploaded_files[100] = str(other)
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "deferred": {"server_save_id": 100, "server_updated_at": ss["updated_at"]},
-                }
-            }
-        }
-
         result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="keep_local")
 
         assert result["success"] is True
@@ -552,7 +534,6 @@ class TestResolveSyncConflict:
 
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert file_state["last_sync_hash"] == local_hash
-        assert "deferred" not in file_state
 
     @pytest.mark.asyncio
     async def test_resolve_use_server_downloads_and_persists(self, tmp_path):
@@ -571,14 +552,6 @@ class TestResolveSyncConflict:
         fake.saves[100] = ss
         fake.uploaded_files[100] = str(server_content)
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "deferred": {"server_save_id": 100, "server_updated_at": ss["updated_at"]},
-                }
-            }
-        }
-
         result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="use_server")
 
         assert result["success"] is True
@@ -587,43 +560,6 @@ class TestResolveSyncConflict:
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert file_state["tracked_save_id"] == 100
         assert file_state["last_sync_hash"] == _file_md5(str(save_path))
-        assert "deferred" not in file_state
-
-    @pytest.mark.asyncio
-    async def test_resolve_defer_persists_deferred_record(self, tmp_path):
-        """defer writes a deferred record with the required keys; no I/O."""
-        svc, fake = make_service(tmp_path)
-        _enable_sync_with_device(svc)
-        _install_rom(svc, tmp_path)
-        # Need a Conflict-shaped state so H2-light doesn't warn on this call.
-        save_path = _create_save(tmp_path, content=b"diverged")
-        ss = _server_save_with_syncs(
-            updated_at="2026-03-15T00:00:00Z",
-            device_syncs=[{"device_id": "device-1", "is_current": False}],
-        )
-        fake.saves[100] = ss
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "0" * 32,
-                    "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
-                }
-            }
-        }
-
-        result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="defer")
-
-        assert result["success"] is True
-        assert result["action"] == "defer"
-        # No I/O initiated.
-        assert not any(c[0] in ("upload_save", "download_save_content", "download_save") for c in fake.call_log)
-        deferred = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]["deferred"]
-        assert deferred["server_save_id"] == 100
-        assert deferred["server_updated_at"] == "2026-03-15T00:00:00Z"
-        assert "deferred_at" in deferred
-        # Local untouched
-        assert save_path.read_bytes() == b"diverged"
 
     @pytest.mark.asyncio
     async def test_resolve_invalid_action_returns_error(self, tmp_path):
