@@ -36,7 +36,7 @@ import {
 } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
-import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, PendingConflict, Achievement, AchievementProgress, EarnedAchievement, SaveSlotSummary } from "../types";
+import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, SyncConflict, Achievement, AchievementProgress, EarnedAchievement, SaveSlotSummary } from "../types";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -59,7 +59,7 @@ interface PanelState {
   biosStatus: BiosStatus | null;
   saveSyncEnabled: boolean;
   saveStatus: SaveStatus | null;
-  conflicts: PendingConflict[];
+  conflicts: SyncConflict[];
   error: boolean;
   activeTab: string;
   achievements: Achievement[];
@@ -205,7 +205,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         }
 
         // Use pre-computed conflicts from backend
-        const conflicts: PendingConflict[] = cached.save_status?.conflicts ?? [];
+        const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
 
         // Store ra_id for tab visibility
         const raId = (cached as any).ra_id ?? null;
@@ -305,7 +305,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         const enabled = detail.save_sync_enabled as boolean;
         if (enabled) {
           const updatedStatus = await getSaveStatus(romIdRef.current).catch((): SaveStatus | null => null);
-          const conflicts: PendingConflict[] = updatedStatus?.conflicts ?? [];
+          const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
           setState((prev) => ({
             ...prev,
             saveSyncEnabled: true,
@@ -320,7 +320,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
       if (detail?.type === "save_sync" && (!detail.rom_id || detail.rom_id === romIdRef.current)) {
         const updatedStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romIdRef.current).catch((): SaveStatus | null => null);
-        const conflicts: PendingConflict[] = updatedStatus?.conflicts ?? [];
+        const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
         setState((prev) => ({
           ...prev,
           saveStatus: updatedStatus,

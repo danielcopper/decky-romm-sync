@@ -38,28 +38,19 @@ import {
 } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
-import { showConflictResolutionModal } from "./ConflictModal";
 import { showCoreChangeModal } from "./CoreChangeModal";
-import { showNewerInSlotModal } from "./NewerInSlotModal";
-import type { DownloadProgressEvent, DownloadCompleteEvent, PendingConflict, NewerInSlotConflict } from "../types";
-import { isNewerInSlotConflict } from "../types";
+import { showSyncConflictModal } from "./SyncConflictModal";
+import type { DownloadProgressEvent, DownloadCompleteEvent, SyncConflict } from "../types";
 
 type PlayButtonState = "loading" | "not_romm" | "download" | "conflict" | "syncing" | "play" | "launching" | "dl_complete" | "uninstalling";
 
-async function handleConflicts(conflicts: (PendingConflict | NewerInSlotConflict)[]): Promise<"cancel" | "resolved"> {
-  const newerInSlot = conflicts.filter(isNewerInSlotConflict);
-  const regularConflicts = conflicts.filter((c): c is PendingConflict => !isNewerInSlotConflict(c));
-
-  for (const nis of newerInSlot) {
-    const resolution = await showNewerInSlotModal(nis);
+async function handleConflicts(conflicts: SyncConflict[]): Promise<"cancel" | "resolved"> {
+  // Backend now emits exactly one conflict type (sync_conflict). Walk them
+  // sequentially — bail on first cancel so the caller can decide what to do.
+  for (const conflict of conflicts) {
+    const resolution = await showSyncConflictModal(conflict);
     if (resolution === "cancel") return "cancel";
   }
-
-  if (regularConflicts.length > 0) {
-    const resolution = await showConflictResolutionModal(regularConflicts);
-    if (resolution === "cancel") return "cancel";
-  }
-
   return "resolved";
 }
 

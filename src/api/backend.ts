@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, PendingConflict, NewerInSlotConflict, RomLookupResult, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse } from "../types";
+import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SyncConflict, RomLookupResult, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse } from "../types";
 
 export interface BackendResult {
   success: boolean;
@@ -16,7 +16,7 @@ export interface CachedGameDetail {
   platform_name?: string;
   installed?: boolean;
   save_sync_enabled?: boolean;
-  save_status?: { files: Array<{ filename: string; status: string; last_sync_at?: string }>; last_sync_check_at?: string; conflicts?: PendingConflict[] } | null;
+  save_status?: { files: Array<{ filename: string; status: string; last_sync_at?: string }>; last_sync_check_at?: string; conflicts?: SyncConflict[] } | null;
 
   metadata?: Record<string, unknown> | null;
   bios_status?: { needs_bios?: boolean; platform_slug: string; server_count: number; local_count: number; all_downloaded: boolean; required_count?: number; required_downloaded?: number; active_core?: string; active_core_label?: string; available_cores?: AvailableCore[]; cached_at?: number; files?: BiosFileStatus[] } | null;
@@ -144,11 +144,11 @@ export interface ListDevicesResponse {
 
 export const listDevices = callable<[], ListDevicesResponse>("list_devices");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
-export const preLaunchSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: (PendingConflict | NewerInSlotConflict)[] }>("pre_launch_sync");
-export const postExitSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: (PendingConflict | NewerInSlotConflict)[]; offline?: boolean }>("post_exit_sync");
+export const preLaunchSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[] }>("pre_launch_sync");
+export const postExitSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[]; offline?: boolean }>("post_exit_sync");
 export const syncRomSaves = callable<[number], { success: boolean; message: string; synced: number; errors?: string[] }>("sync_rom_saves");
 export const syncAllSaves = callable<[], { success: boolean; message: string; synced: number; conflicts: number }>("sync_all_saves");
-export const resolveConflict = callable<[number, string, string, number, string], { success: boolean; message: string }>("resolve_conflict");
+export const resolveSyncConflict = callable<[number, string, "keep_local" | "use_server"], { success: boolean; message?: string; action?: "keep_local" | "use_server" }>("resolve_sync_conflict");
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
 export const recordSessionEnd = callable<[number], { success: boolean; duration_sec?: number; total_seconds?: number; session_count?: number; message?: string }>("record_session_end");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");
@@ -185,7 +185,6 @@ export const deleteSlot = callable<[number, string], DeleteSlotResult>("delete_s
 export const isSaveTrackingConfigured = callable<[number], { configured: boolean; active_slot: string | null }>("is_save_tracking_configured");
 export const getSaveSetupInfo = callable<[number], SaveSetupInfo>("get_save_setup_info");
 export const confirmSlotChoice = callable<[number, string, string | null], { success: boolean; needs_conflict_resolution?: boolean; message: string }>("confirm_slot_choice");
-export const resolveNewerInSlot = callable<[number, string, "use_newer" | "keep_current" | "dismiss", number], { success: boolean; message?: string }>("resolve_newer_in_slot");
 export const checkCoreChange = callable<[number], { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string }>("check_core_change");
 
 // Bulk playtime for plugin-load UI update

@@ -16,7 +16,7 @@ import { toaster } from "@decky/api";
 import { getSlotSaves, switchSlot, debugLog, savesListFileVersions, savesRollbackToVersion, getSlotDeleteInfo, deleteSlot } from "../api/backend";
 import type { SaveVersionEntry, RollbackStatus, SlotDeleteInfo } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
-import type { SaveStatus, PendingConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse, DeviceSyncInfo } from "../types";
+import type { SaveStatus, SyncConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse, DeviceSyncInfo } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { formatTimestamp } from "../utils/formatters";
 
@@ -25,7 +25,7 @@ import { formatTimestamp } from "../utils/formatters";
 interface SavesTabProps {
   romId: number;
   saveStatus: SaveStatus | null;
-  conflicts: PendingConflict[];
+  conflicts: SyncConflict[];
   activeSlot: string | null;
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
@@ -396,7 +396,7 @@ function infoRow(
 
 function renderSaveFileRow(
   f: SaveFileStatus,
-  conflict: PendingConflict | undefined,
+  conflict: SyncConflict | undefined,
   lastSyncCheckAt: string | null,
 ): ReturnType<typeof createElement> {
   const { color, label } = statusLabel(f.status, f.last_sync_at);
@@ -549,7 +549,7 @@ const MUTED_COLOR = "#8f98a0";
 function computeSyncSummary(
   isActive: boolean,
   saveStatus: SaveStatus | null,
-  conflicts: PendingConflict[],
+  conflicts: SyncConflict[],
 ): { syncSummaryText: string | null; syncSummaryColor: string } {
   if (!isActive || !saveStatus) return { syncSummaryText: null, syncSummaryColor: MUTED_COLOR };
 
@@ -567,7 +567,7 @@ function computeSyncSummary(
 
 function renderActiveSlotBody(
   saveStatus: SaveStatus | null,
-  conflicts: PendingConflict[],
+  conflicts: SyncConflict[],
   romId: number,
   slot: string,
   isOffline: boolean,
@@ -669,7 +669,7 @@ interface SlotPanelProps {
   defaultExpanded: boolean;
   // Active slot data (only set when isActive === true)
   saveStatus: SaveStatus | null;
-  conflicts: PendingConflict[];
+  conflicts: SyncConflict[];
   isOffline: boolean;
   // Callbacks
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
