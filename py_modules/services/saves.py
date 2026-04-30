@@ -1037,10 +1037,14 @@ class SaveService:
                 self._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
                 return False
             if isinstance(action, Upload):
-                if action.target_save_id is not None:
-                    # Argosy matrix only emits POST (target=None) right now.
-                    # PUT-target uploads are reachable only via resolve_sync_conflict.
-                    raise NotImplementedError("Upload(target_save_id=int) not emitted by compute_sync_action yet")
+                # Argosy matrix only emits POST (target=None) right now.
+                # PUT-target uploads are reachable only via resolve_sync_conflict.
+                # An int target here is unreachable per the current decision matrix.
+                assert action.target_save_id is None, (
+                    f"compute_sync_action emitted Upload(target_save_id={action.target_save_id}) "
+                    f"but PUT-target uploads are unreachable in current matrix; "
+                    f"resolve_sync_conflict.keep_local has its own PUT path"
+                )
                 if local_path is None:
                     errors.append(f"{filename}: upload requested but no local file")
                     return False
@@ -1262,6 +1266,25 @@ class SaveService:
             return "conflict"
         return "synced"
 
+    @staticmethod
+    def _resolve_chosen_server(action: object, candidates: list[dict]) -> dict | None:
+        """Pick the server-save dict to display alongside the file-status row.
+
+        - ``Download`` and ``Conflict`` carry the chosen save explicitly on the
+          action — use that.
+        - ``Skip`` falls back to the newest in *candidates* so the status panel
+          still shows a server reference where one exists (e.g. synced rows
+          continue to display the server save's metadata).
+        - ``Upload`` (POST-as-new) has no server reference yet → ``None``.
+        """
+        if isinstance(action, Download | Conflict):
+            return action.server_save
+        if isinstance(action, Upload):
+            return None
+        if not candidates:
+            return None
+        return max(candidates, key=lambda s: s.get("updated_at", ""))
+
     def _get_save_status_io(self, rom_id: int, server_saves: list[dict]) -> dict:
         """Sync helper for get_save_status — runs in executor.
 
@@ -1303,13 +1326,7 @@ class SaveService:
                 local_hash=local_hash,
             )
             handled_filenames.add(filename)
-            chosen_server: dict | None
-            if isinstance(action, Download | Conflict):
-                chosen_server = action.server_save
-            elif server_in_slot:
-                chosen_server = max(server_in_slot, key=lambda s: s.get("updated_at", ""))
-            else:
-                chosen_server = None
+            chosen_server = self._resolve_chosen_server(action, server_in_slot)
             status = self._status_from_action(action)
             file_statuses.append(
                 self._build_file_status(
@@ -1328,6 +1345,9 @@ class SaveService:
                 )
             )
             if isinstance(action, Conflict):
+                self._log_debug(
+                    f"_get_save_status_io({rom_id}): conflict {filename} server_save_id={action.server_save.get('id')}"
+                )
                 conflicts.append(
                     self._build_sync_conflict_entry(rom_id, filename, action.server_save, local_path, local_hash)
                 )
@@ -1349,11 +1369,7 @@ class SaveService:
                 device_id=server_device_id or "",
                 local_hash=None,
             )
-            chosen_server: dict | None
-            if isinstance(action, Download | Conflict):
-                chosen_server = action.server_save
-            else:
-                chosen_server = max(group, key=lambda s: s.get("updated_at", ""))
+            chosen_server = self._resolve_chosen_server(action, group)
             status = self._status_from_action(action)
             file_statuses.append(
                 self._build_file_status(
@@ -1370,6 +1386,10 @@ class SaveService:
                 )
             )
             if isinstance(action, Conflict):
+                self._log_debug(
+                    f"_get_save_status_io({rom_id}): conflict {target_filename} "
+                    f"server_save_id={action.server_save.get('id')}"
+                )
                 conflicts.append(
                     self._build_sync_conflict_entry(rom_id, target_filename, action.server_save, None, None)
                 )
@@ -2384,12 +2404,30 @@ class SaveService:
 
             try:
                 if action == "defer":
+                    # H2-light: if there's no active Conflict for this filename
+                    # right now, the resolve call may be from a stale modal or
+                    # frontend bug. Persist the deferred record anyway but
+                    # surface a warning so the case shows up in logs.
+                    if not self._has_active_sync_conflict(rom_id_str, filename, server_in_slot):
+                        self._logger.warning(
+                            "resolve_sync_conflict(action=defer) called for rom_id=%d filename=%s "
+                            "but no Conflict is currently active; this may indicate a stale modal "
+                            "or frontend bug. Persisting deferred record anyway.",
+                            rom_id,
+                            filename,
+                        )
                     await self._loop.run_in_executor(
                         None,
                         self._apply_resolve_defer,
                         rom_id_str,
                         filename,
                         server,
+                    )
+                    self._logger.info(
+                        "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
+                        rom_id,
+                        filename,
+                        action,
                     )
                     return {"success": True, "action": "defer"}
 
@@ -2402,6 +2440,12 @@ class SaveService:
                         server,
                         saves_dir,
                         system,
+                    )
+                    self._logger.info(
+                        "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
+                        rom_id,
+                        filename,
+                        action,
                     )
                     return {"success": True, "action": "use_server"}
 
@@ -2416,10 +2460,51 @@ class SaveService:
                     saves_dir,
                     system,
                 )
+                self._logger.info(
+                    "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
+                    rom_id,
+                    filename,
+                    action,
+                )
                 return {"success": True, "action": "keep_local"}
             except Exception as e:
                 self._logger.error(f"resolve_sync_conflict({rom_id}, {filename}, {action}) failed: {e}")
                 return {"success": False, "message": str(e)}
+
+    def _has_active_sync_conflict(
+        self,
+        rom_id_str: str,
+        filename: str,
+        server_in_slot: list[dict],
+    ) -> bool:
+        """Return True iff ``compute_sync_action`` for this (rom, filename)
+        currently emits a ``Conflict``.
+
+        Used by the ``defer`` branch of ``resolve_sync_conflict`` to detect
+        stale-modal calls (H2-light).  Failures (missing local file, etc.)
+        return False — we'll just warn rather than reject the call.
+        """
+        try:
+            save_state = self._save_sync_state["saves"].get(rom_id_str, {})
+            files_state = save_state.get("files", {})
+            file_state = files_state.get(filename, {})
+            saves_dir = self._get_rom_save_info(int(rom_id_str)) or {}
+            local_path = os.path.join(saves_dir["saves_dir"], filename) if saves_dir.get("saves_dir") else None
+            local_input = (
+                self._build_local_input(local_path, filename) if local_path and os.path.isfile(local_path) else None
+            )
+            local_hash = self._file_md5(local_path) if local_path and os.path.isfile(local_path) else None
+            device_id = self._get_server_device_id() or ""
+            action = compute_sync_action(
+                local_file=local_input,
+                server_saves_in_slot=server_in_slot,
+                files_state=file_state,
+                device_id=device_id,
+                local_hash=local_hash,
+            )
+        except Exception:
+            return False
+        return isinstance(action, Conflict)
 
     def _apply_resolve_defer(self, rom_id_str: str, filename: str, server: dict) -> None:
         """Persist a defer record for *(rom, filename)* against *server*."""
@@ -2473,6 +2558,9 @@ class SaveService:
 
         if server_hash and local_hash == server_hash:
             # Hashes match — adopt server's id without re-uploading.
+            self._log_debug(
+                f"keep_local: hash matches server, adopting without upload (rom={rom_id} filename={filename})"
+            )
             saves = self._save_sync_state.setdefault("saves", {})
             rom_entry = saves.setdefault(rom_id_str, {"files": {}})
             files = rom_entry.setdefault("files", {})
