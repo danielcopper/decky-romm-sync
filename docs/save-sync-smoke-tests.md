@@ -319,8 +319,8 @@ Goal: a server slot we never touched + our local file ahead by mtime → POST a 
 - ✓ Our new save id stored as `tracked_save_id`. New save is newest (`updated_at`).
 - ✓ Original htpc save unchanged.
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip
-**Notes**:
+**Status**: [N/A] — see Findings & Follow-ups below. Branch 6 of `compute_sync_action` (no `device_syncs` entry for our device) is unreachable in real plugin operation because RomM's `GET /api/saves?rom_id=X&device_id=Y` always upserts a row for the queried device. Logic is verified by unit tests in `tests/domain/test_sync_action.py`.
+**Notes**: Worth re-evaluating once we've decided whether to adjust the adapter's `optimistic` parameter usage (see #1 in Findings).
 
 ---
 
@@ -341,8 +341,8 @@ Goal: same as T10 but with local mtime older than server.
 - ✓ Local file content == server content.
 - ✓ State updated with `last_sync_hash` == server-content MD5.
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip
-**Notes**:
+**Status**: [N/A] — same reason as T10. The "no entry for our device" precondition is unreachable from the UI side because every plugin-side `list_saves` GET upserts a row for our device.
+**Notes**: Logic verified by unit tests.
 
 ---
 
@@ -510,3 +510,37 @@ Plus T14 (rollback), T15 (lock), T16 (migration).
 - Note any cosmetic issues (toast wording, modal layout) for follow-ups.
 - Open a PR from `refactor/save-sync-rewrite` → `main`.
 - Mark project-tracker tasks #10 and #11 done.
+
+## Findings & Follow-ups (discovered during the smoke run)
+
+### 1. RomM `GET /api/saves` upserts `device_syncs` regardless of `optimistic` flag
+
+Empirically verified during T10 setup on RomM 4.8.1:
+
+- `GET /api/saves?rom_id=X&device_id=Y` (with or without `&optimistic=true`/`false`) creates a `device_save_sync` row for device Y on every save returned that did not already have one.
+- The `optimistic` flag does NOT prevent the upsert.
+- Effect on `compute_sync_action`: branch 6 ("no entry for our device") is dead code in real plugin operation — `our_entry` is always set by the time the algorithm sees the data, because `services/saves.py:_sync_rom_saves` calls `list_saves` first, which fires the GET, which upserts.
+- T10 and T11 are therefore not hardware-reachable. Logic is covered by unit tests.
+
+**Open question — can we use this to our advantage?**
+
+Two ideas worth investigating:
+
+- **(a) Use `optimistic=false` in `list_saves`** to keep the upserted row's `last_synced_at` not equal to `save.updated_at` — possibly making the "first observation" semantically distinguishable from "synced". *Needs experimentation: does `optimistic=false` change the upsert payload, or is the flag ignored on the list endpoint?* My T10 setup couldn't tell because both flags resulted in `last_synced_at = save.updated_at` and `is_current=False`.
+- **(b) Skip the upsert entirely** by querying without `device_id` and matching device_syncs client-side. We'd lose RomM's per-device filtering of `device_syncs` array (currently the response only contains the queried device's row). Bigger refactor.
+
+Recommended next step: experiment with `optimistic=false` against a fresh save (after this smoke run completes) and document what semantic difference, if any, the flag has on the LIST endpoint. If there is no difference, file a RomM upstream issue clarifying the spec.
+
+### 2. `is_current` formula is strict `>`, not `>=`
+
+The wiki currently says `is_current = sync.last_synced_at >= save.updated_at`. Empirical observation during T10: when `last_synced_at == save.updated_at` exactly (same ISO string), `is_current=False`. So the formula is strict greater-than: `is_current = sync.last_synced_at > save.updated_at`.
+
+Already fixed in the wiki commit that follows this doc update.
+
+### 3. Pre-launch toast text was hard-coded for download direction
+
+Filed as #250. Interim fix in d25d790 changed both pre-launch and post-exit toasts to direction-neutral "Saves synced with RomM". Per-direction breakdown is the proper fix.
+
+### 4. Stale Play button state in Game Mode after Desktop→Game switch (T7)
+
+When the user resolved a conflict in Desktop Mode and then switched to Game Mode, the play button initially showed standard "Spielen" instead of the conflict-aware version. Restarting the Deck fixed it. Probably stale `CustomPlayButton` state cache; first page render didn't re-poll `getSaveStatus`. Worth a follow-up issue if reproducible.
