@@ -478,8 +478,87 @@ Goal: the plugin loads state from before the rewrite without errors and silently
 - ✓ Plugin logs show no errors related to state load.
 - ✓ All other fields preserved.
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip
+**Status**: [ ] Pass / [ ] Fail / [ ] Skip — PAUSED, see "Session Resume Notes" below.
 **Notes**:
+
+---
+
+## Session Resume Notes (2026-05-01)
+
+The smoke run got as far as T14 (rollback) passing cleanly. T15 (per-rom lock) ran best-effort and is marked N/A — manual timing on hardware couldn't trigger overlapping calls; the lock's correctness is covered by unit tests. T16 (state migration) is paused mid-test because two unrelated issues surfaced during setup that need to be addressed before continuing.
+
+### What's confirmed working through T14
+- All decision-matrix paths reachable from the UI (rows 1, 2, 4, 5, 7, 8, 9, 10, 12 in three modes).
+- Conflict modal: Keep Local, Use Server, Cancel — all behave correctly, modal is gated behind the Play button (Sync button + page open never surface the modal).
+- Rollback flow: download → PUT bumps server `updated_at` → `confirm_download` registers our device current → other devices pick it up on next sync.
+- State migration shim runs at plugin load (legacy `dismissed_newer_save_id` is stripped in memory; persistence happens on the next state-write).
+
+### Two issues blocking T16 completion
+
+#### (1) `installed_roms` registry got wiped
+At some point before T16 setup, `state.json.installed_roms` ended up empty (`{}`), even though the ROM file is still on disk at `/run/media/deck/Emulation/retrodeck/roms/gba/Mario Golf - Advance Tour (USA).zip` and `state.json.shortcut_registry["4409"]` still has the metadata. Likely cause: `_prune_stale_installed_roms` removed an entry whose `file_path` pointed at an old internal-SSD location after a RetroDECK SSD→SD-card migration; nothing in the codebase repopulates the entry from disk afterward.
+
+**There is no self-heal path in the codebase.** The only writes to `installed_roms` are `downloads.py:307,324` (when a ROM is downloaded). The only deletes are explicit (`rom_removal.py`) or the prune at startup (`main.py:65 _prune_stale_installed_roms`). On disk-state divergence, the only way to repopulate today is to re-download via the plugin's Download button.
+
+User's expectation was that the registry self-heals. It doesn't. Adding self-heal is a small additive feature (~30 LOC): on plugin load, for each `shortcut_registry[id]` whose canonical ROM path (`<roms_path>/<platform_slug>/<fs_name>` or the extracted directory) exists on disk, populate `installed_roms[id]` with `file_path`, `file_name`, `system`, `platform_slug`, `installed_at`, and (for zip ROMs) `rom_dir`. Done at startup before `_prune_stale_installed_roms` runs.
+
+#### (2) Saves tab UI architecture is wrong for the slot model
+`_get_save_status_io` produces an array `SaveStatus.files[]` rendered by `SavesTab.tsx` as one "card" per entry (header row + Previous Versions dropdown). The function does two passes: per-local-file (Pass 1) and per-server-only-target-filename (Pass 2). Pass 2 was originally for legacy multi-file-per-slot scenarios — it should not exist in the current model. With `installed_roms` empty, `_get_rom_save_info` returns None, `rom_name` is None, `_local_save_target` falls back to per-server-`file_name_no_tags` targets, and Pass 2 emits a separate top-level entry per server save (the symptom user saw: three top-level entries with cross-pollinated dropdowns).
+
+### Agreed model for the rewrite
+
+**Per slot**:
+- Exactly **one** active tracked save → one top-level entry in the saves tab.
+- Header row shows: local filename, last synced (with attribution: "this device" / device name), last updated, server save id + emulator + server filename, local path.
+- Below that: a `Previous Versions` dropdown.
+
+**Previous Versions dropdown**:
+- Lazy-fetched on first expand (already implemented).
+- Lists **every** server save in the active slot **except** the currently-tracked one. **No filter on `file_name_no_tags`.** Saves uploaded by other clients (Argosy, RomM web UI) with different naming schemes are first-class entries, not hidden.
+- Ordered by `updated_at` descending (newest first).
+- Each row shows: `#id`, server filename (with timestamp tag), file size, last-updated timestamp, attribution device.
+
+**Switching to a previous version (the "rollback" / "restore" flow)**:
+1. Verify the currently-tracked save is on the server (Gates D + F: refuse switch if local has unsynced changes or tracked save is missing server-side, unless user confirms).
+2. Delete the local file.
+3. Download the chosen older version → write to the canonical local filename `<rom_basename>.<server.file_extension>`. (Server's stored filename is irrelevant — RetroArch identifies SRAM by ROM-basename, not server-stored name.)
+4. Update state: `tracked_save_id = chosen.id`, `last_sync_hash` = chosen content's MD5, `last_sync_server_*` fields from the server response.
+5. Call `confirm_download(chosen.id, our_device_id)` → marks our device as current on that save server-side. The PUT step in `_rollback_to_version_io` additionally bumps `updated_at` so other devices on their next sync see the chosen save as newest and adopt it. This is how cross-device propagation works.
+
+After the switch, the previously-tracked save remains on the server (still in the slot, accessible via the dropdown). It just isn't the active one anymore.
+
+### Refactor plan (post-compact)
+
+1. **Add `installed_roms` self-heal at plugin startup** (~30 LOC in `main.py`, runs before `_prune_stale_installed_roms`). For each `shortcut_registry` entry, derive the expected ROM path from `retrodeck_home_path + roms/<platform_slug>/<fs_name>` (and the extracted-dir variant for zips), check existence, populate `installed_roms[id]` if missing. Idempotent.
+
+2. **Collapse `_get_save_status_io` to one entry per slot** in `py_modules/services/saves.py`:
+   - Drop the "Pass 1 / Pass 2" structure entirely.
+   - One function: if local file exists in the saves dir, build an entry from it; else if any server save is in the slot, build an entry from the newest server save (status="download"); else no entry.
+   - The result list has 0 or 1 entry per slot (multi-file-per-slot scenarios deferred to Phase 7 if/when they arrive).
+
+3. **Drop the `file_name_no_tags` filter from `list_file_versions`** in `py_modules/services/saves.py`. Show every save in the slot except `tracked_save_id`. Ordering: `updated_at` descending. Update the existing `TestListFileVersions` cases — saves with mismatched basenames now appear in the result (they're first-class versions).
+
+4. **Wiki update** (`Save-File-Sync-Architecture.md`): rewrite the "Local Save File Naming", "Decision Matrix" + Pass 2 references, and Rollback Flow sections to match the slot model. Drop Pass 1/Pass 2 terminology — the function is just "build the active save status".
+
+5. **Smoke test resume**: with the new code in place, T16 (state migration) becomes trivial — open the page, verify `dismissed_newer_save_id` is gone after the next state write. Then we're done.
+
+### Outstanding follow-up issues (file when smoke run completes)
+
+- **#250** (already filed): per-direction toast counts (uploaded vs. downloaded vs. mixed).
+- **NEW**: `installed_roms` self-heal at startup. Even after we add it as part of this rewrite, there's a deeper question: should the prune step also be more conservative (e.g. skip pruning when the canonical ROM path exists on disk even if the recorded `file_path` doesn't)? Out of scope here.
+- **NEW**: Stale Play-button state in Game Mode after Desktop→Game switch (seen at T7). Likely a frontend cache that doesn't refresh on plugin loader restart. Independent of this rewrite.
+- **NEW**: Investigate the `optimistic` query parameter on `GET /api/saves` (recorded in Findings section below). Open question whether the flag changes upsert semantics on the LIST endpoint or is ignored.
+
+### How to resume
+
+After compact, the next session should:
+1. Read this doc top-to-bottom.
+2. Read `py_modules/services/saves.py` `_get_save_status_io` and `list_file_versions`, plus `main.py` `_prune_stale_installed_roms`, to refresh on the code shape.
+3. Implement the four refactor items above as separate commits.
+4. Run `mise run test`, lint, push.
+5. Ask the user to `mise run dev` on the Deck.
+6. Resume T16 (state migration) — should pass cleanly with the new code.
+7. Mark the smoke run complete, file the new follow-up issues, open the PR.
 
 ---
 
