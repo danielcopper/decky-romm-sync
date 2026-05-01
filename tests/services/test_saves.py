@@ -3478,19 +3478,25 @@ class TestListFileVersions:
 
     @pytest.mark.asyncio
     async def test_happy_path_excludes_tracked(self, tmp_path):
-        """Returns older versions, excluding the currently-tracked save."""
+        """Returns every save in the slot except the tracked one. We do not
+        filter by ``file_name_no_tags``: a save uploaded by another client
+        with a different naming scheme is still a legitimate rollback target,
+        and the rollback flow writes content to the canonical ROM-derived
+        local path regardless of the server's stored ``file_name``.
+        """
         svc, fake = make_service(tmp_path)
 
         # tracked save
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
-        # older version
+        # older version with the same base name
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
-        # different base name — should not appear
+        # different base name (e.g. uploaded by another client) — must still appear
         fake.saves[60] = {
             "id": 60,
             "rom_id": 42,
             "file_name": "other.srm",
             "file_name_no_tags": "other",
+            "file_extension": "srm",
             "updated_at": "2026-03-05T10:00:00Z",
             "file_size_bytes": 512,
             "slot": "default",
@@ -3500,9 +3506,9 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 1
-        assert result[0]["id"] == 50
-        assert result[0]["updated_at"] == "2026-03-01T10:00:00Z"
+        assert len(result) == 2
+        # Sorted newest-first: id=60 (2026-03-05) before id=50 (2026-03-01)
+        assert [v["id"] for v in result] == [60, 50]
 
     @pytest.mark.asyncio
     async def test_matches_by_file_name_no_tags(self, tmp_path):
@@ -3563,8 +3569,11 @@ class TestListFileVersions:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_no_tracked_save_returns_empty(self, tmp_path):
-        """When no tracked_save_id in state, returns empty — can't determine base name."""
+    async def test_no_tracked_save_returns_all_slot_saves(self, tmp_path):
+        """When no tracked_save_id in state, every save in the slot is offered
+        as a rollback target. Nothing is excluded because there is no tracked
+        save to exclude.
+        """
         svc, fake = make_service(tmp_path)
 
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
@@ -3573,7 +3582,7 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert result == []
+        assert {v["id"] for v in result} == {100, 50}
 
     @pytest.mark.asyncio
     async def test_api_error_returns_empty(self, tmp_path):

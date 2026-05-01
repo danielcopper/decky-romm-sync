@@ -662,16 +662,24 @@ class SaveService:
         }
 
     @staticmethod
-    def _server_only_target_filename(server_save: dict, rom_name: str | None) -> str:
-        """Derive the local filename a server-only save would land at.
+    def _local_save_target(server_save: dict, rom_name: str | None) -> str:
+        """The local filename a server save should land at on disk.
 
-        Mirrors the legacy ``_collect_server_only_saves`` derivation so we
-        keep parity with what a download would actually write.
+        Returns ``<rom_name>.<server.file_extension>`` when ``rom_name`` is
+        known. Matches Argosy and Grout conventions: RetroArch identifies
+        SRAM by ROM-basename + extension, so the server's stored ``file_name``
+        (which may be timestamp-tagged or come from a different client with
+        an unrelated naming scheme) must be ignored when deciding where to
+        write locally.
+
+        Fallback (no ``rom_name``): use the server's ``file_name_no_tags`` —
+        only happens when we cannot identify the local ROM, which is itself
+        an error path.
         """
         ext = server_save.get("file_extension", "srm")
-        base = server_save.get("file_name_no_tags") or server_save.get("file_name", "unknown")
         if rom_name:
             return f"{rom_name}.{ext}"
+        base = server_save.get("file_name_no_tags") or server_save.get("file_name", "unknown")
         return f"{base}.{ext}"
 
     def _build_sync_conflict_entry(
@@ -877,7 +885,7 @@ class SaveService:
         # filename. compute_sync_action picks newest-in-group automatically.
         server_only_groups: dict[str, list[dict]] = {}
         for ss in server_in_slot:
-            target = self._server_only_target_filename(ss, rom_name)
+            target = self._local_save_target(ss, rom_name)
             if target in handled_filenames:
                 continue
             server_only_groups.setdefault(target, []).append(ss)
@@ -1094,7 +1102,7 @@ class SaveService:
         # Pass 2: server-only saves (grouped by target filename)
         server_only_groups: dict[str, list[dict]] = {}
         for ss in server_in_slot:
-            target = self._server_only_target_filename(ss, rom_name)
+            target = self._local_save_target(ss, rom_name)
             if target in handled_filenames:
                 continue
             server_only_groups.setdefault(target, []).append(ss)
@@ -1692,6 +1700,8 @@ class SaveService:
         # 7. Sync local state to match the new slot
         if slot_saves:
             # New slot has server saves — download them, replacing local files
+            rom_info_for_switch = self._get_rom_save_info(rom_id) or {}
+            switch_rom_name = rom_info_for_switch.get("rom_name")
             await self._loop.run_in_executor(
                 None,
                 self._do_switch_downloads,
@@ -1699,6 +1709,7 @@ class SaveService:
                 saves_dir,
                 rom_id_str,
                 system,
+                switch_rom_name,
             )
         else:
             # New slot is empty — delete local save files for a fresh start
@@ -1724,16 +1735,18 @@ class SaveService:
         saves_dir: str,
         rom_id_str: str,
         system: str,
+        rom_name: str | None,
     ) -> None:
         """Download all saves from *slot_saves* into *saves_dir*.
 
-        Runs synchronously — call via ``run_in_executor``.
+        Each save lands at ``<saves_dir>/<rom_name>.<server.file_extension>``
+        (canonical RetroArch layout) — the server-side ``file_name`` is
+        ignored for the local write target. Runs synchronously; call via
+        ``run_in_executor``.
         """
         for server_save in slot_saves:
-            filename = server_save.get("file_name", "")
-            if not filename:
-                continue
-            self._do_download_save(server_save, saves_dir, filename, rom_id_str, system)
+            target = self._local_save_target(server_save, rom_name)
+            self._do_download_save(server_save, saves_dir, target, rom_id_str, system)
 
     def _delete_local_saves_for_switch(self, rom_id: int, rom_id_str: str) -> None:
         """Delete local save files and clear file tracking state for a slot switch.
@@ -2072,6 +2085,7 @@ class SaveService:
                         server,
                         saves_dir,
                         system,
+                        info.get("rom_name"),
                     )
                     self._logger.info(
                         "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
@@ -2110,9 +2124,17 @@ class SaveService:
         server: dict,
         saves_dir: str,
         system: str,
+        rom_name: str | None,
     ) -> None:
-        """Download *server* into *filename* and update state."""
-        self._do_download_save(server, saves_dir, filename, rom_id_str, system)
+        """Download *server* into the local save file and update state.
+
+        The write path is derived as ``<rom_name>.<server.file_extension>`` —
+        the canonical RetroArch layout — regardless of the *filename* we were
+        passed. Drives state-key consistency too: ``_update_file_sync_state``
+        receives the same target name that the file lands at.
+        """
+        target = self._local_save_target(server, rom_name) if rom_name else filename
+        self._do_download_save(server, saves_dir, target, rom_id_str, system)
         self.save_state()
 
     def _apply_resolve_keep_local(
@@ -2217,25 +2239,26 @@ class SaveService:
         except Exception:
             return []
 
-        # Find the tracked save and its base name (file_name_no_tags)
+        # Identify the currently-tracked save so we can exclude it (rolling
+        # back to the tracked save would be a no-op).
         file_state = self._find_file_state(rom_id_str, filename, server_saves)
         tracked_id = file_state.get("tracked_save_id")
-
-        # Resolve the base name from the tracked save on the server.
-        # Consistent with domain/save_sync.py server-only grouping which also
-        # uses file_name_no_tags to group saves that belong together.
-        tracked_save = next((s for s in server_saves if s.get("id") == tracked_id), None)
-        if tracked_save is None:
-            # Can't determine base name without a tracked save — no versions to show.
-            return []
-        base_name = tracked_save.get("file_name_no_tags") or tracked_save.get("file_name", "")
 
         # Resolve own_upload_ids for attribution — None means legacy state (unknown).
         rom_state = self._save_sync_state["saves"].get(rom_id_str, {})
         raw = rom_state.get("own_upload_ids")
         own_upload_ids: list[int] | None = raw if isinstance(raw, list) else None
 
-        # Filter to saves with the same base name, excluding the tracked one
+        # Show every save in the slot except the currently-tracked one. We do
+        # NOT filter by ``file_name_no_tags`` — the slot is the unit of
+        # version history, and saves uploaded by other clients (Argosy, RomM
+        # web UI, another decky-romm-sync instance with a different ROM-name
+        # resolution) carry filenames that do not match our local
+        # ``file_name_no_tags``. Filtering on filename silently hid those
+        # saves, including legitimate cross-device versions. Rollback writes
+        # use ``_local_save_target`` to land content at
+        # ``<rom_name>.<server.file_extension>`` regardless of the server's
+        # stored ``file_name``, so dropping the filter here is safe.
         versions = [
             {
                 "id": s["id"],
@@ -2247,7 +2270,7 @@ class SaveService:
                 "uploaded_by_us": (s["id"] in own_upload_ids) if own_upload_ids is not None else None,
             }
             for s in server_saves
-            if (s.get("file_name_no_tags") or s.get("file_name", "")) == base_name and s.get("id") != tracked_id
+            if s.get("id") != tracked_id
         ]
 
         # Sort by updated_at descending (client-side — do not trust server order)
@@ -2298,11 +2321,18 @@ class SaveService:
             return {"status": "not_found"}
 
         saves_dir = info["saves_dir"]
-        local_path = os.path.join(saves_dir, filename)
         system = info["system"]
+        rom_name = info.get("rom_name")
 
-        # Gate D: check for unsynced local changes
-        file_state = self._find_file_state(rom_id_str, filename, server_saves)
+        # Resolve the canonical local path: <saves_dir>/<rom_name>.<server.file_extension>.
+        # The frontend's *filename* arg is informational; the actual write uses
+        # the target save's extension so a rollback to a save with a different
+        # extension still lands at a RetroArch-discoverable path.
+        target_filename = self._local_save_target(target_save, rom_name) if rom_name else filename
+        local_path = os.path.join(saves_dir, target_filename)
+
+        # Gate D: check for unsynced local changes (against the file we're about to overwrite)
+        file_state = self._find_file_state(rom_id_str, target_filename, server_saves)
         last_sync_hash = file_state.get("last_sync_hash")
 
         if not force and last_sync_hash and os.path.isfile(local_path):
@@ -2317,7 +2347,7 @@ class SaveService:
         # Step 1: Download the target version to replace local file.
         # ``_do_download_save`` already calls ``_update_file_sync_state`` so the
         # local state already points at ``save_id`` even if step 2 fails.
-        self._do_download_save(target_save, saves_dir, filename, rom_id_str, system)
+        self._do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
 
         # Step 2 + 3 + 4: PUT id=save_id with the same content to bump
         # ``updated_at`` server-side, mark our device as current, and refresh
@@ -2329,7 +2359,7 @@ class SaveService:
             self._do_upload_save(
                 rom_id=int(rom_id_str),
                 file_path=local_path,
-                filename=filename,
+                filename=target_filename,
                 rom_id_str=rom_id_str,
                 system=system,
                 server_save=target_save,
