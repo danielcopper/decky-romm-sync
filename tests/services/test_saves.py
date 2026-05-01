@@ -4898,6 +4898,51 @@ class TestGetSaveStatusComputeAction:
         result_conflict = svc._get_save_status_io(42, [ss_dl])
         assert result_conflict["files"][0]["status"] == "conflict"
 
+    def test_get_save_status_server_only_collapses_to_one_entry(self, tmp_path):
+        """Multiple server saves in the active slot but no local file →
+        exactly one entry returned (the newest server save), not one per
+        server save. Older versions are reachable via list_file_versions."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # No local file.
+
+        ss_old = _server_save_with_syncs(
+            save_id=200,
+            updated_at="2026-03-24T10:00:00",
+            device_syncs=[{"device_id": "device-other", "is_current": True}],
+        )
+        ss_new = _server_save_with_syncs(
+            save_id=201,
+            updated_at="2026-03-24T15:00:00",
+            device_syncs=[{"device_id": "device-other", "is_current": True}],
+        )
+        fake.saves[200] = ss_old
+        fake.saves[201] = ss_new
+
+        svc._save_sync_state["saves"]["42"] = {"files": {}}
+
+        result = svc._get_save_status_io(42, [ss_old, ss_new])
+
+        assert len(result["files"]) == 1
+        entry = result["files"][0]
+        assert entry["server_save_id"] == 201  # newest
+        assert entry["status"] == "download"
+        assert entry["local_path"] is None
+
+    def test_get_save_status_empty_slot_returns_no_entries(self, tmp_path):
+        """No local file and no server saves → files list is empty."""
+        svc, _fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+
+        svc._save_sync_state["saves"]["42"] = {"files": {}}
+
+        result = svc._get_save_status_io(42, [])
+
+        assert result["files"] == []
+        assert result["conflicts"] == []
+
 
 # ---------------------------------------------------------------------------
 # resolve_sync_conflict (two-action user choice)
