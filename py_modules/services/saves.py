@@ -2244,21 +2244,32 @@ class SaveService:
         file_state = self._find_file_state(rom_id_str, filename, server_saves)
         tracked_id = file_state.get("tracked_save_id")
 
+        # Anchor ``base_name`` on the LOCAL filename (the parameter), not on
+        # the tracked save's ``file_name_no_tags``. Using the tracked save
+        # silently hides legitimate versions when the tracked save was
+        # uploaded by another client whose ROM-name resolution differs from
+        # ours (e.g. Argosy, RomM web UI). The local file's basename is the
+        # stable identity the user is reasoning about. Saves whose
+        # ``file_name_no_tags`` matches that basename are versions of "this"
+        # file; everything else is a different save in the same slot and
+        # belongs to its own version chain.
+        base_name = os.path.splitext(filename)[0]
+
         # Resolve own_upload_ids for attribution — None means legacy state (unknown).
         rom_state = self._save_sync_state["saves"].get(rom_id_str, {})
         raw = rom_state.get("own_upload_ids")
         own_upload_ids: list[int] | None = raw if isinstance(raw, list) else None
 
-        # Show every save in the slot except the currently-tracked one. We do
-        # NOT filter by ``file_name_no_tags`` — the slot is the unit of
-        # version history, and saves uploaded by other clients (Argosy, RomM
-        # web UI, another decky-romm-sync instance with a different ROM-name
-        # resolution) carry filenames that do not match our local
-        # ``file_name_no_tags``. Filtering on filename silently hid those
-        # saves, including legitimate cross-device versions. Rollback writes
-        # use ``_local_save_target`` to land content at
-        # ``<rom_name>.<server.file_extension>`` regardless of the server's
-        # stored ``file_name``, so dropping the filter here is safe.
+        def _save_basename(s: dict) -> str:
+            # Prefer ``file_name_no_tags`` when RomM provides it. Fall back
+            # to ``file_name`` with the extension stripped so older saves
+            # (and test fixtures lacking ``file_name_no_tags``) still
+            # compare correctly against the local-filename basename.
+            ftn = s.get("file_name_no_tags")
+            if ftn:
+                return ftn
+            return os.path.splitext(s.get("file_name", ""))[0]
+
         versions = [
             {
                 "id": s["id"],
@@ -2270,7 +2281,7 @@ class SaveService:
                 "uploaded_by_us": (s["id"] in own_upload_ids) if own_upload_ids is not None else None,
             }
             for s in server_saves
-            if s.get("id") != tracked_id
+            if _save_basename(s) == base_name and s.get("id") != tracked_id
         ]
 
         # Sort by updated_at descending (client-side — do not trust server order)
