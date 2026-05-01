@@ -22,6 +22,11 @@ def plugin():
     p._romm_api = MagicMock()
     p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
     p._metadata_cache = {}
+    # Default to "/tmp" so the prune guard sees an existing home in tests that
+    # don't override it. Tests exercising the guard set get_retrodeck_home to
+    # return a non-existent path or empty string.
+    p._retrodeck_paths = MagicMock()
+    p._retrodeck_paths.get_retrodeck_home.return_value = "/tmp"
 
     import decky
 
@@ -507,6 +512,42 @@ class TestPruneStaleStateEdgeCases:
         # _save_state should have been called (state.json written)
         state_path = tmp_path / "state.json"
         assert state_path.exists()
+
+    def test_skips_when_retrodeck_home_unavailable(self, plugin, tmp_path):
+        """Guard: if retrodeck home doesn't exist on disk (SD card not mounted yet
+        at boot), prune skips entirely rather than wiping every entry whose
+        file_path lives on the unmounted volume."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
+        plugin._retrodeck_paths.get_retrodeck_home.return_value = "/run/media/deck/Emulation/retrodeck-not-mounted"
+
+        plugin._state["installed_roms"] = {
+            "1": {
+                "rom_id": 1,
+                "file_path": "/run/media/deck/Emulation/retrodeck-not-mounted/roms/n64/a.z64",
+                "system": "n64",
+            },
+        }
+
+        plugin._prune_stale_installed_roms()
+        # Entry preserved despite stale file_path — guard short-circuited.
+        assert "1" in plugin._state["installed_roms"]
+
+    def test_skips_when_retrodeck_home_unset(self, plugin, tmp_path):
+        """Guard: empty retrodeck_home (first-run before path is detected) also
+        skips the prune."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
+        plugin._retrodeck_paths.get_retrodeck_home.return_value = ""
+
+        plugin._state["installed_roms"] = {
+            "1": {"rom_id": 1, "file_path": "/somewhere/a.z64", "system": "n64"},
+        }
+
+        plugin._prune_stale_installed_roms()
+        assert "1" in plugin._state["installed_roms"]
 
 
 class TestAtomicSettingsWrite:

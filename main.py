@@ -63,7 +63,21 @@ class Plugin:
     # -- pruning ---------------------------------------------------------------
 
     def _prune_stale_installed_roms(self):
-        """Remove installed_roms entries whose files no longer exist on disk."""
+        """Remove installed_roms entries whose files no longer exist on disk.
+
+        Skipped entirely when the RetroDECK home path is not yet available on
+        disk — that almost always means the SD card hasn't finished mounting
+        (boot-time race), and a naive os.path.exists() check would wipe every
+        entry that lives on the card. The next plugin reload, with the
+        filesystem ready, will run the prune normally.
+        """
+        retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
+        if not retrodeck_home or not os.path.exists(retrodeck_home):
+            decky.logger.info(
+                f"Skipping installed_roms prune: retrodeck home unavailable ({retrodeck_home or 'unset'})"
+            )
+            return
+
         pruned = []
         for rom_id, entry in list(self._state["installed_roms"].items()):  # list(): dict mutated below
             file_path = entry.get("file_path", "")
