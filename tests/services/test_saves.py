@@ -3478,20 +3478,19 @@ class TestListFileVersions:
 
     @pytest.mark.asyncio
     async def test_happy_path_excludes_tracked(self, tmp_path):
-        """Returns saves matching the local filename's basename, excluding
-        the currently-tracked save. The base name is anchored on the LOCAL
-        filename (parameter), not on the tracked save's ``file_name_no_tags``,
-        so a tracked save with a stale or foreign-client filename does not
-        hide legitimate versions of the local file.
+        """Returns every save in the slot except the currently-tracked one.
+
+        The slot is the unit, not the filename — saves with different
+        ``file_name_no_tags`` (uploaded by Argosy / RomM web UI / other
+        clients with their own naming) are first-class versions and surface
+        alongside saves whose names match the local filename.
         """
         svc, fake = make_service(tmp_path)
 
-        # tracked save
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
-        # older version with the same base name as the local file
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
-        # different base name — a separate save sharing the slot, not a
-        # version of "pokemon.srm"; must NOT appear in this version list
+        # Foreign-client upload with a different basename — still a valid
+        # version of the same slot, must appear in the version list.
         fake.saves[60] = {
             "id": 60,
             "rom_id": 42,
@@ -3507,21 +3506,19 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 1
-        assert result[0]["id"] == 50
-        assert result[0]["updated_at"] == "2026-03-01T10:00:00Z"
+        ids_in_order = [v["id"] for v in result]
+        assert ids_in_order == [60, 50]  # newest first; tracked id=100 excluded
 
     @pytest.mark.asyncio
-    async def test_filter_anchored_on_local_filename_not_tracked(self, tmp_path):
+    async def test_foreign_tracked_save_does_not_hide_local_versions(self, tmp_path):
         """When the tracked save was uploaded by another client with a
-        different ``file_name_no_tags``, version lookup must still find
-        saves matching the LOCAL filename. The pre-rewrite implementation
-        used the tracked save's ``file_name_no_tags`` and silently produced
-        an empty list in this scenario.
+        different basename, legitimate versions of the local file still
+        surface — they are no longer filtered against the tracked save's
+        ``file_name_no_tags``.
         """
         svc, fake = make_service(tmp_path)
 
-        # Tracked save uploaded by another client with a different naming scheme
+        # Tracked save with a foreign naming scheme.
         fake.saves[100] = _server_save(
             save_id=100,
             rom_id=42,
@@ -3530,37 +3527,6 @@ class TestListFileVersions:
             filename="alt_name [2026-03-10_10-00-00].srm",
             file_name_no_tags="alt_name",
         )
-        # Legitimate version of the local file (matches local basename)
-        fake.saves[50] = _server_save(
-            save_id=50,
-            rom_id=42,
-            slot="default",
-            updated_at="2026-03-01T10:00:00Z",
-            filename="pokemon [2026-03-01_10-00-00].srm",
-            file_name_no_tags="pokemon",
-        )
-        self._setup_state(svc, tracked_id=100)
-
-        result = await svc.list_file_versions(42, "default", "pokemon.srm")
-
-        assert len(result) == 1
-        assert result[0]["id"] == 50
-
-    @pytest.mark.asyncio
-    async def test_matches_by_file_name_no_tags(self, tmp_path):
-        """Saves with different file_name but same file_name_no_tags are included."""
-        svc, fake = make_service(tmp_path)
-
-        # tracked: timestamped filename from initial POST
-        fake.saves[100] = _server_save(
-            save_id=100,
-            rom_id=42,
-            slot="default",
-            updated_at="2026-03-10T10:00:00Z",
-            filename="pokemon [2026-03-10_10-00-00].srm",
-            file_name_no_tags="pokemon",
-        )
-        # another device's upload: different filename, same base
         fake.saves[50] = _server_save(
             save_id=50,
             rom_id=42,
@@ -3605,11 +3571,9 @@ class TestListFileVersions:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_no_tracked_save_returns_matching_basename_saves(self, tmp_path):
-        """With no ``tracked_save_id`` in state, every save in the slot whose
-        ``file_name_no_tags`` matches the local filename is returned.
-        Nothing is excluded as "tracked" because there is no tracked save.
-        """
+    async def test_no_tracked_save_returns_every_save_in_slot(self, tmp_path):
+        """Without ``tracked_save_id`` in state, every save in the slot is
+        returned — there is no tracked save to exclude."""
         svc, fake = make_service(tmp_path)
 
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")

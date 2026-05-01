@@ -2201,12 +2201,20 @@ class SaveService:
         return {}
 
     async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
-        """List older server-side versions of a save file.
+        """List server-side saves in the active slot, excluding the currently-tracked one.
 
-        Returns versions strictly older than the currently-tracked save,
-        sorted newest-first.
+        The slot is the unit, not the filename. Saves uploaded by other
+        clients (Argosy, RomM web UI, etc.) whose naming convention differs
+        from ours are first-class versions of the same slot, so no filename
+        filter is applied — every save in the slot except the one we're
+        currently tracking shows up here.
 
-        Each entry contains: id, updated_at, file_size_bytes, device_syncs.
+        Sorted by ``updated_at`` descending (newest first). Each entry
+        contains: id, file_name, emulator, updated_at, file_size_bytes,
+        device_syncs, uploaded_by_us.
+
+        ``filename`` is kept in the signature for compatibility with the
+        callable wiring but no longer affects which versions are returned.
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
@@ -2222,36 +2230,12 @@ class SaveService:
         except Exception:
             return []
 
-        # Identify the currently-tracked save so we can exclude it (rolling
-        # back to the tracked save would be a no-op).
         file_state = self._find_file_state(rom_id_str, filename, server_saves)
         tracked_id = file_state.get("tracked_save_id")
 
-        # Anchor ``base_name`` on the LOCAL filename (the parameter), not on
-        # the tracked save's ``file_name_no_tags``. Using the tracked save
-        # silently hides legitimate versions when the tracked save was
-        # uploaded by another client whose ROM-name resolution differs from
-        # ours (e.g. Argosy, RomM web UI). The local file's basename is the
-        # stable identity the user is reasoning about. Saves whose
-        # ``file_name_no_tags`` matches that basename are versions of "this"
-        # file; everything else is a different save in the same slot and
-        # belongs to its own version chain.
-        base_name = os.path.splitext(filename)[0]
-
-        # Resolve own_upload_ids for attribution — None means legacy state (unknown).
         rom_state = self._save_sync_state["saves"].get(rom_id_str, {})
         raw = rom_state.get("own_upload_ids")
         own_upload_ids: list[int] | None = raw if isinstance(raw, list) else None
-
-        def _save_basename(s: dict) -> str:
-            # Prefer ``file_name_no_tags`` when RomM provides it. Fall back
-            # to ``file_name`` with the extension stripped so older saves
-            # (and test fixtures lacking ``file_name_no_tags``) still
-            # compare correctly against the local-filename basename.
-            ftn = s.get("file_name_no_tags")
-            if ftn:
-                return ftn
-            return os.path.splitext(s.get("file_name", ""))[0]
 
         versions = [
             {
@@ -2264,10 +2248,9 @@ class SaveService:
                 "uploaded_by_us": (s["id"] in own_upload_ids) if own_upload_ids is not None else None,
             }
             for s in server_saves
-            if _save_basename(s) == base_name and s.get("id") != tracked_id
+            if s.get("id") != tracked_id
         ]
 
-        # Sort by updated_at descending (client-side — do not trust server order)
         versions.sort(key=lambda v: v["updated_at"], reverse=True)
         return versions
 
