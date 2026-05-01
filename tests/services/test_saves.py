@@ -3687,6 +3687,7 @@ class TestRollbackToVersion:
 
     def _setup_state(self, svc, tmp_path, tracked_id: int, last_sync_hash: str | None = None) -> None:
         _install_rom(svc, tmp_path)
+        _enable_sync_with_device(svc)
         svc._save_sync_state["saves"]["42"] = {
             "system": "gba",
             "active_slot": "default",
@@ -3697,6 +3698,19 @@ class TestRollbackToVersion:
                 },
             },
         }
+
+    @staticmethod
+    def _tracked_save(save_id: int, *, updated_at: str = "2026-03-10T10:00:00Z") -> dict:
+        """Build a tracked-save fixture with our device flagged ``is_current``
+        on it. Use this for tests where the matrix pre-flight should return
+        ``Skip(synced)`` so the switch flow itself is what's exercised.
+        """
+        return _server_save_with_syncs(
+            save_id=save_id,
+            slot="default",
+            updated_at=updated_at,
+            device_syncs=[{"device_id": "device-1", "is_current": True, "last_synced_at": updated_at}],
+        )
 
     @pytest.mark.asyncio
     async def test_returns_not_found_when_rom_not_installed(self, tmp_path):
@@ -3712,27 +3726,30 @@ class TestRollbackToVersion:
         """Returns not_found when target save_id is not in the server response."""
         svc, fake = make_service(tmp_path)
 
-        _install_rom(svc, tmp_path)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = self._tracked_save(100)
         # Request save_id=999, which doesn't exist
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 999)
         assert result == {"status": "not_found"}
 
     @pytest.mark.asyncio
     async def test_proceeds_even_with_newer_foreign_save(self, tmp_path):
-        """Rollback is not blocked when a newer save exists in the slot.
+        """Switch is not blocked when a newer foreign save exists in the slot.
 
-        Gate E was removed — rollback is an explicit user action.  The newer
-        save warning is surfaced through the separate newer-in-slot conflict
-        flow, not by blocking the rollback.
+        Gate E was removed — switching to a previous version is an explicit
+        user action. The newer foreign save still gets adopted by the
+        pre-flight (matrix returns Download), then the switch proceeds.
         """
         svc, fake = make_service(tmp_path)
 
-        self._setup_state(svc, tmp_path, tracked_id=100)
         _create_save(tmp_path)
-        # tracked save
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
-        # newer save from another device — should NOT block rollback
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = self._tracked_save(100)
+        # newer save from another device — pre-flight adopts it, switch then
+        # bumps id=50 above it.
         fake.saves[200] = _server_save(save_id=200, rom_id=42, slot="default", updated_at="2026-03-20T10:00:00Z")
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
@@ -3740,63 +3757,80 @@ class TestRollbackToVersion:
         assert result["status"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_tracked_missing_blocked_without_force(self, tmp_path):
-        """Returns tracked_missing when the currently tracked save is gone from the server."""
+    async def test_tracked_missing_does_not_block(self, tmp_path):
+        """Switch proceeds when the currently-tracked save is gone from the
+        server. The matrix pre-flight runs against whatever's actually in
+        the slot and the user's chosen target survives that run.
+        """
         svc, fake = make_service(tmp_path)
-
+        _enable_sync_with_device(svc)
         self._setup_state(svc, tmp_path, tracked_id=999)
         _create_save(tmp_path)
-        # Tracked save 999 does NOT exist on server
+        # Tracked save 999 does NOT exist on server. Only save 50 is present
+        # (and is the rollback target).
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
-        assert result == {"status": "tracked_missing"}
 
-    @pytest.mark.asyncio
-    async def test_tracked_missing_bypassed_by_force(self, tmp_path):
-        """force=True bypasses the tracked_missing guard."""
-        svc, fake = make_service(tmp_path)
-
-        self._setup_state(svc, tmp_path, tracked_id=999)
-        _create_save(tmp_path)
-        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
-
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50, force=True)
         assert result["status"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_unsynced_changes_blocked_without_force(self, tmp_path):
-        """Returns unsynced_changes when local file differs from last_sync_hash and force=False."""
+    async def test_unsynced_changes_get_uploaded_before_switch(self, tmp_path):
+        """Local diverged from last_sync_hash + we're flagged ``is_current`` on
+        the tracked save → matrix returns ``Upload(PUT)`` → pre-flight
+        silently pushes local up to the server → switch proceeds. No warning,
+        no force flag, no data loss.
+        """
         svc, fake = make_service(tmp_path)
-
-        save_file = _create_save(tmp_path, content=b"\xff" * 1024)
-        local_hash = _file_md5(str(save_file))
-        # Set a different hash as the "last synced" hash
+        _enable_sync_with_device(svc)
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="aabbcc001122334455667788")
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
-        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
-
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
-
-        assert result["status"] == "unsynced_changes"
-        assert result["local_hash"] == local_hash
-        assert result["tracked_hash"] == "aabbcc001122334455667788"
-
-    @pytest.mark.asyncio
-    async def test_force_overrides_unsynced_check(self, tmp_path):
-        """force=True skips the unsynced changes check and proceeds with download."""
-        svc, fake = make_service(tmp_path)
-
         _create_save(tmp_path, content=b"\xff" * 1024)
-        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="aabbcc001122334455667788")
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+
+        fake.saves[100] = _server_save_with_syncs(
+            save_id=100,
+            slot="default",
+            updated_at="2026-03-10T10:00:00Z",
+            device_syncs=[{"device_id": "device-1", "is_current": True, "last_synced_at": "2026-03-10T10:00:00Z"}],
+        )
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50, force=True)
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
 
         assert result["status"] == "ok"
+        # Pre-flight PUT against id=100 happened (the silent upload of local
+        # changes), then switch PUT against id=50 (the rollback bump).
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        upload_targets = [c[2].get("save_id") for c in upload_calls]
+        assert 100 in upload_targets  # pre-flight PUT
+        assert 50 in upload_targets  # switch PUT
+
+    @pytest.mark.asyncio
+    async def test_unsynced_with_server_moved_blocks_via_conflict(self, tmp_path):
+        """Local diverged + we're not ``is_current`` (someone else uploaded) →
+        matrix returns ``Conflict`` → switch returns ``conflict_blocked`` and
+        does no I/O on the rollback target. The frontend resolves via the
+        standard SyncConflictModal.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="aabbcc001122334455667788")
+        _create_save(tmp_path, content=b"\xff" * 1024)
+
+        fake.saves[100] = _server_save_with_syncs(
+            save_id=100,
+            slot="default",
+            updated_at="2026-03-15T10:00:00Z",
+            device_syncs=[{"device_id": "device-1", "is_current": False, "last_synced_at": "2026-03-10T10:00:00Z"}],
+        )
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+
+        assert result["status"] == "conflict_blocked"
+        assert len(result["conflicts"]) == 1
+        # No download of the rollback target should have happened.
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
-        assert any(c[1][0] == 50 for c in download_calls)
+        assert not any(c[1][0] == 50 for c in download_calls)
 
     @pytest.mark.asyncio
     async def test_happy_path_downloads_and_updates_state(self, tmp_path):
@@ -3807,7 +3841,7 @@ class TestRollbackToVersion:
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
         # tracked (no change since last sync)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         # older version to roll back to
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
@@ -3822,28 +3856,36 @@ class TestRollbackToVersion:
         assert file_state["tracked_save_id"] == 50
 
     @pytest.mark.asyncio
-    async def test_no_local_file_no_unsynced_block(self, tmp_path):
-        """When local file doesn't exist, unsynced check is skipped."""
+    async def test_no_local_file_pre_flight_downloads_then_switch_proceeds(self, tmp_path):
+        """When local file doesn't exist, the matrix pre-flight pulls the
+        server's tracked save (recovery path) before the switch overwrites it
+        with the chosen older version."""
         svc, fake = make_service(tmp_path)
 
-        # Set a last_sync_hash but no local file
+        # No local file. Tracked save 100 exists with our device current.
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash="somehash")
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
 
         assert result["status"] == "ok"
+        # Both saves were downloaded: 100 from pre-flight recovery, 50 from
+        # the actual switch.
+        download_ids = [c[1][0] for c in fake.call_log if c[0] == "download_save_content"]
+        assert 100 in download_ids
+        assert 50 in download_ids
 
     @pytest.mark.asyncio
-    async def test_no_state_entry_no_unsynced_block(self, tmp_path):
-        """When there's no last_sync_hash in state, unsynced check is skipped."""
+    async def test_no_state_entry_proceeds_via_baseline_adoption(self, tmp_path):
+        """No ``last_sync_hash`` baseline yet → matrix returns
+        ``Skip(adopt_baseline=True)`` for the tracked save → pre-flight is a
+        no-op state hygiene write → switch proceeds normally."""
         svc, fake = make_service(tmp_path)
 
         _create_save(tmp_path, content=b"\xff" * 1024)
-        # No last_sync_hash (first time syncing)
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=None)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
@@ -3851,16 +3893,19 @@ class TestRollbackToVersion:
         assert result["status"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_server_error_returns_not_found(self, tmp_path):
-        """Returns not_found when the server call fails."""
+    async def test_server_error_returns_preflight_failed(self, tmp_path):
+        """Server failure during the matrix pre-flight aborts the switch
+        with ``preflight_failed`` (the rollback never runs)."""
         svc, fake = make_service(tmp_path)
 
         _install_rom(svc, tmp_path)
+        _enable_sync_with_device(svc)
         fake.fail_on_next(Exception("network error"))
 
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
 
-        assert result["status"] == "not_found"
+        assert result["status"] == "preflight_failed"
+        assert any("network" in err.lower() for err in result.get("errors", []))
 
     # ------------------------------------------------------------------
     # Cross-device propagation: rollback re-PUTs target so it becomes
@@ -3875,7 +3920,7 @@ class TestRollbackToVersion:
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
@@ -3895,7 +3940,7 @@ class TestRollbackToVersion:
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
@@ -3914,7 +3959,7 @@ class TestRollbackToVersion:
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
@@ -3944,7 +3989,7 @@ class TestRollbackToVersion:
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         # Track call sequence: download must succeed, then upload must fail.
@@ -3987,7 +4032,7 @@ class TestRollbackToVersion:
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
-        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         original_confirm = fake.confirm_download

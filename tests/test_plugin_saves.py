@@ -1050,43 +1050,12 @@ class TestSavesVersionHistoryCallables:
         assert any(c[1][0] == 50 for c in download_calls)
 
     @pytest.mark.asyncio
-    async def test_saves_rollback_to_version_force_param(self, plugin, tmp_path):
-        """saves_rollback_to_version passes force=True to service when specified."""
-        _install_rom(plugin, tmp_path)
+    async def test_saves_rollback_to_version_signature_no_force_param(self, plugin):
+        """saves_rollback_to_version's signature is (rom_id, slot, filename,
+        save_id) — no force flag. The matrix pre-flight has replaced the
+        Gate D / Gate F warning paths."""
+        import inspect
 
-        saves_dir = tmp_path / "retrodeck" / "saves" / "gba"
-        saves_dir.mkdir(parents=True, exist_ok=True)
-        save_file = saves_dir / "pokemon.srm"
-        save_file.write_bytes(b"\xff" * 1024)  # different from last_sync_hash
-
-        plugin._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "aabbcc"}},
-        }
-        plugin._fake_api.saves[100] = {
-            "id": 100,
-            "rom_id": 42,
-            "file_name": "pokemon.srm",
-            "updated_at": "2026-03-10T00:00:00Z",
-            "file_size_bytes": 1024,
-            "slot": "default",
-            "download_path": "/saves/pokemon.srm",
-        }
-        plugin._fake_api.saves[50] = {
-            "id": 50,
-            "rom_id": 42,
-            "file_name": "pokemon.srm",
-            "updated_at": "2026-03-01T00:00:00Z",
-            "file_size_bytes": 1024,
-            "slot": "default",
-            "download_path": "/saves/pokemon.srm",
-        }
-
-        # Without force=True, should return unsynced_changes
-        result_no_force = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50, False)
-        assert result_no_force["status"] == "unsynced_changes"
-
-        # With force=True, should succeed
-        result_force = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50, True)
-        assert result_force["status"] == "ok"
+        sig = inspect.signature(plugin.saves_rollback_to_version)
+        params = list(sig.parameters.keys())
+        assert params == ["rom_id", "slot", "filename", "save_id"]
