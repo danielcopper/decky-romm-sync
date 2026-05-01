@@ -257,11 +257,12 @@ export type RollbackStatus =
   | { status: "ok" }
   | { status: "not_found" }
   | { status: "unsupported" }
-  | { status: "tracked_missing" }
-  | { status: "unsynced_changes"; local_hash: string; tracked_hash: string };
+  | { status: "conflict_blocked"; conflicts: SyncConflict[] }
+  | { status: "preflight_failed"; errors: string[] }
+  | { status: "put_failed"; error: string };
 
 export const savesListFileVersions = callable<[number, string, string], SaveVersionEntry[]>("saves_list_file_versions");
-export const savesRollbackToVersion = callable<[number, string, string, number, boolean], RollbackStatus>("saves_rollback_to_version");
+export const savesRollbackToVersion = callable<[number, string, string, number], RollbackStatus>("saves_rollback_to_version");
 
 // Achievements callables
 export const getAchievements = callable<[number], AchievementList>("get_achievements");

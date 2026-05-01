@@ -15,6 +15,7 @@ import { ConfirmModal, DialogButton, Focusable, TextField, showModal } from "@de
 import { toaster } from "@decky/api";
 import { getSlotSaves, switchSlot, debugLog, savesListFileVersions, savesRollbackToVersion, getSlotDeleteInfo, deleteSlot } from "../api/backend";
 import type { SaveVersionEntry, RollbackStatus, SlotDeleteInfo } from "../api/backend";
+import { showSyncConflictModal } from "./SyncConflictModal";
 import { getRommConnectionState } from "../utils/connectionState";
 import type { SaveStatus, SyncConflict, SaveSlotSummary, SaveFileStatus, SlotSaveFile, SwitchSlotResponse, DeviceSyncInfo } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -196,41 +197,37 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
     }
   };
 
-  const handleRestore = async (version: SaveVersionEntry, force: boolean) => {
+  const handleRestore = async (version: SaveVersionEntry) => {
     setRestoring(version.id);
-    // When the user needs to confirm via modal, we keep `restoring` set so the
-    // Restore button stays disabled until the modal is resolved (prevents a
-    // double-submit window between the first call's finally and the onOK
-    // callback re-entering handleRestore with force=true).
-    let awaitingModal = false;
     try {
-      const result: RollbackStatus = await savesRollbackToVersion(romId, slot, filename, version.id, force);
+      const result: RollbackStatus = await savesRollbackToVersion(romId, slot, filename, version.id);
       if (result.status === "ok") {
         toaster.toast({ title: "RomM Sync", body: `Save restored from ${formatRelativeTime(version.updated_at)}` });
-        // Invalidate cache so next expand re-fetches
         setVersions(null);
         setExpanded(false);
         onRestored();
-      } else if (result.status === "unsynced_changes") {
-        awaitingModal = true;
-        showModal(createElement(ConfirmModal, {
-          strTitle: "Unsynced Local Changes",
-          strDescription: "Your local save has changes that haven't been synced to the server. Rolling back will discard them. Continue?",
-          strOKButtonText: "Roll Back",
-          strCancelButtonText: "Cancel",
-          onOK: () => { handleRestore(version, true); },
-          onCancel: () => { setRestoring(null); },
-        }));
-      } else if (result.status === "tracked_missing") {
-        awaitingModal = true;
-        showModal(createElement(ConfirmModal, {
-          strTitle: "Current save missing on server",
-          strDescription: "The save currently tracked by this device no longer exists on the server. Rolling back will discard the reference to it. Continue?",
-          strOKButtonText: "Roll Back",
-          strCancelButtonText: "Cancel",
-          onOK: () => { handleRestore(version, true); },
-          onCancel: () => { setRestoring(null); },
-        }));
+      } else if (result.status === "conflict_blocked") {
+        // Pre-flight surfaced a real conflict on the currently-tracked save.
+        // The user has to resolve it via the standard sync conflict modal
+        // before any switch can run. We surface the first conflict (in
+        // practice the slot only ever has one); the modal itself is
+        // identical to the one launched from the play button.
+        const first = result.conflicts[0];
+        if (first) await showSyncConflictModal(first);
+        toaster.toast({ title: "RomM Sync", body: "Resolve the conflict, then try again" });
+      } else if (result.status === "preflight_failed") {
+        const detail = result.errors[0] ?? "preflight error";
+        toaster.toast({ title: "RomM Sync", body: `Sync failed before restore: ${detail}` });
+      } else if (result.status === "put_failed") {
+        // Local download succeeded but the server-side bump didn't — switch
+        // is locally complete, just won't propagate to other devices yet.
+        toaster.toast({
+          title: "RomM Sync",
+          body: "Restored locally, but the server didn't update. Other devices will see the previous version until you retry.",
+        });
+        setVersions(null);
+        setExpanded(false);
+        onRestored();
       } else if (result.status === "not_found") {
         toaster.toast({ title: "RomM Sync", body: "This version no longer exists on the server" });
       } else if (result.status === "unsupported") {
@@ -239,7 +236,7 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
     } catch (e) {
       debugLog(`VersionHistoryPanel: restore error for save ${version.id}: ${e}`);
     } finally {
-      if (!awaitingModal) setRestoring(null);
+      setRestoring(null);
     }
   };
 
@@ -310,7 +307,7 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         noFocusRing: false,
         onFocus: scrollFocusedToCenter,
         disabled: isThisRestoring || restoring !== null || isOffline,
-        onClick: () => { handleRestore(v, false); },
+        onClick: () => { handleRestore(v); },
       }, isThisRestoring ? "Restoring..." : "Restore"),
     );
   };
