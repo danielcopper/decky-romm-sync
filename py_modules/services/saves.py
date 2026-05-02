@@ -662,25 +662,19 @@ class SaveService:
         }
 
     @staticmethod
-    def _local_save_target(server_save: dict, rom_name: str | None) -> str:
-        """The local filename a server save should land at on disk.
+    def _local_save_target(server_save: dict, rom_name: str) -> str:
+        """The canonical local filename for a server save: ``<rom_name>.<ext>``.
 
-        Returns ``<rom_name>.<server.file_extension>`` when ``rom_name`` is
-        known. Matches Argosy and Grout conventions: RetroArch identifies
-        SRAM by ROM-basename + extension, so the server's stored ``file_name``
-        (which may be timestamp-tagged or come from a different client with
-        an unrelated naming scheme) must be ignored when deciding where to
-        write locally.
-
-        Fallback (no ``rom_name``): use the server's ``file_name_no_tags`` —
-        only happens when we cannot identify the local ROM, which is itself
-        an error path.
+        ``rom_name`` is the deterministic identity from RetroArch's
+        perspective — it's the ROM file's basename without extension, the
+        same string RetroArch uses to look up SRAM. Callers must have
+        already resolved the ROM via ``_get_rom_save_info`` (which only
+        returns when the ROM is actually installed); there is no fallback
+        to server-derived names because those can mismatch RetroArch's
+        actual lookup path and silently break the sync.
         """
         ext = server_save.get("file_extension", "srm")
-        if rom_name:
-            return f"{rom_name}.{ext}"
-        base = server_save.get("file_name_no_tags") or server_save.get("file_name", "unknown")
-        return f"{base}.{ext}"
+        return f"{rom_name}.{ext}"
 
     def _build_sync_conflict_entry(
         self,
@@ -1032,13 +1026,16 @@ class SaveService:
         - Local file present: run ``compute_sync_action`` and surface the
           resulting status, server attribution, and any conflict.
         - No local file but the slot has server saves: surface the newest
-          server save as "ready to download". No matrix call needed —
-          downloading is the only sensible outcome.
-        - Empty slot: no entry.
+          server save as "ready to download". The canonical local target
+          is ``<rom_name>.<server.file_extension>`` — derived purely from
+          RetroArch's view of the ROM.
+        - ROM not installed (no rom_name available) → no entry. There is
+          no server-derived filename fallback: without a deterministic
+          local path we cannot tell the user where a download would land.
+        - Empty slot → no entry.
 
         Older versions of the same slot are reachable via the lazy-fetched
-        ``Previous Versions`` dropdown (``list_file_versions``); they are
-        intentionally not enumerated here.
+        ``Previous Versions`` dropdown (``list_file_versions``).
 
         The one allowed mutation is recording an adopted baseline hash when
         the action requests it (``Skip(adopt_baseline=True)``) — pure state
@@ -1046,7 +1043,6 @@ class SaveService:
         """
         rom_id_str = str(rom_id)
         info = self._get_rom_save_info(rom_id)
-        rom_name = info["rom_name"] if info else None
         server_device_id = self._get_server_device_id()
 
         save_state = self._save_sync_state["saves"].get(rom_id_str, {})
@@ -1061,68 +1057,67 @@ class SaveService:
         file_statuses: list[dict] = []
         conflicts: list[SaveConflict | dict] = []
 
-        local_files = self._find_save_files(rom_id) if info else []
-        local_file = local_files[0] if local_files else None
+        if info is not None:
+            rom_name = info["rom_name"]
+            local_files = self._find_save_files(rom_id)
+            local_file = local_files[0] if local_files else None
 
-        if local_file is not None:
-            filename = local_file["filename"]
-            local_path = local_file["path"]
-            local_hash = self._file_md5(local_path) if os.path.isfile(local_path) else None
-            file_state = files_state.get(filename, {})
-            action = compute_sync_action(
-                local_file=self._build_local_input(local_path, filename),
-                server_saves_in_slot=server_in_slot,
-                files_state=file_state,
-                device_id=server_device_id or "",
-                local_hash=local_hash,
-            )
-            if isinstance(action, Skip) and action.adopt_baseline and local_hash is not None:
-                self._adopt_baseline_hash(rom_id_str, filename, local_hash)
-            chosen_server = self._resolve_chosen_server(action, server_in_slot)
-            file_statuses.append(
-                self._build_file_status(
-                    filename,
-                    local_path=local_path,
+            if local_file is not None:
+                filename = local_file["filename"]
+                local_path = local_file["path"]
+                local_hash = self._file_md5(local_path) if os.path.isfile(local_path) else None
+                file_state = files_state.get(filename, {})
+                action = compute_sync_action(
+                    local_file=self._build_local_input(local_path, filename),
+                    server_saves_in_slot=server_in_slot,
+                    files_state=file_state,
+                    device_id=server_device_id or "",
                     local_hash=local_hash,
-                    local_mtime=datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
-                    if os.path.isfile(local_path)
-                    else None,
-                    local_size=os.path.getsize(local_path) if os.path.isfile(local_path) else None,
-                    server=chosen_server,
-                    last_sync_at=file_state.get("last_sync_at"),
-                    status=self._status_from_action(action),
-                    server_device_id=server_device_id,
-                    uploaded_by_us=_compute_uploaded_by_us(chosen_server, own_upload_ids),
                 )
-            )
-            if isinstance(action, Conflict):
-                self._log_debug(
-                    f"_get_save_status_io({rom_id}): conflict {filename} server_save_id={action.server_save.get('id')}"
+                if isinstance(action, Skip) and action.adopt_baseline and local_hash is not None:
+                    self._adopt_baseline_hash(rom_id_str, filename, local_hash)
+                chosen_server = self._resolve_chosen_server(action, server_in_slot)
+                file_statuses.append(
+                    self._build_file_status(
+                        filename,
+                        local_path=local_path,
+                        local_hash=local_hash,
+                        local_mtime=datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
+                        if os.path.isfile(local_path)
+                        else None,
+                        local_size=os.path.getsize(local_path) if os.path.isfile(local_path) else None,
+                        server=chosen_server,
+                        last_sync_at=file_state.get("last_sync_at"),
+                        status=self._status_from_action(action),
+                        server_device_id=server_device_id,
+                        uploaded_by_us=_compute_uploaded_by_us(chosen_server, own_upload_ids),
+                    )
                 )
-                conflicts.append(
-                    self._build_sync_conflict_entry(rom_id, filename, action.server_save, local_path, local_hash)
+                if isinstance(action, Conflict):
+                    self._log_debug(
+                        f"_get_save_status_io({rom_id}): conflict {filename} "
+                        f"server_save_id={action.server_save.get('id')}"
+                    )
+                    conflicts.append(
+                        self._build_sync_conflict_entry(rom_id, filename, action.server_save, local_path, local_hash)
+                    )
+            elif server_in_slot:
+                newest = max(server_in_slot, key=lambda s: s.get("updated_at", ""))
+                target_filename = self._local_save_target(newest, rom_name)
+                file_statuses.append(
+                    self._build_file_status(
+                        target_filename,
+                        local_path=None,
+                        local_hash=None,
+                        local_mtime=None,
+                        local_size=None,
+                        server=newest,
+                        last_sync_at=None,
+                        status="download",
+                        server_device_id=server_device_id,
+                        uploaded_by_us=_compute_uploaded_by_us(newest, own_upload_ids),
+                    )
                 )
-        elif server_in_slot:
-            # Slot has server saves but nothing local — show the newest as
-            # the ready-to-download active save. Local target uses the
-            # canonical <rom_name>.<file_extension>; falls back to the
-            # server's basename when rom_name is unknown.
-            newest = max(server_in_slot, key=lambda s: s.get("updated_at", ""))
-            target_filename = self._local_save_target(newest, rom_name)
-            file_statuses.append(
-                self._build_file_status(
-                    target_filename,
-                    local_path=None,
-                    local_hash=None,
-                    local_mtime=None,
-                    local_size=None,
-                    server=newest,
-                    last_sync_at=None,
-                    status="download",
-                    server_device_id=server_device_id,
-                    uploaded_by_us=_compute_uploaded_by_us(newest, own_upload_ids),
-                )
-            )
 
         playtime = self._save_sync_state.get("playtime", {}).get(rom_id_str, {})
         save_entry = self._save_sync_state.get("saves", {}).get(rom_id_str, {})
@@ -1682,9 +1677,8 @@ class SaveService:
 
         # 7. Sync local state to match the new slot
         if slot_saves:
-            # New slot has server saves — download them, replacing local files
-            rom_info_for_switch = self._get_rom_save_info(rom_id) or {}
-            switch_rom_name = rom_info_for_switch.get("rom_name")
+            # New slot has server saves — download them, replacing local files.
+            # rom_name is guaranteed by the earlier ``info`` check (line 1642).
             await self._loop.run_in_executor(
                 None,
                 self._do_switch_downloads,
@@ -1692,7 +1686,7 @@ class SaveService:
                 saves_dir,
                 rom_id_str,
                 system,
-                switch_rom_name,
+                info["rom_name"],
             )
         else:
             # New slot is empty — delete local save files for a fresh start
@@ -1718,13 +1712,12 @@ class SaveService:
         saves_dir: str,
         rom_id_str: str,
         system: str,
-        rom_name: str | None,
+        rom_name: str,
     ) -> None:
         """Download all saves from *slot_saves* into *saves_dir*.
 
-        Each save lands at ``<saves_dir>/<rom_name>.<server.file_extension>``
-        (canonical RetroArch layout) — the server-side ``file_name`` is
-        ignored for the local write target. Runs synchronously; call via
+        Each save lands at ``<saves_dir>/<rom_name>.<server.file_extension>`` —
+        the canonical RetroArch path. Runs synchronously; call via
         ``run_in_executor``.
         """
         for server_save in slot_saves:
@@ -2064,11 +2057,10 @@ class SaveService:
                         None,
                         self._apply_resolve_use_server,
                         rom_id_str,
-                        filename,
                         server,
                         saves_dir,
                         system,
-                        info.get("rom_name"),
+                        info["rom_name"],
                     )
                     self._logger.info(
                         "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
@@ -2103,20 +2095,19 @@ class SaveService:
     def _apply_resolve_use_server(
         self,
         rom_id_str: str,
-        filename: str,
         server: dict,
         saves_dir: str,
         system: str,
-        rom_name: str | None,
+        rom_name: str,
     ) -> None:
-        """Download *server* into the local save file and update state.
+        """Download *server* into the canonical local save file and update state.
 
-        The write path is derived as ``<rom_name>.<server.file_extension>`` —
-        the canonical RetroArch layout — regardless of the *filename* we were
-        passed. Drives state-key consistency too: ``_update_file_sync_state``
-        receives the same target name that the file lands at.
+        The write path is always ``<rom_name>.<server.file_extension>`` — the
+        path RetroArch reads. Drives state-key consistency too:
+        ``_update_file_sync_state`` receives the same target name the file
+        lands at.
         """
-        target = self._local_save_target(server, rom_name) if rom_name else filename
+        target = self._local_save_target(server, rom_name)
         self._do_download_save(server, saves_dir, target, rom_id_str, system)
         self.save_state()
 
@@ -2168,37 +2159,16 @@ class SaveService:
     # Version History API
     # ------------------------------------------------------------------
 
-    def _find_file_state(self, rom_id_str: str, filename: str, server_saves: list[dict]) -> dict:
-        """Look up the per-file sync state for *filename*.
+    def _find_file_state(self, rom_id_str: str, filename: str, server_saves: list[dict]) -> dict:  # noqa: ARG002 — server_saves kept for callable signature stability
+        """Look up the per-file sync state for *filename* (canonical local name).
 
-        Tries an exact key match first.  If that misses (e.g. because the state
-        key includes RomM timestamp tags while *filename* is the plain local
-        name), falls back to scanning entries whose ``tracked_save_id`` resolves
-        to a server save with the same ``file_name_no_tags``.
+        State keys are always ``<rom_name>.<ext>`` — the same canonical
+        local filename produced by ``_local_save_target`` and consumed by
+        RetroArch — so a single dict lookup is enough. The previous
+        ``file_name_no_tags``-anchored slow path is gone.
         """
         files_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {}).get("files", {})
-
-        # Fast path: exact key match
-        exact = files_state.get(filename)
-        if exact and exact.get("tracked_save_id") is not None:
-            return exact
-
-        # Slow path: derive base name from filename, scan for matching entry
-        fn_base = filename.rsplit(".", 1)[0] if "." in filename else filename
-        for _key, entry in files_state.items():
-            tid = entry.get("tracked_save_id")
-            if tid is None:
-                continue
-            srv = next((s for s in server_saves if s.get("id") == tid), None)
-            if srv is None:
-                continue
-            srv_base = srv.get("file_name_no_tags") or ""
-            # file_name_no_tags strips region tags too (e.g. "(USA)"),
-            # so check if the local base starts with it
-            if srv_base and fn_base.startswith(srv_base):
-                return entry
-
-        return {}
+        return files_state.get(filename, {})
 
     async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
         """List server-side saves in the active slot, excluding the currently-tracked one.
