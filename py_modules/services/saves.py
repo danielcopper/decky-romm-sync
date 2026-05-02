@@ -212,21 +212,39 @@ class SaveService:
         }
 
     def init_state(self) -> None:
-        """Populate ``_save_sync_state`` with defaults (idempotent)."""
+        """Populate ``_save_sync_state`` with defaults (idempotent).
+
+        Defaults only — schema migrations on loaded data live in
+        ``load_state``. Running them here would be a no-op because
+        ``init_state`` is called before any disk data is loaded.
+        """
         defaults = self.make_default_state()
         for key, value in defaults.items():
             self._save_sync_state.setdefault(key, value)
         self._save_sync_state.setdefault("settings", {})
         for key, value in defaults["settings"].items():
             self._save_sync_state["settings"].setdefault(key, value)
-        # Migrate: rename "active_core" → "last_synced_core" in per-game entries
-        for _rid, entry in self._save_sync_state.get("saves", {}).items():
+
+    def _migrate_loaded_state(self) -> None:
+        """Apply schema migrations to data just read from disk.
+
+        Migrations are idempotent. Called from ``load_state`` after the
+        disk content has been merged into ``_save_sync_state``; the next
+        ``save_state`` then persists the cleaned form.
+
+        Currently:
+        - Rename per-game ``active_core`` → ``last_synced_core``.
+        - Drop legacy per-file ``dismissed_newer_save_id`` (was used by
+          the removed newer-in-slot detection).
+        """
+        saves = self._save_sync_state.get("saves", {})
+        if not isinstance(saves, dict):
+            return
+        for entry in saves.values():
+            if not isinstance(entry, dict):
+                continue
             if "active_core" in entry:
                 entry["last_synced_core"] = entry.pop("active_core")
-        # Migrate: drop legacy "dismissed_newer_save_id" from per-file state.
-        # Was used by the removed newer-in-slot detection. Strip on load so the
-        # field disappears from user state files on the next save_state() call.
-        for _rid, entry in self._save_sync_state.get("saves", {}).items():
             files = entry.get("files", {})
             if isinstance(files, dict):
                 for file_state in files.values():
@@ -248,7 +266,8 @@ class SaveService:
             if "settings" in saved:
                 self._save_sync_state["settings"].update(saved["settings"])
         except (FileNotFoundError, json.JSONDecodeError):
-            pass
+            return
+        self._migrate_loaded_state()
 
     def save_state(self) -> None:
         """Persist save sync state to disk (atomic write)."""

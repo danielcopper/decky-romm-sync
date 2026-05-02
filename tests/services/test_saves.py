@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import time
@@ -136,44 +137,105 @@ class TestStateManagement:
         svc, _ = make_service(tmp_path, save_sync_state=state)
         assert svc._save_sync_state["device_id"] == "existing-id"
 
-    def test_init_state_drops_legacy_dismissed_newer_save_id(self, tmp_path):
+    def test_load_state_drops_legacy_dismissed_newer_save_id(self, tmp_path):
         """v0.15.0 user state with the obsolete dismissed_newer_save_id field
-        gets the field stripped on init_state."""
-        state = SaveService.make_default_state()
-        state["saves"]["42"] = {
-            "files": {
-                "game.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "abc",
-                    "dismissed_newer_save_id": 200,  # legacy field
-                },
-                "game.rtc": {
-                    "tracked_save_id": 101,
-                    "dismissed_newer_save_id": 201,  # legacy field
-                },
-            }
+        gets the field stripped after load_state runs migrations on the
+        loaded data. Mirrors the production order init_state → load_state."""
+        legacy = {
+            "version": 1,
+            "device_id": None,
+            "saves": {
+                "42": {
+                    "files": {
+                        "game.srm": {
+                            "tracked_save_id": 100,
+                            "last_sync_hash": "abc",
+                            "dismissed_newer_save_id": 200,  # legacy
+                        },
+                        "game.rtc": {
+                            "tracked_save_id": 101,
+                            "dismissed_newer_save_id": 201,  # legacy
+                        },
+                    }
+                }
+            },
         }
-        svc, _ = make_service(tmp_path, save_sync_state=state)
+        (tmp_path / "save_sync_state.json").write_text(json.dumps(legacy))
+
+        svc, _ = make_service(tmp_path)  # calls init_state internally
+        svc.load_state()
+
         files = svc._save_sync_state["saves"]["42"]["files"]
         assert "dismissed_newer_save_id" not in files["game.srm"]
         assert "dismissed_newer_save_id" not in files["game.rtc"]
-        # other fields preserved
         assert files["game.srm"]["tracked_save_id"] == 100
         assert files["game.srm"]["last_sync_hash"] == "abc"
         assert files["game.rtc"]["tracked_save_id"] == 101
 
-    def test_init_state_skips_dismissed_migration_for_malformed_entries(self, tmp_path):
-        """Migration is defensive: non-dict file_state values don't crash init_state."""
-        state = SaveService.make_default_state()
-        state["saves"]["42"] = {
-            "files": {
-                "good.srm": {"tracked_save_id": 100, "dismissed_newer_save_id": 5},
-                "weird.srm": "not-a-dict",  # malformed entry
+    def test_load_state_drops_legacy_dismissed_newer_save_id_persists_to_disk(self, tmp_path):
+        """End-to-end: legacy field on disk → init_state → load_state →
+        save_state → reread → field is gone from the file. This is the
+        invariant the smoke test (T16) verifies on hardware."""
+        legacy = {
+            "saves": {
+                "42": {
+                    "files": {
+                        "game.srm": {
+                            "tracked_save_id": 100,
+                            "dismissed_newer_save_id": 999,
+                        }
+                    }
+                }
             }
         }
-        # Should not raise
-        svc, _ = make_service(tmp_path, save_sync_state=state)
-        assert "dismissed_newer_save_id" not in svc._save_sync_state["saves"]["42"]["files"]["good.srm"]
+        path = tmp_path / "save_sync_state.json"
+        path.write_text(json.dumps(legacy))
+
+        svc, _ = make_service(tmp_path)
+        svc.load_state()
+        svc.save_state()
+
+        on_disk = json.loads(path.read_text())
+        assert "dismissed_newer_save_id" not in on_disk["saves"]["42"]["files"]["game.srm"]
+
+    def test_load_state_renames_active_core_to_last_synced_core(self, tmp_path):
+        """Legacy ``active_core`` is migrated to ``last_synced_core`` on load."""
+        legacy = {
+            "saves": {
+                "42": {
+                    "active_core": "mgba_libretro",
+                    "files": {},
+                }
+            }
+        }
+        (tmp_path / "save_sync_state.json").write_text(json.dumps(legacy))
+
+        svc, _ = make_service(tmp_path)
+        svc.load_state()
+
+        entry = svc._save_sync_state["saves"]["42"]
+        assert "active_core" not in entry
+        assert entry["last_synced_core"] == "mgba_libretro"
+
+    def test_load_state_skips_migration_for_malformed_entries(self, tmp_path):
+        """Migration is defensive: non-dict values don't crash."""
+        legacy = {
+            "saves": {
+                "42": {
+                    "files": {
+                        "good.srm": {"tracked_save_id": 100, "dismissed_newer_save_id": 5},
+                        "weird.srm": "not-a-dict",
+                    }
+                }
+            }
+        }
+        (tmp_path / "save_sync_state.json").write_text(json.dumps(legacy))
+
+        svc, _ = make_service(tmp_path)
+        svc.load_state()  # should not raise
+
+        files = svc._save_sync_state["saves"]["42"]["files"]
+        assert "dismissed_newer_save_id" not in files["good.srm"]
 
     def test_save_and_load_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
