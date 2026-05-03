@@ -723,6 +723,55 @@ class SaveService:
             "created_at": datetime.now(UTC).isoformat(),
         }
 
+    def _dispatch_skip(
+        self,
+        action: Skip,
+        *,
+        rom_id: int,
+        rom_id_str: str,
+        filename: str,
+        local_hash: str | None,
+    ) -> None:
+        if action.adopt_baseline and local_hash is not None:
+            # State-only mutation: write the current local_hash as the baseline
+            # so future runs can detect drift. No I/O, no synced count.
+            self._log_debug(f"_sync_rom_saves({rom_id}): skip + adopt_baseline {filename} ({action.reason})")
+            self._adopt_baseline_hash(rom_id_str, filename, local_hash)
+        else:
+            self._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
+
+    def _dispatch_upload(
+        self,
+        action: Upload,
+        *,
+        rom_id: int,
+        rom_id_str: str,
+        filename: str,
+        local_path: str | None,
+        system: str,
+        server_saves: list[dict],
+        errors: list[str],
+    ) -> bool:
+        """Execute an ``Upload`` action. Returns True iff the upload was issued."""
+        if local_path is None:
+            errors.append(f"{filename}: upload requested but no local file")
+            return False
+        if action.target_save_id is None:
+            # POST path: brand-new save in slot.
+            self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, None)
+            return True
+        # PUT path: re-upload to update the tracked save (local diverged while
+        # is_current=true).
+        server_save = next((s for s in server_saves if s.get("id") == action.target_save_id), None)
+        if server_save is None:
+            # Picked save vanished between read and dispatch — best-effort.
+            self._log_debug(
+                f"_dispatch_sync_action: target_save_id={action.target_save_id} not in server_saves; skipping",
+            )
+            return False
+        self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server_save)
+        return True
+
     def _dispatch_sync_action(
         self,
         action: object,
@@ -746,38 +795,25 @@ class SaveService:
         """
         try:
             if isinstance(action, Skip):
-                if action.adopt_baseline and local_hash is not None:
-                    # State-only mutation: write the current local_hash as the
-                    # baseline so future runs can detect drift. No I/O, no
-                    # synced count, no conflict.
-                    self._log_debug(f"_sync_rom_saves({rom_id}): skip + adopt_baseline {filename} ({action.reason})")
-                    self._adopt_baseline_hash(rom_id_str, filename, local_hash)
-                else:
-                    self._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
+                self._dispatch_skip(
+                    action,
+                    rom_id=rom_id,
+                    rom_id_str=rom_id_str,
+                    filename=filename,
+                    local_hash=local_hash,
+                )
                 return False
             if isinstance(action, Upload):
-                if local_path is None:
-                    errors.append(f"{filename}: upload requested but no local file")
-                    return False
-                if action.target_save_id is not None:
-                    # PUT path: re-upload to update the existing tracked save
-                    # (local diverged while is_current=true).
-                    server_save = next(
-                        (s for s in server_saves if s.get("id") == action.target_save_id),
-                        None,
-                    )
-                    if server_save is None:
-                        # Picked save vanished between read and dispatch — best-effort.
-                        self._log_debug(
-                            f"_dispatch_sync_action: target_save_id={action.target_save_id} "
-                            f"not in server_saves; skipping",
-                        )
-                        return False
-                    self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server_save)
-                else:
-                    # POST path: brand-new save in slot.
-                    self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, None)
-                return True
+                return self._dispatch_upload(
+                    action,
+                    rom_id=rom_id,
+                    rom_id_str=rom_id_str,
+                    filename=filename,
+                    local_path=local_path,
+                    system=system,
+                    server_saves=server_saves,
+                    errors=errors,
+                )
             if isinstance(action, Download):
                 self._do_download_save(action.server_save, saves_dir, filename, rom_id_str, system)
                 return True
@@ -807,12 +843,125 @@ class SaveService:
         file_state = files.setdefault(filename, {})
         file_state["last_sync_hash"] = local_hash
 
+    def _sync_local_files(
+        self,
+        local_files: list[dict],
+        *,
+        rom_id: int,
+        rom_id_str: str,
+        device_id: str,
+        server_in_slot: list[dict],
+        files_state: dict,
+        system: str,
+        saves_dir: str,
+        errors: list[str],
+        conflicts: list[SaveConflict | dict],
+    ) -> tuple[int, set[str]]:
+        """Run ``compute_sync_action`` on every local file and dispatch each outcome.
+
+        Returns ``(synced_count, handled_filenames)``. ``handled_filenames`` is
+        used by the server-only sweep to skip targets already addressed.
+        """
+        synced = 0
+        handled_filenames: set[str] = set()
+        for lf in local_files:
+            filename = lf["filename"]
+            local_path = lf["path"]
+            local_hash = self._file_md5(local_path) if os.path.isfile(local_path) else None
+            file_state = files_state.get(filename, {})
+            action = compute_sync_action(
+                local_file=self._build_local_input(local_path, filename),
+                server_saves_in_slot=server_in_slot,
+                files_state=file_state,
+                device_id=device_id,
+                local_hash=local_hash,
+            )
+            handled_filenames.add(filename)
+            self._log_debug(f"_sync_rom_saves({rom_id}): local {filename} -> {type(action).__name__}")
+            if self._dispatch_sync_action(
+                action,
+                rom_id=rom_id,
+                rom_id_str=rom_id_str,
+                filename=filename,
+                local_path=local_path,
+                local_hash=local_hash,
+                saves_dir=saves_dir,
+                system=system,
+                server_saves=server_in_slot,
+                errors=errors,
+                conflicts=conflicts,
+            ):
+                synced += 1
+        return synced, handled_filenames
+
+    def _sync_server_only_saves(
+        self,
+        server_in_slot: list[dict],
+        *,
+        rom_id: int,
+        rom_id_str: str,
+        rom_name: str,
+        device_id: str,
+        files_state: dict,
+        handled_filenames: set[str],
+        pending_migration: bool,
+        system: str,
+        saves_dir: str,
+        errors: list[str],
+        conflicts: list[SaveConflict | dict],
+    ) -> int:
+        """Address server saves whose canonical local target wasn't already
+        handled by the local-file sweep. Returns the number of transfers.
+
+        Skipped entirely while a save-sort migration is pending (see #238).
+        """
+        # Group server saves by canonical local target filename. compute_sync_action
+        # picks newest-in-group automatically.
+        server_only_groups: dict[str, list[dict]] = {}
+        for ss in server_in_slot:
+            target = self._local_save_target(ss, rom_name)
+            if target in handled_filenames:
+                continue
+            server_only_groups.setdefault(target, []).append(ss)
+
+        synced = 0
+        for target_filename, group in server_only_groups.items():
+            if pending_migration:
+                self._log_debug(
+                    f"_sync_rom_saves({rom_id}): skipping server_only {target_filename} — migration pending"
+                )
+                continue
+            file_state = files_state.get(target_filename, {})
+            action = compute_sync_action(
+                local_file=None,
+                server_saves_in_slot=group,
+                files_state=file_state,
+                device_id=device_id,
+                local_hash=None,
+            )
+            self._log_debug(f"_sync_rom_saves({rom_id}): server-only {target_filename} -> {type(action).__name__}")
+            if self._dispatch_sync_action(
+                action,
+                rom_id=rom_id,
+                rom_id_str=rom_id_str,
+                filename=target_filename,
+                local_path=None,
+                local_hash=None,
+                saves_dir=saves_dir,
+                system=system,
+                server_saves=group,
+                errors=errors,
+                conflicts=conflicts,
+            ):
+                synced += 1
+        return synced
+
     def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
         """Sync saves for a single ROM.
 
-        Iterates ``compute_sync_action`` decisions for every local file and
-        every server-only save in the active slot, dispatching each outcome
-        through ``_dispatch_sync_action``. Returns
+        Runs ``compute_sync_action`` for every local file and every
+        server-only save in the active slot via two focused helpers,
+        dispatching each outcome through ``_dispatch_sync_action``. Returns
         ``(synced_count, errors_list, conflicts_list)``.
         """
         t_total = time.time()
@@ -827,7 +976,6 @@ class SaveService:
         rom_name = info["rom_name"]
         saves_dir = info["saves_dir"]
 
-        # Fetch server saves (with retry)
         t0 = time.time()
         try:
             device_id = self._get_server_device_id()
@@ -852,86 +1000,37 @@ class SaveService:
         active_slot = save_state.get("active_slot")
         server_in_slot = self._filter_server_saves_to_slot(server_saves, active_slot)
 
-        synced = 0
         errors: list[str] = []
         conflicts: list[SaveConflict | dict] = []
+        device_id_str = device_id or ""
 
-        # During a pending save-sort migration we run upload-only — see #238.
-        pending_migration = self._is_save_sort_changed()
-
-        # Track the local-target filenames we have processed so we don't
-        # re-handle them in the server-only sweep below.
-        handled_filenames: set[str] = set()
-
-        # Pass 1: every local file gets one decision.
-        for lf in local_files:
-            filename = lf["filename"]
-            local_path = lf["path"]
-            local_input = self._build_local_input(local_path, filename)
-            local_hash = self._file_md5(local_path) if os.path.isfile(local_path) else None
-            file_state = files_state.get(filename, {})
-            action = compute_sync_action(
-                local_file=local_input,
-                server_saves_in_slot=server_in_slot,
-                files_state=file_state,
-                device_id=device_id or "",
-                local_hash=local_hash,
-            )
-            handled_filenames.add(filename)
-            self._log_debug(f"_sync_rom_saves({rom_id}): local {filename} -> {type(action).__name__}")
-            if self._dispatch_sync_action(
-                action,
-                rom_id=rom_id,
-                rom_id_str=rom_id_str,
-                filename=filename,
-                local_path=local_path,
-                local_hash=local_hash,
-                saves_dir=saves_dir,
-                system=system,
-                server_saves=server_in_slot,
-                errors=errors,
-                conflicts=conflicts,
-            ):
-                synced += 1
-
-        # Pass 2: server-only saves in slot, grouped by their target local
-        # filename. compute_sync_action picks newest-in-group automatically.
-        server_only_groups: dict[str, list[dict]] = {}
-        for ss in server_in_slot:
-            target = self._local_save_target(ss, rom_name)
-            if target in handled_filenames:
-                continue
-            server_only_groups.setdefault(target, []).append(ss)
-
-        for target_filename, group in server_only_groups.items():
-            if pending_migration:
-                self._log_debug(
-                    f"_sync_rom_saves({rom_id}): skipping server_only {target_filename} — migration pending"
-                )
-                continue
-            file_state = files_state.get(target_filename, {})
-            action = compute_sync_action(
-                local_file=None,
-                server_saves_in_slot=group,
-                files_state=file_state,
-                device_id=device_id or "",
-                local_hash=None,
-            )
-            self._log_debug(f"_sync_rom_saves({rom_id}): server-only {target_filename} -> {type(action).__name__}")
-            if self._dispatch_sync_action(
-                action,
-                rom_id=rom_id,
-                rom_id_str=rom_id_str,
-                filename=target_filename,
-                local_path=None,
-                local_hash=None,
-                saves_dir=saves_dir,
-                system=system,
-                server_saves=group,
-                errors=errors,
-                conflicts=conflicts,
-            ):
-                synced += 1
+        synced_local, handled_filenames = self._sync_local_files(
+            local_files,
+            rom_id=rom_id,
+            rom_id_str=rom_id_str,
+            device_id=device_id_str,
+            server_in_slot=server_in_slot,
+            files_state=files_state,
+            system=system,
+            saves_dir=saves_dir,
+            errors=errors,
+            conflicts=conflicts,
+        )
+        synced_server = self._sync_server_only_saves(
+            server_in_slot,
+            rom_id=rom_id,
+            rom_id_str=rom_id_str,
+            rom_name=rom_name,
+            device_id=device_id_str,
+            files_state=files_state,
+            handled_filenames=handled_filenames,
+            pending_migration=self._is_save_sort_changed(),
+            system=system,
+            saves_dir=saves_dir,
+            errors=errors,
+            conflicts=conflicts,
+        )
+        synced = synced_local + synced_server
 
         # Record when this sync check ran (regardless of whether files transferred)
         save_entry = self._save_sync_state["saves"].setdefault(rom_id_str, {})
@@ -1036,6 +1135,89 @@ class SaveService:
             return None
         return max(candidates, key=lambda s: s.get("updated_at", ""))
 
+    def _status_entry_for_local_file(
+        self,
+        local_file: dict,
+        *,
+        rom_id: int,
+        rom_id_str: str,
+        server_in_slot: list[dict],
+        files_state: dict,
+        server_device_id: str | None,
+        own_upload_ids: list[int] | None,
+    ) -> tuple[dict, dict | None]:
+        """Build the file-status entry for an existing local file.
+
+        Returns ``(status_entry, conflict_entry_or_None)``. The conflict
+        entry is the ``sync_conflict`` descriptor when ``compute_sync_action``
+        returns ``Conflict``; otherwise None.
+        """
+        filename = local_file["filename"]
+        local_path = local_file["path"]
+        local_hash = self._file_md5(local_path) if os.path.isfile(local_path) else None
+        file_state = files_state.get(filename, {})
+        action = compute_sync_action(
+            local_file=self._build_local_input(local_path, filename),
+            server_saves_in_slot=server_in_slot,
+            files_state=file_state,
+            device_id=server_device_id or "",
+            local_hash=local_hash,
+        )
+        if isinstance(action, Skip) and action.adopt_baseline and local_hash is not None:
+            self._adopt_baseline_hash(rom_id_str, filename, local_hash)
+        chosen_server = self._resolve_chosen_server(action, server_in_slot)
+        local_mtime = (
+            datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
+            if os.path.isfile(local_path)
+            else None
+        )
+        local_size = os.path.getsize(local_path) if os.path.isfile(local_path) else None
+        status_entry = self._build_file_status(
+            filename,
+            local_path=local_path,
+            local_hash=local_hash,
+            local_mtime=local_mtime,
+            local_size=local_size,
+            server=chosen_server,
+            last_sync_at=file_state.get("last_sync_at"),
+            status=self._status_from_action(action),
+            server_device_id=server_device_id,
+            uploaded_by_us=_compute_uploaded_by_us(chosen_server, own_upload_ids),
+        )
+        conflict_entry: dict | None = None
+        if isinstance(action, Conflict):
+            self._log_debug(
+                f"_get_save_status_io({rom_id}): conflict {filename} server_save_id={action.server_save.get('id')}"
+            )
+            conflict_entry = self._build_sync_conflict_entry(
+                rom_id, filename, action.server_save, local_path, local_hash
+            )
+        return status_entry, conflict_entry
+
+    def _status_entry_for_server_only(
+        self,
+        server_in_slot: list[dict],
+        *,
+        rom_name: str,
+        server_device_id: str | None,
+        own_upload_ids: list[int] | None,
+    ) -> dict:
+        """Build the ready-to-download status entry when no local file exists
+        but the slot has server saves. Picks newest by ``updated_at``."""
+        newest = max(server_in_slot, key=lambda s: s.get("updated_at", ""))
+        return self._build_file_status(
+            self._local_save_target(newest, rom_name),
+            local_path=None,
+            local_hash=None,
+            local_mtime=None,
+            local_size=None,
+            server=newest,
+            last_sync_at=None,
+            status="download",
+            server_device_id=server_device_id,
+            uploaded_by_us=_compute_uploaded_by_us(newest, own_upload_ids),
+        )
+
     def _get_save_status_io(self, rom_id: int, server_saves: list[dict]) -> dict:
         """Sync helper for get_save_status — runs in executor.
 
@@ -1082,59 +1264,25 @@ class SaveService:
             local_file = local_files[0] if local_files else None
 
             if local_file is not None:
-                filename = local_file["filename"]
-                local_path = local_file["path"]
-                local_hash = self._file_md5(local_path) if os.path.isfile(local_path) else None
-                file_state = files_state.get(filename, {})
-                action = compute_sync_action(
-                    local_file=self._build_local_input(local_path, filename),
-                    server_saves_in_slot=server_in_slot,
-                    files_state=file_state,
-                    device_id=server_device_id or "",
-                    local_hash=local_hash,
+                status_entry, conflict_entry = self._status_entry_for_local_file(
+                    local_file,
+                    rom_id=rom_id,
+                    rom_id_str=rom_id_str,
+                    server_in_slot=server_in_slot,
+                    files_state=files_state,
+                    server_device_id=server_device_id,
+                    own_upload_ids=own_upload_ids,
                 )
-                if isinstance(action, Skip) and action.adopt_baseline and local_hash is not None:
-                    self._adopt_baseline_hash(rom_id_str, filename, local_hash)
-                chosen_server = self._resolve_chosen_server(action, server_in_slot)
-                file_statuses.append(
-                    self._build_file_status(
-                        filename,
-                        local_path=local_path,
-                        local_hash=local_hash,
-                        local_mtime=datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
-                        if os.path.isfile(local_path)
-                        else None,
-                        local_size=os.path.getsize(local_path) if os.path.isfile(local_path) else None,
-                        server=chosen_server,
-                        last_sync_at=file_state.get("last_sync_at"),
-                        status=self._status_from_action(action),
-                        server_device_id=server_device_id,
-                        uploaded_by_us=_compute_uploaded_by_us(chosen_server, own_upload_ids),
-                    )
-                )
-                if isinstance(action, Conflict):
-                    self._log_debug(
-                        f"_get_save_status_io({rom_id}): conflict {filename} "
-                        f"server_save_id={action.server_save.get('id')}"
-                    )
-                    conflicts.append(
-                        self._build_sync_conflict_entry(rom_id, filename, action.server_save, local_path, local_hash)
-                    )
+                file_statuses.append(status_entry)
+                if conflict_entry is not None:
+                    conflicts.append(conflict_entry)
             elif server_in_slot:
-                newest = max(server_in_slot, key=lambda s: s.get("updated_at", ""))
-                target_filename = self._local_save_target(newest, rom_name)
                 file_statuses.append(
-                    self._build_file_status(
-                        target_filename,
-                        local_path=None,
-                        local_hash=None,
-                        local_mtime=None,
-                        local_size=None,
-                        server=newest,
-                        last_sync_at=None,
-                        status="download",
+                    self._status_entry_for_server_only(
+                        server_in_slot,
+                        rom_name=rom_name,
                         server_device_id=server_device_id,
-                        uploaded_by_us=_compute_uploaded_by_us(newest, own_upload_ids),
+                        own_upload_ids=own_upload_ids,
                     )
                 )
 
@@ -2193,10 +2341,10 @@ class SaveService:
         """List server-side saves in the active slot, excluding the currently-tracked one.
 
         The slot is the unit, not the filename. Saves uploaded by other
-        clients (Argosy, RomM web UI, etc.) whose naming convention differs
-        from ours are first-class versions of the same slot, so no filename
-        filter is applied — every save in the slot except the one we're
-        currently tracking shows up here.
+        clients (RomM web UI, third-party clients, etc.) whose naming
+        convention differs from ours are first-class versions of the same
+        slot, so no filename filter is applied — every save in the slot
+        except the one we're currently tracking shows up here.
 
         Sorted by ``updated_at`` descending (newest first). Each entry
         contains: id, file_name, emulator, updated_at, file_size_bytes,
@@ -2316,13 +2464,7 @@ class SaveService:
 
         return {"status": "ok"}
 
-    async def rollback_to_version(
-        self,
-        rom_id: int,
-        slot: str,
-        filename: str,  # noqa: ARG002 — kept for callable-wiring stability
-        save_id: int,
-    ) -> dict:
+    async def rollback_to_version(self, rom_id: int, slot: str, save_id: int) -> dict:
         """Switch the local + tracked save to a chosen older server version.
 
         Flow:

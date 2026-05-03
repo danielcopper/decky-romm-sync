@@ -41,7 +41,10 @@ export const SyncConflictModal: FC<SyncConflictModalProps> = ({
   errorMessage = null,
 }) => {
   const handleResolve = (action: SyncConflictAction) => {
-    void onResolve(action);
+    onResolve(action).catch(() => {
+      // onResolve owns its own error handling; swallow rejections at the
+      // event-handler boundary so React doesn't see an unhandled promise.
+    });
   };
 
   return (

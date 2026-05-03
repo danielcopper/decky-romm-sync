@@ -262,7 +262,7 @@ export type RollbackStatus =
   | { status: "put_failed"; error: string };
 
 export const savesListFileVersions = callable<[number, string, string], SaveVersionEntry[]>("saves_list_file_versions");
-export const savesRollbackToVersion = callable<[number, string, string, number], RollbackStatus>("saves_rollback_to_version");
+export const savesRollbackToVersion = callable<[number, string, number], RollbackStatus>("saves_rollback_to_version");
 
 // Achievements callables
 export const getAchievements = callable<[number], AchievementList>("get_achievements");

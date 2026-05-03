@@ -1043,19 +1043,19 @@ class TestSavesVersionHistoryCallables:
             "download_path": "/saves/pokemon.srm",
         }
 
-        result = await plugin.saves_rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await plugin.saves_rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         download_calls = [c for c in plugin._fake_api.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)
 
     @pytest.mark.asyncio
-    async def test_saves_rollback_to_version_signature_no_force_param(self, plugin):
-        """saves_rollback_to_version's signature is (rom_id, slot, filename,
-        save_id) — no force flag. The matrix pre-flight has replaced the
-        Gate D / Gate F warning paths."""
+    async def test_saves_rollback_to_version_signature(self, plugin):
+        """saves_rollback_to_version's signature is (rom_id, slot, save_id) —
+        no force flag (matrix pre-flight replaced Gate D/F) and no filename
+        (the canonical local path is derived from the target save + ROM)."""
         import inspect
 
         sig = inspect.signature(plugin.saves_rollback_to_version)
         params = list(sig.parameters.keys())
-        assert params == ["rom_id", "slot", "filename", "save_id"]
+        assert params == ["rom_id", "slot", "save_id"]

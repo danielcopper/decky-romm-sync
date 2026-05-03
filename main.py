@@ -679,8 +679,8 @@ class Plugin:
     async def saves_list_file_versions(self, rom_id, slot, filename):
         return await self._save_sync_service.list_file_versions(rom_id, slot, filename)
 
-    async def saves_rollback_to_version(self, rom_id, slot, filename, save_id):
-        return await self._save_sync_service.rollback_to_version(rom_id, slot, filename, save_id)
+    async def saves_rollback_to_version(self, rom_id, slot, save_id):
+        return await self._save_sync_service.rollback_to_version(rom_id, slot, save_id)
 
     async def record_session_start(self, rom_id):
         return self._playtime_service.record_session_start(rom_id)

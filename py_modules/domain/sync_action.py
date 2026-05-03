@@ -131,6 +131,47 @@ def _local_mtime_ge_server_updated_at(local_file: dict, server: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _decide_when_is_current(
+    server: dict, local_file: dict | None, local_hash: str | None, last_sync_hash: str | None
+) -> SyncAction:
+    """Branch 4: ``our_entry.is_current=True`` on the chosen save."""
+    if local_file is None:
+        # Recovery: server still tracks our last version, local is gone.
+        return Download(server_save=server)
+    if not last_sync_hash:
+        # No baseline yet — adopt local_hash so future runs can detect drift.
+        # Pure state mutation, no I/O.
+        return Skip(reason="synced", adopt_baseline=True)
+    if local_hash and local_hash != last_sync_hash:
+        # Played offline since last sync; server unchanged — PUT the diverged
+        # local content against the existing save id.
+        return Upload(target_save_id=server.get("id"))
+    return Skip(reason="synced")
+
+
+def _decide_when_not_current(
+    server: dict, local_file: dict | None, local_hash: str | None, last_sync_hash: str | None
+) -> SyncAction:
+    """Branch 5: ``our_entry`` exists but ``is_current=False`` (server moved past us)."""
+    if local_file is None or not last_sync_hash:
+        # Server moved, nothing local to protect (or no baseline to claim drift).
+        return Download(server_save=server)
+    if local_hash and local_hash != last_sync_hash:
+        # Both sides changed — the only true Conflict.
+        return Conflict(server_save=server)
+    return Download(server_save=server)
+
+
+def _decide_when_no_entry(server: dict, local_file: dict | None) -> SyncAction:
+    """Branch 6: no ``device_syncs`` entry for our device on the chosen save."""
+    if local_file is None:
+        return Download(server_save=server)
+    if _local_mtime_ge_server_updated_at(local_file, server):
+        # POST our local as a new save in the slot.
+        return Upload(target_save_id=None)
+    return Download(server_save=server)
+
+
 def compute_sync_action(
     local_file: dict | None,
     server_saves_in_slot: list[dict],
@@ -157,48 +198,13 @@ def compute_sync_action(
     # 2. Pick newest server save by updated_at.
     server = max(server_saves_in_slot, key=lambda s: s.get("updated_at", ""))
 
-    # 3. Find our device's device_syncs entry on the chosen server save.
+    # 3. Find our device's entry on the chosen save and branch on it.
     device_syncs = server.get("device_syncs") or []
-    our_entry = next(
-        (ds for ds in device_syncs if ds.get("device_id") == device_id),
-        None,
-    )
+    our_entry = next((ds for ds in device_syncs if ds.get("device_id") == device_id), None)
     last_sync_hash = files_state.get("last_sync_hash")
 
-    # 4. Our device is flagged current on the chosen save.
     if our_entry and our_entry.get("is_current"):
-        if local_file is None:
-            # Recovery: server still tracks our last version, local is gone.
-            return Download(server_save=server)
-        if not last_sync_hash:
-            # No baseline yet — adopt local_hash as the baseline so future
-            # runs can detect drift. Pure state mutation, no I/O.
-            return Skip(reason="synced", adopt_baseline=True)
-        if local_hash and local_hash != last_sync_hash:
-            # Played offline since last sync; server unchanged — push the
-            # diverged local content (PUT against the existing save id).
-            return Upload(target_save_id=server.get("id"))
-        # Steady state.
-        return Skip(reason="synced")
-
-    # 5. Our device exists but is not flagged current — server moved past us.
+        return _decide_when_is_current(server, local_file, local_hash, last_sync_hash)
     if our_entry is not None:
-        if local_file is None:
-            # Server moved, nothing local to protect.
-            return Download(server_save=server)
-        if not last_sync_hash:
-            # No baseline → cannot claim drift; server wins.
-            return Download(server_save=server)
-        if local_hash and local_hash != last_sync_hash:
-            # Both sides changed — the only true Conflict.
-            return Conflict(server_save=server)
-        # Server changed, local untouched → adopt.
-        return Download(server_save=server)
-
-    # 6. No entry for our device on the chosen save (never synced this save).
-    if local_file is None:
-        return Download(server_save=server)
-    if _local_mtime_ge_server_updated_at(local_file, server):
-        # POST our local as a new save in the slot.
-        return Upload(target_save_id=None)
-    return Download(server_save=server)
+        return _decide_when_not_current(server, local_file, local_hash, last_sync_hash)
+    return _decide_when_no_entry(server, local_file)

@@ -200,7 +200,7 @@ const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
   const handleRestore = async (version: SaveVersionEntry) => {
     setRestoring(version.id);
     try {
-      const result: RollbackStatus = await savesRollbackToVersion(romId, slot, filename, version.id);
+      const result: RollbackStatus = await savesRollbackToVersion(romId, slot, version.id);
       if (result.status === "ok") {
         toaster.toast({ title: "RomM Sync", body: `Save restored from ${formatRelativeTime(version.updated_at)}` });
         setVersions(null);

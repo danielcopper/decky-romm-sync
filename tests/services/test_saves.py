@@ -3543,9 +3543,9 @@ class TestListFileVersions:
         """Returns every save in the slot except the currently-tracked one.
 
         The slot is the unit, not the filename — saves with different
-        ``file_name_no_tags`` (uploaded by Argosy / RomM web UI / other
-        clients with their own naming) are first-class versions and surface
-        alongside saves whose names match the local filename.
+        ``file_name_no_tags`` (uploaded by RomM web UI or third-party
+        clients with their own naming) are first-class versions and
+        surface alongside saves whose names match the local filename.
         """
         svc, fake = make_service(tmp_path)
 
@@ -3780,7 +3780,7 @@ class TestRollbackToVersion:
         svc, _fake = make_service(tmp_path)
 
         # rom 999 is not installed
-        result = await svc.rollback_to_version(999, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(999, "default", 50)
         assert result == {"status": "not_found"}
 
     @pytest.mark.asyncio
@@ -3793,7 +3793,7 @@ class TestRollbackToVersion:
         self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
         fake.saves[100] = self._tracked_save(100)
         # Request save_id=999, which doesn't exist
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 999)
+        result = await svc.rollback_to_version(42, "default", 999)
         assert result == {"status": "not_found"}
 
     @pytest.mark.asyncio
@@ -3815,7 +3815,7 @@ class TestRollbackToVersion:
         fake.saves[200] = _server_save(save_id=200, rom_id=42, slot="default", updated_at="2026-03-20T10:00:00Z")
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
         assert result["status"] == "ok"
 
     @pytest.mark.asyncio
@@ -3832,7 +3832,7 @@ class TestRollbackToVersion:
         # (and is the rollback target).
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
 
@@ -3856,7 +3856,7 @@ class TestRollbackToVersion:
         )
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         # Pre-flight PUT against id=100 happened (the silent upload of local
@@ -3886,7 +3886,7 @@ class TestRollbackToVersion:
         )
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "conflict_blocked"
         assert len(result["conflicts"]) == 1
@@ -3907,7 +3907,7 @@ class TestRollbackToVersion:
         # older version to roll back to
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         # Verify download was called with save_id=50
@@ -3929,7 +3929,7 @@ class TestRollbackToVersion:
         fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         # Both saves were downloaded: 100 from pre-flight recovery, 50 from
@@ -3950,7 +3950,7 @@ class TestRollbackToVersion:
         fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
 
@@ -3964,7 +3964,7 @@ class TestRollbackToVersion:
         _enable_sync_with_device(svc)
         fake.fail_on_next(Exception("network error"))
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "preflight_failed"
         assert any("network" in err.lower() for err in result.get("errors", []))
@@ -3985,7 +3985,7 @@ class TestRollbackToVersion:
         fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         # Verify a PUT (upload_save with save_id=50) fired after download
@@ -4005,7 +4005,7 @@ class TestRollbackToVersion:
         fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
@@ -4024,7 +4024,7 @@ class TestRollbackToVersion:
         fake.saves[100] = self._tracked_save(100)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
@@ -4063,7 +4063,7 @@ class TestRollbackToVersion:
         fake.upload_save = failing_upload  # type: ignore[method-assign]
 
         try:
-            result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+            result = await svc.rollback_to_version(42, "default", 50)
         finally:
             fake.upload_save = original_upload  # type: ignore[method-assign]
 
@@ -4105,7 +4105,7 @@ class TestRollbackToVersion:
         fake.confirm_download = failing_confirm  # type: ignore[method-assign]
 
         try:
-            result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+            result = await svc.rollback_to_version(42, "default", 50)
         finally:
             fake.confirm_download = original_confirm  # type: ignore[method-assign]
 
@@ -4128,7 +4128,7 @@ class TestRollbackToVersion:
         self._setup_state(svc, tmp_path, tracked_id=50, last_sync_hash=local_hash)
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 50)
+        result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
         # PUT still fired (bumps updated_at, idempotent re-confirm)
@@ -4509,7 +4509,7 @@ class TestOwnUploadIds:
         # Foreign older version to roll back to
         fake.saves[27] = _server_save(save_id=27, rom_id=42, slot="default", updated_at="2026-01-01T00:00:00Z")
 
-        result = await svc.rollback_to_version(42, "default", "pokemon.srm", 27)
+        result = await svc.rollback_to_version(42, "default", 27)
 
         assert result["status"] == "ok"
         # own_upload_ids must be unchanged — 27 was not POSTed by us
