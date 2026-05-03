@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.16.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.15.0...decky-romm-sync-v0.16.0) (2026-05-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** This plugin now requires RomM server 4.8.1 or newer. Servers running 4.7.x or 4.8.0 are hard-rejected with a full error page and the plugin is inert. You MUST update your RomM server to exactly 4.8.1 or newer before installing this release — there is no graceful fallback.
+
+### Features
+
+* **saves:** auto-detect migration state across plugin lifecycle ([#240](https://github.com/danielcopper/decky-romm-sync/issues/240)) ([94c7e78](https://github.com/danielcopper/decky-romm-sync/commit/94c7e78c6f8c58babfb2967ed963cc42b1f4b720))
+* **saves:** device list + client_version reconciliation ([#247](https://github.com/danielcopper/decky-romm-sync/issues/247)) ([2428f66](https://github.com/danielcopper/decky-romm-sync/commit/2428f661d18f3c1ff9a9cddd3e9a6e4b995229d1))
+* **saves:** redesign saves tab with slot-based collapsible layout ([#220](https://github.com/danielcopper/decky-romm-sync/issues/220)) ([ebb4d56](https://github.com/danielcopper/decky-romm-sync/commit/ebb4d567df7e8c73a6359651996c624b321d4487))
+* **saves:** save version history and rollback UI ([#225](https://github.com/danielcopper/decky-romm-sync/issues/225)) ([4bc8ff1](https://github.com/danielcopper/decky-romm-sync/commit/4bc8ff1a03347565e08116fecc9931b8a543d19b))
+* **saves:** show offline indicators in play section and saves tab ([#221](https://github.com/danielcopper/decky-romm-sync/issues/221)) ([#223](https://github.com/danielcopper/decky-romm-sync/issues/223)) ([78331c0](https://github.com/danielcopper/decky-romm-sync/commit/78331c0badf19156c33d31ab6910caa1c369efa3))
+* **saves:** show success toast on migration completion ([#234](https://github.com/danielcopper/decky-romm-sync/issues/234)) ([82f7af8](https://github.com/danielcopper/decky-romm-sync/commit/82f7af8bfd08a1e577e4b934826adb2a9782d3b1))
+* **saves:** slot deletion with server capabilities system ([#245](https://github.com/danielcopper/decky-romm-sync/issues/245)) ([b59e231](https://github.com/danielcopper/decky-romm-sync/commit/b59e231d432c9300c9f20dba9a6f048199180ecd))
+
+
+### Bug Fixes
+
+* **saves:** close post-exit sync race during pending save-sort migration ([#241](https://github.com/danielcopper/decky-romm-sync/issues/241)) ([4a204bb](https://github.com/danielcopper/decky-romm-sync/commit/4a204bbf88de900cc0c7fd1d4dacdd1ad412de33))
+* **saves:** resolve corename from retroarch .info, split retrodeck config adapter ([#227](https://github.com/danielcopper/decky-romm-sync/issues/227)) ([2f27f8e](https://github.com/danielcopper/decky-romm-sync/commit/2f27f8e563fc0fede0a39f0ac981df2821157c50))
+* **saves:** resolve corename via retroarch .info for sort-by-core save paths ([#233](https://github.com/danielcopper/decky-romm-sync/issues/233)) ([089e455](https://github.com/danielcopper/decky-romm-sync/commit/089e4559e65de4fa158e15340270c8feb96c76ef))
+
+
+### Miscellaneous Chores
+
+* **api:** require RomM 4.8.1, drop v4.6 support, polish version error UI ([#246](https://github.com/danielcopper/decky-romm-sync/issues/246)) ([7f616f7](https://github.com/danielcopper/decky-romm-sync/commit/7f616f7034a0b3149783d0b1182bc6dec6504d52))
+
 ## [0.15.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.14.0...decky-romm-sync-v0.15.0) (2026-04-01)
 
 
