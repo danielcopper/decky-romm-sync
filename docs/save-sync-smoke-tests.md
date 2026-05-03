@@ -478,8 +478,8 @@ Goal: the plugin loads state from before the rewrite without errors and silently
 - ✓ Plugin logs show no errors related to state load.
 - ✓ All other fields preserved.
 
-**Status**: [ ] Pass / [ ] Fail / [ ] Skip — PAUSED, see "Session Resume Notes" below.
-**Notes**:
+**Status**: [x] Pass — first run surfaced a real migration-shim bug; fix shipped in `cc1cff2` and re-verified on hardware.
+**Notes**: Initial T16 attempt revealed the `dismissed_newer_save_id` field stayed on disk after page-open. Root cause: `init_state()` runs *before* `load_state()` in main.py, so the migration loops in init_state iterated over an empty `saves` dict. `load_state` then overwrote in-memory state with the disk content (legacy field included), and nothing migrated it after. Fixed by moving both migrations (`active_core` → `last_synced_core` and the `dismissed_newer_save_id` strip) into a new `_migrate_loaded_state()` called from `load_state` after the disk read. Added end-to-end test `test_load_state_drops_legacy_dismissed_newer_save_id_persists_to_disk` that asserts the field is gone from the file on disk after init→load→save. Re-tested on hardware: state file at 07:31:28 had `dismissed_newer_save_id` gone, all other fields preserved.
 
 ---
 
