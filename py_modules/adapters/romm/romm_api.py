@@ -113,9 +113,9 @@ class RommApi:
     ) -> list[dict]:
         query = f"/api/saves?rom_id={rom_id}"
         if device_id is not None:
-            query += f"&device_id={device_id}"
+            query += f"&device_id={urllib.parse.quote(device_id, safe='')}"
         if slot is not None:
-            query += f"&slot={slot}"
+            query += f"&slot={urllib.parse.quote(slot, safe='')}"
         result = self._client.request(query)
         return result if isinstance(result, list) else []
 
@@ -132,9 +132,9 @@ class RommApi:
     ) -> dict:
         params = f"rom_id={rom_id}&emulator={urllib.parse.quote(emulator)}"
         if device_id is not None:
-            params += f"&device_id={device_id}"
+            params += f"&device_id={urllib.parse.quote(device_id, safe='')}"
         if slot is not None:
-            params += f"&slot={slot}"
+            params += f"&slot={urllib.parse.quote(slot, safe='')}"
         if overwrite:
             params += "&overwrite=true"
         if save_id is not None:
@@ -170,7 +170,7 @@ class RommApi:
     def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
         query = f"/api/saves/summary?rom_id={rom_id}"
         if device_id is not None:
-            query += f"&device_id={device_id}"
+            query += f"&device_id={urllib.parse.quote(device_id, safe='')}"
         return self._client.request(query)
 
     def delete_server_saves(self, save_ids: list[int]) -> dict:

@@ -103,6 +103,44 @@ class TestUploadSave:
         path = client.upload_multipart.call_args[0][0]
         assert "slot=default" in path
 
+    def test_url_encodes_slot_with_special_chars(self):
+        """Slot with reserved URL characters (&, =, /, ?, +, space) is percent-encoded."""
+        api, client = _make_api()
+        client.upload_multipart.return_value = {"id": 1}
+        api.upload_save(42, "/tmp/save.srm", "retroarch-mgba", slot="Mom & Dad=draft+1?/x")
+        path = client.upload_multipart.call_args[0][0]
+        # raw special chars must NOT appear in the value segment
+        assert "slot=Mom%20%26%20Dad%3Ddraft%2B1%3F%2Fx" in path
+        assert "slot=Mom & Dad=draft+1?/x" not in path
+
+    def test_url_encodes_slot_empty_string(self):
+        """Empty string slot is encoded but still present (caller asked for it)."""
+        api, client = _make_api()
+        client.upload_multipart.return_value = {"id": 1}
+        api.upload_save(42, "/tmp/save.srm", "retroarch-mgba", slot="")
+        path = client.upload_multipart.call_args[0][0]
+        # empty string serializes as "slot=" — important: still on the URL
+        assert "slot=" in path
+
+    def test_url_encodes_slot_non_ascii(self):
+        """Non-ASCII slot (e.g. Japanese) is percent-encoded as UTF-8."""
+        api, client = _make_api()
+        client.upload_multipart.return_value = {"id": 1}
+        api.upload_save(42, "/tmp/save.srm", "retroarch-mgba", slot="スロット")
+        path = client.upload_multipart.call_args[0][0]
+        # UTF-8 of スロット = E382B9 E383AD E38383 E38388
+        assert "slot=%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88" in path
+        assert "スロット" not in path
+
+    def test_url_encodes_device_id_with_special_chars(self):
+        """device_id is encoded defensively even though it's normally a UUID."""
+        api, client = _make_api()
+        client.upload_multipart.return_value = {"id": 1}
+        api.upload_save(42, "/tmp/save.srm", "retroarch-mgba", device_id="abc&xyz=1")
+        path = client.upload_multipart.call_args[0][0]
+        assert "device_id=abc%26xyz%3D1" in path
+        assert "device_id=abc&xyz=1" not in path
+
     def test_with_overwrite_true(self):
         api, client = _make_api()
         client.upload_multipart.return_value = {"id": 1}
@@ -300,6 +338,40 @@ class TestListSaves:
         client.request.return_value = {"error": "bad"}
         assert api.list_saves(42, device_id="abc") == []
 
+    def test_url_encodes_slot_with_special_chars(self):
+        """Slot with reserved URL characters is percent-encoded."""
+        api, client = _make_api()
+        client.request.return_value = []
+        api.list_saves(42, slot="Mom & Dad=draft+1?/x")
+        url = client.request.call_args[0][0]
+        assert "slot=Mom%20%26%20Dad%3Ddraft%2B1%3F%2Fx" in url
+        assert "slot=Mom & Dad=draft+1?/x" not in url
+
+    def test_url_encodes_slot_ascii_safe_round_trips(self):
+        """Plain ASCII slot like 'Desktop' is unchanged."""
+        api, client = _make_api()
+        client.request.return_value = []
+        api.list_saves(42, slot="Desktop")
+        url = client.request.call_args[0][0]
+        assert "slot=Desktop" in url
+
+    def test_url_encodes_slot_non_ascii(self):
+        """Non-ASCII slot is percent-encoded as UTF-8."""
+        api, client = _make_api()
+        client.request.return_value = []
+        api.list_saves(42, slot="スロット")
+        url = client.request.call_args[0][0]
+        assert "slot=%E3%82%B9%E3%83%AD%E3%83%83%E3%83%88" in url
+
+    def test_url_encodes_device_id_with_special_chars(self):
+        """device_id is encoded defensively even though it's normally a UUID."""
+        api, client = _make_api()
+        client.request.return_value = []
+        api.list_saves(42, device_id="abc&xyz=1")
+        url = client.request.call_args[0][0]
+        assert "device_id=abc%26xyz%3D1" in url
+        assert "device_id=abc&xyz=1" not in url
+
 
 class TestGetCurrentUser:
     def test_calls_users_me_endpoint(self):
@@ -476,6 +548,15 @@ class TestGetSaveSummary:
         client.request.return_value = {"total": 1}
         api.get_save_summary(42, device_id="abc-123")
         client.request.assert_called_once_with("/api/saves/summary?rom_id=42&device_id=abc-123")
+
+    def test_url_encodes_device_id_with_special_chars(self):
+        """device_id is encoded defensively even though it's normally a UUID."""
+        api, client = _make_api()
+        client.request.return_value = {"total": 0}
+        api.get_save_summary(42, device_id="abc&xyz=1")
+        url = client.request.call_args[0][0]
+        assert "device_id=abc%26xyz%3D1" in url
+        assert "device_id=abc&xyz=1" not in url
 
 
 class TestDeleteServerSaves:
