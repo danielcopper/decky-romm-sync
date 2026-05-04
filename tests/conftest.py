@@ -50,7 +50,13 @@ sys.modules["decky"] = mock_decky
 
 
 def _make_testable_plugin():
-    """Return a TestablePlugin instance with test-only attributes declared."""
+    """Return a TestablePlugin instance with test-only attributes declared.
+
+    Pre-populates ``_migration_service`` with a non-pending MagicMock so the
+    ``@migration_blocked`` decorator does not raise AttributeError in tests
+    that don't otherwise wire migration state. Tests that exercise the
+    block can override ``is_retrodeck_migration_pending`` per-test.
+    """
     # Import here to ensure decky mock is already installed
     from main import Plugin
 
@@ -60,7 +66,10 @@ def _make_testable_plugin():
         _fake_api: Any
         _resolve_system: Any
 
-    return TestablePlugin()
+    instance = TestablePlugin()
+    instance._migration_service = MagicMock()
+    instance._migration_service.is_retrodeck_migration_pending.return_value = False
+    return instance
 
 
 @pytest.fixture(autouse=True)

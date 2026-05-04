@@ -32,6 +32,7 @@ import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrat
 import { requestSyncCancel } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
+import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
 import type { MigrationStatus } from "../api/backend";
 
@@ -320,6 +321,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     return <VersionErrorCard message={versionError} compact />;
   }
 
+  if (migration.pending) {
+    return <MigrationBlockedPage migration={migration} />;
+  }
+
   return (
     <>
       <PanelSection title="Status">
@@ -380,25 +385,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </DialogButton>
             </Field>
           </PanelSectionRow>
-        )}
-        {migration.pending && (
-          <>
-            <PanelSectionRow>
-              <div style={{ padding: "8px 12px", backgroundColor: "rgba(212, 167, 44, 0.15)", borderLeft: "3px solid #d4a72c", borderRadius: "4px" }}>
-                <div style={{ fontSize: "13px", fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" }}>
-                  {"\u26A0\uFE0F"} RetroDECK location changed
-                </div>
-                <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" }}>
-                  {(migration.roms_count ?? 0) + (migration.bios_count ?? 0) + (migration.saves_count ?? 0)} file(s) need migration ({migration.roms_count ?? 0} ROMs, {migration.bios_count ?? 0} BIOS, {migration.saves_count ?? 0} saves)
-                </div>
-              </div>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => onNavigate("settings")}>
-                Go to Settings
-              </ButtonItem>
-            </PanelSectionRow>
-          </>
         )}
         {saveSortMigration.pending && (
           <>

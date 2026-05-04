@@ -27,6 +27,10 @@ def plugin():
     # return a non-existent path or empty string.
     p._retrodeck_paths = MagicMock()
     p._retrodeck_paths.get_retrodeck_home.return_value = "/tmp"
+    # Default migration service mock — no migration pending. Tests that need
+    # to exercise the @migration_blocked gate override this.
+    p._migration_service = MagicMock()
+    p._migration_service.is_retrodeck_migration_pending.return_value = False
 
     import decky
 
@@ -549,6 +553,106 @@ class TestPruneStaleStateEdgeCases:
         plugin._prune_stale_installed_roms()
         assert "1" in plugin._state["installed_roms"]
 
+    def test_skip_preserves_entry_at_old_home_during_migration(self, plugin, tmp_path):
+        """Pending migration: entries living under old home are preserved (#251)."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
+        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
+        plugin._state["retrodeck_home_path_previous"] = "/run/media/old/retrodeck"
+
+        plugin._state["installed_roms"] = {
+            "1": {
+                "rom_id": 1,
+                "file_path": "/run/media/old/retrodeck/roms/n64/zelda.z64",
+                "system": "n64",
+            },
+            "2": {
+                "rom_id": 2,
+                "file_path": "/run/media/old/retrodeck/roms/psx/FF7/FF7.m3u",
+                "rom_dir": "/run/media/old/retrodeck/roms/psx/FF7",
+                "system": "psx",
+            },
+        }
+
+        plugin._prune_stale_installed_roms()
+        assert "1" in plugin._state["installed_roms"]
+        assert "2" in plugin._state["installed_roms"]
+
+    def test_skip_does_not_preserve_unrelated_path(self, plugin, tmp_path):
+        """Pending migration: ``old_home="/foo"`` does NOT preserve entry at ``/foobar/x``.
+
+        Path comparison must use the trailing separator to avoid prefix
+        false matches like /foo matching /foobar.
+        """
+        import decky
+
+        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
+        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
+        plugin._state["retrodeck_home_path_previous"] = "/foo"
+
+        plugin._state["installed_roms"] = {
+            "1": {"rom_id": 1, "file_path": "/foobar/x.z64", "system": "n64"},
+        }
+
+        plugin._prune_stale_installed_roms()
+        # /foobar/x is NOT under /foo (with separator), file does not exist → pruned.
+        assert "1" not in plugin._state["installed_roms"]
+
+    def test_skip_does_not_fire_when_old_home_is_empty(self, plugin, tmp_path):
+        """No migration marker — prune behaves normally."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
+        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
+        plugin._state.pop("retrodeck_home_path_previous", None)
+
+        plugin._state["installed_roms"] = {
+            "1": {"rom_id": 1, "file_path": "/gone/a.z64", "system": "n64"},
+        }
+
+        plugin._prune_stale_installed_roms()
+        assert "1" not in plugin._state["installed_roms"]
+
+    def test_skip_clears_after_migration_completes(self, plugin, tmp_path):
+        """After migration completes (marker dropped), normal prune behavior resumes."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
+        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
+
+        # First pass: marker set, entry preserved.
+        plugin._state["retrodeck_home_path_previous"] = "/old/retrodeck"
+        plugin._state["installed_roms"] = {
+            "1": {"rom_id": 1, "file_path": "/old/retrodeck/roms/n64/a.z64", "system": "n64"},
+        }
+        plugin._prune_stale_installed_roms()
+        assert "1" in plugin._state["installed_roms"]
+
+        # Second pass: marker cleared (post-migration), file still missing → pruned.
+        plugin._state.pop("retrodeck_home_path_previous", None)
+        plugin._prune_stale_installed_roms()
+        assert "1" not in plugin._state["installed_roms"]
+
+    def test_skip_logs_info_when_preserving(self, plugin, tmp_path, caplog):
+        """Skip emits an info log naming the preserved rom_id and old home."""
+        import logging
+
+        import decky
+
+        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
+        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
+        plugin._state["retrodeck_home_path_previous"] = "/old/retrodeck"
+
+        plugin._state["installed_roms"] = {
+            "1": {"rom_id": 1, "file_path": "/old/retrodeck/roms/n64/a.z64", "system": "n64"},
+        }
+
+        with caplog.at_level(logging.INFO):
+            plugin._prune_stale_installed_roms()
+
+        assert any("Skipping prune" in rec.message and "/old/retrodeck" in rec.message for rec in caplog.records)
+
 
 class TestAtomicSettingsWrite:
     def test_settings_written_atomically(self, plugin, tmp_path):
@@ -771,6 +875,273 @@ class TestRefreshMigrationState:
         await plugin.refresh_migration_state()
         ordered = [name for name, _args, _kwargs in manager.mock_calls]
         assert ordered == ["detect_retrodeck_path_change", "detect_save_sort_change"]
+
+
+_MIGRATION_BLOCKED_WHITELIST: set[str] = {
+    # Migration management itself (the unblock pathway must work while pending).
+    "migrate_retrodeck_files",
+    "get_migration_status",
+    "get_save_sort_migration_status",
+    "migrate_save_sort_files",
+    "dismiss_save_sort_migration",
+    "dismiss_retrodeck_migration",
+    "refresh_migration_state",
+    # Connection / settings (read-only or non-retrodeck).
+    "test_connection",
+    "get_romm_version",
+    "save_settings",
+    "get_settings",
+    "get_whitelist_settings",
+    "update_whitelist_settings",
+    "save_collection_platform_groups",
+    # Cancel operations — must remain callable mid-operation when migration
+    # marker fires so the user can stop in-flight work.
+    "cancel_sync",
+    "sync_cancel_preview",
+    "cancel_download",
+    # Frontend logging / diagnostic helpers.
+    "frontend_log",
+    "debug_log",
+    "save_log_level",
+    "save_steam_input_setting",
+    "apply_steam_input_setting",
+    "fix_retroarch_input_driver",
+    # Read-only library / sync state queries.
+    "get_cached_game_detail",
+    "get_available_cores",
+    "get_platforms",
+    "get_collections",
+    "get_sync_progress",
+    "sync_heartbeat",
+    "report_sync_results",
+    "get_registry_platforms",
+    "report_removal_results",
+    "get_artwork_base64",
+    "get_sync_stats",
+    "get_rom_by_steam_app_id",
+    "get_download_queue",
+    "get_installed_rom",
+    # Firmware / BIOS read-only checks.
+    "get_firmware_status",
+    "check_platform_bios",
+    "get_bios_status",
+    # Save sync read-only / device queries.
+    "ensure_device_registered",
+    "list_devices",
+    "get_save_status",
+    "check_core_change",
+    "get_save_slots",
+    "get_slot_saves",
+    "get_slot_delete_info",
+    "is_save_tracking_configured",
+    "get_save_setup_info",
+    "get_save_sync_settings",
+    "saves_list_file_versions",
+    # Playtime queries.
+    "record_session_start",
+    "record_session_end",
+    "get_server_playtime",
+    "get_all_playtime",
+    # SteamGridDB / Steam shortcut artwork (Steam-side, not retrodeck).
+    "get_sgdb_artwork_base64",
+    "verify_sgdb_api_key",
+    "save_sgdb_api_key",
+    "save_shortcut_icon",
+    # Metadata cache reads.
+    "get_rom_metadata",
+    "get_all_metadata_cache",
+    "get_app_id_rom_id_map",
+    # Achievements queries (server-side).
+    "get_achievements",
+    "get_achievement_progress",
+    "sync_achievements_after_session",
+}
+
+
+class TestMigrationBlockedDecoratorCoverage:
+    """Every Decky callable on Plugin must be classified: either explicitly
+    whitelisted (read-only / unblock pathway / non-retrodeck) or decorated
+    with @migration_blocked. Prevents new callables from being silently
+    unguarded against pending migration corruption (#251)."""
+
+    def test_all_callables_either_whitelisted_or_decorated(self):
+        import inspect
+
+        from main import Plugin
+
+        unclassified: list[str] = []
+        for name, value in inspect.getmembers(Plugin, predicate=inspect.iscoroutinefunction):
+            if name.startswith("_"):
+                continue  # lifecycle hooks (_main, _unload) are not callables
+            if name in _MIGRATION_BLOCKED_WHITELIST:
+                continue
+            if getattr(value, "_migration_blocked", False):
+                continue
+            unclassified.append(name)
+
+        assert not unclassified, (
+            "Unclassified async callables on Plugin — every one must be in "
+            "_MIGRATION_BLOCKED_WHITELIST or carry @migration_blocked: "
+            f"{sorted(unclassified)}"
+        )
+
+    def test_no_callable_is_both_decorated_and_whitelisted(self):
+        """A callable that is both decorated AND whitelisted is silently
+        passing the coverage check — likely a misclassification. Catch it."""
+        import inspect
+
+        from main import Plugin
+
+        double_classified: list[str] = []
+        for name, value in inspect.getmembers(Plugin, predicate=inspect.iscoroutinefunction):
+            if name.startswith("_"):
+                continue
+            if name in _MIGRATION_BLOCKED_WHITELIST and getattr(value, "_migration_blocked", False):
+                double_classified.append(name)
+
+        assert not double_classified, (
+            "Callables both whitelisted AND decorated with @migration_blocked — "
+            f"remove from one: {sorted(double_classified)}"
+        )
+
+    def test_whitelisted_callables_are_not_decorated(self):
+        """Every name in _MIGRATION_BLOCKED_WHITELIST must NOT carry the
+        @migration_blocked marker. Symmetric to the prior check, but reads
+        from the whitelist side."""
+        from main import Plugin
+
+        decorated: list[str] = []
+        for name in _MIGRATION_BLOCKED_WHITELIST:
+            method = getattr(Plugin, name, None)
+            if method is None:
+                continue
+            if getattr(method, "_migration_blocked", False) is True:
+                decorated.append(name)
+
+        assert not decorated, f"Whitelisted callables that also carry @migration_blocked: {sorted(decorated)}"
+
+
+class TestMainStartupOrdering:
+    """Lock-in test for the #251 startup-order invariant: detect_retrodeck_path_change
+    must run BEFORE _prune_stale_installed_roms so the prune skips entries living
+    under a pending migration's previous home. Brittle by design — the assertion
+    is intentionally narrow."""
+
+    @pytest.mark.asyncio
+    async def test_main_calls_detect_path_change_before_prune(self):
+        from unittest.mock import AsyncMock, patch
+
+        from main import Plugin
+
+        plugin = Plugin()
+        plugin._persistence = MagicMock()
+        plugin._persistence.load_settings.return_value = {}
+        plugin._persistence.load_state.side_effect = lambda x: x
+        plugin._persistence.load_metadata_cache.return_value = {}
+
+        call_order: list[str] = []
+
+        # Mocks for the call-order check.
+        migration_service = MagicMock()
+        migration_service.detect_retrodeck_path_change.side_effect = lambda: call_order.append(
+            "detect_retrodeck_path_change"
+        )
+        migration_service.detect_save_sort_change = MagicMock()
+
+        save_sync_service = MagicMock()
+        save_sync_service.init_state = MagicMock()
+        save_sync_service.load_state = MagicMock()
+        save_sync_service.prune_orphaned_state = MagicMock()
+
+        sgdb_service = MagicMock()
+        sgdb_service.prune_orphaned_artwork_cache = MagicMock()
+
+        artwork_service = MagicMock()
+        artwork_service.prune_orphaned_staging_artwork = MagicMock()
+
+        download_service = MagicMock()
+        download_service.cleanup_leftover_tmp_files = MagicMock()
+        download_service.poll_download_requests = AsyncMock()
+
+        firmware_service = MagicMock()
+        firmware_service.load_bios_registry = MagicMock()
+
+        wired_services = {
+            "save_sync_service": save_sync_service,
+            "playtime_service": MagicMock(),
+            "sync_service": MagicMock(),
+            "download_service": download_service,
+            "rom_removal_service": MagicMock(),
+            "firmware_service": firmware_service,
+            "sgdb_service": sgdb_service,
+            "metadata_service": MagicMock(),
+            "achievements_service": MagicMock(),
+            "migration_service": migration_service,
+            "game_detail_service": MagicMock(),
+            "artwork_service": artwork_service,
+            "shortcut_removal_service": MagicMock(),
+        }
+
+        bootstrapped_adapters = {
+            "persistence": plugin._persistence,
+            "http_adapter": MagicMock(),
+            "romm_api": MagicMock(),
+            "steam_config": MagicMock(),
+            "sgdb_adapter": MagicMock(),
+            "retrodeck_paths": MagicMock(),
+            "retroarch_config": MagicMock(),
+            "retroarch_core_info": MagicMock(),
+        }
+
+        with (
+            patch("main.bootstrap", return_value=bootstrapped_adapters),
+            patch("main.wire_services", return_value=wired_services),
+            patch.object(
+                Plugin,
+                "_prune_stale_installed_roms",
+                lambda self: call_order.append("_prune_stale_installed_roms"),
+            ),
+            patch.object(
+                Plugin,
+                "_prune_stale_registry",
+                lambda self: call_order.append("_prune_stale_registry"),
+            ),
+        ):
+            await plugin._main()
+
+        assert "detect_retrodeck_path_change" in call_order
+        assert "_prune_stale_installed_roms" in call_order
+        assert call_order.index("detect_retrodeck_path_change") < call_order.index("_prune_stale_installed_roms")
+
+
+class TestCancelCallablesNotBlockedByMigration:
+    """Cancel operations stop running work — they must remain callable when
+    a migration marker fires so the user can interrupt in-flight operations."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_sync_callable_when_migration_pending(self, plugin):
+        plugin._migration_service.is_retrodeck_migration_pending.return_value = True
+        plugin._sync_service.cancel_sync = MagicMock(return_value={"success": True, "stopped": True})
+        result = await plugin.cancel_sync()
+        assert result.get("blocked_by_migration") is not True
+        plugin._sync_service.cancel_sync.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sync_cancel_preview_callable_when_migration_pending(self, plugin):
+        plugin._migration_service.is_retrodeck_migration_pending.return_value = True
+        plugin._sync_service.sync_cancel_preview = MagicMock(return_value={"success": True})
+        result = await plugin.sync_cancel_preview()
+        assert result.get("blocked_by_migration") is not True
+        plugin._sync_service.sync_cancel_preview.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancel_download_callable_when_migration_pending(self, plugin):
+        plugin._migration_service.is_retrodeck_migration_pending.return_value = True
+        plugin._download_service = MagicMock()
+        plugin._download_service.cancel_download = MagicMock(return_value={"success": True})
+        result = await plugin.cancel_download(42)
+        assert result.get("blocked_by_migration") is not True
+        plugin._download_service.cancel_download.assert_called_once_with(42)
 
 
 class TestMeetsMinVersion:

@@ -41,6 +41,7 @@ import { getMigrationState, onMigrationChange, setMigrationStatus } from "../uti
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
+import { MigrationBlockedCard } from "./MigrationBlockedCard";
 
 interface RomMGameInfoPanelProps {
   appId: number;
@@ -132,11 +133,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     slotsLoading: false,
   });
   const romIdRef = useRef<number | null>(null);
-  const [migrationPending, setMigrationPending] = useState(getMigrationState().pending);
+  const [migration, setMigration] = useState(getMigrationState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
 
   useEffect(() => {
-    const unsub = onMigrationChange(() => setMigrationPending(getMigrationState().pending));
+    const unsub = onMigrationChange(() => setMigration(getMigrationState()));
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortPending(getSaveSortMigrationState().pending));
     return () => { unsub(); unsubSaveSort(); };
   }, []);
@@ -477,6 +478,15 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
       "div",
       { "data-romm": "true" },
       createElement(VersionErrorCard, { message: versionError }),
+    );
+  }
+
+  // --- Pending RetroDECK migration — block the page until resolved ---
+  if (migration.pending) {
+    return createElement(
+      "div",
+      { "data-romm": "true" },
+      createElement(MigrationBlockedCard, {}),
     );
   }
 
@@ -956,27 +966,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     }
   }
 
-  // --- Migration warning (when path change pending) ---
-  const migrationWarning = migrationPending
-    ? createElement("div", {
-        key: "migration-warning",
-        style: {
-          padding: "8px 12px",
-          marginBottom: "12px",
-          backgroundColor: "rgba(212, 167, 44, 0.15)",
-          borderLeft: "3px solid #d4a72c",
-          borderRadius: "4px",
-        },
-      },
-        createElement("div", {
-          style: { fontSize: "13px", fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" },
-        }, "\u26A0\uFE0F RetroDECK location changed"),
-        createElement("div", {
-          style: { fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" },
-        }, "File paths may be incorrect. Go to Settings to migrate files."),
-      )
-    : null;
-
   const saveSortWarning = saveSortPending
     ? createElement("div", {
         key: "save-sort-warning",
@@ -1046,7 +1035,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   }
 
   return createElement("div", { "data-romm": "true" },
-    migrationWarning,
     saveSortWarning,
     tabBar,
     createElement(Focusable as any, {

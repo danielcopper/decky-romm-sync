@@ -147,6 +147,7 @@ class SaveService:
         plugin_version: str = "0.0.0",
         emit: EventEmitter | None = None,
         detect_sort_change: Callable[[], None] | None = None,
+        is_retrodeck_migration_pending: Callable[[], bool] | None = None,
     ) -> None:
         self._romm_api = romm_api
         self._retry = retry
@@ -163,6 +164,7 @@ class SaveService:
         self._plugin_version = plugin_version
         self._emit = emit
         self._detect_sort_change = detect_sort_change
+        self._is_retrodeck_migration_pending = is_retrodeck_migration_pending
         # Per-rom lock dict — serializes concurrent sync operations on the
         # same rom_id (pre_launch_sync, post_exit_sync, manual sync, resolve).
         self._rom_sync_locks: dict[int, asyncio.Lock] = {}
@@ -1480,6 +1482,20 @@ class SaveService:
             if not self._is_save_sync_enabled():
                 return {"success": True, "message": "Save sync disabled", "synced": 0}
 
+            # Defense in depth: block pre_launch_sync if a future caller bypasses
+            # the @migration_blocked decorator at the public callable. saves_dir
+            # would otherwise resolve under the new home and silently desync from
+            # files still living at the old home. Internal _sync_rom_saves callers
+            # (sync_all_saves, rollback_to_version) are protected by the decorator
+            # on their own public callables — this guard is for pre_launch_sync.
+            if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+                return {
+                    "success": False,
+                    "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+                    "synced": 0,
+                    "blocked_by_migration": True,
+                }
+
             # Refresh save-sort state before the migration gate — see #238.
             await self._refresh_save_sort_state("pre_launch_sync")
 
@@ -1523,6 +1539,18 @@ class SaveService:
             if not self._is_save_sync_enabled():
                 self._logger.info("post_exit_sync skipped: save sync disabled")
                 return {"success": True, "message": "Save sync disabled", "synced": 0}
+
+            # Defense in depth: same rationale as pre_launch_sync — internal
+            # _sync_rom_saves callers are protected by @migration_blocked on
+            # their public callables; this guard covers post_exit_sync only.
+            if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+                self._logger.info("post_exit_sync skipped: retrodeck migration pending")
+                return {
+                    "success": False,
+                    "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+                    "synced": 0,
+                    "blocked_by_migration": True,
+                }
 
             settings = self._save_sync_state.get("settings", {})
             if not settings.get("sync_after_exit", True):

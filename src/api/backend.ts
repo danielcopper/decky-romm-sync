@@ -6,6 +6,8 @@ export interface BackendResult {
   message: string;
   error_code?: RommErrorCode;
   romm_version?: string;
+  /** Set when a callable was rejected because a RetroDECK migration is pending. */
+  blocked_by_migration?: boolean;
 }
 
 export interface CachedGameDetail {
@@ -224,6 +226,7 @@ export interface MigrationResult {
 
 export const getMigrationStatus = callable<[], MigrationStatus>("get_migration_status");
 export const migrateRetroDeckFiles = callable<[string | null], MigrationResult>("migrate_retrodeck_files");
+export const dismissRetrodeckMigration = callable<[], { success: boolean }>("dismiss_retrodeck_migration");
 
 export interface SaveSortMigrationStatus {
   pending: boolean;

@@ -15,6 +15,7 @@ from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
+from lib.migration_gate import migration_blocked
 
 
 class Plugin:
@@ -70,6 +71,11 @@ class Plugin:
         (boot-time race), and a naive os.path.exists() check would wipe every
         entry that lives on the card. The next plugin reload, with the
         filesystem ready, will run the prune normally.
+
+        Entries living under a pending migration's previous home are also
+        preserved — RetroDECK has moved away from that path so the files
+        won't exist there, but the user hasn't migrated yet and the entries
+        must survive until they do.
         """
         retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
         if not retrodeck_home or not os.path.exists(retrodeck_home):
@@ -78,10 +84,18 @@ class Plugin:
             )
             return
 
+        pending_migration_home = self._state.get("retrodeck_home_path_previous", "")
+        pending_prefix = (pending_migration_home + os.sep) if pending_migration_home else ""
+
         pruned = []
         for rom_id, entry in list(self._state["installed_roms"].items()):  # list(): dict mutated below
             file_path = entry.get("file_path", "")
             rom_dir = entry.get("rom_dir", "")
+            if pending_prefix and (file_path.startswith(pending_prefix) or rom_dir.startswith(pending_prefix)):
+                decky.logger.info(
+                    f"Skipping prune of {rom_id} ({file_path}): pending migration from {pending_migration_home}"
+                )
+                continue
             if (file_path and os.path.exists(file_path)) or (rom_dir and os.path.exists(rom_dir)):
                 continue
             decky.logger.info(f"Pruned stale installed_roms entry: {rom_id} ({file_path})")
@@ -199,6 +213,9 @@ class Plugin:
         # ── 5. Startup healing ──────────────────────────────────────────────
         self._save_sync_service.init_state()
         self._save_sync_service.load_state()
+        # Detect retrodeck path changes BEFORE pruning so the prune can skip
+        # entries living under a pending migration's previous home.
+        self._migration_service.detect_retrodeck_path_change()
         self._prune_stale_installed_roms()
         self._prune_stale_registry()
         self._save_sync_service.prune_orphaned_state()
@@ -207,7 +224,6 @@ class Plugin:
         self._download_service.cleanup_leftover_tmp_files()
 
         # ── 6. Background tasks ─────────────────────────────────────────────
-        self._migration_service.detect_retrodeck_path_change()
         self._migration_service.detect_save_sort_change()
         self.loop.create_task(self._download_service.poll_download_requests())
         decky.logger.info("RomM Sync plugin loaded")
@@ -228,6 +244,9 @@ class Plugin:
 
     async def dismiss_save_sort_migration(self):
         return self._migration_service.dismiss_save_sort_migration()
+
+    async def dismiss_retrodeck_migration(self):
+        return self._migration_service.dismiss_retrodeck_migration()
 
     async def refresh_migration_state(self):
         self._migration_service.detect_retrodeck_path_change()
@@ -431,6 +450,7 @@ class Plugin:
         es_de_config.set_system_override(retrodeck_home, platform_slug, core_label or None)
         es_de_config._resolver.reset_cache()
 
+    @migration_blocked
     async def set_system_core(self, platform_slug, core_label):
         """Set system-wide core override. Pass empty string to reset to default."""
         retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
@@ -452,6 +472,7 @@ class Plugin:
         es_de_config.set_game_override(retrodeck_home, platform_slug, rom_path, core_label or None)
         es_de_config._resolver.reset_cache()
 
+    @migration_blocked
     async def set_game_core(self, platform_slug, rom_path, core_label):
         """Set per-game core override. Pass empty string to reset to platform default."""
         retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
@@ -474,12 +495,15 @@ class Plugin:
     async def get_firmware_status(self):
         return await self._firmware_service.get_firmware_status()
 
+    @migration_blocked
     async def download_firmware(self, firmware_id):
         return await self._firmware_service.download_firmware(firmware_id)
 
+    @migration_blocked
     async def download_all_firmware(self, platform_slug):
         return await self._firmware_service.download_all_firmware(platform_slug)
 
+    @migration_blocked
     async def download_required_firmware(self, platform_slug):
         return await self._firmware_service.download_required_firmware(platform_slug)
 
@@ -489,6 +513,7 @@ class Plugin:
     async def get_bios_status(self, rom_id):
         return await self._game_detail_service.get_bios_status(rom_id)
 
+    @migration_blocked
     async def delete_platform_bios(self, platform_slug):
         return await self._firmware_service.delete_platform_bios(platform_slug)
 
@@ -497,18 +522,22 @@ class Plugin:
     async def get_platforms(self):
         return await self._sync_service.get_platforms()
 
+    @migration_blocked
     async def save_platform_sync(self, platform_id, enabled):
         return self._sync_service.save_platform_sync(platform_id, enabled)
 
+    @migration_blocked
     async def set_all_platforms_sync(self, enabled):
         return await self._sync_service.set_all_platforms_sync(enabled)
 
     async def get_collections(self):
         return await self._sync_service.get_collections()
 
+    @migration_blocked
     async def save_collection_sync(self, collection_id, enabled):
         return self._sync_service.save_collection_sync(collection_id, enabled)
 
+    @migration_blocked
     async def set_all_collections_sync(self, enabled, category=None):
         return await self._sync_service.set_all_collections_sync(enabled, category)
 
@@ -517,6 +546,7 @@ class Plugin:
         self._save_settings_to_disk()
         return {"success": True}
 
+    @migration_blocked
     async def start_sync(self):
         return self._sync_service.start_sync()
 
@@ -529,9 +559,11 @@ class Plugin:
     async def sync_heartbeat(self):
         return self._sync_service.sync_heartbeat()
 
+    @migration_blocked
     async def sync_preview(self):
         return await self._sync_service.sync_preview()
 
+    @migration_blocked
     async def sync_apply_delta(self, preview_id):
         return await self._sync_service.sync_apply_delta(preview_id)
 
@@ -544,9 +576,11 @@ class Plugin:
     async def get_registry_platforms(self):
         return self._sync_service.get_registry_platforms()
 
+    @migration_blocked
     async def remove_platform_shortcuts(self, platform_slug):
         return await self._shortcut_removal_service.remove_platform_shortcuts(platform_slug)
 
+    @migration_blocked
     async def remove_all_shortcuts(self):
         return self._shortcut_removal_service.remove_all_shortcuts()
 
@@ -556,6 +590,7 @@ class Plugin:
     async def get_artwork_base64(self, rom_id):
         return await self._artwork_service.get_artwork_base64(int(rom_id), self._sync_service.pending_sync)
 
+    @migration_blocked
     async def clear_sync_cache(self):
         return self._sync_service.clear_sync_cache()
 
@@ -567,6 +602,7 @@ class Plugin:
 
     # ── Download delegation to DownloadService ──────────────
 
+    @migration_blocked
     async def start_download(self, rom_id):
         return await self._download_service.start_download(rom_id)
 
@@ -576,18 +612,21 @@ class Plugin:
     async def get_download_queue(self):
         return self._download_service.get_download_queue()
 
+    @migration_blocked
     async def clear_completed_downloads(self):
         return self._download_service.clear_completed_downloads()
 
     async def get_installed_rom(self, rom_id):
         return self._download_service.get_installed_rom(rom_id)
 
+    @migration_blocked
     async def remove_rom(self, rom_id):
         result = await self._rom_removal_service.remove_rom(rom_id)
         if result.get("success"):
             self._download_service._download_queue.pop(int(rom_id), None)
         return result
 
+    @migration_blocked
     async def uninstall_all_roms(self):
         result = await self._rom_removal_service.uninstall_all_roms()
         if result.get("success"):
@@ -618,30 +657,36 @@ class Plugin:
     async def check_core_change(self, rom_id):
         return self._save_sync_service.check_core_change(rom_id)
 
+    @migration_blocked
     async def pre_launch_sync(self, rom_id):
         return await self._save_sync_service.pre_launch_sync(rom_id)
 
+    @migration_blocked
     async def post_exit_sync(self, rom_id):
         return await self._save_sync_service.post_exit_sync(rom_id)
 
+    @migration_blocked
     async def sync_rom_saves(self, rom_id):
         return await self._save_sync_service.sync_rom_saves(rom_id)
 
     async def get_save_slots(self, rom_id):
         return await self._save_sync_service.get_save_slots(rom_id)
 
+    @migration_blocked
     async def set_game_slot(self, rom_id, slot):
         return self._save_sync_service.set_game_slot(rom_id, slot)
 
     async def get_slot_saves(self, rom_id, slot):
         return await self._save_sync_service.get_slot_saves(rom_id, slot)
 
+    @migration_blocked
     async def switch_slot(self, rom_id, new_slot):
         return await self._save_sync_service.switch_slot(rom_id, new_slot)
 
     async def get_slot_delete_info(self, rom_id, slot):
         return await self._save_sync_service.get_slot_delete_info(rom_id, slot)
 
+    @migration_blocked
     async def delete_slot(self, rom_id, slot):
         return await self._save_sync_service.delete_slot(rom_id, slot)
 
@@ -651,6 +696,7 @@ class Plugin:
     async def get_save_setup_info(self, rom_id):
         return await self._save_sync_service.get_save_setup_info(rom_id)
 
+    @migration_blocked
     async def confirm_slot_choice(self, rom_id, chosen_slot, migrate_from_slot="__no_migration__"):
         from services.saves import _NO_MIGRATION
 
@@ -658,27 +704,33 @@ class Plugin:
         actual = _NO_MIGRATION if migrate_from_slot in ("__no_migration__", None) else migrate_from_slot
         return await self._save_sync_service.confirm_slot_choice(rom_id, chosen_slot, actual)
 
+    @migration_blocked
     async def sync_all_saves(self):
         return await self._save_sync_service.sync_all_saves()
 
+    @migration_blocked
     async def resolve_sync_conflict(self, rom_id, filename, action):
         return await self._save_sync_service.resolve_sync_conflict(rom_id, filename, action)
 
     async def get_save_sync_settings(self):
         return self._save_sync_service.get_save_sync_settings()
 
+    @migration_blocked
     async def update_save_sync_settings(self, settings):
         return self._save_sync_service.update_save_sync_settings(settings)
 
+    @migration_blocked
     async def delete_local_saves(self, rom_id):
         return self._save_sync_service.delete_local_saves(rom_id)
 
+    @migration_blocked
     async def delete_platform_saves(self, platform_slug):
         return self._save_sync_service.delete_platform_saves(platform_slug)
 
     async def saves_list_file_versions(self, rom_id, slot, filename):
         return await self._save_sync_service.list_file_versions(rom_id, slot, filename)
 
+    @migration_blocked
     async def saves_rollback_to_version(self, rom_id, slot, save_id):
         return await self._save_sync_service.rollback_to_version(rom_id, slot, save_id)
 

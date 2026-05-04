@@ -152,6 +152,7 @@ export interface SyncPreview {
   changed_names: string[];
   preview_id: string;
   message?: string;
+  blocked_by_migration?: boolean;
 }
 
 export interface SyncChangedItem extends SyncAddItem {
@@ -235,6 +236,7 @@ export interface FirmwareDownloadResult {
   file_path?: string;
   md5_match?: boolean | null;
   downloaded?: number;
+  blocked_by_migration?: boolean;
 }
 
 export interface RomMetadata {

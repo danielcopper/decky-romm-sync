@@ -22,6 +22,7 @@ from lib.errors import error_response
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Callable
 
     from services.protocols import (
         BiosPathProvider,
@@ -53,6 +54,7 @@ class DownloadService:
         save_state: StatePersister,
         get_roms_path: RomsPathProvider | None = None,
         get_bios_path: BiosPathProvider | None = None,
+        is_retrodeck_migration_pending: Callable[[], bool] | None = None,
     ):
         self._romm_api = romm_api
         self._resolve_system = resolve_system
@@ -64,6 +66,7 @@ class DownloadService:
         self._save_state = save_state
         self._get_roms_path = get_roms_path
         self._get_bios_path = get_bios_path
+        self._is_retrodeck_migration_pending = is_retrodeck_migration_pending
 
         # Owned state
         self._download_in_progress: set = set()
@@ -181,6 +184,12 @@ class DownloadService:
         while True:
             try:
                 await asyncio.sleep(2)
+                # Pause polling while a RetroDECK migration is pending — must
+                # short-circuit BEFORE _poll_download_requests_io reads + clears
+                # the request file, otherwise queued requests would be silently
+                # dropped on the floor.
+                if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+                    continue
                 requests = await self._loop.run_in_executor(None, self._poll_download_requests_io, requests_path)
                 if not requests:
                     continue

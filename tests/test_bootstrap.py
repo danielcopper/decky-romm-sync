@@ -252,6 +252,31 @@ class TestWireServices:
         assert save_sync_service._state is migration_service._state
         deps["loop"].close()
 
+    def test_save_service_receives_is_retrodeck_migration_pending(self, tmp_path):
+        """Regression test for #251: SaveService must receive the bound
+        ``migration_service.is_retrodeck_migration_pending`` callback so
+        pre_launch_sync / post_exit_sync can short-circuit while the user
+        still has files at the previous RetroDECK home."""
+        deps = self._make_deps(tmp_path)
+        result = wire_services(WiringConfig(**deps))
+        save_sync_service = result["save_sync_service"]
+        migration_service = result["migration_service"]
+        assert save_sync_service._is_retrodeck_migration_pending == migration_service.is_retrodeck_migration_pending
+        assert save_sync_service._is_retrodeck_migration_pending.__self__ is migration_service  # type: ignore[union-attr]
+        deps["loop"].close()
+
+    def test_download_service_receives_is_retrodeck_migration_pending(self, tmp_path):
+        """Regression test for #251: DownloadService must receive the bound
+        ``migration_service.is_retrodeck_migration_pending`` callback so
+        the download poll loop pauses while a migration is pending."""
+        deps = self._make_deps(tmp_path)
+        result = wire_services(WiringConfig(**deps))
+        download_service = result["download_service"]
+        migration_service = result["migration_service"]
+        assert download_service._is_retrodeck_migration_pending == migration_service.is_retrodeck_migration_pending
+        assert download_service._is_retrodeck_migration_pending.__self__ is migration_service  # type: ignore[union-attr]
+        deps["loop"].close()
+
     def test_save_sync_detect_sort_change_mutates_shared_state(self, tmp_path):
         """Functional check for #238: invoking the wired detect callback
         from SaveService updates state that SaveService subsequently

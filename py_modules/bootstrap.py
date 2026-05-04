@@ -211,6 +211,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         emit=cfg.emit,
         # SaveService must observe fresh sort state before computing saves_dir (#238).
         detect_sort_change=migration_service.detect_save_sort_change,
+        is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
     )
 
     playtime_service = PlaytimeService(
@@ -291,6 +292,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         save_state=cfg.save_state,
         get_roms_path=cfg.get_roms_path,
         get_bios_path=cfg.get_bios_path,
+        is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
     )
 
     rom_removal_service = RomRemovalService(

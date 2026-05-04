@@ -177,6 +177,117 @@ class TestPathChangeDetection:
         mock_loop.create_task.assert_not_called()
         assert plugin._state["retrodeck_home_path"] == ""
 
+    def test_detect_path_change_auto_clears_when_reverted_to_previous(self, plugin, tmp_path):
+        """User reverted RetroDECK to the previous home — drop the marker, no event."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old_retrodeck")
+        new_home = str(tmp_path / "new_retrodeck")
+        os.makedirs(old_home, exist_ok=True)
+
+        plugin._state["retrodeck_home_path"] = new_home
+        plugin._state["retrodeck_home_path_previous"] = old_home
+
+        mock_loop = MagicMock()
+        plugin._migration_service._loop = mock_loop
+
+        plugin._migration_service._get_retrodeck_home = MagicMock(return_value=old_home)
+        plugin._migration_service.detect_retrodeck_path_change()
+
+        assert plugin._state["retrodeck_home_path"] == old_home
+        assert "retrodeck_home_path_previous" not in plugin._state
+
+    def test_detect_path_change_auto_clear_emits_cleared_event(self, plugin, tmp_path):
+        """Auto-clear MUST emit retrodeck_path_changed with cleared=True so the
+        frontend listener can dismiss any pending migration UI."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old_retrodeck")
+        new_home = str(tmp_path / "new_retrodeck")
+        os.makedirs(old_home, exist_ok=True)
+
+        plugin._state["retrodeck_home_path"] = new_home
+        plugin._state["retrodeck_home_path_previous"] = old_home
+
+        mock_loop = MagicMock()
+        emitted: list = []
+
+        def _capture_task(coro):
+            # Drive the coroutine to capture what was emitted, then close it.
+            try:
+                coro.send(None)
+            except StopIteration as e:
+                emitted.append(("returned", e.value))
+            except BaseException as e:
+                emitted.append(("raised", e))
+            coro.close()
+            return MagicMock()
+
+        mock_loop.create_task = _capture_task
+        plugin._migration_service._loop = mock_loop
+
+        # Replace _emit with a sync recorder so the coroutine resolves cleanly.
+        emit_calls: list = []
+
+        async def fake_emit(event, payload):
+            emit_calls.append((event, payload))
+
+        plugin._migration_service._emit = fake_emit  # type: ignore[method-assign]
+
+        plugin._migration_service._get_retrodeck_home = MagicMock(return_value=old_home)
+        plugin._migration_service.detect_retrodeck_path_change()
+
+        assert len(emit_calls) == 1
+        event, payload = emit_calls[0]
+        assert event == "retrodeck_path_changed"
+        assert payload["cleared"] is True
+        assert payload["old_path"] == old_home
+        assert payload["new_path"] == old_home
+
+
+class TestIsRetroDeckMigrationPending:
+    def test_is_retrodeck_migration_pending_returns_false_when_unset(self, plugin):
+        plugin._state.pop("retrodeck_home_path_previous", None)
+        assert plugin._migration_service.is_retrodeck_migration_pending() is False
+
+    def test_is_retrodeck_migration_pending_returns_true_when_set(self, plugin):
+        plugin._state["retrodeck_home_path_previous"] = "/some/old/path"
+        assert plugin._migration_service.is_retrodeck_migration_pending() is True
+
+    def test_is_retrodeck_migration_pending_returns_false_for_empty_string(self, plugin):
+        plugin._state["retrodeck_home_path_previous"] = ""
+        assert plugin._migration_service.is_retrodeck_migration_pending() is False
+
+
+class TestDismissRetroDeckMigration:
+    def test_dismiss_retrodeck_migration_clears_marker(self, plugin, tmp_path):
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        plugin._state["retrodeck_home_path_previous"] = "/old/path"
+
+        result = plugin._migration_service.dismiss_retrodeck_migration()
+
+        assert result == {"success": True}
+        assert "retrodeck_home_path_previous" not in plugin._state
+
+    def test_dismiss_retrodeck_migration_idempotent_when_no_marker(self, plugin, tmp_path):
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        plugin._state.pop("retrodeck_home_path_previous", None)
+
+        result = plugin._migration_service.dismiss_retrodeck_migration()
+
+        assert result == {"success": True}
+        assert "retrodeck_home_path_previous" not in plugin._state
+
 
 class TestMigrateRetroDeckFiles:
     @pytest.mark.asyncio

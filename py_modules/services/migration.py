@@ -87,6 +87,28 @@ class MigrationService:
             self._save_state()
             return
 
+        # Auto-clear: user reverted RetroDECK to the previous home before migrating.
+        # The "previous" path is now the live one — no migration needed, drop the marker.
+        if current_home == self._state.get("retrodeck_home_path_previous"):
+            previous = self._state.get("retrodeck_home_path_previous", "")
+            self._state.pop("retrodeck_home_path_previous", None)
+            self._state["retrodeck_home_path"] = current_home
+            self._save_state()
+            self._logger.info(f"RetroDECK home reverted to previous path; clearing migration marker: {current_home}")
+            # Notify the frontend so any pending migration UI can dismiss itself.
+            # ``cleared: True`` lets the listener distinguish from the path-change emit.
+            self._loop.create_task(
+                self._emit(
+                    "retrodeck_path_changed",
+                    {
+                        "old_path": previous,
+                        "new_path": current_home,
+                        "cleared": True,
+                    },
+                )
+            )
+            return
+
         old_home = stored_home
 
         # Path changed — store both old and new, emit event
@@ -103,6 +125,16 @@ class MigrationService:
                 },
             )
         )
+
+    def is_retrodeck_migration_pending(self) -> bool:
+        """Return True if a RetroDECK home path migration is pending."""
+        return bool(self._state.get("retrodeck_home_path_previous"))
+
+    def dismiss_retrodeck_migration(self) -> dict:
+        """Dismiss the RetroDECK path migration warning without migrating files."""
+        self._state.pop("retrodeck_home_path_previous", None)
+        self._save_state()
+        return {"success": True}
 
     def _collect_rom_items(self, old_home, new_home):
         """Collect ROM migration items from installed_roms state."""

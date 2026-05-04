@@ -571,6 +571,53 @@ class TestDownloadRequestPolling:
         assert len(requests) == 2
 
 
+class TestPollDownloadRequestsMigrationPause:
+    """Verify the poll loop pauses (does NOT read+clear the request file)
+    while a RetroDECK migration is pending — would otherwise drop queued
+    download requests on the floor (#251)."""
+
+    @pytest.mark.asyncio
+    async def test_poll_download_requests_pauses_when_migration_pending(self, plugin, tmp_path):
+        plugin._download_service._runtime_dir = str(tmp_path)
+        plugin._download_service._is_retrodeck_migration_pending = lambda: True
+
+        requests_path = tmp_path / "download_requests.json"
+        original_payload = [{"rom_id": 42}, {"rom_id": 99}]
+        requests_path.write_text(json.dumps(original_payload))
+
+        # Stub asyncio.sleep so we can run a single iteration deterministically:
+        # first call sleeps normally (returns immediately), second call cancels
+        # the loop so we exit after one pass.
+        sleep_calls = [0]
+
+        async def fake_sleep(_seconds):
+            sleep_calls[0] += 1
+            if sleep_calls[0] >= 2:
+                raise asyncio.CancelledError()
+
+        # Track whether the request file IO was invoked.
+        io_called = [False]
+        original_io = plugin._download_service._poll_download_requests_io
+
+        def tracking_io(path):
+            io_called[0] = True
+            return original_io(path)
+
+        plugin._download_service._poll_download_requests_io = tracking_io
+
+        with (
+            patch("services.downloads.asyncio.sleep", side_effect=fake_sleep),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await plugin._download_service.poll_download_requests()
+
+        # IO must NOT have been called while migration was pending.
+        assert io_called[0] is False
+        # Request file must still hold its original contents — not truncated.
+        with open(requests_path) as f:
+            assert json.load(f) == original_payload
+
+
 class TestMultiFileRomDeletion:
     @pytest.mark.asyncio
     async def test_remove_rom_deletes_rom_dir(self, plugin, tmp_path):

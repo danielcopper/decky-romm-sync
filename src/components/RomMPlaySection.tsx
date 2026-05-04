@@ -200,6 +200,7 @@ function computeSaveSyncDisplay(saveStatus: SaveStatus | null): { status: "synce
 
 import { setRommConnectionState, setVersionError } from "../utils/connectionState";
 import { useVersionError } from "./VersionErrorCard";
+import { useMigrationStatus } from "./MigrationBlockedPage";
 
 /** Extract BIOS fields from a bios_status response into an InfoState partial. */
 function extractBiosInfo(b: BiosStatus): Partial<InfoState> {
@@ -250,6 +251,7 @@ function refreshBiosInBackground(
 export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
+  const migration = useMigrationStatus();
 
   // Read playtime from Steam's own overview synchronously (already written by metadataPatches)
   // This avoids an unnecessary render from setting it inside the async effect.
@@ -751,6 +753,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
 
   // Version mismatch — render nothing (VersionErrorCard is shown in RomMGameInfoPanel instead)
   if (versionError) {
+    return null;
+  }
+
+  // Pending RetroDECK migration — render nothing (MigrationBlockedCard is shown in RomMGameInfoPanel instead)
+  if (migration.pending) {
     return null;
   }
 

@@ -837,6 +837,63 @@ class TestPreLaunchSync:
         assert order.index("detect") < order.index("gate")
 
 
+class TestRetroDeckMigrationBlocksSaveSync:
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
+        svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "test-device"
+        _install_rom(svc, tmp_path)
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert result["blocked_by_migration"] is True
+        assert result["synced"] == 0
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
+        svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "test-device"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"data")
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert result["blocked_by_migration"] is True
+        assert result["synced"] == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_respects_migration_block_via_decorator_chain(self, tmp_path):
+        """End-to-end chain check: Plugin.sync_all_saves must be blocked by the
+        @migration_blocked decorator before SaveService.sync_all_saves runs, so
+        the internal _sync_rom_saves call path is never reached when migration
+        is pending. Protects against accidental decorator removal at the public
+        callable layer."""
+        from main import Plugin
+
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state["device_id"] = "test-device"
+        _install_rom(svc, tmp_path)
+
+        plugin = Plugin()
+        plugin._save_sync_service = svc
+        plugin._migration_service = MagicMock()
+        plugin._migration_service.is_retrodeck_migration_pending.return_value = True
+
+        spy = MagicMock(name="_sync_rom_saves_spy")
+        svc._sync_rom_saves = spy  # type: ignore[method-assign]
+
+        result = await plugin.sync_all_saves()
+
+        assert result["blocked_by_migration"] is True
+        assert result["success"] is False
+        spy.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # TestPostExitSync
 # ---------------------------------------------------------------------------

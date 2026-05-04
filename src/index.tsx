@@ -131,16 +131,13 @@ export default definePlugin(() => {
     }
   })();
 
-  // Check for pending RetroDECK path migration on startup
+  // Check for pending RetroDECK path migration on startup. The QAM block page
+  // and game-detail card surface this to the user — no toast needed.
   (async () => {
     try {
       const status = await getMigrationStatus();
       if (status.pending) {
         setMigrationStatus(status);
-        toaster.toast({
-          title: "RomM Sync",
-          body: "RetroDECK location changed. Go to Settings to migrate files.",
-        });
       }
     } catch (e) {
       logError(`Failed to check migration status: ${e}`);
@@ -315,13 +312,20 @@ export default definePlugin(() => {
     }
   );
 
-  const pathChangedListener = addEventListener<[{ old_path: string; new_path: string }]>(
+  const pathChangedListener = addEventListener<[{ old_path: string; new_path: string; cleared?: boolean }]>(
     "retrodeck_path_changed",
-    () => {
-      toaster.toast({
-        title: "RomM Sync",
-        body: "RetroDECK location changed. Go to Settings to migrate files.",
-      });
+    (data) => {
+      // Backend auto-clears the migration when the new path matches a previous
+      // RetroDECK home (round-trip / branch reset). Drop the pending block so
+      // all subscribers re-render without the migration UI.
+      if (data.cleared) {
+        setMigrationStatus({ pending: false });
+        return;
+      }
+      // Path actually changed — refetch authoritative status (file counts).
+      getMigrationStatus()
+        .then((status) => setMigrationStatus(status))
+        .catch((e) => logError(`Failed to refresh migration status: ${e}`));
     },
   );
 
