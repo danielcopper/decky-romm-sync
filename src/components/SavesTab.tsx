@@ -728,8 +728,6 @@ const SlotPanel: FC<SlotPanelProps> = ({
           msg = "Sync your saves first — local changes haven't been uploaded";
         } else if (result.reason === "server_unreachable") {
           msg = "Can't switch — RomM server is not reachable";
-        } else if (result.reason === "unresolved_conflicts") {
-          msg = "Resolve conflicts before switching slots";
         }
         setSwitchError(msg);
         if (switchErrorTimerRef.current) clearTimeout(switchErrorTimerRef.current);

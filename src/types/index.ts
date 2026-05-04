@@ -343,7 +343,7 @@ export interface SlotSavesResponse {
 
 export interface SwitchSlotResponse {
   success: boolean;
-  reason?: "pending_uploads" | "unresolved_conflicts" | "server_unreachable" | "sync_disabled" | "not_installed";
+  reason?: "pending_uploads" | "server_unreachable" | "sync_disabled" | "not_installed";
   files?: string[];
   save_status?: SaveStatus;
 }
