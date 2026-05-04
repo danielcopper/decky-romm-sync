@@ -32,6 +32,7 @@ from domain.sync_action import (
     compute_sync_action,
 )
 from lib.errors import RommApiError, classify_error
+from lib.iso_time import parse_iso_to_epoch
 from services.protocols import (
     CoreNameProviderFn,
     CoreResolverFn,
@@ -1135,7 +1136,7 @@ class SaveService:
             return None
         if not candidates:
             return None
-        return max(candidates, key=lambda s: s.get("updated_at", ""))
+        return max(candidates, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
 
     def _status_entry_for_local_file(
         self,
@@ -1206,7 +1207,7 @@ class SaveService:
     ) -> dict:
         """Build the ready-to-download status entry when no local file exists
         but the slot has server saves. Picks newest by ``updated_at``."""
-        newest = max(server_in_slot, key=lambda s: s.get("updated_at", ""))
+        newest = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
         return self._build_file_status(
             self._local_save_target(newest, rom_name),
             local_path=None,
@@ -2244,7 +2245,7 @@ class SaveService:
             server_in_slot = self._filter_server_saves_to_slot(server_saves, active_slot)
             if not server_in_slot:
                 return {"success": False, "message": "No server save in active slot"}
-            server = max(server_in_slot, key=lambda s: s.get("updated_at", ""))
+            server = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
 
             try:
                 if action == "use_server":

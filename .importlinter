@@ -42,16 +42,17 @@ forbidden_modules =
     adapters
     domain
 
-# Domain must not import services, adapters, or lib
+# Domain must not import services or adapters. lib is allowed: lib hosts
+# layer-agnostic utilities (e.g. ISO timestamp parsing) shared by both
+# domain and services.
 [importlinter:contract:domain-independence]
-name = Domain must not import services, adapters, or lib
+name = Domain must not import services or adapters
 type = forbidden
 source_modules =
     domain
 forbidden_modules =
     services
     adapters
-    lib
 
 # Models must not import services, adapters, domain, or lib
 [importlinter:contract:models-independence]

@@ -7,23 +7,24 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from lib.iso_time import parse_iso
+
 
 def _format_time_ago(iso_timestamp: str) -> str | None:
     """Format an ISO timestamp as a human-readable time-ago label, or None on error."""
-    try:
-        check_dt = datetime.fromisoformat(iso_timestamp)
-        if check_dt.tzinfo is None:
-            check_dt = check_dt.replace(tzinfo=UTC)
-        diff_min = int((datetime.now(UTC) - check_dt).total_seconds() // 60)
-        if diff_min < 1:
-            return "Just now"
-        if diff_min < 60:
-            return f"{diff_min}m ago"
-        if diff_min < 1440:
-            return f"{diff_min // 60}h ago"
-        return f"{diff_min // 1440}d ago"
-    except (ValueError, TypeError):
+    check_dt = parse_iso(iso_timestamp)
+    if check_dt is None:
         return None
+    if check_dt.tzinfo is None:
+        check_dt = check_dt.replace(tzinfo=UTC)
+    diff_min = int((datetime.now(UTC) - check_dt).total_seconds() // 60)
+    if diff_min < 1:
+        return "Just now"
+    if diff_min < 60:
+        return f"{diff_min}m ago"
+    if diff_min < 1440:
+        return f"{diff_min // 60}h ago"
+    return f"{diff_min // 1440}d ago"
 
 
 def compute_save_sync_display(

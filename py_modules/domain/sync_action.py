@@ -40,7 +40,8 @@ No I/O. No imports from services or adapters. Stdlib only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+
+from lib.iso_time import parse_iso_to_epoch
 
 # ---------------------------------------------------------------------------
 # SyncAction variants
@@ -94,22 +95,6 @@ SyncAction = Skip | Upload | Download | Conflict
 # ---------------------------------------------------------------------------
 
 
-def _parse_iso_to_epoch(value: str) -> float | None:
-    """Parse an ISO-8601 timestamp to epoch seconds.
-
-    Handles a trailing "Z" defensively (older datetime.fromisoformat versions
-    reject it). Returns None on any parse failure — the caller decides how
-    to interpret that.
-    """
-    if not value:
-        return None
-    try:
-        normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
-        return datetime.fromisoformat(normalized).timestamp()
-    except (ValueError, TypeError):
-        return None
-
-
 def _local_mtime_ge_server_updated_at(local_file: dict, server: dict) -> bool:
     """Return True iff local mtime is at-or-after the server save's updated_at.
 
@@ -120,7 +105,7 @@ def _local_mtime_ge_server_updated_at(local_file: dict, server: dict) -> bool:
     local_mtime = local_file.get("mtime")
     if not isinstance(local_mtime, int | float):
         return False
-    server_epoch = _parse_iso_to_epoch(server.get("updated_at", ""))
+    server_epoch = parse_iso_to_epoch(server.get("updated_at", ""))
     if server_epoch is None:
         return False
     return local_mtime >= server_epoch
@@ -195,8 +180,12 @@ def compute_sync_action(
             return Upload(target_save_id=None)
         return Skip(reason="nothing_to_sync")
 
-    # 2. Pick newest server save by updated_at.
-    server = max(server_saves_in_slot, key=lambda s: s.get("updated_at", ""))
+    # 2. Pick newest server save by updated_at (epoch-keyed; unparseable
+    # timestamps sort to the bottom so they can't beat a parseable one).
+    server = max(
+        server_saves_in_slot,
+        key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0,
+    )
 
     # 3. Find our device's entry on the chosen save and branch on it.
     device_syncs = server.get("device_syncs") or []
