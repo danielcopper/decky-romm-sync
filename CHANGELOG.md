@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.16.0...decky-romm-sync-v0.17.0) (2026-05-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **downloads:** Existing installs of nested single-file ROMs were stored locally without their file extension. Affected ROMs must be re-downloaded (or re-synced via the plugin) after updating so the on-disk filename is corrected — buggy entries cannot be patched in place.
+
+### Bug Fixes
+
+* **downloads:** preserve file extension for nested single-file ROMs ([#226](https://github.com/danielcopper/decky-romm-sync/issues/226)) ([#263](https://github.com/danielcopper/decky-romm-sync/issues/263)) ([dbe14f4](https://github.com/danielcopper/decky-romm-sync/commit/dbe14f47f1c586db3d2f6ba781f0ae6bc54e7388))
+* **migration:** block all ops during pending RetroDECK path migration ([#261](https://github.com/danielcopper/decky-romm-sync/issues/261)) ([afd5939](https://github.com/danielcopper/decky-romm-sync/commit/afd59393be88e4f1c032448a08475668e8ffc18f))
+
 ## [0.16.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.15.0...decky-romm-sync-v0.16.0) (2026-05-03)
 
 
