@@ -63,6 +63,14 @@ class Plugin:
 
     # -- pruning ---------------------------------------------------------------
 
+    def _is_pending_migration_path(self, file_path: str, rom_dir: str) -> bool:
+        """True when an installed_roms entry lives under the pre-migration home."""
+        pending = self._state.get("retrodeck_home_path_previous", "")
+        if not pending:
+            return False
+        prefix = pending + os.sep
+        return file_path.startswith(prefix) or rom_dir.startswith(prefix)
+
     def _prune_stale_installed_roms(self):
         """Remove installed_roms entries whose files no longer exist on disk.
 
@@ -84,17 +92,12 @@ class Plugin:
             )
             return
 
-        pending_migration_home = self._state.get("retrodeck_home_path_previous", "")
-        pending_prefix = (pending_migration_home + os.sep) if pending_migration_home else ""
-
         pruned = []
         for rom_id, entry in list(self._state["installed_roms"].items()):  # list(): dict mutated below
             file_path = entry.get("file_path", "")
             rom_dir = entry.get("rom_dir", "")
-            if pending_prefix and (file_path.startswith(pending_prefix) or rom_dir.startswith(pending_prefix)):
-                decky.logger.info(
-                    f"Skipping prune of {rom_id} ({file_path}): pending migration from {pending_migration_home}"
-                )
+            if self._is_pending_migration_path(file_path, rom_dir):
+                decky.logger.info(f"Skipping prune of {rom_id} ({file_path}): pending migration")
                 continue
             if (file_path and os.path.exists(file_path)) or (rom_dir and os.path.exists(rom_dir)):
                 continue
