@@ -38,6 +38,23 @@ _ZIP_TMP_EXT = ".zip.tmp"
 _TMP_EXT = ".tmp"
 
 
+def _resolve_local_file_name(rom_detail: dict, logger: logging.Logger) -> str:
+    """Resolve the on-disk filename for a ROM.
+
+    For nested-single-file ROMs RomM reports ``fs_name`` as the parent folder,
+    so the actual filename (with extension) lives in ``files[0].file_name``.
+    For all other layouts ``fs_name`` is already the correct filename.
+    """
+    fs_name = rom_detail.get("fs_name", f"rom_{rom_detail.get('id', 'unknown')}")
+    if not rom_detail.get("has_nested_single_file"):
+        return fs_name
+    files = rom_detail.get("files") or []
+    if not files:
+        logger.warning(f"has_nested_single_file=true but files list is empty; falling back to fs_name='{fs_name}'")
+        return fs_name
+    return files[0].get("file_name") or fs_name
+
+
 class DownloadService:
     """ROM download engine: downloads and queue management."""
 
@@ -220,7 +237,7 @@ class DownloadService:
         system = self._resolve_system(platform_slug, platform_fs_slug)
 
         roms_dir = os.path.join(self._get_roms_path() if self._get_roms_path else "", system)
-        file_name = rom_detail.get("fs_name", f"rom_{rom_id}")
+        file_name = _resolve_local_file_name(rom_detail, self._logger)
         # Fix 1: Sanitize fs_name to prevent path traversal
         safe_name = os.path.basename(file_name)
         if safe_name != file_name:
@@ -245,7 +262,7 @@ class DownloadService:
         platform_name = rom_detail.get("platform_name", platform_slug)
 
         try:
-            task = self._loop.create_task(self._do_download(rom_id, rom_detail, target_path, system))
+            task = self._loop.create_task(self._do_download(rom_id, rom_detail, target_path, system, file_name))
         except Exception as e:
             self._download_in_progress.discard(rom_id)
             self._logger.error(f"Failed to start download task for ROM {rom_id}: {e}")
@@ -377,8 +394,7 @@ class DownloadService:
 
         return progress_callback
 
-    async def _do_download(self, rom_id, rom_detail, target_path, system):
-        file_name = rom_detail.get("fs_name", f"rom_{rom_id}")
+    async def _do_download(self, rom_id, rom_detail, target_path, system, file_name):
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
         has_multiple = rom_detail.get("has_multiple_files", False)

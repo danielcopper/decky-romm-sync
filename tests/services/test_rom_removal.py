@@ -256,6 +256,28 @@ class TestRemoveRom:
         assert evil.exists()
         assert "99" not in state["installed_roms"]
 
+    @pytest.mark.asyncio
+    async def test_removes_nested_single_file_entry(self, service, state, tmp_path):
+        """Nested-single-file entries (#226) store the resolved filename in file_path with no rom_dir."""
+        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
+        rom = tmp_path / "retrodeck" / "roms" / "dc" / "Resident Evil.chd"
+        rom.parent.mkdir(parents=True)
+        rom.write_bytes(b"\x00" * 100)
+
+        state["installed_roms"]["42"] = {
+            "rom_id": 42,
+            "file_name": "Resident Evil.chd",
+            "file_path": str(rom),
+            "system": "dc",
+        }
+
+        result = await service.remove_rom(42)
+        assert result["success"] is True
+        assert not rom.exists()
+        # Parent system dir should still exist
+        assert (tmp_path / "retrodeck" / "roms" / "dc").exists()
+        assert "42" not in state["installed_roms"]
+
 
 class TestUninstallAllRoms:
     @pytest.mark.asyncio
