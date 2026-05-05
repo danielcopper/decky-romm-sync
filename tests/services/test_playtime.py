@@ -87,6 +87,21 @@ class TestRecordSession:
         assert result["success"] is False
 
     @pytest.mark.asyncio
+    async def test_end_with_unparseable_start(self):
+        """Malformed last_session_start -> parse_iso returns None -> failure."""
+        svc, _, state, _ = make_service()
+        state["playtime"]["42"] = {
+            "total_seconds": 0,
+            "session_count": 0,
+            "last_session_start": "not-a-date",
+            "last_session_duration_sec": None,
+            "offline_deltas": [],
+        }
+        result = await svc.record_session_end(42)
+        assert result["success"] is False
+        assert "Failed to calculate session duration" in result["message"]
+
+    @pytest.mark.asyncio
     async def test_multiple_sessions_accumulate(self):
         svc, _, state, _ = make_service()
 

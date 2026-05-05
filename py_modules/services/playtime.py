@@ -11,6 +11,7 @@ import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from lib.iso_time import parse_iso
 from services.protocols import RetryStrategy, RommApiProtocol, StatePersister
 
 if TYPE_CHECKING:
@@ -206,7 +207,9 @@ class PlaytimeService:
             return {"success": False, "message": "No active session"}
 
         try:
-            start = datetime.fromisoformat(entry["last_session_start"])
+            start = parse_iso(entry["last_session_start"])
+            if start is None:
+                return {"success": False, "message": "Failed to calculate session duration"}
             now = datetime.now(UTC)
             duration = (now - start).total_seconds()
 
