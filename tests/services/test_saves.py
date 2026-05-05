@@ -237,6 +237,32 @@ class TestStateManagement:
         files = svc._save_sync_state["saves"]["42"]["files"]
         assert "dismissed_newer_save_id" not in files["good.srm"]
 
+    def test_migrate_loaded_state_strips_legacy_settings_keys(self, tmp_path):
+        """Legacy ``conflict_mode`` and ``clock_skew_tolerance_sec`` settings
+        are dropped on state load. Other settings keys survive."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"] = {
+            "conflict_mode": "ask_me",
+            "clock_skew_tolerance_sec": 60,
+            "save_sync_enabled": True,
+        }
+
+        svc._migrate_loaded_state()
+
+        settings = svc._save_sync_state["settings"]
+        assert "conflict_mode" not in settings
+        assert "clock_skew_tolerance_sec" not in settings
+        assert settings["save_sync_enabled"] is True
+
+    def test_migrate_loaded_state_strip_legacy_settings_idempotent(self, tmp_path):
+        """Stripping legacy settings is a no-op when they aren't present."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"] = {"save_sync_enabled": True}
+
+        svc._migrate_loaded_state()  # should not raise
+
+        assert svc._save_sync_state["settings"] == {"save_sync_enabled": True}
+
     def test_save_and_load_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["device_id"] = "test-device"
