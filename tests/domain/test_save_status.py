@@ -65,3 +65,19 @@ class TestComputeSaveSyncDisplay:
         files = [{"status": "skip", "local_path": "/saves/test.srm"}]
         result = compute_save_sync_display(files, None)
         assert result == {"status": "synced", "label": "Not synced"}
+
+    def test_unparseable_last_check_falls_back_to_not_synced(self):
+        """Malformed timestamp -> _format_time_ago returns None -> 'Not synced' fallback."""
+        files = [{"status": "synced", "local_path": "/saves/test.srm"}]
+        result = compute_save_sync_display(files, "not-a-date")
+        assert result == {"status": "synced", "label": "Not synced"}
+
+    def test_naive_timestamp_treated_as_utc(self):
+        """A naive ISO timestamp (no tzinfo) is treated as UTC, not crashed on."""
+        # Recent enough that we get a sane label rather than something like '20000d ago'.
+        recent_naive = (datetime.now(UTC) - timedelta(minutes=5)).replace(tzinfo=None).isoformat()
+        files = [{"status": "synced", "local_path": "/saves/test.srm"}]
+        result = compute_save_sync_display(files, recent_naive)
+        assert result["status"] == "synced"
+        # Allow a small tolerance band — clock-edge flake protection.
+        assert result["label"] in {"4m ago", "5m ago", "6m ago"}
