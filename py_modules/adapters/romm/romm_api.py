@@ -155,7 +155,7 @@ class RommApi:
         path = f"/api/saves/{save_id}/content"
         if device_id is not None:
             opt = "true" if optimistic else "false"
-            path += f"?device_id={device_id}&optimistic={opt}"
+            path += f"?device_id={urllib.parse.quote(device_id, safe='')}&optimistic={opt}"
         self._client.download(path, dest_path)
 
     def confirm_download(self, save_id: int, device_id: str) -> dict:
@@ -195,7 +195,7 @@ class RommApi:
 
     def update_device(self, device_id: str, **fields) -> dict:
         payload = {k: v for k, v in fields.items() if v is not None}
-        return self._client.put_json(f"/api/devices/{device_id}", payload)
+        return self._client.put_json(f"/api/devices/{urllib.parse.quote(device_id, safe='')}", payload)
 
     # ── Notes / Playtime ──────────────────────────────────────────────
 

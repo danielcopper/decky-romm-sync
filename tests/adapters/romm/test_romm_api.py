@@ -200,6 +200,21 @@ class TestDownloadSaveContent:
         api.download_save_content(42, "/tmp/save.srm")
         client.download.assert_called_once_with("/api/saves/42/content", "/tmp/save.srm")
 
+    def test_url_encodes_device_id_ascii_round_trip(self):
+        """ASCII device_id (UUID-like) survives encoding unchanged."""
+        api, client = _make_api()
+        api.download_save_content(99, "/tmp/save.srm", device_id="abc-123")
+        url = client.download.call_args[0][0]
+        assert "device_id=abc-123" in url
+
+    def test_url_encodes_device_id_with_special_chars(self):
+        """device_id with reserved URL characters is percent-encoded."""
+        api, client = _make_api()
+        api.download_save_content(99, "/tmp/save.srm", device_id="abc&xyz/1")
+        url = client.download.call_args[0][0]
+        assert "device_id=abc%26xyz%2F1" in url
+        assert "device_id=abc&xyz/1" not in url
+
 
 class TestListCollections:
     def test_returns_list(self):
@@ -297,6 +312,23 @@ class TestUpdateDevice:
         api.update_device("xyz-999", client_version="1.0.0")
         url = client.put_json.call_args[0][0]
         assert "xyz-999" in url
+
+    def test_url_encodes_device_id_ascii_round_trip(self):
+        """ASCII device_id (UUID-like) survives encoding unchanged."""
+        api, client = _make_api()
+        client.put_json.return_value = {"id": "abc-123"}
+        api.update_device("abc-123", client_version="1.0.0")
+        url = client.put_json.call_args[0][0]
+        assert url == "/api/devices/abc-123"
+
+    def test_url_encodes_device_id_with_special_chars(self):
+        """device_id with reserved URL characters is percent-encoded."""
+        api, client = _make_api()
+        client.put_json.return_value = {"id": "abc&xyz/1"}
+        api.update_device("abc&xyz/1", client_version="1.0.0")
+        url = client.put_json.call_args[0][0]
+        assert url == "/api/devices/abc%26xyz%2F1"
+        assert "abc&xyz/1" not in url
 
 
 class TestSetVersion:
