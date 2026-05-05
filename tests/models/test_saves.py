@@ -84,7 +84,6 @@ class TestSaveSyncSettings:
             save_sync_enabled=True,
             sync_before_launch=True,
             sync_after_exit=True,
-            clock_skew_tolerance_sec=60,
         )
         assert s.save_sync_enabled is True
 
@@ -93,10 +92,11 @@ class TestSaveSyncSettings:
             save_sync_enabled=False,
             sync_before_launch=False,
             sync_after_exit=False,
-            clock_skew_tolerance_sec=120,
         )
         d = asdict(s)
-        assert d["clock_skew_tolerance_sec"] == 120
+        assert d["save_sync_enabled"] is False
+        assert d["sync_before_launch"] is False
+        assert d["sync_after_exit"] is False
 
 
 class TestSyncResult:

@@ -631,7 +631,6 @@ class TestSaveSyncSettings:
         assert result["save_sync_enabled"] is True
         assert result["sync_before_launch"] is True
         assert result["sync_after_exit"] is True
-        assert result["clock_skew_tolerance_sec"] == 60
 
     @pytest.mark.asyncio
     async def test_update_changes_settings(self, plugin, tmp_path):
@@ -667,17 +666,6 @@ class TestSaveSyncSettings:
         assert result["success"] is True
         assert result["settings"]["sync_before_launch"] is True
         assert "unknown_key" not in result["settings"]
-
-    @pytest.mark.asyncio
-    async def test_clock_skew_clamped_to_zero(self, plugin):
-        """Negative clock_skew_tolerance_sec clamped to 0."""
-        result = await plugin.update_save_sync_settings(
-            {
-                "clock_skew_tolerance_sec": -10,
-            }
-        )
-
-        assert result["settings"]["clock_skew_tolerance_sec"] == 0
 
     @pytest.mark.asyncio
     async def test_boolean_coercion(self, plugin):

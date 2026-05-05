@@ -44,7 +44,6 @@ class SaveSyncSettings:
     save_sync_enabled: bool
     sync_before_launch: bool
     sync_after_exit: bool
-    clock_skew_tolerance_sec: int
 
 
 @dataclass(frozen=True)

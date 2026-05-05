@@ -1263,13 +1263,6 @@ class TestSettings:
         assert result["success"] is True
         assert "unknown_key" not in result["settings"]
 
-    @pytest.mark.asyncio
-    async def test_clock_skew_clamped(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        svc.update_save_sync_settings({"clock_skew_tolerance_sec": -10})
-        settings = svc.get_save_sync_settings()
-        assert settings["clock_skew_tolerance_sec"] == 0
-
 
 # ---------------------------------------------------------------------------
 # TestDeleteSaves

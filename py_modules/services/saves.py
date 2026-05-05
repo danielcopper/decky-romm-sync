@@ -207,7 +207,6 @@ class SaveService:
                 "save_sync_enabled": False,
                 "sync_before_launch": True,
                 "sync_after_exit": True,
-                "clock_skew_tolerance_sec": 60,
                 "default_slot": "default",
                 "autocleanup_limit": 10,
             },
@@ -2591,7 +2590,6 @@ class SaveService:
             settings.setdefault("save_sync_enabled", False)
             settings.setdefault("sync_before_launch", True)
             settings.setdefault("sync_after_exit", True)
-            settings.setdefault("clock_skew_tolerance_sec", 60)
         return settings
 
     @staticmethod
@@ -2601,8 +2599,6 @@ class SaveService:
         Returns (coerced_value, skip) where skip=True means the value should
         be discarded (e.g. empty slot name).
         """
-        if key == "clock_skew_tolerance_sec":
-            return max(0, int(value)), False  # type: ignore[arg-type]
         if key == "default_slot":
             if value is None:
                 return None, False  # None = legacy mode
@@ -2620,7 +2616,6 @@ class SaveService:
             "save_sync_enabled",
             "sync_before_launch",
             "sync_after_exit",
-            "clock_skew_tolerance_sec",
             "default_slot",
             "autocleanup_limit",
         }
