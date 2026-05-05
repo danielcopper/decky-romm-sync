@@ -130,7 +130,7 @@ class RommApi:
         slot: str | None = None,
         overwrite: bool = False,
     ) -> dict:
-        params = f"rom_id={rom_id}&emulator={urllib.parse.quote(emulator)}"
+        params = f"rom_id={rom_id}&emulator={urllib.parse.quote(emulator, safe='')}"
         if device_id is not None:
             params += f"&device_id={urllib.parse.quote(device_id, safe='')}"
         if slot is not None:

@@ -157,11 +157,13 @@ class TestUploadSave:
         assert "overwrite" not in path
 
     def test_encodes_emulator(self):
+        """Slash in emulator name is encoded (safe="" — house style)."""
         api, client = _make_api()
         client.upload_multipart.return_value = {"id": 1}
         api.upload_save(42, "/tmp/save.srm", "retro arch/core")
         path = client.upload_multipart.call_args[0][0]
-        assert "emulator=retro%20arch/core" in path
+        assert "emulator=retro%20arch%2Fcore" in path
+        assert "retro arch/core" not in path
 
     def test_409_raises_conflict_error(self):
         """409 from server propagates as RommConflictError."""
