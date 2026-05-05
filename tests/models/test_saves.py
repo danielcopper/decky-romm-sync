@@ -82,7 +82,6 @@ class TestSaveSyncSettings:
     def test_construction(self):
         s = SaveSyncSettings(
             save_sync_enabled=True,
-            conflict_mode="newest_wins",
             sync_before_launch=True,
             sync_after_exit=True,
             clock_skew_tolerance_sec=60,
@@ -92,7 +91,6 @@ class TestSaveSyncSettings:
     def test_asdict(self):
         s = SaveSyncSettings(
             save_sync_enabled=False,
-            conflict_mode="ask_me",
             sync_before_launch=False,
             sync_after_exit=False,
             clock_skew_tolerance_sec=120,

@@ -251,11 +251,8 @@ export interface RomMetadata {
   steam_categories?: number[];
 }
 
-export type ConflictMode = "newest_wins" | "always_upload" | "always_download" | "ask_me";
-
 export interface SaveSyncSettings {
   save_sync_enabled: boolean;
-  conflict_mode: ConflictMode;
   sync_before_launch: boolean;
   sync_after_exit: boolean;
   clock_skew_tolerance_sec: number;

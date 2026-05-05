@@ -7,7 +7,7 @@
 
 import { toaster } from "@decky/api";
 import { isRomMAppId } from "../patches/gameDetailPatch";
-import { getInstalledRom, getSaveStatus, getSaveSyncSettings, refreshMigrationState, logInfo, logError } from "../api/backend";
+import { getInstalledRom, getSaveStatus, refreshMigrationState, logInfo, logError } from "../api/backend";
 import { getMigrationState, setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { hasAnySaveConflict } from "./saveStatus";
@@ -64,20 +64,17 @@ export function registerLaunchInterceptor(): void {
           return;
         }
 
-        // Check for save conflicts in ask_me mode
+        // Block launch when a save conflict is pending — the user must
+        // resolve it from the game page before playing.
         try {
-          const settings = await getSaveSyncSettings();
-          if (settings.conflict_mode === "ask_me") {
-            const saveStatus = await getSaveStatus(rom.rom_id);
-            const hasConflict = hasAnySaveConflict(saveStatus);
-            if (hasConflict) {
-              SteamClient.Apps.CancelGameAction(gameActionId);
-              toaster.toast({
-                title: "RomM Save Sync",
-                body: "Save conflict detected \u2014 open game page to resolve before playing",
-              });
-              return;
-            }
+          const saveStatus = await getSaveStatus(rom.rom_id);
+          if (hasAnySaveConflict(saveStatus)) {
+            SteamClient.Apps.CancelGameAction(gameActionId);
+            toaster.toast({
+              title: "RomM Save Sync",
+              body: "Save conflict detected — open game page to resolve before playing",
+            });
+            return;
           }
         } catch {
           // Non-critical — let the game launch if we can't check conflicts

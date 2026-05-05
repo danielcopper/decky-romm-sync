@@ -34,7 +34,7 @@ import {
 } from "../api/backend";
 import type { SaveSortMigrationStatus, RegisteredDevice } from "../api/backend";
 import { getSaveSortMigrationState, setSaveSortMigrationStatus as setStoreSaveSortStatus, clearSaveSortMigration, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
-import type { SaveSyncSettings as SaveSyncSettingsType, ConflictMode, RetroArchInputCheck } from "../types";
+import type { SaveSyncSettings as SaveSyncSettingsType, RetroArchInputCheck } from "../types";
 
 // Module-level state survives component remounts (modal close can remount QAM)
 const pendingEdits: { url?: string; username?: string; password?: string } = {};
@@ -90,13 +90,6 @@ const TextInputModal: FC<{
     </ConfirmModal>
   );
 };
-
-const conflictModeOptions = [
-  { data: "ask_me" as ConflictMode, label: "Ask Me (Default)" },
-  { data: "newest_wins" as ConflictMode, label: "Newest Wins" },
-  { data: "always_upload" as ConflictMode, label: "Always Upload" },
-  { data: "always_download" as ConflictMode, label: "Always Download" },
-];
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -583,15 +576,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
                     description="Upload changed saves to server after closing a game"
                     checked={saveSyncSettings.sync_after_exit}
                     onChange={(value) => handleSaveSyncSettingChange({ sync_after_exit: value })}
-                  />
-                </PanelSectionRow>
-                <PanelSectionRow>
-                  <DropdownItem
-                    label="When saves conflict"
-                    description="How to handle conflicting save files between devices"
-                    rgOptions={conflictModeOptions}
-                    selectedOption={saveSyncSettings.conflict_mode}
-                    onChange={(option) => handleSaveSyncSettingChange({ conflict_mode: option.data as ConflictMode })}
                   />
                 </PanelSectionRow>
                 <PanelSectionRow>

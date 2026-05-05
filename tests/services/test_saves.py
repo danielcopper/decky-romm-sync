@@ -128,7 +128,7 @@ class TestStateManagement:
 
     def test_init_state_populates_defaults(self, tmp_path):
         svc, _ = make_service(tmp_path, save_sync_state={})
-        assert svc._save_sync_state["settings"]["conflict_mode"] == "ask_me"
+        assert svc._save_sync_state["settings"]["save_sync_enabled"] is False
         assert svc._save_sync_state["saves"] == {}
 
     def test_init_state_preserves_existing(self, tmp_path):
@@ -1239,8 +1239,9 @@ class TestSettings:
     async def test_get_defaults(self, tmp_path):
         svc, _ = make_service(tmp_path)
         settings = svc.get_save_sync_settings()
-        assert settings["conflict_mode"] == "ask_me"
         assert settings["save_sync_enabled"] is False
+        assert settings["sync_before_launch"] is True
+        assert settings["sync_after_exit"] is True
 
     @pytest.mark.asyncio
     async def test_update_settings(self, tmp_path):
@@ -1248,19 +1249,12 @@ class TestSettings:
         result = svc.update_save_sync_settings(
             {
                 "save_sync_enabled": True,
-                "conflict_mode": "newest_wins",
+                "sync_before_launch": False,
             }
         )
         assert result["success"] is True
         assert result["settings"]["save_sync_enabled"] is True
-        assert result["settings"]["conflict_mode"] == "newest_wins"
-
-    @pytest.mark.asyncio
-    async def test_invalid_mode_ignored(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        svc.update_save_sync_settings({"conflict_mode": "invalid_mode"})
-        settings = svc.get_save_sync_settings()
-        assert settings["conflict_mode"] == "ask_me"
+        assert result["settings"]["sync_before_launch"] is False
 
     @pytest.mark.asyncio
     async def test_unknown_key_ignored(self, tmp_path):
@@ -2294,25 +2288,25 @@ class TestSaveSyncSettingsSlotAndCleanup:
 
     def test_empty_string_becomes_none(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        val, skip = svc._sanitize_setting("default_slot", "", set())
+        val, skip = svc._sanitize_setting("default_slot", "")
         assert val is None
         assert skip is False
 
     def test_none_value_passes_through(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        val, skip = svc._sanitize_setting("default_slot", None, set())
+        val, skip = svc._sanitize_setting("default_slot", None)
         assert val is None
         assert skip is False
 
     def test_whitespace_only_becomes_none(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        val, skip = svc._sanitize_setting("default_slot", "   ", set())
+        val, skip = svc._sanitize_setting("default_slot", "   ")
         assert val is None
         assert skip is False
 
     def test_nonempty_string_trimmed(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        val, skip = svc._sanitize_setting("default_slot", "  desktop  ", set())
+        val, skip = svc._sanitize_setting("default_slot", "  desktop  ")
         assert val == "desktop"
         assert skip is False
 
