@@ -26,6 +26,7 @@ import {
   logError,
 } from "../api/backend";
 import { getSyncProgress } from "../utils/syncProgress";
+import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
@@ -363,24 +364,28 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               label="RetroArch: input_driver issue"
               description={`Using "${retroarchWarning.current}"`}
             >
-              <DialogButton onClick={() => showModal(
-                <ConfirmModal
-                  strTitle="Fix RetroArch input_driver?"
-                  strDescription="This will change input_driver to sdl2 in your RetroArch config. Controllers should work better in RetroArch menus after this change."
-                  strOKButtonText="Apply Fix"
-                  strCancelButtonText="Cancel"
-                  onOK={async () => {
-                    try {
-                      const result = await fixRetroarchInputDriver();
-                      if (result.success) {
-                        setRetroarchWarning(null);
+              <DialogButton
+                onClick={() => showModal(
+                  <ConfirmModal
+                    strTitle="Fix RetroArch input_driver?"
+                    strDescription="This will change input_driver to sdl2 in your RetroArch config. Controllers should work better in RetroArch menus after this change."
+                    strOKButtonText="Apply Fix"
+                    strCancelButtonText="Cancel"
+                    onOK={async () => {
+                      try {
+                        const result = await fixRetroarchInputDriver();
+                        if (result.success) {
+                          setRetroarchWarning(null);
+                        }
+                      } catch {
+                        // ignore
                       }
-                    } catch {
-                      // ignore
-                    }
-                  }}
-                />
-              )}>
+                    }}
+                  />
+                )}
+                // @ts-expect-error onFocus works at runtime; not in Decky's DialogButton types
+                onFocus={scrollToTop}
+              >
                 Fix
               </DialogButton>
             </Field>
@@ -405,7 +410,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </div>
             </PanelSectionRow>
             <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => onNavigate("settings")}>
+              <ButtonItem
+                layout="below"
+                onClick={() => onNavigate("settings")}
+                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+                onFocus={scrollToTop}
+              >
                 Go to Settings
               </ButtonItem>
             </PanelSectionRow>
@@ -425,7 +435,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             {preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 || preview.summary.collection_diff?.has_changes || preview.summary.platform_collection_diff?.has_changes ? (
               <>
                 <PanelSectionRow>
-                  <ButtonItem layout="below" onClick={handleApply}>
+                  <ButtonItem
+                    layout="below"
+                    onClick={handleApply}
+                    // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+                    onFocus={scrollToTop}
+                  >
                     Apply Sync
                   </ButtonItem>
                 </PanelSectionRow>
@@ -437,7 +452,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </>
             ) : (
               <PanelSectionRow>
-                <ButtonItem layout="below" onClick={handleDismiss}>
+                <ButtonItem
+                  layout="below"
+                  onClick={handleDismiss}
+                  // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+                  onFocus={scrollToTop}
+                >
                   Dismiss
                 </ButtonItem>
               </PanelSectionRow>
@@ -450,6 +470,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 layout="below"
                 onClick={handleSync}
                 disabled={loading || connected === false}
+                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+                onFocus={scrollToTop}
               >
                 Sync Library
               </ButtonItem>
@@ -504,7 +526,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </PanelSectionRow>
             )}
             <PanelSectionRow>
-              <ButtonItem layout="below" onClick={handleCancel}>
+              <ButtonItem
+                layout="below"
+                onClick={handleCancel}
+                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+                onFocus={scrollToTop}
+              >
                 Cancel Sync
               </ButtonItem>
             </PanelSectionRow>

@@ -19,6 +19,7 @@ import {
   clearMigration,
 } from "../utils/migrationStore";
 import { MigrationConflictModal } from "./MigrationConflictModal";
+import { scrollToTop } from "../utils/scrollHelpers";
 
 /**
  * Subscribe to migration state changes.
@@ -132,7 +133,13 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
-        <ButtonItem layout="below" disabled={migrating} onClick={handleMigrate}>
+        <ButtonItem
+          layout="below"
+          disabled={migrating}
+          onClick={handleMigrate}
+          // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+          onFocus={scrollToTop}
+        >
           {migrating ? "Migrating..." : "Migrate Files"}
         </ButtonItem>
       </PanelSectionRow>

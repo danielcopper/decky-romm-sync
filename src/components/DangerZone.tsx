@@ -26,6 +26,7 @@ import {
   updateWhitelistSettings,
 } from "../api/backend";
 import { removeShortcut } from "../utils/steamShortcuts";
+import { scrollToTop } from "../utils/scrollHelpers";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import type { RegistryPlatform } from "../types";
 
@@ -234,7 +235,12 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={onBack}>
+          <ButtonItem
+            layout="below"
+            onClick={onBack}
+            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+            onFocus={scrollToTop}
+          >
             Back
           </ButtonItem>
         </PanelSectionRow>

@@ -8,6 +8,7 @@ import {
 } from "@decky/ui";
 import { getDownloadQueue, cancelDownload } from "../api/backend";
 import { getDownloadState, setDownloads } from "../utils/downloadStore";
+import { scrollToTop } from "../utils/scrollHelpers";
 import type { DownloadItem } from "../types";
 
 interface DownloadQueueProps {
@@ -103,7 +104,12 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={onBack}>
+          <ButtonItem
+            layout="below"
+            onClick={onBack}
+            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+            onFocus={scrollToTop}
+          >
             Back
           </ButtonItem>
         </PanelSectionRow>

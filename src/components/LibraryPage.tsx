@@ -26,6 +26,7 @@ import {
   debugLog,
 } from "../api/backend";
 import type { PlatformSyncSetting, CollectionSyncSetting, FirmwarePlatformExt } from "../types";
+import { scrollToTop } from "../utils/scrollHelpers";
 
 const CATEGORY_TITLES: Record<string, string> = {
   favorites: "Favorites",
@@ -513,7 +514,12 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={onBack}>
+          <ButtonItem
+            layout="below"
+            onClick={onBack}
+            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+            onFocus={scrollToTop}
+          >
             Back
           </ButtonItem>
         </PanelSectionRow>

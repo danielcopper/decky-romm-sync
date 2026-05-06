@@ -34,6 +34,7 @@ import {
 } from "../api/backend";
 import type { SaveSortMigrationStatus, RegisteredDevice } from "../api/backend";
 import { getSaveSortMigrationState, setSaveSortMigrationStatus as setStoreSaveSortStatus, clearSaveSortMigration, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
+import { scrollToTop } from "../utils/scrollHelpers";
 import type { SaveSyncSettings as SaveSyncSettingsType, RetroArchInputCheck } from "../types";
 
 // Module-level state survives component remounts (modal close can remount QAM)
@@ -324,7 +325,12 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={onBack}>
+          <ButtonItem
+            layout="below"
+            onClick={onBack}
+            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+            onFocus={scrollToTop}
+          >
             Back
           </ButtonItem>
         </PanelSectionRow>
