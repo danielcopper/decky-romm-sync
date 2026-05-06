@@ -12,7 +12,7 @@
  */
 
 /** Find the nearest ancestor with overflowY scroll/auto */
-function findScrollParent(el: HTMLElement): HTMLElement | null {
+export function findScrollParent(el: HTMLElement): HTMLElement | null {
   let parent: HTMLElement | null = el.parentElement;
   while (parent) {
     const ov = globalThis.getComputedStyle(parent).overflowY;
@@ -23,7 +23,7 @@ function findScrollParent(el: HTMLElement): HTMLElement | null {
 }
 
 /** Find the outermost ancestor with overflowY scroll/auto */
-function findOutermostScrollParent(el: HTMLElement): HTMLElement | null {
+export function findOutermostScrollParent(el: HTMLElement): HTMLElement | null {
   let parent: HTMLElement | null = el.parentElement;
   let outermost: HTMLElement | null = null;
   while (parent) {

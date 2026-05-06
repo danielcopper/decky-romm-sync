@@ -4,7 +4,7 @@ import {
   removeEventListener,
   toaster,
 } from "@decky/api";
-import { useState, FC } from "react";
+import { useState, useRef, useEffect, FC, type ReactNode } from "react";
 import { FaGamepad } from "react-icons/fa";
 import { MainPage } from "./components/MainPage";
 import { SettingsPage } from "./components/SettingsPage";
@@ -24,6 +24,7 @@ import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
+import { findOutermostScrollParent, findScrollParent } from "./utils/scrollHelpers";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads";
@@ -33,20 +34,40 @@ let currentPage: Page = "main";
 
 const QAMPanel: FC = () => {
   const [page, setPageState] = useState<Page>(currentPage);
+  const rootRef = useRef<HTMLDivElement>(null);
   const setPage = (p: Page) => { currentPage = p; setPageState(p); };
 
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const container = findOutermostScrollParent(el) ?? findScrollParent(el);
+    if (!container) return;
+    // rAF lets the new page mount/measure before we set scrollTop.
+    const handle = requestAnimationFrame(() => {
+      container.scrollTop = 0;
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [page]);
+
+  let content: ReactNode;
   switch (page) {
     case "settings":
-      return <SettingsPage onBack={() => setPage("main")} />;
+      content = <SettingsPage onBack={() => setPage("main")} />;
+      break;
     case "library":
-      return <LibraryPage onBack={() => setPage("main")} />;
+      content = <LibraryPage onBack={() => setPage("main")} />;
+      break;
     case "data":
-      return <DangerZone onBack={() => setPage("main")} />;
+      content = <DangerZone onBack={() => setPage("main")} />;
+      break;
     case "downloads":
-      return <DownloadQueue onBack={() => setPage("main")} />;
+      content = <DownloadQueue onBack={() => setPage("main")} />;
+      break;
     default:
-      return <MainPage onNavigate={(p) => setPage(p)} />;
+      content = <MainPage onNavigate={(p) => setPage(p)} />;
   }
+
+  return <div ref={rootRef}>{content}</div>;
 };
 
 export default definePlugin(() => {
