@@ -41,12 +41,25 @@ const QAMPanel: FC = () => {
     const el = rootRef.current;
     if (!el) return;
     const container = findOutermostScrollParent(el) ?? findScrollParent(el);
-    if (!container) return;
     // rAF lets the new page mount/measure before we set scrollTop.
-    const handle = requestAnimationFrame(() => {
-      container.scrollTop = 0;
+    const rafHandle = requestAnimationFrame(() => {
+      if (container) container.scrollTop = 0;
     });
-    return () => cancelAnimationFrame(handle);
+    // Steam's gamepad nav retains a focus pointer across page swaps and
+    // resolves it on the next input — landing on a button at the old page's
+    // position. Force focus to the first button so navigation starts at the
+    // top. Same querySelector + .focus() + gpfocus pattern as CustomPlayButton.
+    const focusTimer = setTimeout(() => {
+      const btn = el.querySelector("button");
+      if (btn) {
+        btn.focus();
+        btn.classList.add("gpfocus");
+      }
+    }, 50);
+    return () => {
+      cancelAnimationFrame(rafHandle);
+      clearTimeout(focusTimer);
+    };
   }, [page]);
 
   let content: ReactNode;
