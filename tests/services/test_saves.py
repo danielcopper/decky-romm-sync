@@ -263,6 +263,24 @@ class TestStateManagement:
 
         assert svc._save_sync_state["settings"] == {"save_sync_enabled": True}
 
+    def test_migrate_loaded_state_handles_missing_settings(self, tmp_path):
+        """Migration is defensive: missing ``settings`` key doesn't crash."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.pop("settings", None)
+
+        svc._migrate_loaded_state()  # should not raise
+
+        assert "settings" not in svc._save_sync_state
+
+    def test_migrate_loaded_state_handles_non_dict_settings(self, tmp_path):
+        """Migration is defensive: non-dict ``settings`` is left untouched."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state["settings"] = "broken"
+
+        svc._migrate_loaded_state()  # should not raise
+
+        assert svc._save_sync_state["settings"] == "broken"
+
     def test_save_and_load_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["device_id"] = "test-device"

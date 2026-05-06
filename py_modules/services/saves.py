@@ -256,7 +256,7 @@ class SaveService:
         # Strip removed legacy settings keys. Old state files keep these
         # forever otherwise (load_state does dict.update on settings, so
         # orphan keys survive). Idempotent: pop returns None when absent.
-        settings = self._save_sync_state.get("settings", {})
+        settings = self._save_sync_state.get("settings")
         if isinstance(settings, dict):
             settings.pop("conflict_mode", None)
             settings.pop("clock_skew_tolerance_sec", None)
