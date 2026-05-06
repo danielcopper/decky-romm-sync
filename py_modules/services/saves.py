@@ -240,22 +240,32 @@ class SaveService:
         - Strip removed legacy settings keys (``conflict_mode``,
           ``clock_skew_tolerance_sec``).
         """
-        saves = self._save_sync_state.get("saves", {})
-        if isinstance(saves, dict):
-            for entry in saves.values():
-                if not isinstance(entry, dict):
-                    continue
-                if "active_core" in entry:
-                    entry["last_synced_core"] = entry.pop("active_core")
-                files = entry.get("files", {})
-                if isinstance(files, dict):
-                    for file_state in files.values():
-                        if isinstance(file_state, dict):
-                            file_state.pop("dismissed_newer_save_id", None)
+        self._migrate_saves_entries()
+        self._strip_legacy_settings()
 
-        # Strip removed legacy settings keys. Old state files keep these
-        # forever otherwise (load_state does dict.update on settings, so
-        # orphan keys survive). Idempotent: pop returns None when absent.
+    def _migrate_saves_entries(self) -> None:
+        """Rename ``active_core`` → ``last_synced_core`` and drop dead per-file flags."""
+        saves = self._save_sync_state.get("saves")
+        if not isinstance(saves, dict):
+            return
+        for entry in saves.values():
+            if not isinstance(entry, dict):
+                continue
+            if "active_core" in entry:
+                entry["last_synced_core"] = entry.pop("active_core")
+            files = entry.get("files")
+            if not isinstance(files, dict):
+                continue
+            for file_state in files.values():
+                if isinstance(file_state, dict):
+                    file_state.pop("dismissed_newer_save_id", None)
+
+    def _strip_legacy_settings(self) -> None:
+        """Strip removed settings keys from loaded state.
+
+        Old state files keep these forever otherwise (``load_state`` does
+        ``dict.update`` on settings, so orphan keys survive). Idempotent.
+        """
         settings = self._save_sync_state.get("settings")
         if isinstance(settings, dict):
             settings.pop("conflict_mode", None)
