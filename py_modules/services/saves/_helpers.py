@@ -1,4 +1,4 @@
-"""Pure helpers shared across the saves sub-package. No state, no I/O."""
+"""Pure helpers for the saves package — no state, no I/O."""
 
 from __future__ import annotations
 

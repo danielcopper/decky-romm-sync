@@ -1,8 +1,7 @@
-"""SaveSyncState lifecycle: in-memory dict, on-disk JSON, migrations, locking.
+"""SaveSyncState lifecycle: in-memory dict, on-disk JSON, schema migrations.
 
-Mechanical extraction from SaveService. The dict is exposed via the
-``data`` property so existing call sites in SaveService continue to access
-state without changes during the transition.
+The on-disk JSON is updated atomically via fcntl-locked temp+rename.
+Schema migrations apply on load to upgrade legacy formats in place.
 """
 
 from __future__ import annotations
