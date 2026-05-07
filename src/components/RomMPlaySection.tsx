@@ -26,6 +26,7 @@ import {
 import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { hasAnySaveConflict } from "../utils/saveStatus";
+import { scrollToTop } from "../utils/scrollHelpers";
 import {
   getCachedGameDetail,
   _cachedGameDetailCache,
@@ -932,6 +933,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       createElement(DialogButton, {
         className: "romm-gear-btn",
         onClick: showRomMMenu,
+        onFocus: scrollToTop,
         title: "RomM Actions",
       } as any,
         createElement(FaGamepad, { size: 18, color: "#553e98" }),
@@ -942,6 +944,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
           key: "core-btn",
           className: "romm-gear-btn",
           onClick: showCoreMenu,
+          onFocus: scrollToTop,
           title: "Emulator Core",
         } as any,
           createElement(FaMicrochip, { size: 18, color: info.activeCoreIsDefault ? "#8f98a0" : "#d4a72c" }),
@@ -951,6 +954,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       createElement(DialogButton, {
         className: "romm-gear-btn",
         onClick: showSteamMenu,
+        onFocus: scrollToTop,
         title: "Steam Properties",
       } as any,
         createElement(FaCog, { size: 18, color: "#8f98a0" }),
