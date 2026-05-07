@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from domain.emulator_tag import build_emulator_tag
 from services.saves._helpers import _local_save_target
+from services.saves._messages import SAVE_SYNC_DISABLED
 
 if TYPE_CHECKING:
     import logging
@@ -17,7 +18,6 @@ if TYPE_CHECKING:
 
 
 _NO_MIGRATION = object()  # sentinel: no slot migration requested
-_SYNC_DISABLED_MSG = "Save sync is disabled"
 
 
 class SlotsService:
@@ -140,7 +140,7 @@ class SlotsService:
         slot = str(slot).strip() if slot else ""
 
         if not self._save_service._is_save_sync_enabled():
-            return {"success": False, "slot": slot, "saves": [], "error": _SYNC_DISABLED_MSG}
+            return {"success": False, "slot": slot, "saves": [], "error": SAVE_SYNC_DISABLED}
 
         device_id = self._save_service._get_server_device_id()
 

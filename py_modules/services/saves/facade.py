@@ -25,6 +25,7 @@ from services.protocols import (
     SavesPathProvider,
 )
 from services.saves._helpers import _local_save_target
+from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
 from services.saves.slots import SlotsService
 from services.saves.slots.service import _NO_MIGRATION
 from services.saves.state import StateService
@@ -32,16 +33,11 @@ from services.saves.status import StatusService
 from services.saves.sync_engine import SyncEngine
 from services.saves.versions import VersionsService
 
-_DEVICE_NOT_REGISTERED = "Device not registered"
-
 if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
     from services.protocols import EventEmitter
-
-
-_SYNC_DISABLED_MSG = "Save sync is disabled"
 
 
 class SaveService:
@@ -649,7 +645,7 @@ class SaveService:
         rom_id = int(rom_id)
         async with self._rom_lock(rom_id):
             if not self._is_save_sync_enabled():
-                return {"success": True, "message": "Save sync disabled", "synced": 0}
+                return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
             # Defense in depth: block pre_launch_sync if a future caller bypasses
             # the @migration_blocked decorator at the public callable. saves_dir
@@ -683,7 +679,7 @@ class SaveService:
             if not self._save_sync_state.get("device_id"):
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
-                    return {"success": False, "message": _DEVICE_NOT_REGISTERED}
+                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
             synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
             self.save_state()
@@ -707,7 +703,7 @@ class SaveService:
         async with self._rom_lock(rom_id):
             if not self._is_save_sync_enabled():
                 self._logger.info("post_exit_sync skipped: save sync disabled")
-                return {"success": True, "message": "Save sync disabled", "synced": 0}
+                return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
             # Defense in depth: same rationale as pre_launch_sync — internal
             # _sync_rom_saves callers are protected by @migration_blocked on
@@ -738,7 +734,7 @@ class SaveService:
             if not self._save_sync_state.get("device_id"):
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
-                    return {"success": False, "message": _DEVICE_NOT_REGISTERED}
+                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
             synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
             self.save_state()
@@ -769,7 +765,7 @@ class SaveService:
         rom_id = int(rom_id)
         async with self._rom_lock(rom_id):
             if not self._is_save_sync_enabled():
-                return {"success": False, "message": _SYNC_DISABLED_MSG, "synced": 0}
+                return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
             # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
             # Manual sync paths must observe fresh sort state too: a user could
@@ -780,7 +776,7 @@ class SaveService:
             if not self._save_sync_state.get("device_id"):
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
-                    return {"success": False, "message": _DEVICE_NOT_REGISTERED}
+                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
             synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
             self.save_state()
@@ -838,7 +834,7 @@ class SaveService:
     async def sync_all_saves(self) -> dict:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
         if not self._is_save_sync_enabled():
-            return {"success": False, "message": _SYNC_DISABLED_MSG, "synced": 0, "conflicts": 0}
+            return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0, "conflicts": 0}
 
         # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
         # Manual sync paths must observe fresh sort state too: a user could
@@ -849,7 +845,7 @@ class SaveService:
         if not self._save_sync_state.get("device_id"):
             reg = await self.ensure_device_registered()
             if not reg.get("success"):
-                return {"success": False, "message": _DEVICE_NOT_REGISTERED}
+                return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
         total_synced = 0
         total_errors: list[str] = []
