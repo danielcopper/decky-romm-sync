@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import hashlib
-import json
 import os
 import socket
 import tempfile
@@ -42,6 +40,7 @@ from services.protocols import (
     SavesPathProvider,
 )
 from services.saves._helpers import _compute_uploaded_by_us, _local_save_target
+from services.saves.state import StateService
 
 _DEVICE_NOT_REGISTERED = "Device not registered"
 _NO_MIGRATION = object()  # sentinel: no slot migration requested
@@ -137,10 +136,18 @@ class SaveService:
         self._retry = retry
         self._settings = settings
         self._state = state
-        self._save_sync_state = save_sync_state
+        self._state_svc = StateService(
+            save_sync_state=save_sync_state,
+            state=state,
+            runtime_dir=runtime_dir,
+            logger=logger,
+        )
+        # Alias the dict so the dozens of self._save_sync_state[...] call
+        # sites elsewhere in SaveService keep working unchanged. Both names
+        # reference the same underlying dict object.
+        self._save_sync_state = self._state_svc.data
         self._loop = loop
         self._logger = logger
-        self._runtime_dir = runtime_dir
         self._get_saves_path = get_saves_path
         self._get_roms_path = get_roms_path
         self._get_active_core = get_active_core
@@ -179,130 +186,27 @@ class SaveService:
     @staticmethod
     def make_default_state() -> dict:
         """Return a fresh default save-sync state dict."""
-        return {
-            "version": 1,
-            "device_id": None,
-            "device_name": None,
-            "server_device_id": None,
-            "saves": {},
-            "playtime": {},
-            "settings": {
-                "save_sync_enabled": False,
-                "sync_before_launch": True,
-                "sync_after_exit": True,
-                "default_slot": "default",
-                "autocleanup_limit": 10,
-            },
-        }
+        return StateService.make_default_state()
 
     def init_state(self) -> None:
-        """Populate ``_save_sync_state`` with defaults (idempotent).
-
-        Defaults only — schema migrations on loaded data live in
-        ``load_state``. Running them here would be a no-op because
-        ``init_state`` is called before any disk data is loaded.
-        """
-        defaults = self.make_default_state()
-        for key, value in defaults.items():
-            self._save_sync_state.setdefault(key, value)
-        self._save_sync_state.setdefault("settings", {})
-        for key, value in defaults["settings"].items():
-            self._save_sync_state["settings"].setdefault(key, value)
+        """Populate ``_save_sync_state`` with defaults (idempotent)."""
+        self._state_svc.init_state()
 
     def _migrate_loaded_state(self) -> None:
-        """Apply schema migrations to data just read from disk.
-
-        Migrations are idempotent. Called from ``load_state`` after the
-        disk content has been merged into ``_save_sync_state``; the next
-        ``save_state`` then persists the cleaned form.
-
-        Currently:
-        - Rename per-game ``active_core`` → ``last_synced_core``.
-        - Drop legacy per-file ``dismissed_newer_save_id`` (was used by
-          the removed newer-in-slot detection).
-        - Strip removed legacy settings keys (``conflict_mode``,
-          ``clock_skew_tolerance_sec``).
-        """
-        self._migrate_saves_entries()
-        self._strip_legacy_settings()
-
-    def _migrate_saves_entries(self) -> None:
-        """Rename ``active_core`` → ``last_synced_core`` and drop dead per-file flags."""
-        saves = self._save_sync_state.get("saves")
-        if not isinstance(saves, dict):
-            return
-        for entry in saves.values():
-            if not isinstance(entry, dict):
-                continue
-            if "active_core" in entry:
-                entry["last_synced_core"] = entry.pop("active_core")
-            files = entry.get("files")
-            if not isinstance(files, dict):
-                continue
-            for file_state in files.values():
-                if isinstance(file_state, dict):
-                    file_state.pop("dismissed_newer_save_id", None)
-
-    def _strip_legacy_settings(self) -> None:
-        """Strip removed settings keys from loaded state.
-
-        Old state files keep these forever otherwise (``load_state`` does
-        ``dict.update`` on settings, so orphan keys survive). Idempotent.
-        """
-        settings = self._save_sync_state.get("settings")
-        if isinstance(settings, dict):
-            settings.pop("conflict_mode", None)
-            settings.pop("clock_skew_tolerance_sec", None)
+        """Apply schema migrations to data just read from disk."""
+        self._state_svc._migrate_loaded_state()
 
     def load_state(self) -> None:
         """Load save sync state from disk, merging with defaults."""
-        path = os.path.join(self._runtime_dir, "save_sync_state.json")
-        try:
-            with open(path) as f:
-                saved = json.load(f)
-            for key in ("saves", "playtime"):
-                if key in saved:
-                    self._save_sync_state[key] = saved[key]
-            for key in ("version", "device_id", "device_name", "server_device_id"):
-                if key in saved:
-                    self._save_sync_state[key] = saved[key]
-            if "settings" in saved:
-                self._save_sync_state["settings"].update(saved["settings"])
-        except (FileNotFoundError, json.JSONDecodeError):
-            return
-        self._migrate_loaded_state()
+        self._state_svc.load_state()
 
     def save_state(self) -> None:
         """Persist save sync state to disk (atomic write)."""
-        os.makedirs(self._runtime_dir, exist_ok=True)
-        path = os.path.join(self._runtime_dir, "save_sync_state.json")
-        tmp = path + ".tmp"
-        lock_fd = os.open(path + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
-                json.dump(self._save_sync_state, f, indent=2)
-            os.replace(tmp, path)
-        finally:
-            os.close(lock_fd)
+        self._state_svc.save_state()
 
     def prune_orphaned_state(self) -> None:
         """Remove save sync state entries for rom_ids no longer in shortcut registry."""
-        registry = self._state.get("shortcut_registry", {})
-        changed = False
-
-        for section in ("saves", "playtime"):
-            data = self._save_sync_state.get(section, {})
-            stale = [rid for rid in data if rid not in registry]
-            for rid in stale:
-                del data[rid]
-                self._logger.info(f"Pruned orphaned save sync state: {section}[{rid}]")
-            if stale:
-                changed = True
-
-        if changed:
-            self.save_state()
+        self._state_svc.prune_orphaned_state()
 
     # ------------------------------------------------------------------
     # ROM / path helpers
