@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import os
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from models.saves import SaveConflict
 
-from domain.sync_action import Conflict, Skip, compute_sync_action
+from domain.sync_action import Conflict, Skip
 from lib.iso_time import parse_iso_to_epoch
-from services.saves._helpers import _compute_uploaded_by_us, _local_save_target
+from services.saves._helpers import _compute_uploaded_by_us
 from services.saves.status.builders import (
     _build_file_status,
     _resolve_chosen_server,
@@ -21,6 +19,7 @@ if TYPE_CHECKING:
     from services.protocols import RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
+    from services.saves.sync_engine import MatrixOutcome, SyncEngine
 
 
 class StatusService:
@@ -31,59 +30,40 @@ class StatusService:
         *,
         save_service: SaveService,
         state_svc: StateService,
+        sync_engine: SyncEngine,
         romm_api: RommApiProtocol,
         logger: logging.Logger,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
+        self._sync_engine = sync_engine
         self._romm_api = romm_api
         self._logger = logger
 
-    def _status_entry_for_local_file(
+    def _status_entry_from_outcome(
         self,
-        local_file: dict,
+        outcome: MatrixOutcome,
         *,
         rom_id: int,
-        rom_id_str: str,
-        server_in_slot: list[dict],
-        files_state: dict,
         server_device_id: str | None,
         own_upload_ids: list[int] | None,
     ) -> tuple[dict, dict | None]:
-        """Build the file-status entry for an existing local file.
+        """Build the status DTO + optional conflict descriptor for one outcome.
 
         Returns ``(status_entry, conflict_entry_or_None)``. The conflict
-        entry is the ``sync_conflict`` descriptor when ``compute_sync_action``
-        returns ``Conflict``; otherwise None.
+        entry is the ``sync_conflict`` descriptor when the matrix returned
+        ``Conflict``; otherwise ``None``.
         """
-        filename = local_file["filename"]
-        local_path = local_file["path"]
-        local_hash = self._save_service._file_md5(local_path) if os.path.isfile(local_path) else None
-        file_state = files_state.get(filename, {})
-        action = compute_sync_action(
-            local_file=self._save_service._build_local_input(local_path, filename),
-            server_saves_in_slot=server_in_slot,
-            files_state=file_state,
-            device_id=server_device_id or "",
-            local_hash=local_hash,
-        )
-        if isinstance(action, Skip) and action.adopt_baseline and local_hash is not None:
-            self._save_service._adopt_baseline_hash(rom_id_str, filename, local_hash)
-        chosen_server = _resolve_chosen_server(action, server_in_slot)
-        local_mtime = (
-            datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
-            if os.path.isfile(local_path)
-            else None
-        )
-        local_size = os.path.getsize(local_path) if os.path.isfile(local_path) else None
+        action = outcome.action
+        chosen_server = _resolve_chosen_server(action, outcome.server_candidates)
         status_entry = _build_file_status(
-            filename,
-            local_path=local_path,
-            local_hash=local_hash,
-            local_mtime=local_mtime,
-            local_size=local_size,
+            outcome.filename,
+            local_path=outcome.local_path,
+            local_hash=outcome.local_hash,
+            local_mtime=outcome.local_mtime_iso,
+            local_size=outcome.local_size,
             server=chosen_server,
-            last_sync_at=file_state.get("last_sync_at"),
+            last_sync_at=outcome.file_state.get("last_sync_at"),
             status=_status_from_action(action),
             server_device_id=server_device_id,
             uploaded_by_us=_compute_uploaded_by_us(chosen_server, own_upload_ids),
@@ -91,36 +71,13 @@ class StatusService:
         conflict_entry: dict | None = None
         if isinstance(action, Conflict):
             self._save_service._log_debug(
-                f"_get_save_status_io({rom_id}): conflict {filename} server_save_id={action.server_save.get('id')}"
+                f"_get_save_status_io({rom_id}): conflict {outcome.filename} "
+                f"server_save_id={action.server_save.get('id')}"
             )
-            conflict_entry = self._save_service._build_sync_conflict_entry(
-                rom_id, filename, action.server_save, local_path, local_hash
+            conflict_entry = self._sync_engine._build_sync_conflict_entry(
+                rom_id, outcome.filename, action.server_save, outcome.local_path, outcome.local_hash
             )
         return status_entry, conflict_entry
-
-    def _status_entry_for_server_only(
-        self,
-        server_in_slot: list[dict],
-        *,
-        rom_name: str,
-        server_device_id: str | None,
-        own_upload_ids: list[int] | None,
-    ) -> dict:
-        """Build the ready-to-download status entry when no local file exists
-        but the slot has server saves. Picks newest by ``updated_at``."""
-        newest = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
-        return _build_file_status(
-            _local_save_target(newest, rom_name),
-            local_path=None,
-            local_hash=None,
-            local_mtime=None,
-            local_size=None,
-            server=newest,
-            last_sync_at=None,
-            status="download",
-            server_device_id=server_device_id,
-            uploaded_by_us=_compute_uploaded_by_us(newest, own_upload_ids),
-        )
 
     def _get_save_status_io(self, rom_id: int, server_saves: list[dict]) -> dict:
         """Sync helper for get_save_status — runs in executor.
@@ -151,9 +108,8 @@ class StatusService:
         server_device_id = self._save_service._get_server_device_id()
 
         save_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        files_state = save_state.get("files", {})
         active_slot = save_state.get("active_slot")
-        server_in_slot = self._save_service._filter_server_saves_to_slot(server_saves, active_slot)
+        server_in_slot = self._sync_engine._filter_server_saves_to_slot(server_saves, active_slot)
 
         # own_upload_ids: None means missing key (legacy entry — unknown attribution).
         raw_own_ids = save_state.get("own_upload_ids")
@@ -163,32 +119,31 @@ class StatusService:
         conflicts: list[SaveConflict | dict] = []
 
         if info is not None:
-            rom_name = info["rom_name"]
-            local_files = self._save_service._find_save_files(rom_id)
-            local_file = local_files[0] if local_files else None
+            local_outcome: MatrixOutcome | None = None
+            server_only_outcomes: list[MatrixOutcome] = []
+            for outcome in self._sync_engine.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
+                if isinstance(outcome.action, Skip) and outcome.action.adopt_baseline and outcome.local_hash:
+                    self._sync_engine._adopt_baseline_hash(rom_id_str, outcome.filename, outcome.local_hash)
+                if outcome.local_path is not None:
+                    if local_outcome is None:
+                        local_outcome = outcome
+                else:
+                    server_only_outcomes.append(outcome)
 
-            if local_file is not None:
-                status_entry, conflict_entry = self._status_entry_for_local_file(
-                    local_file,
+            chosen = local_outcome
+            if chosen is None and server_only_outcomes:
+                chosen = max(server_only_outcomes, key=_outcome_server_sort_key)
+
+            if chosen is not None:
+                status_entry, conflict_entry = self._status_entry_from_outcome(
+                    chosen,
                     rom_id=rom_id,
-                    rom_id_str=rom_id_str,
-                    server_in_slot=server_in_slot,
-                    files_state=files_state,
                     server_device_id=server_device_id,
                     own_upload_ids=own_upload_ids,
                 )
                 file_statuses.append(status_entry)
                 if conflict_entry is not None:
                     conflicts.append(conflict_entry)
-            elif server_in_slot:
-                file_statuses.append(
-                    self._status_entry_for_server_only(
-                        server_in_slot,
-                        rom_name=rom_name,
-                        server_device_id=server_device_id,
-                        own_upload_ids=own_upload_ids,
-                    )
-                )
 
         playtime = self._state_svc.data.get("playtime", {}).get(rom_id_str, {})
         save_entry = self._state_svc.data.get("saves", {}).get(rom_id_str, {})
@@ -202,3 +157,12 @@ class StatusService:
             "conflicts": conflicts,
             "save_sort_changed": self._save_service._is_save_sort_changed(),
         }
+
+
+def _outcome_server_sort_key(outcome: MatrixOutcome) -> float:
+    """Sort key picking the newest server-side save across server-only outcomes."""
+    candidates = outcome.server_candidates or []
+    if not candidates:
+        return 0.0
+    newest = max(candidates, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
+    return parse_iso_to_epoch(newest.get("updated_at")) or 0.0

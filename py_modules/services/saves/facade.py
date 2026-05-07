@@ -153,17 +153,18 @@ class SaveService:
             romm_api=self._romm_api,
             logger=self._logger,
         )
-        self._status = StatusService(
-            save_service=self,
-            state_svc=self._state_svc,
-            romm_api=self._romm_api,
-            logger=self._logger,
-        )
         self._sync_engine = SyncEngine(
             save_service=self,
             state_svc=self._state_svc,
             romm_api=self._romm_api,
             retry=self._retry,
+            logger=self._logger,
+        )
+        self._status = StatusService(
+            save_service=self,
+            state_svc=self._state_svc,
+            sync_engine=self._sync_engine,
+            romm_api=self._romm_api,
             logger=self._logger,
         )
 

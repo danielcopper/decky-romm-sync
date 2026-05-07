@@ -4,6 +4,8 @@ import contextlib
 import os
 import tempfile
 import time
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -14,6 +16,7 @@ from domain.sync_action import (
     Conflict,
     Download,
     Skip,
+    SyncAction,
     Upload,
     compute_sync_action,
 )
@@ -26,6 +29,26 @@ if TYPE_CHECKING:
     from services.protocols import RetryStrategy, RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
+
+
+@dataclass(frozen=True)
+class MatrixOutcome:
+    """One newest-wins matrix evaluation, ready for sync dispatch or status rendering.
+
+    Yielded by :meth:`SyncEngine.iter_matrix_outcomes` for both consumers
+    (sync I/O dispatch, status DTO building). All fields are read-only —
+    the iterator runs pure compute and consumers drive their own side
+    effects.
+    """
+
+    filename: str
+    action: SyncAction
+    local_path: str | None
+    local_hash: str | None
+    local_mtime_iso: str | None
+    local_size: int | None
+    file_state: dict
+    server_candidates: list[dict]
 
 
 class SyncEngine:
@@ -409,32 +432,43 @@ class SyncEngine:
         file_state = files.setdefault(filename, {})
         file_state["last_sync_hash"] = local_hash
 
-    def _sync_local_files(
+    def iter_matrix_outcomes(
         self,
-        local_files: list[dict],
-        *,
         rom_id: int,
-        rom_id_str: str,
-        device_id: str,
         server_in_slot: list[dict],
-        files_state: dict,
-        system: str,
-        saves_dir: str,
-        errors: list[str],
-        conflicts: list[SaveConflict | dict],
-    ) -> tuple[int, set[str]]:
-        """Run ``compute_sync_action`` on every local file and dispatch each outcome.
+        *,
+        info: dict,
+    ) -> Iterator[MatrixOutcome]:
+        """Yield one :class:`MatrixOutcome` per save file in the ROM's active slot.
 
-        Returns ``(synced_count, handled_filenames)``. ``handled_filenames`` is
-        used by the server-only sweep to skip targets already addressed.
+        Walks the local saves directory + server-only canonical targets,
+        runs ``compute_sync_action`` against the per-filename inputs, and
+        emits :class:`MatrixOutcome` records ready for sync dispatch or
+        status rendering. Pure compute — no I/O writes, no state mutation.
+        Consumers drive their own side effects from the yielded outcomes.
         """
-        synced = 0
+        rom_id_str = str(int(rom_id))
+        rom_name = info["rom_name"]
+
+        save_state = self._state_svc.data["saves"].get(rom_id_str, {})
+        files_state = save_state.get("files", {})
+        device_id = self._save_service._get_server_device_id() or ""
+
+        local_files = self._save_service._find_save_files(rom_id)
+
         handled_filenames: set[str] = set()
         for lf in local_files:
             filename = lf["filename"]
             local_path = lf["path"]
+            handled_filenames.add(filename)
             local_hash = self._save_service._file_md5(local_path) if os.path.isfile(local_path) else None
             file_state = files_state.get(filename, {})
+            local_mtime_iso = (
+                datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
+                if os.path.isfile(local_path)
+                else None
+            )
+            local_size = os.path.getsize(local_path) if os.path.isfile(local_path) else None
             action = compute_sync_action(
                 local_file=self._build_local_input(local_path, filename),
                 server_saves_in_slot=server_in_slot,
@@ -442,47 +476,20 @@ class SyncEngine:
                 device_id=device_id,
                 local_hash=local_hash,
             )
-            handled_filenames.add(filename)
-            self._save_service._log_debug(f"_sync_rom_saves({rom_id}): local {filename} -> {type(action).__name__}")
-            if self._dispatch_sync_action(
-                action,
-                rom_id=rom_id,
-                rom_id_str=rom_id_str,
+            yield MatrixOutcome(
                 filename=filename,
+                action=action,
                 local_path=local_path,
                 local_hash=local_hash,
-                saves_dir=saves_dir,
-                system=system,
-                server_saves=server_in_slot,
-                errors=errors,
-                conflicts=conflicts,
-            ):
-                synced += 1
-        return synced, handled_filenames
+                local_mtime_iso=local_mtime_iso,
+                local_size=local_size,
+                file_state=file_state,
+                server_candidates=server_in_slot,
+            )
 
-    def _sync_server_only_saves(
-        self,
-        server_in_slot: list[dict],
-        *,
-        rom_id: int,
-        rom_id_str: str,
-        rom_name: str,
-        device_id: str,
-        files_state: dict,
-        handled_filenames: set[str],
-        pending_migration: bool,
-        system: str,
-        saves_dir: str,
-        errors: list[str],
-        conflicts: list[SaveConflict | dict],
-    ) -> int:
-        """Address server saves whose canonical local target wasn't already
-        handled by the local-file sweep. Returns the number of transfers.
-
-        Skipped entirely while a save-sort migration is pending (see #238).
-        """
-        # Group server saves by canonical local target filename. compute_sync_action
-        # picks newest-in-group automatically.
+        # Group server saves by canonical local target filename. Server-only
+        # groups (no local file) get matrix-evaluated against their own group;
+        # compute_sync_action picks newest-in-group internally.
         server_only_groups: dict[str, list[dict]] = {}
         for ss in server_in_slot:
             target = _local_save_target(ss, rom_name)
@@ -490,13 +497,7 @@ class SyncEngine:
                 continue
             server_only_groups.setdefault(target, []).append(ss)
 
-        synced = 0
         for target_filename, group in server_only_groups.items():
-            if pending_migration:
-                self._save_service._log_debug(
-                    f"_sync_rom_saves({rom_id}): skipping server_only {target_filename} — migration pending"
-                )
-                continue
             file_state = files_state.get(target_filename, {})
             action = compute_sync_action(
                 local_file=None,
@@ -505,31 +506,22 @@ class SyncEngine:
                 device_id=device_id,
                 local_hash=None,
             )
-            self._save_service._log_debug(
-                f"_sync_rom_saves({rom_id}): server-only {target_filename} -> {type(action).__name__}"
-            )
-            if self._dispatch_sync_action(
-                action,
-                rom_id=rom_id,
-                rom_id_str=rom_id_str,
+            yield MatrixOutcome(
                 filename=target_filename,
+                action=action,
                 local_path=None,
                 local_hash=None,
-                saves_dir=saves_dir,
-                system=system,
-                server_saves=group,
-                errors=errors,
-                conflicts=conflicts,
-            ):
-                synced += 1
-        return synced
+                local_mtime_iso=None,
+                local_size=None,
+                file_state=file_state,
+                server_candidates=group,
+            )
 
     def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
         """Sync saves for a single ROM.
 
-        Runs ``compute_sync_action`` for every local file and every
-        server-only save in the active slot via two focused helpers,
-        dispatching each outcome through ``_dispatch_sync_action``. Returns
+        Drives :meth:`iter_matrix_outcomes` and dispatches each emitted
+        outcome through :meth:`_dispatch_sync_action`. Returns
         ``(synced_count, errors_list, conflicts_list)``.
         """
         t_total = time.time()
@@ -541,7 +533,6 @@ class SyncEngine:
             self._save_service._log_debug(f"_sync_rom_saves({rom_id}): no save info, skipping")
             return 0, [], []
         system = info["system"]
-        rom_name = info["rom_name"]
         saves_dir = info["saves_dir"]
 
         t0 = time.time()
@@ -554,51 +545,44 @@ class SyncEngine:
             return 0, [f"Failed to fetch saves: {_msg}"], []
         self._save_service._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): list_saves {time.time() - t0:.3f}s")
 
-        t0 = time.time()
-        local_files = self._save_service._find_save_files(rom_id)
-        self._save_service._log_debug(
-            f"_sync_rom_saves({rom_id}): system={system}, rom_name={rom_name}, "
-            f"local_files={len(local_files)}, server_saves={len(server_saves)}, "
-            f"saves_dir={saves_dir}"
-        )
-        self._save_service._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): find_local {time.time() - t0:.3f}s")
-
         save_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        files_state = save_state.get("files", {})
         active_slot = save_state.get("active_slot")
         server_in_slot = self._filter_server_saves_to_slot(server_saves, active_slot)
 
+        self._save_service._log_debug(
+            f"_sync_rom_saves({rom_id}): system={system}, rom_name={info['rom_name']}, "
+            f"server_saves={len(server_saves)}, saves_dir={saves_dir}"
+        )
+
         errors: list[str] = []
         conflicts: list[SaveConflict | dict] = []
-        device_id_str = device_id or ""
+        synced = 0
 
-        synced_local, handled_filenames = self._sync_local_files(
-            local_files,
-            rom_id=rom_id,
-            rom_id_str=rom_id_str,
-            device_id=device_id_str,
-            server_in_slot=server_in_slot,
-            files_state=files_state,
-            system=system,
-            saves_dir=saves_dir,
-            errors=errors,
-            conflicts=conflicts,
-        )
-        synced_server = self._sync_server_only_saves(
-            server_in_slot,
-            rom_id=rom_id,
-            rom_id_str=rom_id_str,
-            rom_name=rom_name,
-            device_id=device_id_str,
-            files_state=files_state,
-            handled_filenames=handled_filenames,
-            pending_migration=self._save_service._is_save_sort_changed(),
-            system=system,
-            saves_dir=saves_dir,
-            errors=errors,
-            conflicts=conflicts,
-        )
-        synced = synced_local + synced_server
+        pending_migration = self._save_service._is_save_sort_changed()
+        for outcome in self.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
+            origin = "local" if outcome.local_path is not None else "server-only"
+            self._save_service._log_debug(
+                f"_sync_rom_saves({rom_id}): {origin} {outcome.filename} -> {type(outcome.action).__name__}"
+            )
+            if outcome.local_path is None and pending_migration:
+                self._save_service._log_debug(
+                    f"_sync_rom_saves({rom_id}): skipping server_only {outcome.filename} — migration pending"
+                )
+                continue
+            if self._dispatch_sync_action(
+                outcome.action,
+                rom_id=rom_id,
+                rom_id_str=rom_id_str,
+                filename=outcome.filename,
+                local_path=outcome.local_path,
+                local_hash=outcome.local_hash,
+                saves_dir=saves_dir,
+                system=system,
+                server_saves=outcome.server_candidates,
+                errors=errors,
+                conflicts=conflicts,
+            ):
+                synced += 1
 
         # Record when this sync check ran (regardless of whether files transferred)
         save_entry = self._state_svc.data["saves"].setdefault(rom_id_str, {})
