@@ -41,6 +41,7 @@ from services.protocols import (
 )
 from services.saves._helpers import _compute_uploaded_by_us, _local_save_target
 from services.saves.state import StateService
+from services.saves.versions import VersionsService
 
 _DEVICE_NOT_REGISTERED = "Device not registered"
 _NO_MIGRATION = object()  # sentinel: no slot migration requested
@@ -159,6 +160,12 @@ class SaveService:
         # Per-rom lock dict — serializes concurrent sync operations on the
         # same rom_id (pre_launch_sync, post_exit_sync, manual sync, resolve).
         self._rom_sync_locks: dict[int, asyncio.Lock] = {}
+        self._versions = VersionsService(
+            save_service=self,
+            state_svc=self._state_svc,
+            romm_api=self._romm_api,
+            logger=self._logger,
+        )
 
     def _rom_lock(self, rom_id: int) -> asyncio.Lock:
         """Return the lock for this rom_id, creating it lazily."""
@@ -2244,232 +2251,13 @@ class SaveService:
     # Version History API
     # ------------------------------------------------------------------
 
-    def _find_file_state(self, rom_id_str: str, filename: str, server_saves: list[dict]) -> dict:  # noqa: ARG002 — server_saves kept for callable signature stability
-        """Look up the per-file sync state for *filename* (canonical local name).
-
-        State keys are always ``<rom_name>.<ext>`` — the same canonical
-        local filename produced by ``_local_save_target`` and consumed by
-        RetroArch — so a single dict lookup is enough. The previous
-        ``file_name_no_tags``-anchored slow path is gone.
-        """
-        files_state = self._save_sync_state.get("saves", {}).get(rom_id_str, {}).get("files", {})
-        return files_state.get(filename, {})
-
     async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
-        """List server-side saves in the active slot, excluding the currently-tracked one.
-
-        The slot is the unit, not the filename. Saves uploaded by other
-        clients (RomM web UI, third-party clients, etc.) whose naming
-        convention differs from ours are first-class versions of the same
-        slot, so no filename filter is applied — every save in the slot
-        except the one we're currently tracking shows up here.
-
-        Sorted by ``updated_at`` descending (newest first). Each entry
-        contains: id, file_name, emulator, updated_at, file_size_bytes,
-        device_syncs, uploaded_by_us.
-
-        ``filename`` is kept in the signature for compatibility with the
-        callable wiring but no longer affects which versions are returned.
-        """
-        rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
-        device_id = self._get_server_device_id()
-
-        try:
-            server_saves = await self._loop.run_in_executor(
-                None,
-                lambda: self._retry.with_retry(
-                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
-                ),
-            )
-        except Exception:
-            return []
-
-        file_state = self._find_file_state(rom_id_str, filename, server_saves)
-        tracked_id = file_state.get("tracked_save_id")
-
-        rom_state = self._save_sync_state["saves"].get(rom_id_str, {})
-        raw = rom_state.get("own_upload_ids")
-        own_upload_ids: list[int] | None = raw if isinstance(raw, list) else None
-
-        versions = [
-            {
-                "id": s["id"],
-                "file_name": s.get("file_name", ""),
-                "emulator": s.get("emulator"),
-                "updated_at": s.get("updated_at", ""),
-                "file_size_bytes": s.get("file_size_bytes"),
-                "device_syncs": s.get("device_syncs", []),
-                "uploaded_by_us": (s["id"] in own_upload_ids) if own_upload_ids is not None else None,
-            }
-            for s in server_saves
-            if s.get("id") != tracked_id
-        ]
-
-        versions.sort(key=lambda v: v["updated_at"], reverse=True)
-        return versions
-
-    def _rollback_to_version_io(
-        self,
-        rom_id_str: str,
-        save_id: int,
-        info: dict,
-        server_saves: list[dict],
-    ) -> dict:
-        """Blocking I/O portion of the version-switch flow — runs in executor.
-
-        The caller is responsible for the matrix pre-flight: by the time
-        this function runs, the currently-tracked save is already in sync
-        with the server (or the switch was aborted before we got here).
-        This function is purely the destructive switch:
-
-        1. Download id=save_id content → overwrite local file.
-           ``_do_download_save`` updates ``tracked_save_id`` /
-           ``last_sync_hash`` to point at the target version locally.
-        2. PUT id=save_id with the same content. RomM v4.8.1 fires the
-           SQLAlchemy ``onupdate=utc_now`` hook, so ``save.updated_at``
-           becomes NOW and id=save_id is now newest in the slot — beating
-           anything else there.
-        3. ``_do_upload_save`` calls ``confirm_download(save_id, device_id)``,
-           setting our ``last_synced_at = save.updated_at`` so
-           ``is_current`` evaluates true for us. Required because v4.8.1
-           PUT does NOT auto-upsert sync rows.
-        4. ``_do_upload_save`` refreshes local sync state via
-           ``_update_file_sync_state`` to match the post-PUT response.
-
-        After this, the next ``compute_sync_action`` run picks id=save_id
-        (now newest), our ``is_current=true``, hash matches →
-        ``Skip(synced)``. Other devices on their next sync see id=save_id
-        as newest with their ``is_current=false`` → ``Download`` → adopt
-        our switch. Cross-device propagation works.
-        """
-        target_save = next(
-            (s for s in server_saves if s.get("id") == save_id),
-            None,
-        )
-        if target_save is None:
-            return {"status": "not_found"}
-
-        saves_dir = info["saves_dir"]
-        system = info["system"]
-        rom_name = info["rom_name"]
-        target_filename = _local_save_target(target_save, rom_name)
-        local_path = os.path.join(saves_dir, target_filename)
-
-        self._do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
-
-        try:
-            self._do_upload_save(
-                rom_id=int(rom_id_str),
-                file_path=local_path,
-                filename=target_filename,
-                rom_id_str=rom_id_str,
-                system=system,
-                server_save=target_save,
-            )
-        except Exception as e:
-            # Download already mutated local state to reflect ``save_id``, so
-            # the switch is locally complete — but cross-device propagation
-            # failed because ``updated_at`` was not bumped. Surface this so
-            # the caller can prompt the user to retry.
-            self._logger.error(
-                "_rollback_to_version_io: PUT to bump updated_at failed for rom=%s save=%s: %s",
-                rom_id_str,
-                save_id,
-                e,
-            )
-            return {"status": "put_failed", "error": str(e)}
-
-        return {"status": "ok"}
+        """Delegate to :class:`VersionsService` — see its docstring."""
+        return await self._versions.list_file_versions(rom_id, slot, filename)
 
     async def rollback_to_version(self, rom_id: int, slot: str, save_id: int) -> dict:
-        """Switch the local + tracked save to a chosen older server version.
-
-        Flow:
-
-        1. Run ``_sync_rom_saves`` as a matrix pre-flight on the
-           currently-tracked save. The matrix decides:
-
-           - ``Skip(synced)`` / ``Skip(adopt_baseline=True)`` — proceed.
-           - ``Upload(POST/PUT)`` — silently push local up, then proceed.
-           - ``Download(server)`` — silently adopt the server-newest, then
-             proceed (the user's chosen target is still in the slot).
-           - ``Conflict`` — abort with ``conflict_blocked``; user must
-             resolve via the standard ``SyncConflictModal`` first.
-
-        2. After a clean pre-flight, the destructive switch runs in
-           ``_rollback_to_version_io``: download chosen → write to
-           canonical local target → PUT same content → ``confirm_download``.
-
-        ``filename`` is kept in the signature for callable-wiring stability
-        but no longer drives any decision — the canonical local path is
-        derived from the target save and the ROM name.
-
-        Returns a status dict:
-        - ``{"status": "ok"}`` on success.
-        - ``{"status": "not_found"}`` if the ROM is not installed or the
-          chosen save id is no longer on the server.
-        - ``{"status": "conflict_blocked", "conflicts": [...]}`` if the
-          pre-flight surfaced a conflict on the currently-tracked save.
-          The frontend resolves it via the standard conflict modal.
-        - ``{"status": "preflight_failed", "errors": [...]}`` if the
-          pre-flight hit non-conflict errors (network, server, etc.).
-          No switch was attempted.
-        - ``{"status": "put_failed", "error": ...}`` if the local download
-          succeeded but the server-side ``updated_at`` bump failed. Local
-          file and state already point at the target; retrying is safe
-          and idempotent. Without a successful re-PUT the switch will not
-          propagate cross-device.
-        """
-        rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
-        save_id = int(save_id)
-
-        async with self._rom_lock(rom_id):
-            info = self._get_rom_save_info(rom_id)
-            if not info:
-                return {"status": "not_found"}
-
-            # Matrix pre-flight: get the tracked save in sync first, or surface
-            # a conflict that the user must resolve before any switch can run.
-            _synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
-            if conflicts:
-                self.save_state()
-                return {
-                    "status": "conflict_blocked",
-                    "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
-                }
-            if errors:
-                self.save_state()
-                return {"status": "preflight_failed", "errors": errors}
-
-            # Re-fetch server saves after the pre-flight: it may have created
-            # or modified saves the switch needs to see.
-            device_id = self._get_server_device_id()
-            try:
-                server_saves: list[dict] = await self._loop.run_in_executor(
-                    None,
-                    lambda: self._retry.with_retry(
-                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
-                    ),
-                )
-            except Exception as e:
-                self._log_debug(f"rollback_to_version: failed to list saves: {e}")
-                return {"status": "not_found"}
-
-            result = await self._loop.run_in_executor(
-                None,
-                self._rollback_to_version_io,
-                rom_id_str,
-                save_id,
-                info,
-                server_saves,
-            )
-
-            if result.get("status") in ("ok", "put_failed"):
-                self.save_state()
-
-            return result
+        """Delegate to :class:`VersionsService` — see its docstring."""
+        return await self._versions.rollback_to_version(rom_id, slot, save_id)
 
     def get_save_sync_settings(self) -> dict:
         """Return current save sync settings."""
