@@ -169,7 +169,7 @@ class SlotsService:
     # Active slot mutation
     # ------------------------------------------------------------------
 
-    def set_game_slot(self, rom_id: int, slot: str) -> dict:
+    def _set_active_slot(self, rom_id: int, slot: str) -> dict:
         """Set the active save slot for a specific game.
 
         If the slot doesn't exist yet (not on server), it is persisted
@@ -295,7 +295,7 @@ class SlotsService:
         slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
 
         # 6. Update active slot in state
-        self.set_game_slot(rom_id, new_slot)
+        self._set_active_slot(rom_id, new_slot)
 
         # 7. Sync local state to match the new slot
         if slot_saves:

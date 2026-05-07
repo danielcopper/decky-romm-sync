@@ -802,10 +802,6 @@ class SaveService:
         """Fetch server save files for a specific slot."""
         return await self._slots.get_slot_saves(rom_id, slot)
 
-    def set_game_slot(self, rom_id: int, slot: str) -> dict:
-        """Set the active save slot for a specific game."""
-        return self._slots.set_game_slot(rom_id, slot)
-
     async def switch_slot(self, rom_id: int, new_slot: str) -> dict:
         """Switch the active save slot with immediate state sync."""
         return await self._slots.switch_slot(rom_id, new_slot)
@@ -938,7 +934,7 @@ class SaveService:
                 if action == "use_server":
                     await self._loop.run_in_executor(
                         None,
-                        self._apply_resolve_use_server,
+                        self._resolve_conflict_use_server,
                         rom_id_str,
                         server,
                         saves_dir,
@@ -956,7 +952,7 @@ class SaveService:
                 # keep_local
                 await self._loop.run_in_executor(
                     None,
-                    self._apply_resolve_keep_local,
+                    self._resolve_conflict_keep_local,
                     rom_id,
                     rom_id_str,
                     filename,
@@ -975,7 +971,7 @@ class SaveService:
                 self._logger.error(f"resolve_sync_conflict({rom_id}, {filename}, {action}) failed: {e}")
                 return {"success": False, "message": str(e)}
 
-    def _apply_resolve_use_server(
+    def _resolve_conflict_use_server(
         self,
         rom_id_str: str,
         server: dict,
@@ -994,7 +990,7 @@ class SaveService:
         self._do_download_save(server, saves_dir, target, rom_id_str, system)
         self.save_state()
 
-    def _apply_resolve_keep_local(
+    def _resolve_conflict_keep_local(
         self,
         rom_id: int,
         rom_id_str: str,

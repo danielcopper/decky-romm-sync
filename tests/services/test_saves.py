@@ -2375,7 +2375,7 @@ class TestSaveSyncSettingsSlotAndCleanup:
 
 
 class TestSaveSlots:
-    """Tests for get_save_slots and set_game_slot."""
+    """Tests for get_save_slots and _set_active_slot."""
 
     @pytest.mark.asyncio
     async def test_get_save_slots(self, tmp_path):
@@ -2443,34 +2443,34 @@ class TestSaveSlots:
         result = await svc.get_save_slots(123)
         assert result["success"] is False
 
-    def test_set_game_slot(self, tmp_path):
+    def test_set_active_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
         svc._save_sync_state["saves"] = {
             "123": {"system": "gba", "active_slot": "default", "files": {}},
         }
-        result = svc.set_game_slot(123, "desktop")
+        result = svc._slots._set_active_slot(123, "desktop")
         assert result["success"] is True
         assert svc._save_sync_state["saves"]["123"]["active_slot"] == "desktop"
 
-    def test_set_game_slot_creates_entry(self, tmp_path):
+    def test_set_active_slot_creates_entry(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        result = svc.set_game_slot(456, "my-slot")
+        result = svc._slots._set_active_slot(456, "my-slot")
         assert result["success"] is True
         assert svc._save_sync_state["saves"]["456"]["active_slot"] == "my-slot"
 
-    def test_set_game_slot_empty_sets_none(self, tmp_path):
+    def test_set_active_slot_empty_sets_none(self, tmp_path):
         """Empty string sets active_slot to None (legacy mode)."""
         svc, _ = make_service(tmp_path)
-        result = svc.set_game_slot(123, "")
+        result = svc._slots._set_active_slot(123, "")
         assert result["success"] is True
         assert result["active_slot"] is None
         assert svc._save_sync_state["saves"]["123"]["active_slot"] is None
 
     @pytest.mark.asyncio
-    async def test_set_game_slot_triggers_background_check(self, tmp_path):
-        """set_game_slot fires a background save status check task."""
+    async def test_set_active_slot_triggers_background_check(self, tmp_path):
+        """_set_active_slot fires a background save status check task."""
         emitted = []
 
         async def fake_emit(event, *args):
@@ -2479,7 +2479,7 @@ class TestSaveSlots:
         svc, _ = make_service(tmp_path, emit=fake_emit)
         _install_rom(svc, tmp_path)
 
-        svc.set_game_slot(42, "slot1")
+        svc._slots._set_active_slot(42, "slot1")
 
         # Give the background task a chance to run
         await asyncio.sleep(0.1)
