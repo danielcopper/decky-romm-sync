@@ -1,7 +1,9 @@
-"""SaveSyncState lifecycle: in-memory dict, on-disk JSON, schema migrations.
+"""Single source of truth for save_sync_state.json.
 
-The on-disk JSON is updated atomically via fcntl-locked temp+rename.
-Schema migrations apply on load to upgrade legacy formats in place.
+Anything that loads, persists, migrates, or owns the on-disk save-sync
+state lives here. Other modules read state via the ``data`` property and
+trigger persistence via ``save_state()`` — they never open the file
+directly.
 """
 
 from __future__ import annotations

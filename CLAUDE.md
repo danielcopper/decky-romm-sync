@@ -44,6 +44,17 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 - **import-linter**: Layer boundary enforcement in CI (services ↛ adapters, adapters ↛ services, services independent).
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
+## Module docstrings — intent over behavior
+
+Module-level docstrings describe **what belongs in the file** (the contract), not what's currently in it (the behavior). Behavior listings rot when methods get added/changed/removed; contracts don't.
+
+- Bad: `"""Version history listing and rollback flow. 1. Download. 2. PUT. 3. confirm_download."""`
+- Good: `"""Save version history reads and the destructive version-switch flow. Anything that lists, fetches, or rolls back to an older save version lives here. Mutations of the active save record outside the rollback flow belong in SyncEngine or StatusService, not here."""`
+
+Method and class docstrings describing what the method does (and non-obvious how) are fine — those describe a specific contract that doesn't shift when other methods are added.
+
+Avoid all of: "mechanical extraction from X", "during the transition", "moved from Y", "added for the Z flow", "see PR #123" — that's commit-message content that rots in source.
+
 ## Testing
 
 Every backend feature or callable where testing makes sense MUST have unit tests. Cover:

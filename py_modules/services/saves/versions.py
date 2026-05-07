@@ -1,28 +1,9 @@
-"""Version history listing and rollback flow for save sync.
+"""Save version history reads and the destructive version-switch flow.
 
-Two responsibilities:
-
-* ``list_file_versions`` — read-only enumeration of older server saves in a
-  slot, excluding the currently-tracked one. Powers the
-  ``Previous Versions`` UI.
-* ``rollback_to_version`` — atomic switch of the currently-tracked save to
-  a chosen older server version.
-
-Rollback runs a matrix pre-flight first (so the tracked save is in sync or
-the user is shown a conflict to resolve), then performs the destructive
-switch in a single executor hop:
-
-1. Download the chosen older save → overwrite the canonical local file.
-2. PUT the same content back as the chosen save id. RomM ``onupdate`` bumps
-   ``updated_at`` to NOW, so the older id is now newest in the slot.
-3. ``confirm_download`` records ``last_synced_at = save.updated_at`` so the
-   local device's ``is_current`` flips true. PUT alone does not upsert sync
-   rows in v4.8.1.
-
-After step 3 the next ``compute_sync_action`` run on this device sees
-``Skip(synced)``; other devices see the chosen save as newest with
-``is_current=false`` → ``Download`` → adopt the switch. Cross-device
-propagation is therefore inherent in the flow, not a separate broadcast.
+Anything that lists, fetches, or rolls back to an older save version
+lives here. Mutations of the active save record outside the rollback
+flow (download, upload, conflict resolution, status reporting) belong
+in SyncEngine or StatusService, not here.
 """
 
 from __future__ import annotations

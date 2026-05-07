@@ -1,7 +1,10 @@
-"""SaveService — save sync business logic.
+"""SaveService façade — composes the save-sync sub-services and exposes
+the public callable API for save sync.
 
-All RomM communication goes through ``RommApiProtocol``.
-No ``import decky`` — error utilities come from ``lib.errors``.
+Business logic and state live in dedicated sub-modules; this file holds
+composition + thin delegates. RomM communication goes through
+``RommApiProtocol``; no ``import decky`` (error helpers come from
+``lib.errors``).
 """
 
 from __future__ import annotations
