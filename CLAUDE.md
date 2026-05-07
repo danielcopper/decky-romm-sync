@@ -44,14 +44,16 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 - **import-linter**: Layer boundary enforcement in CI (services ↛ adapters, adapters ↛ services, services independent).
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
-## Module docstrings — intent over behavior
+## Docstrings — intent over behavior
 
-Module-level docstrings describe **what belongs in the file** (the contract), not what's currently in it (the behavior). Behavior listings rot when methods get added/changed/removed; contracts don't.
+**Module and class docstrings** describe **what belongs here** (the contract), not what's currently in the file/class (the behavior). Behavior listings and method enumerations rot when methods get added/changed/removed; contracts don't.
 
-- Bad: `"""Version history listing and rollback flow. 1. Download. 2. PUT. 3. confirm_download."""`
-- Good: `"""Save version history reads and the destructive version-switch flow. Anything that lists, fetches, or rolls back to an older save version lives here. Mutations of the active save record outside the rollback flow belong in SyncEngine or StatusService, not here."""`
+- Bad (module): `"""Version history listing and rollback flow. 1. Download. 2. PUT. 3. confirm_download."""`
+- Good (module): `"""Save version history reads and the destructive version-switch flow. Anything that lists, fetches, or rolls back to an older save version lives here. Mutations of the active save record outside the rollback flow belong in SyncEngine or StatusService, not here."""`
+- Bad (class): `"""Owns save_sync_state.json — persistence, migrations, default construction."""` (rots when a 4th responsibility is added)
+- Good (class): `"""Owns save_sync_state.json — single source of truth for on-disk save-sync state."""`
 
-Method and class docstrings describing what the method does (and non-obvious how) are fine — those describe a specific contract that doesn't shift when other methods are added.
+**Method docstrings are different.** A method docstring describes one specific contract (this method's behavior, parameters, return value, non-obvious how) — that contract is naturally scoped, so describing behavior is fine and stays in sync with the signature. Numpy-style parameter sections on a class's `__init__` count as method-like for this purpose.
 
 Avoid all of: "mechanical extraction from X", "during the transition", "moved from Y", "added for the Z flow", "see PR #123" — that's commit-message content that rots in source.
 

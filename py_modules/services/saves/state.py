@@ -15,7 +15,7 @@ import os
 
 
 class StateService:
-    """Owns ``save_sync_state.json`` — persistence, migrations, default construction."""
+    """Owns ``save_sync_state.json`` — single source of truth for on-disk save-sync state."""
 
     def __init__(
         self,

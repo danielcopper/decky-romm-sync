@@ -1,9 +1,11 @@
-"""Save version history reads and the destructive version-switch flow.
+"""Save version history reads and rollback orchestration.
 
-Anything that lists, fetches, or rolls back to an older save version
-lives here. Mutations of the active save record outside the rollback
-flow (download, upload, conflict resolution, status reporting) belong
-in SyncEngine or StatusService, not here.
+Coordinates the rollback flow (pre-flight sync, version pick, atomic
+switch) but does not perform the actual file or server writes — those
+go through SyncEngine / LocalSavesAdapter. Anything that lists,
+fetches, or rolls back to an older save version lives here. Mutations
+of the active save record outside the rollback flow (conflict
+resolution, status reporting) belong in SyncEngine or StatusService.
 """
 
 from __future__ import annotations
@@ -23,12 +25,10 @@ if TYPE_CHECKING:
 
 
 class VersionsService:
-    """Owns version history listing and the rollback flow.
+    """Save version history reads and rollback orchestration.
 
-    The rollback I/O orchestrators (``_do_download_save``, ``_do_upload_save``,
-    ``_record_own_upload``, ``_update_file_sync_state``, ``_get_rom_save_info``,
-    ``_sync_rom_saves``) currently live on :class:`SaveService`. This class
-    holds a back-reference to the owning ``SaveService`` to invoke them.
+    Coordinates the rollback flow but does not perform file or server
+    writes — those go through SyncEngine / LocalSavesAdapter.
     """
 
     def __init__(
