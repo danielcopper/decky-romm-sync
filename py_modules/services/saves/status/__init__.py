@@ -1,9 +1,8 @@
 """Read-only save-status reporting.
 
-Builds the status DTO that powers the SAVES tab UI by running the
-sync-action matrix without dispatching writes. Anything that needs
-to render or compute current save sync state for one or more ROMs
-lives here. Mutations belong in SyncEngine; storage in StateService.
+Anything that needs to render or compute current save sync state for
+one or more ROMs lives here. Mutations belong in SyncEngine; storage
+in StateService.
 """
 
 from __future__ import annotations

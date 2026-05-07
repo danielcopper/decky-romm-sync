@@ -1,9 +1,7 @@
 """Pure status DTO builders — no state, no I/O.
 
-Maps the matrix output (``SyncAction`` subclasses) plus a few
-server/local metadata fields onto the status entry shape consumed by
-the SAVES tab UI. Anything that needs persisted state, network access,
-or file I/O does not belong here.
+Anything that needs persisted state, network access, or file I/O does
+not belong here.
 """
 
 from __future__ import annotations
