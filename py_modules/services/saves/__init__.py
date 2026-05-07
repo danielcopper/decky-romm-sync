@@ -41,6 +41,7 @@ from services.protocols import (
     RomsPathProvider,
     SavesPathProvider,
 )
+from services.saves._helpers import _compute_uploaded_by_us, _local_save_target
 
 _DEVICE_NOT_REGISTERED = "Device not registered"
 _NO_MIGRATION = object()  # sentinel: no slot migration requested
@@ -53,24 +54,6 @@ if TYPE_CHECKING:
 
 
 _SYNC_DISABLED_MSG = "Save sync is disabled"
-
-
-def _compute_uploaded_by_us(
-    server_save: dict | None,
-    own_upload_ids: list[int] | None,
-) -> bool | None:
-    """Three-way uploader attribution flag.
-
-    Returns True/False when own_upload_ids is known for this ROM (we can tell
-    whether this installation POSTed the save), or None for legacy ROM state
-    without the ``own_upload_ids`` field (attribution unknown).
-    """
-    if server_save is None or own_upload_ids is None:
-        return None
-    sid = server_save.get("id")
-    if sid is None:
-        return None
-    return sid in own_upload_ids
 
 
 class SaveService:
@@ -700,21 +683,6 @@ class SaveService:
             "mtime": os.path.getmtime(local_path) if os.path.isfile(local_path) else None,
         }
 
-    @staticmethod
-    def _local_save_target(server_save: dict, rom_name: str) -> str:
-        """The canonical local filename for a server save: ``<rom_name>.<ext>``.
-
-        ``rom_name`` is the deterministic identity from RetroArch's
-        perspective — it's the ROM file's basename without extension, the
-        same string RetroArch uses to look up SRAM. Callers must have
-        already resolved the ROM via ``_get_rom_save_info`` (which only
-        returns when the ROM is actually installed); there is no fallback
-        to server-derived names because those can mismatch RetroArch's
-        actual lookup path and silently break the sync.
-        """
-        ext = server_save.get("file_extension", "srm")
-        return f"{rom_name}.{ext}"
-
     def _build_sync_conflict_entry(
         self,
         rom_id: int,
@@ -939,7 +907,7 @@ class SaveService:
         # picks newest-in-group automatically.
         server_only_groups: dict[str, list[dict]] = {}
         for ss in server_in_slot:
-            target = self._local_save_target(ss, rom_name)
+            target = _local_save_target(ss, rom_name)
             if target in handled_filenames:
                 continue
             server_only_groups.setdefault(target, []).append(ss)
@@ -1226,7 +1194,7 @@ class SaveService:
         but the slot has server saves. Picks newest by ``updated_at``."""
         newest = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
         return self._build_file_status(
-            self._local_save_target(newest, rom_name),
+            _local_save_target(newest, rom_name),
             local_path=None,
             local_hash=None,
             local_mtime=None,
@@ -1934,7 +1902,7 @@ class SaveService:
         ``run_in_executor``.
         """
         for server_save in slot_saves:
-            target = self._local_save_target(server_save, rom_name)
+            target = _local_save_target(server_save, rom_name)
             self._do_download_save(server_save, saves_dir, target, rom_id_str, system)
 
     def _delete_local_saves_for_switch(self, rom_id: int, rom_id_str: str) -> None:
@@ -2320,7 +2288,7 @@ class SaveService:
         ``_update_file_sync_state`` receives the same target name the file
         lands at.
         """
-        target = self._local_save_target(server, rom_name)
+        target = _local_save_target(server, rom_name)
         self._do_download_save(server, saves_dir, target, rom_id_str, system)
         self.save_state()
 
@@ -2481,7 +2449,7 @@ class SaveService:
         saves_dir = info["saves_dir"]
         system = info["system"]
         rom_name = info["rom_name"]
-        target_filename = self._local_save_target(target_save, rom_name)
+        target_filename = _local_save_target(target_save, rom_name)
         local_path = os.path.join(saves_dir, target_filename)
 
         self._do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
