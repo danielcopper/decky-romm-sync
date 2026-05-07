@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.17.0...decky-romm-sync-v0.17.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* **game-detail:** scroll to top on focus of action buttons ([#162](https://github.com/danielcopper/decky-romm-sync/issues/162)) ([#270](https://github.com/danielcopper/decky-romm-sync/issues/270)) ([6bd28c1](https://github.com/danielcopper/decky-romm-sync/commit/6bd28c1e4d00d980804ed2ef2b46ad8a7566402b))
+* **qam:** scroll and focus to top on QAM page navigation ([#161](https://github.com/danielcopper/decky-romm-sync/issues/161)) ([#266](https://github.com/danielcopper/decky-romm-sync/issues/266)) ([4ddd473](https://github.com/danielcopper/decky-romm-sync/commit/4ddd473f7ca4ad282e72788ffb0d5425a841ff31))
+
 ## [0.17.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.16.0...decky-romm-sync-v0.17.0) (2026-05-04)
 
 
