@@ -44,6 +44,35 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 - **import-linter**: Layer boundary enforcement in CI (services ↛ adapters, adapters ↛ services, services independent).
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
+## Sub-package layout — `__init__.py` is re-export only
+
+For sub-packages (e.g. `services/saves/status/`, `services/saves/sync_engine/`), `__init__.py` holds only:
+
+1. The package's contract-style module docstring (describing what belongs in the package)
+2. Re-exports of the public class(es) from named implementation modules
+3. Optional `__all__`
+
+Implementation lives in named modules (`engine.py`, `service.py`, `builders.py`, etc.). Don't put 500+ LOC class definitions directly in `__init__.py` — that obscures the package's public surface and breaks the "init = namespace marker + re-export" Python convention.
+
+Example:
+
+```python
+# services/saves/sync_engine/__init__.py
+"""Newest-wins matrix executor ..."""
+
+from services.saves.sync_engine.engine import SyncEngine
+
+__all__ = ["SyncEngine"]
+```
+
+```python
+# services/saves/sync_engine/engine.py
+from __future__ import annotations
+# ... imports, then the SyncEngine class
+```
+
+**Top-level package `__init__.py`** (e.g. `services/saves/__init__.py`) may contain primary code because it IS the public API of the parent package — that's where `SaveService` lives.
+
 ## Docstrings — intent over behavior
 
 **Module and class docstrings** describe **what belongs here** (the contract), not what's currently in the file/class (the behavior). Behavior listings and method enumerations rot when methods get added/changed/removed; contracts don't.
