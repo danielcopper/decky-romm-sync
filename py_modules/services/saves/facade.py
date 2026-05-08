@@ -434,26 +434,6 @@ class SaveService:
         """Delegate to :class:`SyncEngine` — see its docstring."""
         return SyncEngine._filter_server_saves_to_slot(server_saves, active_slot)
 
-    @staticmethod
-    def _build_local_input(local_path: str, filename: str) -> dict:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        return SyncEngine._build_local_input(local_path, filename)
-
-    def _build_sync_conflict_entry(
-        self,
-        rom_id: int,
-        filename: str,
-        server: dict,
-        local_path: str | None,
-        local_hash: str | None,
-    ) -> dict:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        return self._sync_engine._build_sync_conflict_entry(rom_id, filename, server, local_path, local_hash)
-
-    def _adopt_baseline_hash(self, rom_id_str: str, filename: str, local_hash: str) -> None:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        self._sync_engine._adopt_baseline_hash(rom_id_str, filename, local_hash)
-
     def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
         """Delegate to :class:`SyncEngine` — see its docstring."""
         return self._sync_engine._sync_rom_saves(rom_id)
@@ -588,9 +568,9 @@ class SaveService:
             if file_path:
                 rom_filename = os.path.basename(file_path)
 
-        # TODO: Core labels come from ES-DE config which may differ from RetroArch's
-        # corename (e.g. "Snes9x - Current" vs "Snes9x"). Align with RetroArch
-        # core names when #208 is resolved.
+        # Core labels come from ES-DE config which may differ from RetroArch's
+        # corename (e.g. "Snes9x - Current" vs "Snes9x"). Aligning with RetroArch
+        # core names is tracked in #208.
         try:
             active_core, active_label = self._get_active_core(system, rom_filename)
         except Exception:
