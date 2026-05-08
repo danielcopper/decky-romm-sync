@@ -79,6 +79,34 @@ class StatusService:
             )
         return status_entry, conflict_entry
 
+    def _partition_outcomes(
+        self,
+        rom_id: int,
+        rom_id_str: str,
+        server_in_slot: list[dict],
+        info: dict,
+    ) -> tuple[MatrixOutcome | None, list[MatrixOutcome]]:
+        """Iterate matrix outcomes for the active slot, splitting them into local/server-only buckets.
+
+        Side effect: when an outcome is ``Skip(adopt_baseline=True)`` with
+        a local hash, records that hash as the new sync baseline via the
+        sync engine.
+
+        Returns ``(first_local_outcome, server_only_outcomes)``. The local
+        bucket is the first outcome with a local file present — matching
+        the active-slot single-entry view this status flow surfaces.
+        """
+        local_outcome: MatrixOutcome | None = None
+        server_only_outcomes: list[MatrixOutcome] = []
+        for outcome in self._sync_engine.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
+            if isinstance(outcome.action, Skip) and outcome.action.adopt_baseline and outcome.local_hash:
+                self._sync_engine._adopt_baseline_hash(rom_id_str, outcome.filename, outcome.local_hash)
+            if outcome.local_path is None:
+                server_only_outcomes.append(outcome)
+            elif local_outcome is None:
+                local_outcome = outcome
+        return local_outcome, server_only_outcomes
+
     def _get_save_status_io(self, rom_id: int, server_saves: list[dict]) -> dict:
         """Sync helper for get_save_status — runs in executor.
 
@@ -119,16 +147,7 @@ class StatusService:
         conflicts: list[SaveConflict | dict] = []
 
         if info is not None:
-            local_outcome: MatrixOutcome | None = None
-            server_only_outcomes: list[MatrixOutcome] = []
-            for outcome in self._sync_engine.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
-                if isinstance(outcome.action, Skip) and outcome.action.adopt_baseline and outcome.local_hash:
-                    self._sync_engine._adopt_baseline_hash(rom_id_str, outcome.filename, outcome.local_hash)
-                if outcome.local_path is not None:
-                    if local_outcome is None:
-                        local_outcome = outcome
-                else:
-                    server_only_outcomes.append(outcome)
+            local_outcome, server_only_outcomes = self._partition_outcomes(rom_id, rom_id_str, server_in_slot, info)
 
             chosen = local_outcome
             if chosen is None and server_only_outcomes:
