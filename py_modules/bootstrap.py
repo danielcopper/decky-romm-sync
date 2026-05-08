@@ -46,7 +46,7 @@ from services.protocols import (
 )
 from services.protocols import SteamConfigAdapter as SteamConfigProtocol
 from services.rom_removal import RomRemovalService
-from services.saves import SaveService
+from services.saves import SaveService, SaveServiceConfig
 from services.shortcut_removal import ShortcutRemovalService
 from services.steamgrid import SteamGridService
 
@@ -194,15 +194,10 @@ def wire_services(cfg: WiringConfig) -> dict:
         get_core_name=cfg.get_core_name,
     )
 
-    save_sync_service = SaveService(
-        romm_api=cfg.romm_api,
-        retry=cfg.http_adapter,
-        settings=cfg.settings,
-        state=cfg.state,
-        save_sync_state=cfg.save_sync_state,
+    save_service_config = SaveServiceConfig(
+        runtime_dir=cfg.runtime_dir,
         loop=cfg.loop,
         logger=cfg.logger,
-        runtime_dir=cfg.runtime_dir,
         get_saves_path=cfg.get_saves_path,
         get_roms_path=cfg.get_roms_path,
         get_active_core=_es_de_config.get_active_core,
@@ -212,6 +207,14 @@ def wire_services(cfg: WiringConfig) -> dict:
         # SaveService must observe fresh sort state before computing saves_dir (#238).
         detect_sort_change=migration_service.detect_save_sort_change,
         is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
+    )
+    save_sync_service = SaveService(
+        romm_api=cfg.romm_api,
+        retry=cfg.http_adapter,
+        settings=cfg.settings,
+        state=cfg.state,
+        save_sync_state=cfg.save_sync_state,
+        config=save_service_config,
     )
 
     playtime_service = PlaytimeService(

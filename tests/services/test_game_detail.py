@@ -15,7 +15,7 @@ from services.firmware import FirmwareService
 from services.game_detail import GameDetailService
 from services.library import LibraryService
 from services.playtime import PlaytimeService
-from services.saves import SaveService
+from services.saves import SaveService, SaveServiceConfig
 
 
 def _no_retry(fn, *a, **kw):
@@ -80,12 +80,14 @@ def plugin(tmp_path):
         settings={"log_level": "debug"},
         state=p._state,
         save_sync_state=p._save_sync_state,
-        loop=asyncio.get_event_loop(),
-        logger=logging.getLogger("test"),
-        runtime_dir=str(tmp_path),
-        get_saves_path=lambda: saves_path,
-        get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
-        get_active_core=lambda system_name, rom_filename=None: (None, None),
+        config=SaveServiceConfig(
+            loop=asyncio.get_event_loop(),
+            logger=logging.getLogger("test"),
+            runtime_dir=str(tmp_path),
+            get_saves_path=lambda: saves_path,
+            get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
+            get_active_core=lambda system_name, rom_filename=None: (None, None),
+        ),
     )
     p._save_sync_service.init_state()
 

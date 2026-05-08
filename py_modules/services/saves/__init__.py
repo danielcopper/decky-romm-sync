@@ -7,6 +7,7 @@ RomM communication goes through ``RommApiProtocol``; no ``import decky``
 (error helpers come from ``lib.errors``).
 """
 
+from services.saves._config import SaveServiceConfig
 from services.saves.facade import SaveService
 
-__all__ = ["SaveService"]
+__all__ = ["SaveService", "SaveServiceConfig"]

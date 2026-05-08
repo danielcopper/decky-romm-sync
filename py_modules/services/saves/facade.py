@@ -7,7 +7,7 @@ import os
 import socket
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from models.saves import SaveConflict
 
@@ -17,13 +17,10 @@ from domain.save_path import resolve_save_dir
 from lib.errors import classify_error
 from lib.iso_time import parse_iso_to_epoch
 from services.protocols import (
-    CoreNameProviderFn,
-    CoreResolverFn,
     RetryStrategy,
     RommApiProtocol,
-    RomsPathProvider,
-    SavesPathProvider,
 )
+from services.saves._config import SaveServiceConfig
 from services.saves._helpers import _local_save_target
 from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
 from services.saves.slots import SlotsService
@@ -33,15 +30,14 @@ from services.saves.status import StatusService
 from services.saves.sync_engine import SyncEngine
 from services.saves.versions import VersionsService
 
-if TYPE_CHECKING:
-    import logging
-    from collections.abc import Callable
-
-    from services.protocols import EventEmitter
-
 
 class SaveService:
-    """Bidirectional save file sync between local RetroDECK and RomM server.
+    """Façade for bidirectional save file sync between RetroDECK and RomM.
+
+    Composes the save-sync sub-services (state, sync_engine, status,
+    versions, slots) and exposes the callable surface consumed by the
+    Decky entrypoints. All RomM communication routes through
+    ``RommApiProtocol``; no direct ``import decky``.
 
     Parameters
     ----------
@@ -49,50 +45,18 @@ class SaveService:
         Protocol adapter for all RomM save/notes HTTP operations.
     retry:
         Retry strategy — provides ``with_retry`` and ``is_retryable``.
+    settings:
+        Live reference to the main plugin settings dict.
     state:
         Live reference to the main plugin state dict (``installed_roms``,
         ``shortcut_registry``).
     save_sync_state:
-        Live reference to the save-sync state dict.  Caller should
+        Live reference to the save-sync state dict. Caller should
         pre-populate via :meth:`init_state` / :meth:`load_state`.
-    loop:
-        The plugin's ``asyncio`` event loop (for ``run_in_executor``).
-    logger:
-        Standard-library logger (replaces ``decky.logger``).
-    runtime_dir:
-        Absolute path to the plugin runtime directory (for
-        ``save_sync_state.json`` persistence).
-    get_saves_path:
-        Callable returning the current RetroDECK saves directory.
-    get_roms_path:
-        Callable returning the current RetroDECK roms directory.
-    get_active_core:
-        Callable resolving the active RetroArch core for a system/game.
-        Returns ``(core_so, label)`` tuple; either may be None if unresolved.
-        This is an ES-DE question (``which core runs this ROM?``).
-    get_core_name:
-        Callable returning the RetroArch canonical ``corename`` field from
-        a core's ``.info`` file for a given ``core_so`` (e.g. ``"mgba_libretro"``
-        → ``"mGBA"``). Optional. When ``sort_savefiles_enable`` is active on
-        RetroArch, this is the authoritative name used for the per-core save
-        subdirectory — it is NOT the same as the ES-DE UI label returned by
-        ``get_active_core`` (see the Config-Source-Parsers wiki page for the
-        one-parser-per-source rationale). When ``None`` or when resolution
-        fails at runtime, SaveService warns and falls back to the parent
-        directory path; see ``_resolve_retroarch_corename``.
-    detect_sort_change:
-        Optional synchronous callback that refreshes save-sort state from
-        the live RetroArch config (wired to
-        ``MigrationService.detect_save_sort_change`` in ``bootstrap``).
-        Save-sync MUST see fresh save-sort state before computing
-        ``saves_dir`` — otherwise a direct-Steam-launch with no pre-launch
-        detect trigger would silently download stale server content to the
-        wrong layout and destroy real user progress during the subsequent
-        migration (#238). ``pre_launch_sync`` and ``post_exit_sync`` invoke
-        this callback once at their entry point. ``None`` disables the
-        call (used only in unit tests where state is seeded explicitly);
-        failures are logged and swallowed so save-sync degrades
-        gracefully to the previously-known state.
+    config:
+        Construction-time wiring bundle (paths, callbacks, asyncio loop,
+        logger, plugin metadata). See :class:`SaveServiceConfig` for the
+        per-field rationale.
     """
 
     _LOG_LEVELS: ClassVar[dict[str, int]] = {"debug": 0, "info": 1, "warn": 2, "error": 3}
@@ -105,42 +69,35 @@ class SaveService:
         settings: dict,
         state: dict,
         save_sync_state: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        runtime_dir: str,
-        get_saves_path: SavesPathProvider,
-        get_roms_path: RomsPathProvider,
-        get_active_core: CoreResolverFn,
-        get_core_name: CoreNameProviderFn | None = None,
-        plugin_version: str = "0.0.0",
-        emit: EventEmitter | None = None,
-        detect_sort_change: Callable[[], None] | None = None,
-        is_retrodeck_migration_pending: Callable[[], bool] | None = None,
+        config: SaveServiceConfig,
     ) -> None:
         self._romm_api = romm_api
         self._retry = retry
         self._settings = settings
         self._state = state
+        self._config = config
         self._state_svc = StateService(
             save_sync_state=save_sync_state,
             state=state,
-            runtime_dir=runtime_dir,
-            logger=logger,
+            runtime_dir=config.runtime_dir,
+            logger=config.logger,
         )
         # Alias the dict so the dozens of self._save_sync_state[...] call
         # sites elsewhere in SaveService keep working unchanged. Both names
         # reference the same underlying dict object.
         self._save_sync_state = self._state_svc.data
-        self._loop = loop
-        self._logger = logger
-        self._get_saves_path = get_saves_path
-        self._get_roms_path = get_roms_path
-        self._get_active_core = get_active_core
-        self._get_core_name = get_core_name
-        self._plugin_version = plugin_version
-        self._emit = emit
-        self._detect_sort_change = detect_sort_change
-        self._is_retrodeck_migration_pending = is_retrodeck_migration_pending
+        # Convenience aliases — the rest of the class body (and sub-services
+        # via the ``_save_service`` back-ref) read these attributes directly.
+        self._loop = config.loop
+        self._logger = config.logger
+        self._get_saves_path = config.get_saves_path
+        self._get_roms_path = config.get_roms_path
+        self._get_active_core = config.get_active_core
+        self._get_core_name = config.get_core_name
+        self._plugin_version = config.plugin_version
+        self._emit = config.emit
+        self._detect_sort_change = config.detect_sort_change
+        self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
         # Per-rom lock dict — serializes concurrent sync operations on the
         # same rom_id (pre_launch_sync, post_exit_sync, manual sync, resolve).
         self._rom_sync_locks: dict[int, asyncio.Lock] = {}

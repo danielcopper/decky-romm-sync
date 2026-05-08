@@ -13,7 +13,7 @@ import pytest
 from fakes.fake_save_api import FakeSaveApi
 
 from lib.errors import RommApiError
-from services.saves import SaveService
+from services.saves import SaveService, SaveServiceConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -31,26 +31,49 @@ def _make_retry():
     return retry
 
 
+_CONFIG_FIELDS = frozenset(
+    {
+        "runtime_dir",
+        "loop",
+        "logger",
+        "get_saves_path",
+        "get_roms_path",
+        "get_active_core",
+        "get_core_name",
+        "plugin_version",
+        "emit",
+        "detect_sort_change",
+        "is_retrodeck_migration_pending",
+    }
+)
+
+
 def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["SaveService", "FakeSaveApi"]:
     """Create a SaveService with sensible defaults for testing."""
     fake: FakeSaveApi = fake_api or FakeSaveApi()
-    defaults: dict[str, Any] = dict(
-        romm_api=fake,
-        retry=_make_retry(),
-        settings={"log_level": "debug"},
-        state={"shortcut_registry": {}, "installed_roms": {}},
-        save_sync_state=SaveService.make_default_state(),
+    config_kwargs: dict[str, Any] = dict(
+        runtime_dir=str(tmp_path),
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
-        runtime_dir=str(tmp_path),
         get_saves_path=lambda: str(tmp_path / "saves"),
         get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
         get_active_core=lambda system_name, rom_filename=None: (None, None),
         plugin_version="0.14.0",
         emit=emit,
     )
-    defaults.update(overrides)
-    svc = SaveService(**defaults)
+    ctor_kwargs: dict[str, Any] = dict(
+        romm_api=fake,
+        retry=_make_retry(),
+        settings={"log_level": "debug"},
+        state={"shortcut_registry": {}, "installed_roms": {}},
+        save_sync_state=SaveService.make_default_state(),
+    )
+    for key, value in overrides.items():
+        if key in _CONFIG_FIELDS:
+            config_kwargs[key] = value
+        else:
+            ctor_kwargs[key] = value
+    svc = SaveService(**ctor_kwargs, config=SaveServiceConfig(**config_kwargs))
     svc.init_state()
     return svc, fake
 
