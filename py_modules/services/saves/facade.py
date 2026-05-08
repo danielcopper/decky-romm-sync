@@ -313,8 +313,17 @@ class SaveService:
 
     @staticmethod
     def _file_md5(path: str) -> str:
-        """Compute MD5 hash of a file."""
-        h = hashlib.md5()
+        """Compute MD5 hash of a file for sync drift detection.
+
+        ``usedforsecurity=False`` documents (and silences Sonar S4790) that
+        this hash is for content-comparison only — drift detection between
+        local file and the recorded ``last_sync_hash`` baseline. Not used
+        for passwords, signing, certificates, or any security-critical
+        purpose. A hash collision here would mean two different save files
+        treated as identical → "sync misses an update", not a security
+        breach.
+        """
+        h = hashlib.md5(usedforsecurity=False)
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
                 h.update(chunk)

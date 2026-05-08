@@ -9,5 +9,6 @@ RomM communication goes through ``RommApiProtocol``; no ``import decky``
 
 from services.saves._config import SaveServiceConfig
 from services.saves.facade import SaveService
+from services.saves.slots.service import _NO_MIGRATION
 
-__all__ = ["SaveService", "SaveServiceConfig"]
+__all__ = ["SaveService", "SaveServiceConfig", "_NO_MIGRATION"]  # noqa: RUF022 — keep public exports first, then sentinels
