@@ -1099,27 +1099,40 @@ class SaveService:
         self.save_state()
         return {"success": True, "settings": current}
 
+    def _delete_saves_for_roms(self, rom_ids: list[int]) -> tuple[int, list[str]]:
+        """Delete local save files for the given ROM IDs and clean their sync state.
+
+        For each ROM ID, enumerates files via ``_find_save_files``, removes them
+        on disk (counting successes and collecting per-file error strings), and
+        pops the ROM's entry from ``_save_sync_state['saves']``. Persists state
+        once at the end via ``save_state()``.
+
+        Returns a ``(total_deleted, errors)`` tuple.
+        """
+        total_deleted = 0
+        errors: list[str] = []
+        for rom_id in rom_ids:
+            rom_id_str = str(rom_id)
+            files = self._find_save_files(rom_id)
+            for f in files:
+                try:
+                    os.remove(f["path"])
+                    total_deleted += 1
+                except Exception as e:
+                    errors.append(f"{f['filename']}: {e}")
+            self._save_sync_state.get("saves", {}).pop(rom_id_str, None)
+
+        self.save_state()
+        return total_deleted, errors
+
     def delete_local_saves(self, rom_id: int) -> dict:
         """Delete local save files (.srm, .rtc) for a ROM."""
         rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
 
-        files = self._find_save_files(rom_id)
-        if not files:
+        deleted, errors = self._delete_saves_for_roms([rom_id])
+
+        if deleted == 0 and not errors:
             return {"success": True, "deleted_count": 0, "message": "No local save files found"}
-
-        deleted = 0
-        errors = []
-        for f in files:
-            try:
-                os.remove(f["path"])
-                deleted += 1
-            except Exception as e:
-                errors.append(f"{f['filename']}: {e}")
-
-        # Clean up sync state for this ROM
-        self._save_sync_state.get("saves", {}).pop(rom_id_str, None)
-        self.save_state()
 
         if errors:
             return {
@@ -1135,26 +1148,14 @@ class SaveService:
 
     def delete_platform_saves(self, platform_slug: str) -> dict:
         """Delete local save files for all installed ROMs on a platform."""
-        total_deleted = 0
-        total_errors: list[str] = []
-        rom_count = 0
-
+        rom_ids: list[int] = []
         for rom_id_str, entry in self._state["installed_roms"].items():
             if entry.get("platform_slug") != platform_slug:
                 continue
-            rom_count += 1
-            rom_id = int(rom_id_str)
-            files = self._find_save_files(rom_id)
-            for f in files:
-                try:
-                    os.remove(f["path"])
-                    total_deleted += 1
-                except Exception as e:
-                    total_errors.append(f"{f['filename']}: {e}")
-            # Clean up sync state
-            self._save_sync_state.get("saves", {}).pop(rom_id_str, None)
+            rom_ids.append(int(rom_id_str))
 
-        self.save_state()
+        rom_count = len(rom_ids)
+        total_deleted, total_errors = self._delete_saves_for_roms(rom_ids)
 
         if total_errors:
             return {
