@@ -1,33 +1,36 @@
-"""Single source of truth for save_sync_state.json.
+"""In-memory save-sync state and on-disk migration logic.
 
-Anything that loads, persists, migrates, or owns the on-disk save-sync
-state lives here. Other modules read state via the ``data`` property and
-trigger persistence via ``save_state()`` — they never open the file
-directly.
+Anything that mutates ``save_sync_state`` in memory or migrates a
+freshly-loaded payload lives here. Raw I/O for ``save_sync_state.json``
+(atomic writes, locking, missing-file handling) belongs to the
+``SaveSyncStatePersister`` injected into ``StateService``; this service
+never opens the file directly.
 """
 
 from __future__ import annotations
 
-import fcntl
-import json
-import logging
-import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import logging
+
+    from services.protocols import SaveSyncStatePersister
 
 
 class StateService:
-    """Owns ``save_sync_state.json`` — single source of truth for on-disk save-sync state."""
+    """Owns the in-memory save-sync state dict and its on-load migrations."""
 
     def __init__(
         self,
         *,
         save_sync_state: dict,
         state: dict,
-        runtime_dir: str,
+        persister: SaveSyncStatePersister,
         logger: logging.Logger,
     ) -> None:
         self._save_sync_state = save_sync_state
         self._state = state
-        self._runtime_dir = runtime_dir
+        self._persister = persister
         self._logger = logger
 
     @property
@@ -115,36 +118,22 @@ class StateService:
 
     def load_state(self) -> None:
         """Load save sync state from disk, merging with defaults."""
-        path = os.path.join(self._runtime_dir, "save_sync_state.json")
-        try:
-            with open(path) as f:
-                saved = json.load(f)
-            for key in ("saves", "playtime"):
-                if key in saved:
-                    self._save_sync_state[key] = saved[key]
-            for key in ("version", "device_id", "device_name", "server_device_id"):
-                if key in saved:
-                    self._save_sync_state[key] = saved[key]
-            if "settings" in saved:
-                self._save_sync_state["settings"].update(saved["settings"])
-        except (FileNotFoundError, json.JSONDecodeError):
+        saved = self._persister.load()
+        if saved is None:
             return
+        for key in ("saves", "playtime"):
+            if key in saved:
+                self._save_sync_state[key] = saved[key]
+        for key in ("version", "device_id", "device_name", "server_device_id"):
+            if key in saved:
+                self._save_sync_state[key] = saved[key]
+        if "settings" in saved:
+            self._save_sync_state["settings"].update(saved["settings"])
         self._migrate_loaded_state()
 
     def save_state(self) -> None:
-        """Persist save sync state to disk (atomic write)."""
-        os.makedirs(self._runtime_dir, exist_ok=True)
-        path = os.path.join(self._runtime_dir, "save_sync_state.json")
-        tmp = path + ".tmp"
-        lock_fd = os.open(path + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
-                json.dump(self._save_sync_state, f, indent=2)
-            os.replace(tmp, path)
-        finally:
-            os.close(lock_fd)
+        """Persist save sync state to disk via the injected persister."""
+        self._persister.save(self._save_sync_state)
 
     def clear_files_state(self, rom_id_str: str) -> None:
         """Clear the per-file tracking dict for a ROM, preserving slot config.

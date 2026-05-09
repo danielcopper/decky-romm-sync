@@ -297,6 +297,21 @@ class SettingsPersister(Protocol):
     def __call__(self) -> None: ...
 
 
+class SaveSyncStatePersister(Protocol):
+    """Read/write the on-disk save-sync state file.
+
+    Implementations are responsible for atomic writes, locking, and
+    handling missing/corrupt files. They perform dumb I/O only —
+    schema migrations on loaded data live in ``StateService``, so
+    ``load`` returns the raw dict (or ``None`` when the file does not
+    yet exist) without versioning the payload.
+    """
+
+    def save(self, data: dict) -> None: ...
+
+    def load(self) -> dict | None: ...
+
+
 class EventEmitter(Protocol):
     """Emit named events with a data payload to the frontend."""
 

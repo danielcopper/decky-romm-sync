@@ -199,3 +199,54 @@ class PersistenceAdapter:
         data["version"] = _FIRMWARE_CACHE_VERSION
         cache_path = os.path.join(self._runtime_dir, "firmware_cache.json")
         self._locked_write(cache_path, data)
+
+    # ------------------------------------------------------------------
+    # Save-sync state
+    # ------------------------------------------------------------------
+
+    def save_save_sync_state(self, data: dict) -> None:
+        """Atomic write of *data* to ``save_sync_state.json`` with flock.
+
+        Does not stamp a version — ``save_sync_state.json`` carries its
+        own ``version`` key managed by the service-side migration layer
+        (``StateService._migrate_loaded_state``). Adapters do dumb I/O.
+        """
+        state_path = os.path.join(self._runtime_dir, "save_sync_state.json")
+        self._locked_write(state_path, data)
+
+    def load_save_sync_state(self) -> dict | None:
+        """Read ``save_sync_state.json`` and return the raw dict.
+
+        Returns ``None`` when the file is missing, corrupt, or not a
+        JSON object — callers (``StateService.load_state``) treat that
+        as "first run, keep defaults". Migrations on the returned payload
+        live in the service layer.
+        """
+        state_path = os.path.join(self._runtime_dir, "save_sync_state.json")
+        try:
+            with open(state_path) as f:
+                loaded = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        return loaded
+
+
+class SaveSyncStatePersisterAdapter:
+    """Adapter view exposing the ``SaveSyncStatePersister`` Protocol.
+
+    Wraps a :class:`PersistenceAdapter` and forwards ``save`` / ``load``
+    to its ``save_save_sync_state`` / ``load_save_sync_state`` methods.
+    Lives in the adapters layer so services depend only on the Protocol,
+    never on this class.
+    """
+
+    def __init__(self, persistence: PersistenceAdapter) -> None:
+        self._persistence = persistence
+
+    def save(self, data: dict) -> None:
+        self._persistence.save_save_sync_state(data)
+
+    def load(self) -> dict | None:
+        return self._persistence.load_save_sync_state()

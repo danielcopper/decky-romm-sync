@@ -156,6 +156,7 @@ class TestWireServices:
             "save_metadata_cache": MagicMock(),
             "save_firmware_cache": MagicMock(),
             "load_firmware_cache": MagicMock(return_value={}),
+            "save_sync_state_persister": MagicMock(load=MagicMock(return_value=None), save=MagicMock()),
             "log_debug": MagicMock(),
         }
 

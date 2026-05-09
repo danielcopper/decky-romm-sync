@@ -12,8 +12,21 @@ from unittest.mock import MagicMock
 import pytest
 from fakes.fake_save_api import FakeSaveApi
 
+from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from lib.errors import RommApiError
 from services.saves import SaveService, SaveServiceConfig
+
+
+def _make_save_sync_state_persister(tmp_path) -> SaveSyncStatePersisterAdapter:
+    """Adapter rooted at tmp_path so disk-touching tests stay end-to-end."""
+    return SaveSyncStatePersisterAdapter(
+        PersistenceAdapter(
+            settings_dir=str(tmp_path),
+            runtime_dir=str(tmp_path),
+            logger=logging.getLogger("test"),
+        )
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,6 +47,7 @@ def _make_retry():
 _CONFIG_FIELDS = frozenset(
     {
         "runtime_dir",
+        "save_sync_state_persister",
         "loop",
         "logger",
         "get_saves_path",
@@ -53,6 +67,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
     fake: FakeSaveApi = fake_api or FakeSaveApi()
     config_kwargs: dict[str, Any] = dict(
         runtime_dir=str(tmp_path),
+        save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         get_saves_path=lambda: str(tmp_path / "saves"),

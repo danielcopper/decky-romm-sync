@@ -41,6 +41,7 @@ from services.protocols import (
     RommApiProtocol,
     RomsPathProvider,
     SavesPathProvider,
+    SaveSyncStatePersister,
     SettingsPersister,
     StatePersister,
 )
@@ -87,6 +88,7 @@ class WiringConfig:
     save_metadata_cache: StatePersister
     save_firmware_cache: Callable[[dict], None]
     load_firmware_cache: Callable[[], dict]
+    save_sync_state_persister: SaveSyncStatePersister
     log_debug: DebugLogger
 
 
@@ -196,6 +198,7 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     save_service_config = SaveServiceConfig(
         runtime_dir=cfg.runtime_dir,
+        save_sync_state_persister=cfg.save_sync_state_persister,
         loop=cfg.loop,
         logger=cfg.logger,
         get_saves_path=cfg.get_saves_path,

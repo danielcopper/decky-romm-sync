@@ -14,6 +14,7 @@ from adapters.persistence import (
     _STATE_VERSION,
     DEFAULT_SETTINGS,
     PersistenceAdapter,
+    SaveSyncStatePersisterAdapter,
 )
 
 
@@ -317,3 +318,76 @@ class TestLoadingEdgeCases:
         settings_path = os.path.join(adapter._settings_dir, "settings.json")
         mode = os.stat(settings_path).st_mode & 0o777
         assert mode == 0o600
+
+
+# ── Save-sync state ────────────────────────────────────────────────────────────
+
+
+class TestSaveSyncState:
+    def test_save_creates_lock_file(self, adapter):
+        adapter.save_save_sync_state({"version": 1, "saves": {}})
+        lock_path = os.path.join(adapter._runtime_dir, "save_sync_state.json.lock")
+        assert os.path.exists(lock_path)
+
+    def test_save_round_trip(self, adapter):
+        payload = {
+            "version": 1,
+            "device_id": "dev-1",
+            "saves": {"42": {"files": {"game.srm": {"tracked_save_id": 7}}}},
+        }
+        adapter.save_save_sync_state(payload)
+        loaded = adapter.load_save_sync_state()
+        assert loaded == payload
+
+    def test_save_does_not_stamp_version_when_caller_omits_it(self, adapter):
+        """Adapter is dumb I/O — it must not inject a version when the caller
+        didn't supply one. Migrations and version stamping live in StateService."""
+        adapter.save_save_sync_state({"saves": {}, "playtime": {}})
+        loaded = adapter.load_save_sync_state()
+        assert loaded == {"saves": {}, "playtime": {}}
+        assert "version" not in loaded
+
+    def test_load_missing_file_returns_none(self, adapter):
+        result = adapter.load_save_sync_state()
+        assert result is None
+
+    def test_load_corrupt_json_returns_none(self, adapter):
+        path = os.path.join(adapter._runtime_dir, "save_sync_state.json")
+        with open(path, "w") as f:
+            f.write("CORRUPT{{{")
+        result = adapter.load_save_sync_state()
+        assert result is None
+
+    def test_load_non_dict_json_returns_none(self, adapter):
+        path = os.path.join(adapter._runtime_dir, "save_sync_state.json")
+        with open(path, "w") as f:
+            json.dump([1, 2, 3], f)
+        result = adapter.load_save_sync_state()
+        assert result is None
+
+    def test_save_atomic_write_no_tmp_file_after_success(self, adapter):
+        adapter.save_save_sync_state({"version": 1})
+        tmp_path = os.path.join(adapter._runtime_dir, "save_sync_state.json.tmp")
+        assert not os.path.exists(tmp_path)
+
+
+class TestSaveSyncStatePersisterAdapter:
+    def test_save_delegates_to_persistence_adapter(self, adapter):
+        wrapper = SaveSyncStatePersisterAdapter(adapter)
+        wrapper.save({"version": 1, "device_id": "dev-1"})
+
+        path = os.path.join(adapter._runtime_dir, "save_sync_state.json")
+        with open(path) as f:
+            on_disk = json.load(f)
+        assert on_disk == {"version": 1, "device_id": "dev-1"}
+
+    def test_load_delegates_to_persistence_adapter(self, adapter):
+        wrapper = SaveSyncStatePersisterAdapter(adapter)
+        wrapper.save({"version": 1, "saves": {"42": {"files": {}}}})
+
+        loaded = wrapper.load()
+        assert loaded == {"version": 1, "saves": {"42": {"files": {}}}}
+
+    def test_load_returns_none_when_missing(self, adapter):
+        wrapper = SaveSyncStatePersisterAdapter(adapter)
+        assert wrapper.load() is None

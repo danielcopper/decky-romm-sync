@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         EventEmitter,
         RomsPathProvider,
         SavesPathProvider,
+        SaveSyncStatePersister,
     )
 
 
@@ -36,8 +37,13 @@ class SaveServiceConfig:
     Parameters
     ----------
     runtime_dir:
-        Absolute path to the plugin runtime directory (for
-        ``save_sync_state.json`` persistence).
+        Absolute path to the plugin runtime directory. Consumed by
+        SaveService for ad-hoc runtime files; ``save_sync_state.json``
+        persistence routes through ``save_sync_state_persister``.
+    save_sync_state_persister:
+        Protocol-typed I/O wrapper for ``save_sync_state.json``. The
+        ``StateService`` uses ``.save(data)`` / ``.load() -> dict | None``
+        — file path, locking, and atomic-write are adapter-internal.
     loop:
         The plugin's ``asyncio`` event loop (for ``run_in_executor``).
     logger:
@@ -89,6 +95,7 @@ class SaveServiceConfig:
     """
 
     runtime_dir: str
+    save_sync_state_persister: SaveSyncStatePersister
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     get_saves_path: SavesPathProvider

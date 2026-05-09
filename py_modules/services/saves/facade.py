@@ -79,7 +79,7 @@ class SaveService:
         self._state_svc = StateService(
             save_sync_state=save_sync_state,
             state=state,
-            runtime_dir=config.runtime_dir,
+            persister=config.save_sync_state_persister,
             logger=config.logger,
         )
         # Alias the dict so the dozens of self._save_sync_state[...] call

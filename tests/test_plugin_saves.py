@@ -10,6 +10,7 @@ import pytest
 from conftest import _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
 
+from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.library import LibraryService
@@ -85,6 +86,13 @@ def plugin(tmp_path):
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             runtime_dir=str(tmp_path),
+            save_sync_state_persister=SaveSyncStatePersisterAdapter(
+                PersistenceAdapter(
+                    settings_dir=str(tmp_path),
+                    runtime_dir=str(tmp_path),
+                    logger=logging.getLogger("test"),
+                )
+            ),
             get_saves_path=lambda: saves_path,
             get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
             get_active_core=lambda system_name, rom_filename=None: (None, None),
