@@ -1,4 +1,4 @@
-"""Pure helpers for the saves package — no state, no I/O."""
+"""Cross-cutting helpers for the saves package — utilities shared across sub-services."""
 
 from __future__ import annotations
 

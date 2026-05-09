@@ -5395,15 +5395,18 @@ class TestPathTraversalDefense:
     2. Frontend-supplied ``filename`` arriving at ``resolve_sync_conflict``.
     """
 
-    def test_local_save_target_strips_traversal_in_extension(self):
+    def test_local_save_target_strips_traversal_in_extension(self, caplog):
         """A malicious ``file_extension`` cannot produce a path-escape filename."""
         from services.saves._helpers import _local_save_target
 
-        target = _local_save_target({"file_extension": "../etc/passwd"}, "pokemon")
+        with caplog.at_level(logging.WARNING):
+            target = _local_save_target({"file_extension": "../etc/passwd"}, "pokemon")
         # Sanitization reduces to a simple basename — no separators, no parent refs.
         assert "/" not in target
         assert ".." not in target.split(".")
         assert os.path.basename(target) == target
+        # The strip-and-warn path must log a warning identifying the sanitized field.
+        assert any("Sanitized" in rec.message and "file_extension" in rec.message for rec in caplog.records)
 
     def test_local_save_target_happy_path_unchanged(self):
         """Clean ``file_extension`` produces ``<rom_name>.<ext>`` unchanged."""
@@ -5422,6 +5425,9 @@ class TestPathTraversalDefense:
         # Either the sanitized basename or the safe default — never traversal.
         assert "/" not in target
         assert target.endswith(".srm") or target == "pokemon.srm"
+        # The fallback path is the only signal of a glitched server extension —
+        # assert it actually fires so a future refactor can't drop it silently.
+        assert any("invalid" in rec.message.lower() and "file_extension" in rec.message for rec in caplog.records)
 
     @pytest.mark.asyncio
     async def test_resolve_sync_conflict_rejects_traversal_filename(self, tmp_path, caplog):
@@ -5444,6 +5450,7 @@ class TestPathTraversalDefense:
         assert result["success"] is False
         assert "invalid" in result["message"].lower()
         # No I/O against the server (no list_saves, no upload_save).
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
         assert not any(c[0] == "upload_save" for c in fake.call_log)
         # Nothing written outside saves_dir.
         assert not outside.exists()
