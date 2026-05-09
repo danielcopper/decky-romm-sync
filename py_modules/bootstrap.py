@@ -13,6 +13,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -21,6 +22,8 @@ from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApi
 from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
+from adapters.system_clock import SystemClock
+from adapters.system_uuid_gen import SystemUuidGen
 from domain import es_de_config as _es_de_config
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService
@@ -33,6 +36,7 @@ from services.migration import MigrationService
 from services.playtime import PlaytimeService
 from services.protocols import (
     BiosPathProvider,
+    Clock,
     CoreNameProviderFn,
     DebugLogger,
     EventEmitter,
@@ -43,7 +47,9 @@ from services.protocols import (
     SavesPathProvider,
     SaveSyncStatePersister,
     SettingsPersister,
+    Sleeper,
     StatePersister,
+    UuidGen,
 )
 from services.protocols import SteamConfigAdapter as SteamConfigProtocol
 from services.rom_removal import RomRemovalService
@@ -75,6 +81,9 @@ class WiringConfig:
     plugin_dir: str
     runtime_dir: str
     emit: EventEmitter
+    clock: Clock
+    uuid_gen: UuidGen
+    sleeper: Sleeper
 
     # Callbacks
     get_saves_path: SavesPathProvider
@@ -136,6 +145,9 @@ def bootstrap(
     romm_api = RommApi(http_adapter)
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
     sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
+    clock = SystemClock()
+    uuid_gen = SystemUuidGen()
+    sleeper = AsyncioSleeper()
 
     return {
         "persistence": persistence,
@@ -146,6 +158,9 @@ def bootstrap(
         "retrodeck_paths": retrodeck_paths,
         "retroarch_config": retroarch_config,
         "retroarch_core_info": retroarch_core_info,
+        "clock": clock,
+        "uuid_gen": uuid_gen,
+        "sleeper": sleeper,
     }
 
 
@@ -235,6 +250,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         metadata_cache=cfg.metadata_cache,
         loop=cfg.loop,
         logger=cfg.logger,
+        clock=cfg.clock,
         save_metadata_cache=cfg.save_metadata_cache,
         log_debug=cfg.log_debug,
     )
@@ -350,6 +366,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         metadata_cache=cfg.metadata_cache,
         save_sync_state=cfg.save_sync_state,
         logger=cfg.logger,
+        clock=cfg.clock,
         bios_checker=firmware_service,
         achievements=achievements_service,
     )

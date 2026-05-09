@@ -7,7 +7,6 @@ the list API and served from cache on demand (no detail API calls).
 
 from __future__ import annotations
 
-import time
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
@@ -19,7 +18,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import DebugLogger, RommApiProtocol, StatePersister
+    from services.protocols import Clock, DebugLogger, RommApiProtocol, StatePersister
 
 
 class MetadataService:
@@ -33,6 +32,7 @@ class MetadataService:
         metadata_cache: dict,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
+        clock: Clock,
         save_metadata_cache: StatePersister,
         log_debug: DebugLogger,
     ) -> None:
@@ -41,6 +41,7 @@ class MetadataService:
         self._metadata_cache = metadata_cache
         self._loop = loop
         self._logger = logger
+        self._clock = clock
         self._save_metadata_cache = save_metadata_cache
         self._log_debug = log_debug
 
@@ -68,7 +69,7 @@ class MetadataService:
                 average_rating=average_rating,
                 game_modes=tuple(game_modes_list),
                 player_count=metadatum.get("player_count", "") or "",
-                cached_at=time.time(),
+                cached_at=self._clock.time(),
                 steam_categories=tuple(steam_cats),
             )
         )

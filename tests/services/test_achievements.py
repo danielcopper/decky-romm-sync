@@ -1,8 +1,10 @@
 import asyncio
 import time
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakes.system_time import FakeClock
 
 from adapters.steam_config import SteamConfigAdapter
 
@@ -68,6 +70,7 @@ def plugin():
         metadata_cache=p._metadata_cache,
         save_sync_state=p._save_sync_state,
         logger=decky.logger,
+        clock=FakeClock(now=datetime.now(UTC)),
         bios_checker=bios_checker,
         achievements=p._achievements_service,
     )

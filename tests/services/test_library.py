@@ -3,6 +3,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fakes.system_time import FakeClock
 
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -35,6 +36,7 @@ def plugin():
         metadata_cache=p._metadata_cache,
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
+        clock=FakeClock(),
         save_metadata_cache=p._save_metadata_cache,
         log_debug=p._log_debug,
     )

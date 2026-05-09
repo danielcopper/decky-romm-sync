@@ -8,7 +8,6 @@ independent of other service modules.
 
 from __future__ import annotations
 
-import time
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
@@ -20,7 +19,7 @@ from domain.save_status import compute_save_sync_display
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import AchievementsReader, BiosChecker
+    from services.protocols import AchievementsReader, BiosChecker, Clock
 
 METADATA_TTL_SEC = 7 * 24 * 3600  # 7 days
 BIOS_TTL_SEC = 3600  # 1 hour
@@ -37,6 +36,7 @@ class GameDetailService:
         metadata_cache: dict,
         save_sync_state: dict,
         logger: logging.Logger,
+        clock: Clock,
         bios_checker: BiosChecker,
         achievements: AchievementsReader,
     ) -> None:
@@ -44,6 +44,7 @@ class GameDetailService:
         self._metadata_cache = metadata_cache
         self._save_sync_state = save_sync_state
         self._logger = logger
+        self._clock = clock
         self._bios_checker = bios_checker
         self._achievements = achievements
 
@@ -106,6 +107,7 @@ class GameDetailService:
     @staticmethod
     def _compute_stale_fields(
         *,
+        now: float,
         metadata: dict | None,
         bios_status: dict | None,
         platform_slug: str,
@@ -113,7 +115,6 @@ class GameDetailService:
         achievement_summary: dict | None,
     ) -> list[str]:
         """Return list of cache keys that are stale and need background refresh."""
-        now = time.time()
         stale: list[str] = []
 
         meta_cached_at = metadata.get("cached_at", 0) if metadata else 0
@@ -186,6 +187,7 @@ class GameDetailService:
         achievement_summary = self._build_achievement_summary(rom_id_str, ra_id)
 
         stale_fields = self._compute_stale_fields(
+            now=self._clock.time(),
             metadata=metadata,
             bios_status=bios_status,
             platform_slug=platform_slug,

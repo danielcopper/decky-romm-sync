@@ -5,6 +5,7 @@ root_packages =
     lib
     domain
     models
+include_external_packages = True
 
 # Services must not import concrete adapters (protocols are OK).
 [importlinter:contract:no-adapter-impl-in-services]
@@ -65,6 +66,28 @@ forbidden_modules =
     adapters
     domain
     lib
+
+# Services must not import stdlib I/O or concurrency primitives directly.
+# Real I/O belongs behind adapters; sleep, sync, and HTTP must come from
+# Protocols (Sleeper, retry strategies, RommApiProtocol). This contract is a
+# pure guardrail — none of the listed modules are imported by services
+# today, and adding one is a Cosmic Python regression that should be
+# caught at PR time.
+#
+# ``urllib.request`` is intentionally omitted: import-linter rejects
+# subpackage names for forbidden external modules, and banning the
+# whole ``urllib`` parent would also lock out ``urllib.parse`` /
+# ``urllib.error`` which services legitimately need.
+[importlinter:contract:no-stdlib-io-in-services]
+name = Services must not import stdlib I/O or concurrency primitives
+type = forbidden
+source_modules =
+    services
+forbidden_modules =
+    random
+    subprocess
+    threading
+    requests
 
 # Services must be independent of each other
 [importlinter:contract:service-independence]

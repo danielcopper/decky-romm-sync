@@ -5,6 +5,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 from bootstrap import WiringConfig, bootstrap, wire_services
+from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
@@ -145,6 +146,9 @@ class TestWireServices:
             "plugin_dir": str(tmp_path / "plugin"),
             "runtime_dir": str(tmp_path / "runtime"),
             "emit": AsyncMock(),
+            "clock": FakeClock(),
+            "uuid_gen": FakeUuidGen(),
+            "sleeper": FakeSleeper(),
             "get_saves_path": MagicMock(return_value=str(tmp_path / "saves")),
             "get_roms_path": MagicMock(return_value=str(tmp_path / "retrodeck" / "roms")),
             "get_bios_path": MagicMock(return_value=str(tmp_path / "retrodeck" / "bios")),

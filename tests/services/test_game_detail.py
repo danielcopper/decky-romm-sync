@@ -8,6 +8,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
+from fakes.system_time import FakeClock
 
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -134,12 +135,21 @@ def plugin(tmp_path):
 
 @pytest.fixture
 def game_detail_service(plugin):
-    """Create a GameDetailService wired to the plugin's state."""
+    """Create a GameDetailService wired to the plugin's state.
+
+    The injected ``FakeClock`` is pinned to real wall-clock ``datetime.now(UTC)``
+    so tests that stamp ``cached_at`` with ``time.time()`` continue to compute
+    realistic stale/fresh deltas without each test having to thread a clock
+    through.
+    """
+    from datetime import UTC, datetime
+
     return GameDetailService(
         state=plugin._state,
         metadata_cache=plugin._metadata_cache,
         save_sync_state=plugin._save_sync_state,
         logger=logging.getLogger("test"),
+        clock=FakeClock(now=datetime.now(UTC)),
         bios_checker=plugin._firmware_service,
         achievements=plugin._achievements_service,
     )

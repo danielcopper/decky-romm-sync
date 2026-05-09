@@ -1091,6 +1091,9 @@ class TestMainStartupOrdering:
             "retrodeck_paths": MagicMock(),
             "retroarch_config": MagicMock(),
             "retroarch_core_info": MagicMock(),
+            "clock": MagicMock(),
+            "uuid_gen": MagicMock(),
+            "sleeper": MagicMock(),
         }
 
         with (
