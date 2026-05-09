@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo, FC } from "react";
+import { useState, useEffect, useMemo, FC, createElement } from "react";
 import {
   PanelSection,
   PanelSectionRow,
   ButtonItem,
+  ConfirmModal,
   Field,
   TextField,
   ToggleField,
@@ -210,15 +211,27 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
     }
   };
 
-  const handleDeleteSaves = async (p: RegistryPlatform) => {
-    setActionStatus(`Deleting ${p.name} saves...`);
-    try {
-      const result = await deletePlatformSaves(p.slug);
-      setActionStatus(result.message);
-      window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
-    } catch {
-      setActionStatus("Failed to delete saves");
-    }
+  const handleDeleteSaves = (p: RegistryPlatform) => {
+    const platformName = p.name || p.slug;
+    showModal(
+      createElement(ConfirmModal, {
+        strTitle: `Delete all save files for ${platformName}?`,
+        strDescription:
+          "This will delete every local save file for ROMs on this platform. Any local changes that haven't been uploaded to RomM yet will be lost permanently. Make sure saves are synced first.",
+        strOKButtonText: "Delete Save Files",
+        strCancelButtonText: "Cancel",
+        onOK: async () => {
+          setActionStatus(`Deleting ${p.name} saves...`);
+          try {
+            const result = await deletePlatformSaves(p.slug);
+            setActionStatus(result.message);
+            window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
+          } catch {
+            setActionStatus("Failed to delete saves");
+          }
+        },
+      } as any),
+    );
   };
 
   const handleDeleteBios = async (p: RegistryPlatform) => {
