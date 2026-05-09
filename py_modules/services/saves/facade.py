@@ -13,7 +13,7 @@ from models.saves import SaveConflict
 
 from domain.emulator_tag import detect_core_change
 from domain.save_extensions import get_save_extensions
-from domain.save_path import resolve_save_dir
+from domain.save_path import resolve_save_dir, sanitize_save_filename
 from lib.errors import classify_error
 from lib.iso_time import parse_iso_to_epoch
 from services.protocols import (
@@ -849,6 +849,27 @@ class SaveService:
 
         if action not in ("keep_local", "use_server"):
             return {"success": False, "message": f"Invalid action: {action}"}
+
+        # Frontend-supplied filename flows into ``os.path.join(saves_dir, …)``
+        # via ``_resolve_conflict_keep_local``. Reject anything that isn't
+        # already a clean basename — legitimate callers always pass one.
+        try:
+            sanitized = sanitize_save_filename(filename)
+        except ValueError as e:
+            self._logger.warning(
+                "resolve_sync_conflict(rom_id=%d, action=%s) rejected invalid filename: %s",
+                rom_id,
+                action,
+                e,
+            )
+            return {"success": False, "message": "Invalid filename"}
+        if sanitized != filename:
+            self._logger.warning(
+                "resolve_sync_conflict(rom_id=%d, action=%s) rejected non-basename filename",
+                rom_id,
+                action,
+            )
+            return {"success": False, "message": "Invalid filename"}
 
         async with self._rom_lock(rom_id):
             info = self._get_rom_save_info(rom_id)

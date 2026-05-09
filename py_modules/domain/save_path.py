@@ -86,6 +86,32 @@ def resolve_save_filename(rom_path: str, ext: str = ".srm") -> str:
     return name + ext
 
 
+def sanitize_save_filename(name: str) -> str:
+    """Reduce *name* to a safe filename component for joining onto ``saves_dir``.
+
+    Defends path joins against compromised-server data (e.g. a malicious
+    ``file_extension``) and frontend-supplied filenames (e.g. the
+    ``resolve_sync_conflict`` callable parameter). Pure: no I/O, stdlib only.
+
+    Returns the basename of *name* unchanged when it is already a single
+    safe component. Raises :class:`ValueError` for inputs that cannot be
+    coerced into a usable filename:
+
+    - empty string
+    - ``"."`` or ``".."``
+    - any string containing a NUL byte
+    - inputs whose basename is empty (e.g. trailing path separator)
+    """
+    if "\x00" in name:
+        raise ValueError("filename contains a NUL byte")
+    if name in ("", ".", ".."):
+        raise ValueError(f"filename is not a valid path component: {name!r}")
+    base = os.path.basename(name)
+    if base in ("", ".", ".."):
+        raise ValueError(f"filename has no valid basename: {name!r}")
+    return base
+
+
 def detect_path_change(stored_path: str | None, resolved_path: str) -> bool:
     """Detect if the save path has changed since last sync.
 

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
+from domain.save_path import sanitize_save_filename
+
+_logger = logging.getLogger(__name__)
+
 
 def _compute_uploaded_by_us(
     server_save: dict | None,
@@ -33,4 +39,24 @@ def _local_save_target(server_save: dict, rom_name: str) -> str:
     actual lookup path and silently break the sync.
     """
     ext = server_save.get("file_extension", "srm")
-    return f"{rom_name}.{ext}"
+    target = f"{rom_name}.{ext}"
+    try:
+        sanitized = sanitize_save_filename(target)
+    except ValueError:
+        # Server returned an extension that produces an unusable filename
+        # (NUL byte, ``"."``, ``".."``, …). Fall back to the safe default
+        # so the sync attempt doesn't crash the whole ROM loop.
+        _logger.warning(
+            "Sanitized server-supplied save target — invalid file_extension=%r; falling back to 'srm'",
+            ext,
+        )
+        return f"{rom_name}.srm"
+    if sanitized != target:
+        # Path-traversal characters were stripped (e.g. ``../etc/passwd``).
+        _logger.warning(
+            "Sanitized server-supplied save target from %r to %r (file_extension=%r)",
+            target,
+            sanitized,
+            ext,
+        )
+    return sanitized

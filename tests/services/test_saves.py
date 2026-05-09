@@ -5384,6 +5384,91 @@ class TestResolveSyncConflict:
 
 
 # ---------------------------------------------------------------------------
+# Path-traversal defense (#224)
+# ---------------------------------------------------------------------------
+
+
+class TestPathTraversalDefense:
+    """Defense in depth against malicious filenames at the two choke points.
+
+    1. Server-supplied ``file_extension`` flowing through ``_local_save_target``.
+    2. Frontend-supplied ``filename`` arriving at ``resolve_sync_conflict``.
+    """
+
+    def test_local_save_target_strips_traversal_in_extension(self):
+        """A malicious ``file_extension`` cannot produce a path-escape filename."""
+        from services.saves._helpers import _local_save_target
+
+        target = _local_save_target({"file_extension": "../etc/passwd"}, "pokemon")
+        # Sanitization reduces to a simple basename — no separators, no parent refs.
+        assert "/" not in target
+        assert ".." not in target.split(".")
+        assert os.path.basename(target) == target
+
+    def test_local_save_target_happy_path_unchanged(self):
+        """Clean ``file_extension`` produces ``<rom_name>.<ext>`` unchanged."""
+        from services.saves._helpers import _local_save_target
+
+        assert _local_save_target({"file_extension": "srm"}, "pokemon") == "pokemon.srm"
+
+    def test_local_save_target_falls_back_to_srm_on_unusable_ext(self, caplog):
+        """When the server's extension produces an empty/dot-only name, fall back to ``srm``."""
+        from services.saves._helpers import _local_save_target
+
+        with caplog.at_level(logging.WARNING):
+            # An ``ext`` that drives the basename to ``""`` after sanitization
+            # (e.g. trailing separator) — the helper degrades to ``"srm"``.
+            target = _local_save_target({"file_extension": "evil/"}, "pokemon")
+        # Either the sanitized basename or the safe default — never traversal.
+        assert "/" not in target
+        assert target.endswith(".srm") or target == "pokemon.srm"
+
+    @pytest.mark.asyncio
+    async def test_resolve_sync_conflict_rejects_traversal_filename(self, tmp_path, caplog):
+        """Frontend-supplied traversal filename is rejected before any I/O."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"local data")
+
+        # Snapshot files outside saves_dir to assert nothing got written there.
+        outside = tmp_path / "outside.txt"
+
+        with caplog.at_level(logging.WARNING):
+            result = await svc.resolve_sync_conflict(
+                rom_id=42,
+                filename="../../etc/passwd",
+                action="keep_local",
+            )
+
+        assert result["success"] is False
+        assert "invalid" in result["message"].lower()
+        # No I/O against the server (no list_saves, no upload_save).
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        # Nothing written outside saves_dir.
+        assert not outside.exists()
+        assert not (tmp_path / "etc").exists()
+        # A warning was logged identifying the rejection.
+        assert any("rejected" in rec.message.lower() and "filename" in rec.message.lower() for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_resolve_sync_conflict_rejects_null_byte_filename(self, tmp_path):
+        """NUL byte in filename is rejected with the same shape."""
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon\x00.srm",
+            action="keep_local",
+        )
+
+        assert result["success"] is False
+        assert "invalid" in result["message"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Per-rom lock serialization
 # ---------------------------------------------------------------------------
 

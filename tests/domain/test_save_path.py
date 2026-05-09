@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from domain.save_path import (
     detect_path_change,
     resolve_save_dir,
     resolve_save_filename,
+    sanitize_save_filename,
 )
 
 # ---------------------------------------------------------------------------
@@ -197,3 +200,46 @@ class TestDetectPathChange:
     def test_trailing_slash_difference(self) -> None:
         """Paths with vs without trailing slash are different strings."""
         assert detect_path_change("/saves/gba/", "/saves/gba") is True
+
+
+# ---------------------------------------------------------------------------
+# sanitize_save_filename
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeSaveFilename:
+    def test_clean_basename_returned_unchanged(self) -> None:
+        assert sanitize_save_filename("mario.srm") == "mario.srm"
+
+    def test_clean_name_with_spaces_and_parens_unchanged(self) -> None:
+        """RetroArch-friendly filenames with USA/Europe tags are valid."""
+        name = "Mario Golf - Advance Tour (USA).srm"
+        assert sanitize_save_filename(name) == name
+
+    def test_traversal_components_stripped_to_basename(self) -> None:
+        """``../../etc/passwd`` → ``passwd`` (basename of last component)."""
+        assert sanitize_save_filename("../../etc/passwd") == "passwd"
+
+    def test_absolute_path_stripped_to_basename(self) -> None:
+        assert sanitize_save_filename("/etc/passwd") == "passwd"
+
+    def test_null_byte_rejected(self) -> None:
+        with pytest.raises(ValueError, match="NUL byte"):
+            sanitize_save_filename("foo\x00bar.srm")
+
+    def test_empty_string_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            sanitize_save_filename("")
+
+    def test_dot_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            sanitize_save_filename(".")
+
+    def test_dotdot_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            sanitize_save_filename("..")
+
+    def test_trailing_separator_rejected(self) -> None:
+        """``foo/`` has an empty basename, which is not a valid component."""
+        with pytest.raises(ValueError):
+            sanitize_save_filename("foo/")
