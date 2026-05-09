@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -134,22 +135,28 @@ def plugin(tmp_path):
 
 
 @pytest.fixture
-def game_detail_service(plugin):
-    """Create a GameDetailService wired to the plugin's state.
+def clock():
+    """FakeClock pinned to a fixed synthetic instant.
 
-    The injected ``FakeClock`` is pinned to real wall-clock ``datetime.now(UTC)``
-    so tests that stamp ``cached_at`` with ``time.time()`` continue to compute
-    realistic stale/fresh deltas without each test having to thread a clock
-    through.
+    GameDetailService's own ``stale_fields`` comparison reads from this clock,
+    so any ``cached_at`` value compared by that path (e.g. ``metadata.cached_at``)
+    must be stamped via ``clock.time()`` to stay deterministic. Other services
+    that GameDetailService delegates to (e.g. AchievementsService) are not yet
+    on the Clock Protocol — tests that seed those caches still need real
+    ``time.time()`` until those services are refactored.
     """
-    from datetime import UTC, datetime
+    return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
 
+
+@pytest.fixture
+def game_detail_service(plugin, clock):
+    """Create a GameDetailService wired to the plugin's state and the pinned clock fixture."""
     return GameDetailService(
         state=plugin._state,
         metadata_cache=plugin._metadata_cache,
         save_sync_state=plugin._save_sync_state,
         logger=logging.getLogger("test"),
-        clock=FakeClock(now=datetime.now(UTC)),
+        clock=clock,
         bios_checker=plugin._firmware_service,
         achievements=plugin._achievements_service,
     )
@@ -786,6 +793,10 @@ class TestAchievementSummaryCachedAt:
     @pytest.mark.asyncio
     async def test_achievement_summary_includes_cached_at(self, plugin, game_detail_service):
         """When progress is cached, achievement_summary includes cached_at timestamp."""
+        # AchievementsService is not yet refactored to use the Clock Protocol; its
+        # freshness checks still use real wall-clock time, so seed its cache with
+        # ``time.time()``. The pinned ``clock`` fixture only governs
+        # GameDetailService's own stale-fields comparison.
         cached_time = time.time() - 600  # 10 minutes ago
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
@@ -822,6 +833,7 @@ class TestAchievementSummaryCachedAt:
     @pytest.mark.asyncio
     async def test_achievement_summary_cached_at_reflects_storage_time(self, plugin, game_detail_service):
         """cached_at in summary matches the time progress was stored, not current time."""
+        # AchievementsService is unrefactored — keep real wall-clock for its cache seeds.
         storage_time = time.time() - 1800  # 30 minutes ago
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
@@ -890,7 +902,7 @@ class TestStaleFields:
     """Test stale_fields computation in get_cached_game_detail."""
 
     @pytest.mark.asyncio
-    async def test_stale_fields_empty_when_all_fresh(self, plugin, game_detail_service):
+    async def test_stale_fields_empty_when_all_fresh(self, plugin, game_detail_service, clock):
         """No stale fields when all caches are fresh."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
@@ -898,13 +910,13 @@ class TestStaleFields:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._metadata_cache["42"] = {"cached_at": time.time(), "genres": []}
+        plugin._metadata_cache["42"] = {"cached_at": clock.time(), "genres": []}
         result = game_detail_service.get_cached_game_detail(99999)
         assert "stale_fields" in result
         assert "metadata" not in result["stale_fields"]
 
     @pytest.mark.asyncio
-    async def test_metadata_stale_when_old(self, plugin, game_detail_service):
+    async def test_metadata_stale_when_old(self, plugin, game_detail_service, clock):
         """Metadata older than 7 days should appear in stale_fields."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
@@ -912,7 +924,7 @@ class TestStaleFields:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._metadata_cache["42"] = {"cached_at": time.time() - 8 * 24 * 3600, "genres": []}
+        plugin._metadata_cache["42"] = {"cached_at": clock.time() - 8 * 24 * 3600, "genres": []}
         result = game_detail_service.get_cached_game_detail(99999)
         assert "metadata" in result["stale_fields"]
 

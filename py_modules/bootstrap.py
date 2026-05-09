@@ -60,7 +60,7 @@ from services.steamgrid import SteamGridService
 
 @dataclass
 class WiringConfig:
-    """Configuration bundle for wire_services — groups the 17 parameters
+    """Configuration bundle for wire_services — groups the parameters
     into a single object to keep the composition root readable."""
 
     # Adapters
