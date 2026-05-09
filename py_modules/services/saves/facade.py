@@ -1046,12 +1046,14 @@ class SaveService:
         return {"success": True, "settings": current}
 
     def _delete_saves_for_roms(self, rom_ids: list[int]) -> tuple[int, list[str]]:
-        """Delete local save files for the given ROM IDs and clean their sync state.
+        """Delete local save files for the given ROM IDs and clear file tracking state.
 
         For each ROM ID, enumerates files via ``_find_save_files``, removes them
         on disk (counting successes and collecting per-file error strings), and
-        pops the ROM's entry from ``_save_sync_state['saves']``. Persists state
-        once at the end via ``save_state()``.
+        clears the ROM's per-file tracking dict via ``StateService.clear_files_state``.
+        Slot config (``active_slot``, ``slot_confirmed``, ``emulator``,
+        ``last_synced_core``, ``own_upload_ids``, ``slots``, ``system``) is
+        preserved. Persists state once at the end via ``save_state()``.
 
         Returns a ``(total_deleted, errors)`` tuple.
         """
@@ -1066,7 +1068,7 @@ class SaveService:
                     total_deleted += 1
                 except Exception as e:
                     errors.append(f"{f['filename']}: {e}")
-            self._save_sync_state.get("saves", {}).pop(rom_id_str, None)
+            self._state_svc.clear_files_state(rom_id_str)
 
         self.save_state()
         return total_deleted, errors

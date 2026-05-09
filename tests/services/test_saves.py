@@ -1350,7 +1350,60 @@ class TestDeleteSaves:
         assert result["success"] is True
         assert result["deleted_count"] == 1
         assert not save_path.exists()
+        # Entry survives — only files are cleared.
+        assert "42" in svc._save_sync_state["saves"]
+        assert svc._save_sync_state["saves"]["42"]["files"] == {}
+
+    @pytest.mark.asyncio
+    async def test_delete_local_saves_preserves_slot_config(self, tmp_path):
+        """Slot config and attribution metadata survive a delete (#279)."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        assert save_path.exists()
+
+        svc._save_sync_state["saves"]["42"] = {
+            "files": {"pokemon.srm": {"last_sync_hash": "abc"}},
+            "active_slot": "desktop",
+            "slot_confirmed": True,
+            "emulator": "retroarch-mgba",
+            "last_synced_core": "mgba_libretro",
+            "own_upload_ids": ["save-1", "save-2"],
+            "slots": {"default": {}, "desktop": {}},
+            "system": "gba",
+        }
+
+        result = svc.delete_local_saves(42)
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not save_path.exists()
+
+        entry = svc._save_sync_state["saves"]["42"]
+        assert entry["files"] == {}
+        assert entry["active_slot"] == "desktop"
+        assert entry["slot_confirmed"] is True
+        assert entry["emulator"] == "retroarch-mgba"
+        assert entry["last_synced_core"] == "mgba_libretro"
+        assert entry["own_upload_ids"] == ["save-1", "save-2"]
+        assert entry["slots"] == {"default": {}, "desktop": {}}
+        assert entry["system"] == "gba"
+
+    @pytest.mark.asyncio
+    async def test_delete_local_saves_no_prior_state_entry(self, tmp_path):
+        """Delete on a ROM with no prior saves entry creates a stable empty entry."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+
+        # No svc._save_sync_state["saves"]["42"] set up.
         assert "42" not in svc._save_sync_state["saves"]
+
+        result = svc.delete_local_saves(42)
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        assert not save_path.exists()
+        # clear_files_state creates an empty entry with files={}.
+        assert svc._save_sync_state["saves"]["42"] == {"files": {}}
 
     @pytest.mark.asyncio
     async def test_delete_no_saves(self, tmp_path):
@@ -1412,6 +1465,46 @@ class TestEmulatorTag:
         assert result["deleted_count"] == 2
 
     @pytest.mark.asyncio
+    async def test_delete_platform_saves_preserves_slot_config(self, tmp_path):
+        """Per-platform delete preserves slot config for every affected ROM (#279)."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="gba", file_name="game2.gba")
+        _create_save(tmp_path, system="gba", rom_name="game1")
+        _create_save(tmp_path, system="gba", rom_name="game2")
+
+        svc._save_sync_state["saves"]["1"] = {
+            "files": {"game1.srm": {}},
+            "active_slot": "desktop",
+            "slot_confirmed": True,
+            "emulator": "retroarch-mgba",
+            "system": "gba",
+        }
+        svc._save_sync_state["saves"]["2"] = {
+            "files": {"game2.srm": {}},
+            "active_slot": "default",
+            "slot_confirmed": True,
+            "own_upload_ids": ["save-x"],
+            "system": "gba",
+        }
+
+        result = svc.delete_platform_saves("gba")
+        assert result["success"] is True
+        assert result["deleted_count"] == 2
+
+        entry1 = svc._save_sync_state["saves"]["1"]
+        assert entry1["files"] == {}
+        assert entry1["active_slot"] == "desktop"
+        assert entry1["slot_confirmed"] is True
+        assert entry1["emulator"] == "retroarch-mgba"
+
+        entry2 = svc._save_sync_state["saves"]["2"]
+        assert entry2["files"] == {}
+        assert entry2["active_slot"] == "default"
+        assert entry2["slot_confirmed"] is True
+        assert entry2["own_upload_ids"] == ["save-x"]
+
+    @pytest.mark.asyncio
     async def test_delete_platform_saves_other_platform_untouched(self, tmp_path):
         svc, _ = make_service(tmp_path)
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
@@ -1419,8 +1512,20 @@ class TestEmulatorTag:
         _create_save(tmp_path, system="gba", rom_name="game1")
         snes_save = _create_save(tmp_path, system="snes", rom_name="game2")
 
+        svc._save_sync_state["saves"]["2"] = {
+            "files": {"game2.srm": {}},
+            "active_slot": "default",
+            "slot_confirmed": True,
+            "system": "snes",
+        }
+
         svc.delete_platform_saves("gba")
         assert snes_save.exists()
+        # Other-platform entry must be entirely untouched.
+        snes_entry = svc._save_sync_state["saves"]["2"]
+        assert snes_entry["files"] == {"game2.srm": {}}
+        assert snes_entry["active_slot"] == "default"
+        assert snes_entry["slot_confirmed"] is True
 
 
 # ---------------------------------------------------------------------------

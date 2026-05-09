@@ -146,6 +146,20 @@ class StateService:
         finally:
             os.close(lock_fd)
 
+    def clear_files_state(self, rom_id_str: str) -> None:
+        """Clear the per-file tracking dict for a ROM, preserving slot config.
+
+        Resets ``data["saves"][rom_id_str]["files"]`` to an empty dict while
+        leaving ``active_slot``, ``slot_confirmed``, ``emulator``,
+        ``last_synced_core``, ``own_upload_ids``, ``slots``, ``system``, and any
+        other slot/attribution metadata untouched. Creates the ROM entry as an
+        empty dict (with only ``files``) when none exists. Caller is
+        responsible for persisting via ``save_state()``.
+        """
+        saves = self._save_sync_state.setdefault("saves", {})
+        entry = saves.setdefault(rom_id_str, {})
+        entry["files"] = {}
+
     def prune_orphaned_state(self) -> None:
         """Remove save sync state entries for rom_ids no longer in shortcut registry."""
         registry = self._state.get("shortcut_registry", {})

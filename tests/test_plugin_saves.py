@@ -869,7 +869,57 @@ async def test_delete_local_saves_happy_path(plugin, tmp_path):
     assert result["deleted_count"] == 2
     assert not srm.exists()
     assert not rtc.exists()
-    assert "100" not in plugin._save_sync_state["saves"]
+    # Entry survives — only files are cleared (#279).
+    assert "100" in plugin._save_sync_state["saves"]
+    assert plugin._save_sync_state["saves"]["100"]["files"] == {}
+    assert plugin._save_sync_state["saves"]["100"]["system"] == system
+
+
+@pytest.mark.asyncio
+async def test_delete_local_saves_preserves_slot_config(plugin, tmp_path):
+    """Slot config / attribution metadata survive a delete (#279)."""
+    rom_id = 101
+    system = "snes"
+    rom_name = "SlotGame"
+
+    plugin._state["installed_roms"]["101"] = {
+        "rom_id": 101,
+        "file_name": f"{rom_name}.sfc",
+        "file_path": str(tmp_path / "retrodeck" / "roms" / system / f"{rom_name}.sfc"),
+        "system": system,
+        "platform_slug": "snes",
+    }
+
+    saves_dir = tmp_path / "retrodeck" / "saves" / system
+    saves_dir.mkdir(parents=True)
+    srm = saves_dir / f"{rom_name}.srm"
+    srm.write_bytes(b"\x00" * 32)
+
+    plugin._save_sync_state["saves"]["101"] = {
+        "files": {f"{rom_name}.srm": {"last_sync_hash": "hash"}},
+        "active_slot": "desktop",
+        "slot_confirmed": True,
+        "emulator": "retroarch-snes9x",
+        "last_synced_core": "snes9x_libretro",
+        "own_upload_ids": ["save-9"],
+        "slots": {"default": {}, "desktop": {}},
+        "system": system,
+    }
+
+    result = await plugin.delete_local_saves(rom_id)
+    assert result["success"] is True
+    assert result["deleted_count"] == 1
+    assert not srm.exists()
+
+    entry = plugin._save_sync_state["saves"]["101"]
+    assert entry["files"] == {}
+    assert entry["active_slot"] == "desktop"
+    assert entry["slot_confirmed"] is True
+    assert entry["emulator"] == "retroarch-snes9x"
+    assert entry["last_synced_core"] == "snes9x_libretro"
+    assert entry["own_upload_ids"] == ["save-9"]
+    assert entry["slots"] == {"default": {}, "desktop": {}}
+    assert entry["system"] == system
 
 
 @pytest.mark.asyncio
@@ -942,8 +992,13 @@ async def test_delete_platform_saves(plugin, tmp_path):
     assert result["deleted_count"] == 2
     assert not srm1.exists()
     assert not srm2.exists()
-    assert "10" not in plugin._save_sync_state["saves"]
-    assert "20" not in plugin._save_sync_state["saves"]
+    # Entries survive — only files are cleared (#279).
+    assert "10" in plugin._save_sync_state["saves"]
+    assert plugin._save_sync_state["saves"]["10"]["files"] == {}
+    assert plugin._save_sync_state["saves"]["10"]["system"] == "snes"
+    assert "20" in plugin._save_sync_state["saves"]
+    assert plugin._save_sync_state["saves"]["20"]["files"] == {}
+    assert plugin._save_sync_state["saves"]["20"]["system"] == "snes"
 
 
 # ============================================================================

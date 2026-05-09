@@ -362,8 +362,7 @@ class SlotsService:
                 self._save_service._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")
 
         # Clear file tracking state (but keep slot config)
-        save_entry = self._state_svc.data.get("saves", {}).get(rom_id_str, {})
-        save_entry["files"] = {}
+        self._state_svc.clear_files_state(rom_id_str)
 
     # ------------------------------------------------------------------
     # Save Setup Wizard
