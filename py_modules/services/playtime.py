@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import contextlib
 import json
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from lib.iso_time import parse_iso
-from services.protocols import RetryStrategy, RommApiProtocol, StatePersister
+from services.protocols import Clock, RetryStrategy, RommApiProtocol, StatePersister
 
 if TYPE_CHECKING:
     import asyncio
@@ -49,6 +48,7 @@ class PlaytimeService:
         save_sync_state: dict,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
+        clock: Clock,
         save_state: StatePersister,
     ) -> None:
         self._romm_api = romm_api
@@ -56,6 +56,7 @@ class PlaytimeService:
         self._save_sync_state = save_sync_state
         self._loop = loop
         self._logger = logger
+        self._clock = clock
         self._save_state = save_state
 
     # ------------------------------------------------------------------
@@ -156,7 +157,7 @@ class PlaytimeService:
 
             playtime_data = {
                 "seconds": new_total,
-                "updated": datetime.now(UTC).isoformat(),
+                "updated": self._clock.now().isoformat(),
                 "device": device_name,
             }
 
@@ -190,7 +191,7 @@ class PlaytimeService:
                 "offline_deltas": [],
             },
         )
-        entry["last_session_start"] = datetime.now(UTC).isoformat()
+        entry["last_session_start"] = self._clock.now().isoformat()
         self._save_state()
         return {"success": True}
 
@@ -210,7 +211,7 @@ class PlaytimeService:
             start = parse_iso(entry["last_session_start"])
             if start is None:
                 return {"success": False, "message": "Failed to calculate session duration"}
-            now = datetime.now(UTC)
+            now = self._clock.now()
             duration = (now - start).total_seconds()
 
             # Sanity check: clamp to 0-24h

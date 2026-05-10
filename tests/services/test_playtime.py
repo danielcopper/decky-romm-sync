@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fakes.fake_save_api import FakeSaveApi
+from fakes.system_time import FakeClock
 
 from lib.errors import RommApiError
 from services.playtime import PlaytimeService
@@ -29,11 +30,12 @@ def _make_retry():
     return retry
 
 
-def make_service(tmp_path=None, fake_api=None, **overrides):
+def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
     """Create a PlaytimeService with sensible defaults."""
     fake = fake_api or FakeSaveApi()
     state: dict[str, Any] = {"playtime": {}}
     saved: list[bool] = []
+    clk = clock or FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
 
     defaults: dict[str, Any] = dict(
         romm_api=fake,
@@ -41,6 +43,7 @@ def make_service(tmp_path=None, fake_api=None, **overrides):
         save_sync_state=state,
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
+        clock=clk,
         save_state=lambda: saved.append(True),
     )
     defaults.update(overrides)
@@ -70,8 +73,8 @@ class TestRecordSession:
         # Start session
         svc.record_session_start(42)
 
-        # Backdate session start by 60 seconds
-        start = datetime.now(UTC) - timedelta(seconds=60)
+        # Backdate session start by 60 seconds (relative to the fake clock)
+        start = svc._clock.now() - timedelta(seconds=60)
         state["playtime"]["42"]["last_session_start"] = start.isoformat()
 
         result = await svc.record_session_end(42)
@@ -107,13 +110,13 @@ class TestRecordSession:
 
         # Session 1
         svc.record_session_start(42)
-        start = datetime.now(UTC) - timedelta(seconds=30)
+        start = svc._clock.now() - timedelta(seconds=30)
         state["playtime"]["42"]["last_session_start"] = start.isoformat()
         await svc.record_session_end(42)
 
         # Session 2
         svc.record_session_start(42)
-        start = datetime.now(UTC) - timedelta(seconds=45)
+        start = svc._clock.now() - timedelta(seconds=45)
         state["playtime"]["42"]["last_session_start"] = start.isoformat()
         result2 = await svc.record_session_end(42)
 
@@ -354,7 +357,7 @@ class TestEdgeCases:
         svc.record_session_start(42)
 
         # Backdate by 25 hours
-        start = datetime.now(UTC) - timedelta(hours=25)
+        start = svc._clock.now() - timedelta(hours=25)
         state["playtime"]["42"]["last_session_start"] = start.isoformat()
 
         result = await svc.record_session_end(42)

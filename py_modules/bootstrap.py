@@ -241,6 +241,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         save_sync_state=cfg.save_sync_state,
         loop=cfg.loop,
         logger=cfg.logger,
+        clock=cfg.clock,
         save_state=save_sync_service.save_state,
     )
 

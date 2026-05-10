@@ -9,6 +9,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
+from fakes.system_time import FakeClock
 
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.romm.http import RommHttpAdapter
@@ -106,6 +107,7 @@ def plugin(tmp_path):
         save_sync_state=p._save_sync_state,
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         save_state=p._save_sync_service.save_state,
     )
 
@@ -502,7 +504,7 @@ class TestPlaytimeTracking:
     async def test_session_end_calculates_delta(self, plugin):
         """record_session_end computes correct duration."""
         plugin._save_sync_state.setdefault("playtime", {})
-        start_time = datetime.now(UTC) - timedelta(seconds=600)
+        start_time = plugin._playtime_service._clock.now() - timedelta(seconds=600)
         plugin._save_sync_state["playtime"]["42"] = {
             "total_seconds": 0,
             "session_count": 0,
@@ -520,7 +522,7 @@ class TestPlaytimeTracking:
     @pytest.mark.asyncio
     async def test_delta_accumulated(self, plugin):
         """Playtime delta added to existing total."""
-        start_time = datetime.now(UTC) - timedelta(seconds=300)
+        start_time = plugin._playtime_service._clock.now() - timedelta(seconds=300)
         plugin._save_sync_state["playtime"] = {
             "42": {
                 "total_seconds": 1000,
@@ -539,7 +541,7 @@ class TestPlaytimeTracking:
     @pytest.mark.asyncio
     async def test_session_count_incremented(self, plugin):
         """Session count goes up on end."""
-        start_time = datetime.now(UTC) - timedelta(seconds=10)
+        start_time = plugin._playtime_service._clock.now() - timedelta(seconds=10)
         plugin._save_sync_state["playtime"] = {
             "42": {
                 "total_seconds": 0,
@@ -564,7 +566,7 @@ class TestPlaytimeTracking:
     @pytest.mark.asyncio
     async def test_session_start_clears_on_end(self, plugin):
         """last_session_start is cleared after session end."""
-        start_time = datetime.now(UTC) - timedelta(seconds=10)
+        start_time = plugin._playtime_service._clock.now() - timedelta(seconds=10)
         plugin._save_sync_state["playtime"] = {
             "42": {
                 "total_seconds": 0,
@@ -582,7 +584,7 @@ class TestPlaytimeTracking:
     @pytest.mark.asyncio
     async def test_duration_clamped_to_24h(self, plugin):
         """Duration clamped to max 24 hours."""
-        start_time = datetime.now(UTC) - timedelta(hours=48)
+        start_time = plugin._playtime_service._clock.now() - timedelta(hours=48)
         plugin._save_sync_state["playtime"] = {
             "42": {
                 "total_seconds": 0,
