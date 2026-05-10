@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -143,15 +142,7 @@ def plugin(tmp_path):
 
 @pytest.fixture
 def clock():
-    """FakeClock pinned to a fixed synthetic instant.
-
-    GameDetailService's own ``stale_fields`` comparison reads from this clock,
-    so any ``cached_at`` value compared by that path (e.g. ``metadata.cached_at``)
-    must be stamped via ``clock.time()`` to stay deterministic. Other services
-    that GameDetailService delegates to (e.g. AchievementsService) are not yet
-    on the Clock Protocol — tests that seed those caches still need real
-    ``time.time()`` until those services are refactored.
-    """
+    """FakeClock pinned to a fixed synthetic instant — drives all TTL comparisons deterministically."""
     return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
 
 
@@ -798,13 +789,9 @@ class TestAchievementSummaryCachedAt:
     """Test that achievement_summary includes cached_at from progress cache."""
 
     @pytest.mark.asyncio
-    async def test_achievement_summary_includes_cached_at(self, plugin, game_detail_service):
+    async def test_achievement_summary_includes_cached_at(self, plugin, game_detail_service, clock):
         """When progress is cached, achievement_summary includes cached_at timestamp."""
-        # AchievementsService is not yet refactored to use the Clock Protocol; its
-        # freshness checks still use real wall-clock time, so seed its cache with
-        # ``time.time()``. The pinned ``clock`` fixture only governs
-        # GameDetailService's own stale-fields comparison.
-        cached_time = time.time() - 600  # 10 minutes ago
+        cached_time = clock.time() - 600  # 10 minutes ago
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
             "name": "Sonic",
@@ -812,12 +799,10 @@ class TestAchievementSummaryCachedAt:
             "platform_name": "Genesis",
             "ra_id": 555,
         }
-        # Seed RA username cache
         plugin._achievements_service._achievements_cache["_ra_user"] = {
             "username": "testuser",
-            "cached_at": time.time(),
+            "cached_at": clock.time(),
         }
-        # Seed progress cache
         plugin._achievements_service._achievements_cache["42"] = {
             "user_progress": {
                 "earned": 5,
@@ -826,7 +811,7 @@ class TestAchievementSummaryCachedAt:
                 "earned_achievements": [],
                 "cached_at": cached_time,
             },
-            "cached_at": time.time(),
+            "cached_at": clock.time(),
         }
 
         result = game_detail_service.get_cached_game_detail(99999)
@@ -838,10 +823,9 @@ class TestAchievementSummaryCachedAt:
         assert result["achievement_summary"]["cached_at"] == cached_time
 
     @pytest.mark.asyncio
-    async def test_achievement_summary_cached_at_reflects_storage_time(self, plugin, game_detail_service):
+    async def test_achievement_summary_cached_at_reflects_storage_time(self, plugin, game_detail_service, clock):
         """cached_at in summary matches the time progress was stored, not current time."""
-        # AchievementsService is unrefactored — keep real wall-clock for its cache seeds.
-        storage_time = time.time() - 1800  # 30 minutes ago
+        storage_time = clock.time() - 1800  # 30 minutes ago
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
             "name": "Sonic",
@@ -851,7 +835,7 @@ class TestAchievementSummaryCachedAt:
         }
         plugin._achievements_service._achievements_cache["_ra_user"] = {
             "username": "testuser",
-            "cached_at": time.time(),
+            "cached_at": clock.time(),
         }
         plugin._achievements_service._achievements_cache["42"] = {
             "user_progress": {
@@ -861,14 +845,13 @@ class TestAchievementSummaryCachedAt:
                 "earned_achievements": [],
                 "cached_at": storage_time,
             },
-            "cached_at": time.time(),
+            "cached_at": clock.time(),
         }
 
         result = game_detail_service.get_cached_game_detail(99999)
 
-        # cached_at should be the storage time, not a fresh timestamp
         assert result["achievement_summary"]["cached_at"] == storage_time
-        assert result["achievement_summary"]["cached_at"] < time.time() - 1700
+        assert result["achievement_summary"]["cached_at"] < clock.time() - 1700
 
     @pytest.mark.asyncio
     async def test_no_achievement_summary_without_ra_username(self, plugin, game_detail_service):
@@ -886,7 +869,7 @@ class TestAchievementSummaryCachedAt:
         assert result["achievement_summary"] is None
 
     @pytest.mark.asyncio
-    async def test_no_achievement_summary_without_cached_progress(self, plugin, game_detail_service):
+    async def test_no_achievement_summary_without_cached_progress(self, plugin, game_detail_service, clock):
         """With RA username but no cached progress, achievement_summary is None."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
@@ -897,7 +880,7 @@ class TestAchievementSummaryCachedAt:
         }
         plugin._achievements_service._achievements_cache["_ra_user"] = {
             "username": "testuser",
-            "cached_at": time.time(),
+            "cached_at": clock.time(),
         }
 
         result = game_detail_service.get_cached_game_detail(99999)
