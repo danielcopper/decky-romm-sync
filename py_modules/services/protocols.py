@@ -367,6 +367,22 @@ class SaveSyncStatePersister(Protocol):
     def load(self) -> dict | None: ...
 
 
+class FirmwareCachePersister(Protocol):
+    """Read/write the on-disk firmware list cache.
+
+    Owns the round-trip for the cached firmware listing consumed by
+    ``FirmwareService``. Path, file format, and version handling are
+    adapter concerns — services see only the dict payload they
+    previously wrote. ``load`` returns an empty dict (not ``None``)
+    when no cached payload is available so callers can probe with
+    ``"items" in data`` without a None-check.
+    """
+
+    def save(self, data: dict) -> None: ...
+
+    def load(self) -> dict: ...
+
+
 class EventEmitter(Protocol):
     """Emit named events with a data payload to the frontend."""
 

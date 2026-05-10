@@ -250,3 +250,22 @@ class SaveSyncStatePersisterAdapter:
 
     def load(self) -> dict | None:
         return self._persistence.load_save_sync_state()
+
+
+class FirmwareCachePersisterAdapter:
+    """Adapter view exposing the ``FirmwareCachePersister`` Protocol.
+
+    Wraps a :class:`PersistenceAdapter` and forwards ``save`` / ``load``
+    to its ``save_firmware_cache`` / ``load_firmware_cache`` methods.
+    Lives in the adapters layer so services depend only on the Protocol,
+    never on this class.
+    """
+
+    def __init__(self, persistence: PersistenceAdapter) -> None:
+        self._persistence = persistence
+
+    def save(self, data: dict) -> None:
+        self._persistence.save_firmware_cache(data)
+
+    def load(self) -> dict:
+        return self._persistence.load_firmware_cache()

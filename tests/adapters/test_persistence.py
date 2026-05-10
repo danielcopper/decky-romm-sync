@@ -13,6 +13,7 @@ from adapters.persistence import (
     _SETTINGS_VERSION,
     _STATE_VERSION,
     DEFAULT_SETTINGS,
+    FirmwareCachePersisterAdapter,
     PersistenceAdapter,
     SaveSyncStatePersisterAdapter,
 )
@@ -391,3 +392,34 @@ class TestSaveSyncStatePersisterAdapter:
     def test_load_returns_none_when_missing(self, adapter):
         wrapper = SaveSyncStatePersisterAdapter(adapter)
         assert wrapper.load() is None
+
+
+class TestFirmwareCachePersisterAdapter:
+    def test_save_writes_through_persistence_adapter(self, adapter):
+        wrapper = FirmwareCachePersisterAdapter(adapter)
+        wrapper.save({"items": [{"id": 1, "file_name": "bios.bin"}], "cached_at": 1700.0})
+
+        path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
+        with open(path) as f:
+            on_disk = json.load(f)
+        # PersistenceAdapter.save_firmware_cache stamps the version key
+        assert on_disk["items"] == [{"id": 1, "file_name": "bios.bin"}]
+        assert on_disk["cached_at"] == 1700.0
+        assert on_disk["version"] == _FIRMWARE_CACHE_VERSION
+
+    def test_save_then_load_round_trip(self, adapter):
+        wrapper = FirmwareCachePersisterAdapter(adapter)
+        payload = {"items": [{"id": 7, "file_name": "scph5501.bin"}], "cached_at": 42.0}
+        wrapper.save(payload)
+
+        loaded = wrapper.load()
+        assert loaded["items"] == payload["items"]
+        assert loaded["cached_at"] == payload["cached_at"]
+        assert loaded["version"] == _FIRMWARE_CACHE_VERSION
+
+    def test_load_returns_empty_dict_when_missing(self, adapter):
+        wrapper = FirmwareCachePersisterAdapter(adapter)
+        # No file written yet — should mirror PersistenceAdapter.load_firmware_cache
+        # behaviour and return the version-stamped empty dict, never None.
+        loaded = wrapper.load()
+        assert loaded == {"version": _FIRMWARE_CACHE_VERSION}

@@ -11,7 +11,11 @@ sys.path.insert(0, plugin_dir)
 import decky
 from bootstrap import WiringConfig, bootstrap, wire_services
 
-from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
+from adapters.persistence import (
+    FirmwareCachePersisterAdapter,
+    PersistenceAdapter,
+    SaveSyncStatePersisterAdapter,
+)
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
@@ -196,8 +200,7 @@ class Plugin:
                 save_state=self._save_state,
                 save_settings_to_disk=self._save_settings_to_disk,
                 save_metadata_cache=self._save_metadata_cache,
-                save_firmware_cache=self._persistence.save_firmware_cache,
-                load_firmware_cache=self._persistence.load_firmware_cache,
+                firmware_cache_persister=FirmwareCachePersisterAdapter(self._persistence),
                 save_sync_state_persister=SaveSyncStatePersisterAdapter(self._persistence),
                 log_debug=self._log_debug,
             )

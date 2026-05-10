@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import FakeFirmwareCachePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
 
@@ -49,8 +50,7 @@ def plugin():
         plugin_dir=decky.DECKY_PLUGIN_DIR,
         clock=_make_clock(),
         save_state=MagicMock(),
-        save_firmware_cache=MagicMock(),
-        load_firmware_cache=MagicMock(return_value={}),
+        firmware_cache_persister=FakeFirmwareCachePersister(),
         get_bios_path=MagicMock(return_value=""),
     )
 
@@ -1764,7 +1764,7 @@ class TestFirmwareCachePersistence:
         import decky
 
         cached_items = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
-        load_fn = MagicMock(return_value={"items": cached_items, "cached_at": 1000.0})
+        persister = FakeFirmwareCachePersister(canned_load={"items": cached_items, "cached_at": 1000.0})
         clock = _make_clock()
         fw = FirmwareService(
             romm_api=MagicMock(),
@@ -1774,20 +1774,19 @@ class TestFirmwareCachePersistence:
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=clock,
             save_state=MagicMock(),
-            save_firmware_cache=MagicMock(),
-            load_firmware_cache=load_fn,
+            firmware_cache_persister=persister,
         )
         assert fw._firmware_cache == cached_items
         assert fw._firmware_cache_epoch == 1000.0
         # cache_at is set from the clock's monotonic reading (deterministic in tests)
         assert fw._firmware_cache_at == clock.monotonic()
-        load_fn.assert_called_once()
+        assert persister.load_count == 1
 
     def test_empty_disk_cache_leaves_memory_none(self):
         """Empty disk cache doesn't populate in-memory cache."""
         import decky
 
-        load_fn = MagicMock(return_value={})
+        persister = FakeFirmwareCachePersister(canned_load={})
         fw = FirmwareService(
             romm_api=MagicMock(),
             state={"shortcut_registry": {}, "downloaded_bios": {}},
@@ -1796,8 +1795,7 @@ class TestFirmwareCachePersistence:
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=_make_clock(),
             save_state=MagicMock(),
-            save_firmware_cache=MagicMock(),
-            load_firmware_cache=load_fn,
+            firmware_cache_persister=persister,
         )
         assert fw._firmware_cache is None
 
@@ -1805,7 +1803,7 @@ class TestFirmwareCachePersistence:
         """FileNotFoundError from load doesn't crash init."""
         import decky
 
-        load_fn = MagicMock(side_effect=FileNotFoundError("no file"))
+        persister = FakeFirmwareCachePersister(load_side_effect=FileNotFoundError("no file"))
         fw = FirmwareService(
             romm_api=MagicMock(),
             state={"shortcut_registry": {}, "downloaded_bios": {}},
@@ -1814,13 +1812,12 @@ class TestFirmwareCachePersistence:
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=_make_clock(),
             save_state=MagicMock(),
-            save_firmware_cache=MagicMock(),
-            load_firmware_cache=load_fn,
+            firmware_cache_persister=persister,
         )
         assert fw._firmware_cache is None
 
-    def test_no_load_callback_skips_restore(self):
-        """No load_firmware_cache callback skips disk restore gracefully."""
+    def test_no_persister_skips_restore(self):
+        """Omitting firmware_cache_persister skips disk restore gracefully."""
         import decky
 
         fw = FirmwareService(
@@ -1843,10 +1840,11 @@ class TestFirmwareCachePersistence:
         result = fw._get_firmware_list()
 
         assert result == firmware_list
-        fw._save_firmware_cache.assert_called_once()
-        call_data = fw._save_firmware_cache.call_args[0][0]
-        assert call_data["items"] == firmware_list
-        assert "cached_at" in call_data
+        persister = fw._firmware_cache_persister
+        assert persister.save_count == 1
+        assert persister.last_saved is not None
+        assert persister.last_saved["items"] == firmware_list
+        assert "cached_at" in persister.last_saved
 
     def test_invalidate_clears_persisted_cache(self, fw):
         """invalidate_firmware_cache writes empty dict to disk."""
@@ -1857,13 +1855,15 @@ class TestFirmwareCachePersistence:
         fw.invalidate_firmware_cache()
 
         assert fw._firmware_cache is None
-        fw._save_firmware_cache.assert_called_once_with({})
+        persister = fw._firmware_cache_persister
+        assert persister.save_count == 1
+        assert persister.last_saved == {}
 
     def test_persist_failure_does_not_crash_fetch(self, fw):
         """Disk write failure during fetch doesn't break the return value."""
         firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
         fw._romm_api.list_firmware.return_value = firmware_list
-        fw._save_firmware_cache.side_effect = OSError("disk full")
+        fw._firmware_cache_persister.save_side_effect = OSError("disk full")
         fw._firmware_cache = None
 
         result = fw._get_firmware_list()

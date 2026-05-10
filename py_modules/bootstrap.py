@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from adapters.asyncio_sleeper import AsyncioSleeper
@@ -40,6 +39,7 @@ from services.protocols import (
     CoreNameProviderFn,
     DebugLogger,
     EventEmitter,
+    FirmwareCachePersister,
     RetroArchSaveSortingProvider,
     RetroDeckHomeProvider,
     RommApiProtocol,
@@ -95,8 +95,7 @@ class WiringConfig:
     save_state: StatePersister
     save_settings_to_disk: SettingsPersister
     save_metadata_cache: StatePersister
-    save_firmware_cache: Callable[[dict], None]
-    load_firmware_cache: Callable[[], dict]
+    firmware_cache_persister: FirmwareCachePersister
     save_sync_state_persister: SaveSyncStatePersister
     log_debug: DebugLogger
 
@@ -342,8 +341,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         plugin_dir=cfg.plugin_dir,
         clock=cfg.clock,
         save_state=cfg.save_state,
-        save_firmware_cache=cfg.save_firmware_cache,
-        load_firmware_cache=cfg.load_firmware_cache,
+        firmware_cache_persister=cfg.firmware_cache_persister,
         get_bios_path=cfg.get_bios_path,
     )
 
