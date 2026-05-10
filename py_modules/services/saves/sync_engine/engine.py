@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,7 +25,7 @@ from services.saves._helpers import _local_save_target
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import RetryStrategy, RommApiProtocol
+    from services.protocols import Clock, RetryStrategy, RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
 
@@ -62,12 +61,14 @@ class SyncEngine:
         romm_api: RommApiProtocol,
         retry: RetryStrategy,
         logger: logging.Logger,
+        clock: Clock,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
         self._romm_api = romm_api
         self._retry = retry
         self._logger = logger
+        self._clock = clock
 
     # ------------------------------------------------------------------
     # Server Save Hash Helper
@@ -127,7 +128,7 @@ class SyncEngine:
         if core_so is not None:
             save_entry["last_synced_core"] = core_so
 
-        now = datetime.now(UTC).isoformat()
+        now = self._clock.now().isoformat()
         local_hash = self._save_service._file_md5(local_path) if os.path.isfile(local_path) else ""
 
         save_entry["files"][filename] = {
@@ -165,7 +166,7 @@ class SyncEngine:
         if os.path.isfile(local_path):
             backup_dir = os.path.join(saves_dir, ".romm-backup")
             os.makedirs(backup_dir, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
             name, ext = os.path.splitext(filename)
             os.replace(local_path, os.path.join(backup_dir, f"{name}_{ts}{ext}"))
 
@@ -307,7 +308,7 @@ class SyncEngine:
             "local_hash": local_hash,
             "local_mtime": local_mtime,
             "local_size": local_size,
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": self._clock.now().isoformat(),
         }
 
     def _dispatch_skip(
@@ -524,7 +525,7 @@ class SyncEngine:
         outcome through :meth:`_dispatch_sync_action`. Returns
         ``(synced_count, errors_list, conflicts_list)``.
         """
-        t_total = time.time()
+        t_total = self._clock.time()
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
 
@@ -535,7 +536,7 @@ class SyncEngine:
         system = info["system"]
         saves_dir = info["saves_dir"]
 
-        t0 = time.time()
+        t0 = self._clock.time()
         try:
             device_id = self._save_service._get_server_device_id()
             server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id))
@@ -543,7 +544,7 @@ class SyncEngine:
             self._logger.error(f"_sync_rom_saves({rom_id}): failed to list saves: {e}")
             _code, _msg = classify_error(e)
             return 0, [f"Failed to fetch saves: {_msg}"], []
-        self._save_service._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): list_saves {time.time() - t0:.3f}s")
+        self._save_service._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
 
         save_state = self._state_svc.data["saves"].get(rom_id_str, {})
         active_slot = save_state.get("active_slot")
@@ -586,10 +587,10 @@ class SyncEngine:
 
         # Record when this sync check ran (regardless of whether files transferred)
         save_entry = self._state_svc.data["saves"].setdefault(rom_id_str, {})
-        save_entry["last_sync_check_at"] = datetime.now(UTC).isoformat()
+        save_entry["last_sync_check_at"] = self._clock.now().isoformat()
 
         self._save_service._log_debug(
-            f"[TIMING] _sync_rom_saves({rom_id}): TOTAL {time.time() - t_total:.3f}s"
+            f"[TIMING] _sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"
             f" synced={synced} errors={len(errors)}"
         )
         return synced, errors, conflicts

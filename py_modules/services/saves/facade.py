@@ -113,6 +113,7 @@ class SaveService:
             romm_api=self._romm_api,
             retry=self._retry,
             logger=self._logger,
+            clock=self._clock,
         )
         self._status = StatusService(
             save_service=self,
