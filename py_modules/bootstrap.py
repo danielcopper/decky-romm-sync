@@ -358,6 +358,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         state=cfg.state,
         loop=cfg.loop,
         logger=cfg.logger,
+        clock=cfg.clock,
         log_debug=cfg.log_debug,
     )
 

@@ -1,5 +1,4 @@
 import asyncio
-import time
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,7 +15,17 @@ from services.library import LibraryService
 
 
 @pytest.fixture
-def plugin():
+def clock():
+    """FakeClock pinned to a synthetic instant.
+
+    Shared between AchievementsService and GameDetailService so cache seeds
+    stamped via ``clock.time()`` are comparable across both services.
+    """
+    return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
+
+
+@pytest.fixture
+def plugin(clock):
     p = Plugin()
     p.settings = {
         "romm_url": "http://romm.local",
@@ -59,6 +68,7 @@ def plugin():
         state=p._state,
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
+        clock=clock,
         log_debug=p._log_debug,
     )
     bios_checker = MagicMock()
@@ -70,7 +80,7 @@ def plugin():
         metadata_cache=p._metadata_cache,
         save_sync_state=p._save_sync_state,
         logger=decky.logger,
-        clock=FakeClock(now=datetime.now(UTC)),
+        clock=clock,
         bios_checker=bios_checker,
         achievements=p._achievements_service,
     )
@@ -153,7 +163,7 @@ def _seed_ra_username_cache(svc, username="RetroPlayer"):
     """Pre-populate the RA username cache to simulate a known user."""
     svc._achievements_cache["_ra_user"] = {
         "username": username,
-        "cached_at": time.time(),
+        "cached_at": svc._clock.time(),
     }
 
 
@@ -171,14 +181,14 @@ class TestGetRaUsername:
     def test_returns_empty_when_cache_expired(self, svc):
         svc._achievements_cache["_ra_user"] = {
             "username": "RetroPlayer",
-            "cached_at": time.time() - (2 * 3600),  # 2h old > 1h TTL
+            "cached_at": svc._clock.time() - (2 * 3600),  # 2h old > 1h TTL
         }
         assert svc.get_ra_username() == ""
 
     def test_returns_cached_when_fresh(self, svc):
         svc._achievements_cache["_ra_user"] = {
             "username": "JohnDoe",
-            "cached_at": time.time() - 1800,  # 30min old < 1h TTL
+            "cached_at": svc._clock.time() - 1800,  # 30min old < 1h TTL
         }
         assert svc.get_ra_username() == "JohnDoe"
 
@@ -217,7 +227,7 @@ class TestFetchRaUsername:
     async def test_returns_stale_cache_on_api_error(self, svc, plugin):
         svc._achievements_cache["_ra_user"] = {
             "username": "OldUser",
-            "cached_at": time.time() - (2 * 3600),  # expired
+            "cached_at": svc._clock.time() - (2 * 3600),  # expired
         }
 
         plugin._romm_api.get_current_user.side_effect = Exception("Network error")
@@ -335,7 +345,7 @@ class TestAchievementsCacheEntry:
     def test_returns_entry_when_fresh(self, svc):
         svc._achievements_cache["42"] = {
             "achievements": [{"ra_id": 1}],
-            "cached_at": time.time(),
+            "cached_at": svc._clock.time(),
         }
         result = svc._get_achievements_cache_entry("42")
         assert result is not None
@@ -344,7 +354,7 @@ class TestAchievementsCacheEntry:
     def test_returns_none_when_expired(self, svc):
         svc._achievements_cache["42"] = {
             "achievements": [{"ra_id": 1}],
-            "cached_at": time.time() - (25 * 3600),  # 25h old > 24h TTL
+            "cached_at": svc._clock.time() - (25 * 3600),  # 25h old > 24h TTL
         }
         result = svc._get_achievements_cache_entry("42")
         assert result is None
@@ -362,7 +372,7 @@ class TestAchievementsCacheEntry:
         """Entry at exactly TTL age is considered expired."""
         svc._achievements_cache["42"] = {
             "achievements": [{"ra_id": 1}],
-            "cached_at": time.time() - (24 * 3600 + 1),
+            "cached_at": svc._clock.time() - (24 * 3600 + 1),
         }
         result = svc._get_achievements_cache_entry("42")
         assert result is None
@@ -374,7 +384,7 @@ class TestProgressCacheEntry:
             "user_progress": {
                 "earned": 5,
                 "total": 10,
-                "cached_at": time.time(),
+                "cached_at": svc._clock.time(),
             },
         }
         result = svc.get_progress_cache_entry("42")
@@ -386,7 +396,7 @@ class TestProgressCacheEntry:
             "user_progress": {
                 "earned": 5,
                 "total": 10,
-                "cached_at": time.time() - (2 * 3600),  # 2h old > 1h TTL
+                "cached_at": svc._clock.time() - (2 * 3600),  # 2h old > 1h TTL
             },
         }
         result = svc.get_progress_cache_entry("42")
@@ -408,7 +418,7 @@ class TestProgressCacheEntry:
 
     def test_entry_includes_cached_at(self, svc):
         """Returned progress entry includes cached_at timestamp."""
-        store_time = time.time() - 300
+        store_time = svc._clock.time() - 300
         svc._achievements_cache["42"] = {
             "user_progress": {
                 "earned": 3,
@@ -423,7 +433,7 @@ class TestProgressCacheEntry:
 
     def test_cached_at_reflects_storage_time(self, svc):
         """cached_at is the original storage time, not current time."""
-        store_time = time.time() - 1800  # 30 min ago
+        store_time = svc._clock.time() - 1800  # 30 min ago
         svc._achievements_cache["42"] = {
             "user_progress": {
                 "earned": 1,
@@ -433,7 +443,7 @@ class TestProgressCacheEntry:
         }
         result = svc.get_progress_cache_entry("42")
         assert result["cached_at"] == store_time
-        assert result["cached_at"] < time.time() - 1700
+        assert result["cached_at"] < svc._clock.time() - 1700
 
 
 # --- get_achievements ---
@@ -463,7 +473,7 @@ class TestGetAchievements:
         """Returns cached data without calling get_rom."""
         svc._achievements_cache["42"] = {
             "achievements": [{"ra_id": 1001, "title": "Cached"}],
-            "cached_at": time.time(),
+            "cached_at": svc._clock.time(),
         }
         plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
 
@@ -479,7 +489,7 @@ class TestGetAchievements:
         """Refetches from API when cache is older than TTL."""
         svc._achievements_cache["42"] = {
             "achievements": [{"ra_id": 1001, "title": "Old"}],
-            "cached_at": time.time() - (25 * 3600),
+            "cached_at": svc._clock.time() - (25 * 3600),
         }
         plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
         rom_data = _sample_rom_data()
@@ -517,7 +527,7 @@ class TestGetAchievements:
         """On API error, returns stale cache if available."""
         svc._achievements_cache["42"] = {
             "achievements": [{"ra_id": 1001, "title": "Stale"}],
-            "cached_at": time.time() - (25 * 3600),  # expired
+            "cached_at": svc._clock.time() - (25 * 3600),  # expired
         }
         plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
 
@@ -645,7 +655,7 @@ class TestGetAchievementProgress:
                 "earned_hardcore": 1,
                 "total": 10,
                 "earned_achievements": [1001, 1002, 1003],
-                "cached_at": time.time(),
+                "cached_at": svc._clock.time(),
             },
         }
 
@@ -685,13 +695,13 @@ class TestGetAchievementProgress:
         # Pre-populate achievements cache so get_achievements succeeds from cache
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
-            "cached_at": time.time(),
+            "cached_at": svc._clock.time(),
             "user_progress": {
                 "earned": 2,
                 "earned_hardcore": 0,
                 "total": 10,
                 "earned_achievements": [1001, 1002],
-                "cached_at": time.time() - (2 * 3600),  # expired progress
+                "cached_at": svc._clock.time() - (2 * 3600),  # expired progress
             },
         }
 
@@ -711,7 +721,7 @@ class TestGetAchievementProgress:
         # Pre-populate achievements cache so get_achievements succeeds
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
-            "cached_at": time.time(),
+            "cached_at": svc._clock.time(),
         }
 
         plugin._romm_api.get_current_user.side_effect = Exception("Network error")
@@ -862,11 +872,11 @@ class TestSyncAchievementsAfterSession:
         # Pre-populate cache with old progress
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
-            "cached_at": time.time(),
+            "cached_at": svc._clock.time(),
             "user_progress": {
                 "earned": 1,
                 "total": 10,
-                "cached_at": time.time(),
+                "cached_at": svc._clock.time(),
             },
         }
 
@@ -887,11 +897,11 @@ class TestSyncAchievementsAfterSession:
         plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
-            "cached_at": time.time(),
+            "cached_at": svc._clock.time(),
             "user_progress": {
                 "earned": 1,
                 "total": 10,
-                "cached_at": time.time(),
+                "cached_at": svc._clock.time(),
             },
         }
 
@@ -935,12 +945,12 @@ class TestSyncAchievementsAfterSession:
         plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
-            "cached_at": time.time(),
+            "cached_at": svc._clock.time(),
             "ra_id": 9999,
             "user_progress": {
                 "earned": 1,
                 "total": 10,
-                "cached_at": time.time(),
+                "cached_at": svc._clock.time(),
             },
         }
 
@@ -973,7 +983,7 @@ class TestGetCachedGameDetailAchievements:
                 "earned": 5,
                 "total": 10,
                 "earned_hardcore": 3,
-                "cached_at": time.time(),
+                "cached_at": svc._clock.time(),
             },
         }
         plugin._save_sync_state.clear()
@@ -1059,7 +1069,7 @@ class TestGetCachedGameDetailAchievements:
                 "earned": 5,
                 "total": 10,
                 "earned_hardcore": 3,
-                "cached_at": time.time() - (2 * 3600),  # expired
+                "cached_at": svc._clock.time() - (2 * 3600),  # expired
             },
         }
         plugin._save_sync_state.clear()

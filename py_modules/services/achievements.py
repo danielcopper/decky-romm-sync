@@ -6,14 +6,13 @@ user progress tracking, and post-session refresh.
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import DebugLogger, RommApiProtocol
+    from services.protocols import Clock, DebugLogger, RommApiProtocol
 
 
 class AchievementsService:
@@ -30,12 +29,14 @@ class AchievementsService:
         state: dict,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
+        clock: Clock,
         log_debug: DebugLogger,
     ) -> None:
         self._romm_api = romm_api
         self._state = state
         self._loop = loop
         self._logger = logger
+        self._clock = clock
         self._log_debug = log_debug
 
         self._achievements_cache: dict = {}
@@ -48,7 +49,7 @@ class AchievementsService:
         """
         cached = self._achievements_cache.get("_ra_user")
         if cached:
-            age = time.time() - cached.get("cached_at", 0)
+            age = self._clock.time() - cached.get("cached_at", 0)
             if age < self.RA_USERNAME_CACHE_TTL:
                 return cached.get("username", "")
         return ""
@@ -60,7 +61,7 @@ class AchievementsService:
             ra_username = (user_data.get("ra_username") or "").strip()
             self._achievements_cache["_ra_user"] = {
                 "username": ra_username,
-                "cached_at": time.time(),
+                "cached_at": self._clock.time(),
             }
             return ra_username
         except Exception as e:
@@ -76,7 +77,7 @@ class AchievementsService:
         entry = self._achievements_cache.get(rom_id_str)
         if not entry:
             return None
-        age = time.time() - entry.get("cached_at", 0)
+        age = self._clock.time() - entry.get("cached_at", 0)
         if age > self.ACHIEVEMENTS_CACHE_TTL:
             return None
         return entry
@@ -86,7 +87,7 @@ class AchievementsService:
         entry = self._achievements_cache.get(rom_id_str, {}).get("user_progress")
         if not entry:
             return None
-        age = time.time() - entry.get("cached_at", 0)
+        age = self._clock.time() - entry.get("cached_at", 0)
         if age > self.PROGRESS_CACHE_TTL:
             return None
         return entry
@@ -141,7 +142,7 @@ class AchievementsService:
             if rom_id_str not in self._achievements_cache:
                 self._achievements_cache[rom_id_str] = {}
             self._achievements_cache[rom_id_str]["achievements"] = achievements
-            self._achievements_cache[rom_id_str]["cached_at"] = time.time()
+            self._achievements_cache[rom_id_str]["cached_at"] = self._clock.time()
             self._achievements_cache[rom_id_str]["ra_id"] = ra_id
 
             return {"success": True, "achievements": achievements, "total": len(achievements)}
@@ -169,14 +170,14 @@ class AchievementsService:
                 "earned_hardcore": 0,
                 "total": total,
                 "earned_achievements": [],
-                "cached_at": time.time(),
+                "cached_at": self._clock.time(),
             }
         return {
             "earned": game_progress.get("num_awarded", 0) or 0,
             "earned_hardcore": game_progress.get("num_awarded_hardcore", 0) or 0,
             "total": game_progress.get("max_possible", total) or total,
             "earned_achievements": game_progress.get("earned_achievements", []),
-            "cached_at": time.time(),
+            "cached_at": self._clock.time(),
         }
 
     def _progress_data_response(self, progress_data):
@@ -211,7 +212,7 @@ class AchievementsService:
             user_data = await self._loop.run_in_executor(None, self._romm_api.get_current_user)
             fetched_username = (user_data.get("ra_username") or "").strip()
             if fetched_username:
-                self._achievements_cache["_ra_user"] = {"username": fetched_username, "cached_at": time.time()}
+                self._achievements_cache["_ra_user"] = {"username": fetched_username, "cached_at": self._clock.time()}
 
             progress_data = self._extract_game_progress(user_data.get("ra_progression"), ra_id, total)
 

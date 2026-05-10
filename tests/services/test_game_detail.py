@@ -115,6 +115,7 @@ def plugin(tmp_path):
         state=p._state,
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         log_debug=p._log_debug,
     )
 
