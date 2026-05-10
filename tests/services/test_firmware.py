@@ -1571,6 +1571,7 @@ class TestFirmwareListCache:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
+            get_bios_path=MagicMock(return_value=""),
         )
 
     def test_firmware_list_cached(self):
@@ -1668,6 +1669,7 @@ class TestCheckPlatformBiosCached:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
+            get_bios_path=MagicMock(return_value=""),
         )
         fw._firmware_cache = firmware_cache
         fw._firmware_cache_at = firmware_cache_at
@@ -1747,6 +1749,7 @@ class TestCheckPlatformBiosCached:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
+            get_bios_path=MagicMock(return_value=""),
         )
         fw._firmware_cache = []
         fw._firmware_cache_at = 1.0
@@ -1778,6 +1781,7 @@ class TestFirmwareCachePersistence:
             clock=clock,
             save_state=MagicMock(),
             firmware_cache_persister=persister,
+            get_bios_path=MagicMock(return_value=""),
         )
         assert fw._firmware_cache == cached_items
         assert fw._firmware_cache_epoch == 1000.0
@@ -1799,6 +1803,7 @@ class TestFirmwareCachePersistence:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=persister,
+            get_bios_path=MagicMock(return_value=""),
         )
         assert fw._firmware_cache is None
 
@@ -1816,6 +1821,7 @@ class TestFirmwareCachePersistence:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=persister,
+            get_bios_path=MagicMock(return_value=""),
         )
         assert fw._firmware_cache is None
 

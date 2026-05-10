@@ -47,6 +47,7 @@ def plugin():
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         save_state=MagicMock(),
         firmware_cache_persister=FakeFirmwareCachePersister(),
+        get_bios_path=MagicMock(return_value=""),
     )
 
     p._sync_service = LibraryService(

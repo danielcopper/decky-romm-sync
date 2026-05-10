@@ -45,7 +45,7 @@ class FirmwareService:
         clock: Clock,
         save_state: StatePersister,
         firmware_cache_persister: FirmwareCachePersister,
-        get_bios_path: BiosPathProvider | None = None,
+        get_bios_path: BiosPathProvider,
     ) -> None:
         self._romm_api = romm_api
         self._state = state
@@ -144,7 +144,7 @@ class FirmwareService:
         placement (e.g. dc/dc_boot.bin). Falls back to flat in bios root
         for files not in the registry.
         """
-        bios_base = self._get_bios_path() if self._get_bios_path else ""
+        bios_base = self._get_bios_path()
         file_name = firmware.get("file_name", "")
         reg_entry = self._bios_files_index.get(file_name)
         if reg_entry and reg_entry.get("firmware_path"):
@@ -281,7 +281,7 @@ class FirmwareService:
 
     def _group_registry_firmware(self):
         """Build platform map from bios registry (offline fallback)."""
-        bios_base = self._get_bios_path() if self._get_bios_path else ""
+        bios_base = self._get_bios_path()
         platforms_map = {}
         for reg_slug, reg_files in self._bios_registry.get("platforms", {}).items():
             if reg_slug not in platforms_map:
@@ -520,7 +520,7 @@ class FirmwareService:
         except Exception:
             if not registry_platform:
                 return {"needs_bios": False}
-            bios_base = self._get_bios_path() if self._get_bios_path else ""
+            bios_base = self._get_bios_path()
             registry_items = [
                 {
                     "file_name": file_name,
