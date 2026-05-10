@@ -282,7 +282,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         logger=cfg.logger,
         emit=cfg.emit,
         save_state=cfg.save_state,
-        remove_artwork_files=artwork_service.remove_artwork_files,
+        artwork_remover=artwork_service,
     )
 
     sync_service = LibraryService(

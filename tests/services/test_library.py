@@ -83,7 +83,7 @@ def plugin():
         logger=decky.logger,
         emit=decky.emit,
         save_state=p._save_state,
-        remove_artwork_files=artwork_service.remove_artwork_files,
+        artwork_remover=artwork_service,
     )
     # Default migration service mock — no migration pending. Tests that need
     # to exercise the @migration_blocked gate override this.

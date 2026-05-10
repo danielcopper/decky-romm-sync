@@ -7,9 +7,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable
 
-    from services.protocols import EventEmitter, RommApiProtocol, StatePersister, SteamConfigAdapter
+    from services.protocols import (
+        ArtworkRemover,
+        EventEmitter,
+        RommApiProtocol,
+        StatePersister,
+        SteamConfigAdapter,
+    )
 
 
 class ShortcutRemovalService:
@@ -25,7 +30,7 @@ class ShortcutRemovalService:
         logger: logging.Logger,
         emit: EventEmitter,
         save_state: StatePersister,
-        remove_artwork_files: Callable[[str, str | int, dict], None],
+        artwork_remover: ArtworkRemover,
     ) -> None:
         self._romm_api = romm_api
         self._steam_config = steam_config
@@ -34,7 +39,7 @@ class ShortcutRemovalService:
         self._logger = logger
         self._emit = emit
         self._save_state = save_state
-        self._remove_artwork_files = remove_artwork_files
+        self._artwork_remover = artwork_remover
 
     # ── Registry helpers ───────────────────────────────────────────────────
 
@@ -114,7 +119,7 @@ class ShortcutRemovalService:
         for rom_id in removed_rom_ids:
             entry = self._state["shortcut_registry"].pop(str(rom_id), None)
             if entry and grid:
-                self._remove_artwork_files(grid, rom_id, entry)
+                self._artwork_remover.remove_artwork_files(grid, rom_id, entry)
 
         # Update sync_stats to reflect current registry
         registry = self._state.get("shortcut_registry", {})

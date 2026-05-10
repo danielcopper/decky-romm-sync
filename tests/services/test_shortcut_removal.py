@@ -23,12 +23,12 @@ def steam_config():
 
 
 @pytest.fixture
-def remove_artwork_files_mock():
+def artwork_remover_mock():
     return MagicMock()
 
 
 @pytest.fixture
-def svc(state, steam_config, remove_artwork_files_mock):
+def svc(state, steam_config, artwork_remover_mock):
     service = ShortcutRemovalService(
         romm_api=MagicMock(),
         steam_config=steam_config,
@@ -37,7 +37,7 @@ def svc(state, steam_config, remove_artwork_files_mock):
         logger=decky.logger,
         emit=decky.emit,
         save_state=MagicMock(),
-        remove_artwork_files=remove_artwork_files_mock,
+        artwork_remover=artwork_remover_mock,
     )
     return service
 
@@ -173,7 +173,7 @@ class TestReportRemovalResults:
         assert state["shortcut_registry"] == {}
 
     @pytest.mark.asyncio
-    async def test_cleans_up_artwork_via_callback(self, svc, state, steam_config, remove_artwork_files_mock, tmp_path):
+    async def test_cleans_up_artwork_via_callback(self, svc, state, steam_config, artwork_remover_mock, tmp_path):
         grid_dir = tmp_path / "grid"
         grid_dir.mkdir()
         steam_config.grid_dir = lambda: str(grid_dir)
@@ -183,7 +183,7 @@ class TestReportRemovalResults:
         }
 
         await svc.report_removal_results([10])
-        assert remove_artwork_files_mock.called
+        assert artwork_remover_mock.remove_artwork_files.called
 
     @pytest.mark.asyncio
     async def test_partial_removal(self, svc, state, tmp_path):
@@ -245,7 +245,7 @@ class TestRemovalCleansUpArtwork:
             logger=decky.logger,
             emit=decky.emit,
             save_state=MagicMock(),
-            remove_artwork_files=artwork_svc.remove_artwork_files,
+            artwork_remover=artwork_svc,
         )
         svc._loop = asyncio.get_event_loop()
 
@@ -282,7 +282,7 @@ class TestRemovalCleansUpArtwork:
             logger=decky.logger,
             emit=decky.emit,
             save_state=MagicMock(),
-            remove_artwork_files=artwork_svc.remove_artwork_files,
+            artwork_remover=artwork_svc,
         )
         svc._loop = asyncio.get_event_loop()
 

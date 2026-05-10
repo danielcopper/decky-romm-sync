@@ -440,6 +440,18 @@ class SyncStateRef(Protocol):
     def __call__(self) -> SyncState: ...
 
 
+class ArtworkRemover(Protocol):
+    """Delete the on-disk artwork files associated with a registry entry.
+
+    Consumed by ``ShortcutRemovalService`` to clean up grid/banner/cover
+    files when a shortcut is removed. The exact set of files and the
+    naming scheme are an artwork-layer concern — this Protocol exposes
+    only the single-entry deletion seam the removal flow needs.
+    """
+
+    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None: ...
+
+
 # ---------------------------------------------------------------------------
 # Multi-method cross-service Protocols
 # ---------------------------------------------------------------------------
