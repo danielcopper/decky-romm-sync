@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import FakeFirmwareCachePersister
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
 
@@ -52,6 +52,7 @@ def plugin():
         save_state=MagicMock(),
         firmware_cache_persister=FakeFirmwareCachePersister(),
         get_bios_path=MagicMock(return_value=""),
+        core_info=FakeCoreInfoProvider(),
     )
 
     p._sync_service = LibraryService(
@@ -1199,11 +1200,9 @@ class TestPerCoreFiltering:
         fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
 
         # gpSP only uses gba_bios.bin — all files returned but gb/sgb marked as not used by active
-        with (
-            patch("services.firmware.es_de_config.get_active_core", return_value=("gpsp_libretro", "gpSP")),
-            patch("services.firmware.es_de_config.get_available_cores", return_value=[]),
-            patch.object(fw, "_get_bios_path", return_value=str(tmp_path / "bios")),
-        ):
+        fw._core_info.active_core = ("gpsp_libretro", "gpSP")
+        fw._core_info.available_cores = []
+        with patch.object(fw, "_get_bios_path", return_value=str(tmp_path / "bios")):
             result = await fw.check_platform_bios("gba")
 
         assert result["needs_bios"] is True
@@ -1293,11 +1292,9 @@ class TestPerCoreFiltering:
         fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
 
         # mGBA uses all 3 files, all optional
-        with (
-            patch("services.firmware.es_de_config.get_active_core", return_value=("mgba_libretro", "mGBA")),
-            patch("services.firmware.es_de_config.get_available_cores", return_value=[]),
-        ):
-            result = await fw.check_platform_bios("gba")
+        fw._core_info.active_core = ("mgba_libretro", "mGBA")
+        fw._core_info.available_cores = []
+        result = await fw.check_platform_bios("gba")
 
         assert result["needs_bios"] is True
         assert result["server_count"] == 3
@@ -1342,11 +1339,9 @@ class TestPerCoreFiltering:
         fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
 
         # Core resolution fails
-        with (
-            patch("services.firmware.es_de_config.get_active_core", return_value=(None, None)),
-            patch("services.firmware.es_de_config.get_available_cores", return_value=[]),
-        ):
-            result = await fw.check_platform_bios("gba")
+        fw._core_info.active_core = (None, None)
+        fw._core_info.available_cores = []
+        result = await fw.check_platform_bios("gba")
 
         assert result["needs_bios"] is True
         assert result["server_count"] == 1
@@ -1386,10 +1381,10 @@ class TestPerCoreFiltering:
 
         fw._loop = asyncio.get_event_loop()
 
+        fw._core_info.active_core = ("gpsp_libretro", "gpSP")
+        fw._core_info.available_cores = []
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch("services.firmware.es_de_config.get_active_core", return_value=("gpsp_libretro", "gpSP")),
-            patch("services.firmware.es_de_config.get_available_cores", return_value=[]),
             patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
         ):
             result = await fw.check_platform_bios("gba")
@@ -1539,11 +1534,11 @@ class TestGetFirmwareStatusOfflineFallback:
 
         fw._loop = asyncio.get_event_loop()
 
+        fw._core_info.active_core = (None, None)
+        fw._core_info.available_cores = []
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
             patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
-            patch("services.firmware.es_de_config.get_active_core", return_value=(None, None)),
-            patch("services.firmware.es_de_config.get_available_cores", return_value=[]),
         ):
             result = await fw.get_firmware_status()
 
@@ -1572,6 +1567,7 @@ class TestFirmwareListCache:
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             get_bios_path=MagicMock(return_value=""),
+            core_info=FakeCoreInfoProvider(),
         )
 
     def test_firmware_list_cached(self):
@@ -1657,9 +1653,16 @@ class TestFirmwareListCache:
 class TestCheckPlatformBiosCached:
     """Tests for check_platform_bios_cached — cache-only BIOS status read."""
 
-    def _make_service(self, firmware_cache=None, firmware_cache_at: float = 0, bios_registry=None, state=None):
+    def _make_service(
+        self,
+        firmware_cache=None,
+        firmware_cache_at: float = 0,
+        bios_registry=None,
+        state=None,
+    ) -> tuple[FirmwareService, FakeCoreInfoProvider]:
         import logging
 
+        core_info = FakeCoreInfoProvider()
         fw = FirmwareService(
             romm_api=MagicMock(),
             state=state or {"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
@@ -1670,31 +1673,32 @@ class TestCheckPlatformBiosCached:
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             get_bios_path=MagicMock(return_value=""),
+            core_info=core_info,
         )
         fw._firmware_cache = firmware_cache
         fw._firmware_cache_at = firmware_cache_at
         fw._firmware_cache_epoch = firmware_cache_at
         if bios_registry:
             fw._bios_registry = bios_registry
-        return fw
+        return fw, core_info
 
     def test_returns_none_when_cache_empty(self):
         """No firmware cache → returns None."""
-        fw = self._make_service(firmware_cache=None)
+        fw, _ = self._make_service(firmware_cache=None)
         result = fw.check_platform_bios_cached("gba")
         assert result is None
 
     def test_returns_needs_bios_false_no_matching_firmware(self):
         """Cache populated but no firmware for this platform → needs_bios=False."""
-        fw = self._make_service(
+        fw, core_info = self._make_service(
             firmware_cache=[
                 {"file_path": "bios/snes/some.bin", "file_name": "some.bin", "file_size_bytes": 100, "md5_hash": ""}
             ],
             firmware_cache_at=1000.0,
         )
 
-        with patch("domain.es_de_config.get_active_core", return_value=(None, None)):
-            result = fw.check_platform_bios_cached("gba")
+        core_info.active_core = (None, None)
+        result = fw.check_platform_bios_cached("gba")
 
         assert result is not None
         assert result["needs_bios"] is False
@@ -1702,7 +1706,7 @@ class TestCheckPlatformBiosCached:
 
     def test_returns_bios_status_from_cache(self, tmp_path):
         """Cache populated with matching firmware → full BIOS status with cached_at."""
-        fw = self._make_service(
+        fw, core_info = self._make_service(
             firmware_cache=[
                 {
                     "file_path": "bios/gba/gba_bios.bin",
@@ -1715,14 +1719,9 @@ class TestCheckPlatformBiosCached:
             firmware_cache_at=42.0,
         )
 
-        with (
-            patch("domain.es_de_config.get_active_core", return_value=("mgba_libretro.so", "mGBA")),
-            patch(
-                "domain.es_de_config.get_available_cores",
-                return_value=[{"label": "mGBA", "so": "mgba_libretro.so"}],
-            ),
-            patch.object(fw, "_get_bios_path", return_value=str(tmp_path)),
-        ):
+        core_info.active_core = ("mgba_libretro.so", "mGBA")
+        core_info.available_cores = [{"label": "mGBA", "so": "mgba_libretro.so"}]
+        with patch.object(fw, "_get_bios_path", return_value=str(tmp_path)):
             result = fw.check_platform_bios_cached("gba")
 
         assert result is not None
@@ -1740,6 +1739,7 @@ class TestCheckPlatformBiosCached:
         api = MagicMock()
         import logging
 
+        core_info = FakeCoreInfoProvider()
         fw = FirmwareService(
             romm_api=api,
             state={"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
@@ -1750,13 +1750,14 @@ class TestCheckPlatformBiosCached:
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             get_bios_path=MagicMock(return_value=""),
+            core_info=core_info,
         )
         fw._firmware_cache = []
         fw._firmware_cache_at = 1.0
         fw._firmware_cache_epoch = 1.0
 
-        with patch("domain.es_de_config.get_active_core", return_value=(None, None)):
-            fw.check_platform_bios_cached("gba")
+        core_info.active_core = (None, None)
+        fw.check_platform_bios_cached("gba")
 
         api.list_firmware.assert_not_called()
         api.get_firmware.assert_not_called()
@@ -1782,6 +1783,7 @@ class TestFirmwareCachePersistence:
             save_state=MagicMock(),
             firmware_cache_persister=persister,
             get_bios_path=MagicMock(return_value=""),
+            core_info=FakeCoreInfoProvider(),
         )
         assert fw._firmware_cache == cached_items
         assert fw._firmware_cache_epoch == 1000.0
@@ -1804,6 +1806,7 @@ class TestFirmwareCachePersistence:
             save_state=MagicMock(),
             firmware_cache_persister=persister,
             get_bios_path=MagicMock(return_value=""),
+            core_info=FakeCoreInfoProvider(),
         )
         assert fw._firmware_cache is None
 
@@ -1822,6 +1825,7 @@ class TestFirmwareCachePersistence:
             save_state=MagicMock(),
             firmware_cache_persister=persister,
             get_bios_path=MagicMock(return_value=""),
+            core_info=FakeCoreInfoProvider(),
         )
         assert fw._firmware_cache is None
 

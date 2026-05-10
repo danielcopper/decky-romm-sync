@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import FakeFirmwareCachePersister, _make_testable_plugin
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
@@ -133,6 +133,7 @@ def plugin(tmp_path):
         save_state=MagicMock(),
         firmware_cache_persister=FakeFirmwareCachePersister(),
         get_bios_path=MagicMock(return_value=""),
+        core_info=FakeCoreInfoProvider(),
     )
 
     # Store fake_api on plugin for test access
@@ -472,11 +473,9 @@ class TestGetCachedGameDetailBiosFromCache:
         plugin._firmware_service._firmware_cache_at = 99.0
         plugin._firmware_service._firmware_cache_epoch = 99.0
 
-        with (
-            patch("domain.es_de_config.get_active_core", return_value=("mgba_libretro.so", "mGBA")),
-            patch("domain.es_de_config.get_available_cores", return_value=[]),
-            patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(tmp_path)),
-        ):
+        plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
+        plugin._firmware_service._core_info.available_cores = []
+        with patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(tmp_path)):
             result = game_detail_service.get_cached_game_detail(50000)
 
         assert result["found"] is True
@@ -500,8 +499,6 @@ class TestGetCachedGameDetailBiosFromCache:
     @pytest.mark.asyncio
     async def test_bios_status_none_when_needs_bios_false(self, plugin, game_detail_service):
         """Cache populated but no firmware for platform → bios_status is None."""
-        from unittest.mock import patch
-
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 50000,
             "name": "Tetris",
@@ -512,8 +509,8 @@ class TestGetCachedGameDetailBiosFromCache:
         plugin._firmware_service._firmware_cache_at = 50.0
         plugin._firmware_service._firmware_cache_epoch = 50.0
 
-        with patch("domain.es_de_config.get_active_core", return_value=(None, None)):
-            result = game_detail_service.get_cached_game_detail(50000)
+        plugin._firmware_service._core_info.active_core = (None, None)
+        result = game_detail_service.get_cached_game_detail(50000)
 
         assert result["bios_status"] is None
 
@@ -691,11 +688,9 @@ class TestComputedFields:
         ]
         plugin._firmware_service._firmware_cache_epoch = 100.0
 
-        with (
-            patch("domain.es_de_config.get_active_core", return_value=("mgba_libretro.so", "mGBA")),
-            patch("domain.es_de_config.get_available_cores", return_value=[]),
-            patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(tmp_path / "nonexistent")),
-        ):
+        plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
+        plugin._firmware_service._core_info.available_cores = []
+        with patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(tmp_path / "nonexistent")):
             result = game_detail_service.get_cached_game_detail(99999)
 
         assert result["bios_level"] is not None
@@ -745,11 +740,9 @@ class TestComputedFields:
         ]
         plugin._firmware_service._firmware_cache_epoch = 100.0
 
-        with (
-            patch("domain.es_de_config.get_active_core", return_value=("mgba_libretro.so", "mGBA")),
-            patch("domain.es_de_config.get_available_cores", return_value=[]),
-            patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(bios_dir)),
-        ):
+        plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
+        plugin._firmware_service._core_info.available_cores = []
+        with patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(bios_dir)):
             result = game_detail_service.get_cached_game_detail(99999)
 
         assert result["bios_level"] == "ok"

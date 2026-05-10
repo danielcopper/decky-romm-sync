@@ -201,6 +201,7 @@ class Plugin:
                 save_settings_to_disk=self._save_settings_to_disk,
                 save_metadata_cache=self._save_metadata_cache,
                 firmware_cache_persister=FirmwareCachePersisterAdapter(self._persistence),
+                core_info_provider=adapters["es_de_core_info"],
                 save_sync_state_persister=SaveSyncStatePersisterAdapter(self._persistence),
                 log_debug=self._log_debug,
             )

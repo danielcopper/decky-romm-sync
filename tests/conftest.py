@@ -133,6 +133,34 @@ class FakeFirmwareCachePersister:
         return self.canned_load
 
 
+class FakeCoreInfoProvider:
+    """In-memory CoreInfoProvider for tests.
+
+    Returns the configured active_core and available_cores for any system.
+    Both attributes are mutable so tests can set them directly on the
+    instance before exercising the code under test.
+    """
+
+    def __init__(
+        self,
+        *,
+        active_core: tuple[str | None, str | None] = (None, None),
+        available_cores: list[dict] | None = None,
+    ) -> None:
+        self.active_core = active_core
+        self.available_cores: list[dict] = available_cores if available_cores is not None else []
+
+    def get_active_core(
+        self,
+        system_name: str,
+        rom_filename: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        return self.active_core
+
+    def get_available_cores(self, system_name: str) -> list[dict]:
+        return self.available_cores
+
+
 @pytest.fixture(autouse=True)
 def _reset_es_de_config_user_home():
     """Reset ``es_de_config`` module-level state between every test.

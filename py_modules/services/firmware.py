@@ -12,7 +12,6 @@ import os
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
-from domain import es_de_config
 from domain.bios import collect_firmware_status
 from lib.errors import error_response
 
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         BiosPathProvider,
         Clock,
+        CoreInfoProvider,
         FirmwareCachePersister,
         RommApiProtocol,
         StatePersister,
@@ -46,6 +46,7 @@ class FirmwareService:
         save_state: StatePersister,
         firmware_cache_persister: FirmwareCachePersister,
         get_bios_path: BiosPathProvider,
+        core_info: CoreInfoProvider,
     ) -> None:
         self._romm_api = romm_api
         self._state = state
@@ -56,6 +57,7 @@ class FirmwareService:
         self._save_state = save_state
         self._firmware_cache_persister = firmware_cache_persister
         self._get_bios_path = get_bios_path
+        self._core_info = core_info
         self._bios_registry: dict = {}
         self._bios_files_index: dict = {}
         self._firmware_cache: list | None = None
@@ -218,7 +220,7 @@ class FirmwareService:
             return None
 
         fw_slugs = self._platform_to_firmware_slugs(platform_slug)
-        active_core_so, active_core_label = es_de_config.get_active_core(platform_slug, rom_filename=rom_filename)
+        active_core_so, active_core_label = self._core_info.get_active_core(platform_slug, rom_filename=rom_filename)
 
         registry_platform = {}
         for slug in fw_slugs:
@@ -254,7 +256,7 @@ class FirmwareService:
             "files": [asdict(f) for f in files],
             "active_core": active_core_so,
             "active_core_label": active_core_label,
-            "available_cores": es_de_config.get_available_cores(platform_slug),
+            "available_cores": self._core_info.get_available_cores(platform_slug),
             "cached_at": self._firmware_cache_epoch,
         }
 
@@ -309,10 +311,10 @@ class FirmwareService:
         }
         for plat in platforms_map.values():
             slug = plat["platform_slug"]
-            core_so, core_label = es_de_config.get_active_core(slug)
+            core_so, core_label = self._core_info.get_active_core(slug)
             plat["active_core"] = core_so
             plat["active_core_label"] = core_label
-            plat["available_cores"] = es_de_config.get_available_cores(slug)
+            plat["available_cores"] = self._core_info.get_available_cores(slug)
             for f in plat["files"]:
                 self._enrich_firmware_file(f, core_so=core_so)
             plat["has_games"] = slug in installed_slugs
@@ -479,7 +481,7 @@ class FirmwareService:
             return resp
 
         fw_slugs = self._platform_to_firmware_slugs(platform_slug)
-        core_so, _ = es_de_config.get_active_core(platform_slug)
+        core_so, _ = self._core_info.get_active_core(platform_slug)
 
         platform_firmware = [
             fw
@@ -498,7 +500,7 @@ class FirmwareService:
     async def check_platform_bios(self, platform_slug, rom_filename=None):
         """Check if RomM has firmware for this platform and whether it's downloaded."""
         fw_slugs = self._platform_to_firmware_slugs(platform_slug)
-        active_core_so, active_core_label = es_de_config.get_active_core(platform_slug, rom_filename=rom_filename)
+        active_core_so, active_core_label = self._core_info.get_active_core(platform_slug, rom_filename=rom_filename)
 
         # Build combined registry entries for this platform from all mapped slugs
         registry_platform = {}
@@ -552,7 +554,7 @@ class FirmwareService:
             "files": [asdict(f) for f in files],
             "active_core": active_core_so,
             "active_core_label": active_core_label,
-            "available_cores": es_de_config.get_available_cores(platform_slug),
+            "available_cores": self._core_info.get_available_cores(platform_slug),
         }
 
     def _delete_platform_bios_io(self, files):

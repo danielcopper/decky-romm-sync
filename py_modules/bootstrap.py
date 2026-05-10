@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass
 
 from adapters.asyncio_sleeper import AsyncioSleeper
+from adapters.es_de_core_info import EsDeCoreInfoAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -36,6 +37,7 @@ from services.playtime import PlaytimeService
 from services.protocols import (
     BiosPathProvider,
     Clock,
+    CoreInfoProvider,
     CoreNameProviderFn,
     DebugLogger,
     EventEmitter,
@@ -96,6 +98,7 @@ class WiringConfig:
     save_settings_to_disk: SettingsPersister
     save_metadata_cache: StatePersister
     firmware_cache_persister: FirmwareCachePersister
+    core_info_provider: CoreInfoProvider
     save_sync_state_persister: SaveSyncStatePersister
     log_debug: DebugLogger
 
@@ -147,6 +150,7 @@ def bootstrap(
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
+    es_de_core_info = EsDeCoreInfoAdapter()
 
     return {
         "persistence": persistence,
@@ -160,6 +164,7 @@ def bootstrap(
         "clock": clock,
         "uuid_gen": uuid_gen,
         "sleeper": sleeper,
+        "es_de_core_info": es_de_core_info,
     }
 
 
@@ -343,6 +348,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         save_state=cfg.save_state,
         firmware_cache_persister=cfg.firmware_cache_persister,
         get_bios_path=cfg.get_bios_path,
+        core_info=cfg.core_info_provider,
     )
 
     sgdb_service = SteamGridService(

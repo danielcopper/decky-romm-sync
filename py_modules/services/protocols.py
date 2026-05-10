@@ -437,6 +437,22 @@ class CoreResolverFn(Protocol):
     def __call__(self, system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]: ...
 
 
+class CoreInfoProvider(Protocol):
+    """Core resolution for ES-DE configured systems, consumed by FirmwareService.
+
+    Wraps the module-level functions in domain.es_de_config behind a boundary
+    so services can be tested without patching module symbols.
+    """
+
+    def get_active_core(
+        self,
+        system_name: str,
+        rom_filename: str | None = None,
+    ) -> tuple[str | None, str | None]: ...
+
+    def get_available_cores(self, system_name: str) -> list[dict]: ...
+
+
 class CoreNameProviderFn(Protocol):
     """Return the RetroArch canonical ``corename`` for a core shared object.
 

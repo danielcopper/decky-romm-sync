@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeFirmwareCachePersister
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
@@ -48,6 +48,7 @@ def plugin():
         save_state=MagicMock(),
         firmware_cache_persister=FakeFirmwareCachePersister(),
         get_bios_path=MagicMock(return_value=""),
+        core_info=FakeCoreInfoProvider(),
     )
 
     p._sync_service = LibraryService(
