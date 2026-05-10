@@ -11,10 +11,8 @@ import fcntl
 import json
 import os
 import shutil
-import time
 import urllib.parse
 import zipfile
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u
@@ -26,9 +24,11 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         BiosPathProvider,
+        Clock,
         EventEmitter,
         RommApiProtocol,
         RomsPathProvider,
+        Sleeper,
         StatePersister,
         SystemResolver,
     )
@@ -68,6 +68,8 @@ class DownloadService:
         logger: logging.Logger,
         runtime_dir: str,
         emit: EventEmitter,
+        clock: Clock,
+        sleeper: Sleeper,
         save_state: StatePersister,
         get_roms_path: RomsPathProvider | None = None,
         get_bios_path: BiosPathProvider | None = None,
@@ -80,6 +82,8 @@ class DownloadService:
         self._logger = logger
         self._runtime_dir = runtime_dir
         self._emit = emit
+        self._clock = clock
+        self._sleeper = sleeper
         self._save_state = save_state
         self._get_roms_path = get_roms_path
         self._get_bios_path = get_bios_path
@@ -200,7 +204,7 @@ class DownloadService:
         requests_path = os.path.join(self._runtime_dir, "download_requests.json")
         while True:
             try:
-                await asyncio.sleep(2)
+                await self._sleeper.sleep(2)
                 # Pause polling while a RetroDECK migration is pending — must
                 # short-circuit BEFORE _poll_download_requests_io reads + clears
                 # the request file, otherwise queued requests would be silently
@@ -327,7 +331,7 @@ class DownloadService:
             "file_path": launch_file,
             "system": system,
             "platform_slug": rom_detail.get("platform_slug", ""),
-            "installed_at": datetime.now().isoformat(),
+            "installed_at": self._clock.now().isoformat(),
             "rom_dir": extract_dir,
         }
         self._state["installed_roms"][str(rom_id)] = installed_entry
@@ -345,7 +349,7 @@ class DownloadService:
             "file_path": target_path,
             "system": system,
             "platform_slug": rom_detail.get("platform_slug", ""),
-            "installed_at": datetime.now().isoformat(),
+            "installed_at": self._clock.now().isoformat(),
         }
         self._state["installed_roms"][str(rom_id)] = installed_entry
         self._save_state()
@@ -357,7 +361,7 @@ class DownloadService:
         last_log = [0.0]
 
         def progress_callback(downloaded, total):
-            now = time.monotonic()
+            now = self._clock.monotonic()
             if now - last_log[0] >= 30.0:
                 last_log[0] = now
                 mb_dl = downloaded / (1024 * 1024)

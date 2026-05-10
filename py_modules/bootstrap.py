@@ -313,6 +313,8 @@ def wire_services(cfg: WiringConfig) -> dict:
         logger=cfg.logger,
         runtime_dir=cfg.runtime_dir,
         emit=cfg.emit,
+        clock=cfg.clock,
+        sleeper=cfg.sleeper,
         save_state=cfg.save_state,
         get_roms_path=cfg.get_roms_path,
         get_bios_path=cfg.get_bios_path,

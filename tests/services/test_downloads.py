@@ -1,12 +1,14 @@
 import asyncio
 import json
 import os
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
+from fakes.system_time import FakeClock, FakeSleeper
 
 from adapters.steam_config import SteamConfigAdapter
 from services.downloads import DownloadService
@@ -52,6 +54,8 @@ def plugin():
         logger=decky.logger,
         runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
         emit=decky.emit,
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+        sleeper=FakeSleeper(),
         save_state=MagicMock(),
         get_roms_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
         get_bios_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
@@ -585,15 +589,19 @@ class TestPollDownloadRequestsMigrationPause:
         original_payload = [{"rom_id": 42}, {"rom_id": 99}]
         requests_path.write_text(json.dumps(original_payload))
 
-        # Stub asyncio.sleep so we can run a single iteration deterministically:
-        # first call sleeps normally (returns immediately), second call cancels
-        # the loop so we exit after one pass.
-        sleep_calls = [0]
+        # Stub the injected Sleeper so we can run a single iteration
+        # deterministically: first call sleeps normally (returns immediately),
+        # second call cancels the loop so we exit after one pass.
+        class _CancellingSleeper:
+            def __init__(self):
+                self.calls = 0
 
-        async def fake_sleep(_seconds):
-            sleep_calls[0] += 1
-            if sleep_calls[0] >= 2:
-                raise asyncio.CancelledError()
+            async def sleep(self, _seconds):
+                self.calls += 1
+                if self.calls >= 2:
+                    raise asyncio.CancelledError
+
+        plugin._download_service._sleeper = _CancellingSleeper()
 
         # Track whether the request file IO was invoked.
         io_called = [False]
@@ -605,10 +613,7 @@ class TestPollDownloadRequestsMigrationPause:
 
         plugin._download_service._poll_download_requests_io = tracking_io
 
-        with (
-            patch("services.downloads.asyncio.sleep", side_effect=fake_sleep),
-            pytest.raises(asyncio.CancelledError),
-        ):
+        with pytest.raises(asyncio.CancelledError):
             await plugin._download_service.poll_download_requests()
 
         # IO must NOT have been called while migration was pending.
