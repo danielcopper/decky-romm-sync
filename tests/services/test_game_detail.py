@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import _make_testable_plugin
+from conftest import FakeFirmwareCachePersister, _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
@@ -131,6 +131,7 @@ def plugin(tmp_path):
         plugin_dir=decky.DECKY_PLUGIN_DIR,
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         save_state=MagicMock(),
+        firmware_cache_persister=FakeFirmwareCachePersister(),
     )
 
     # Store fake_api on plugin for test access

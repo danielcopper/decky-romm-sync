@@ -1570,6 +1570,7 @@ class TestFirmwareListCache:
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=_make_clock(),
             save_state=MagicMock(),
+            firmware_cache_persister=FakeFirmwareCachePersister(),
         )
 
     def test_firmware_list_cached(self):
@@ -1666,6 +1667,7 @@ class TestCheckPlatformBiosCached:
             plugin_dir="/fake",
             clock=_make_clock(),
             save_state=MagicMock(),
+            firmware_cache_persister=FakeFirmwareCachePersister(),
         )
         fw._firmware_cache = firmware_cache
         fw._firmware_cache_at = firmware_cache_at
@@ -1744,6 +1746,7 @@ class TestCheckPlatformBiosCached:
             plugin_dir="/fake",
             clock=_make_clock(),
             save_state=MagicMock(),
+            firmware_cache_persister=FakeFirmwareCachePersister(),
         )
         fw._firmware_cache = []
         fw._firmware_cache_at = 1.0
@@ -1813,21 +1816,6 @@ class TestFirmwareCachePersistence:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=persister,
-        )
-        assert fw._firmware_cache is None
-
-    def test_no_persister_skips_restore(self):
-        """Omitting firmware_cache_persister skips disk restore gracefully."""
-        import decky
-
-        fw = FirmwareService(
-            romm_api=MagicMock(),
-            state={"shortcut_registry": {}, "downloaded_bios": {}},
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
-            clock=_make_clock(),
-            save_state=MagicMock(),
         )
         assert fw._firmware_cache is None
 

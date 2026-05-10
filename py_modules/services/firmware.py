@@ -44,7 +44,7 @@ class FirmwareService:
         plugin_dir: str,
         clock: Clock,
         save_state: StatePersister,
-        firmware_cache_persister: FirmwareCachePersister | None = None,
+        firmware_cache_persister: FirmwareCachePersister,
         get_bios_path: BiosPathProvider | None = None,
     ) -> None:
         self._romm_api = romm_api
@@ -155,8 +155,6 @@ class FirmwareService:
 
     def _restore_firmware_cache(self) -> None:
         """Load firmware cache from disk on init."""
-        if self._firmware_cache_persister is None:
-            return
         try:
             data = self._firmware_cache_persister.load()
             if data and "items" in data and "cached_at" in data:
@@ -169,7 +167,7 @@ class FirmwareService:
 
     def _persist_firmware_cache(self) -> None:
         """Write current firmware cache to disk."""
-        if self._firmware_cache_persister is None or self._firmware_cache is None:
+        if self._firmware_cache is None:
             return
         try:
             self._firmware_cache_persister.save(
@@ -205,11 +203,10 @@ class FirmwareService:
         self._firmware_cache = None
         self._firmware_cache_at = 0
         self._firmware_cache_epoch = 0
-        if self._firmware_cache_persister is not None:
-            try:
-                self._firmware_cache_persister.save({})
-            except Exception as e:
-                self._logger.warning(f"Failed to clear persisted firmware cache: {e}")
+        try:
+            self._firmware_cache_persister.save({})
+        except Exception as e:
+            self._logger.warning(f"Failed to clear persisted firmware cache: {e}")
 
     def check_platform_bios_cached(self, platform_slug, rom_filename=None):
         """Return BIOS status from in-memory cache only — no HTTP.

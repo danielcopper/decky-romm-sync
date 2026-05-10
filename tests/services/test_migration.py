@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import FakeFirmwareCachePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
@@ -45,6 +46,7 @@ def plugin():
         plugin_dir=decky.DECKY_PLUGIN_DIR,
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         save_state=MagicMock(),
+        firmware_cache_persister=FakeFirmwareCachePersister(),
     )
 
     p._sync_service = LibraryService(
