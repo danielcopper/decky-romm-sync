@@ -335,6 +335,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         loop=cfg.loop,
         logger=cfg.logger,
         plugin_dir=cfg.plugin_dir,
+        clock=cfg.clock,
         save_state=cfg.save_state,
         save_firmware_cache=cfg.save_firmware_cache,
         load_firmware_cache=cfg.load_firmware_cache,

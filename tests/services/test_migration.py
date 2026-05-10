@@ -1,8 +1,10 @@
 import asyncio
 import os
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from fakes.system_time import FakeClock
 
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -41,6 +43,7 @@ def plugin():
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
         plugin_dir=decky.DECKY_PLUGIN_DIR,
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         save_state=MagicMock(),
     )
 

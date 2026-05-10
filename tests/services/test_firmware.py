@@ -1,9 +1,10 @@
 import asyncio
 import os
-import time
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fakes.system_time import FakeClock
 from models.bios import BiosFileEntry
 
 from adapters.steam_config import SteamConfigAdapter
@@ -12,6 +13,11 @@ from adapters.steam_config import SteamConfigAdapter
 from main import Plugin
 from services.firmware import FirmwareService
 from services.library import LibraryService
+
+
+def _make_clock() -> FakeClock:
+    """Return a fresh FakeClock pinned to a synthetic instant."""
+    return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
 
 
 @pytest.fixture
@@ -41,6 +47,7 @@ def plugin():
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
         plugin_dir=decky.DECKY_PLUGIN_DIR,
+        clock=_make_clock(),
         save_state=MagicMock(),
         save_firmware_cache=MagicMock(),
         load_firmware_cache=MagicMock(return_value={}),
@@ -1558,6 +1565,7 @@ class TestFirmwareListCache:
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=_make_clock(),
             save_state=MagicMock(),
         )
 
@@ -1576,8 +1584,6 @@ class TestFirmwareListCache:
 
     def test_firmware_cache_ttl_expired(self):
         """After TTL expires, _get_firmware_list re-fetches from the API."""
-        import time
-
         api = MagicMock()
         api.list_firmware.side_effect = [
             [{"id": 1}],
@@ -1590,7 +1596,7 @@ class TestFirmwareListCache:
         assert api.list_firmware.call_count == 1
 
         # Simulate TTL expiry by backdating the cache timestamp
-        fw._firmware_cache_at = time.monotonic() - 3601
+        fw._firmware_cache_at = fw._clock.monotonic() - 3601
 
         result2 = fw._get_firmware_list()
         assert len(result2) == 2
@@ -1627,7 +1633,7 @@ class TestFirmwareListCache:
 
         # Expire the cache so it tries to re-fetch (must be far enough in the past
         # to exceed TTL even when system uptime is short)
-        fw._firmware_cache_at = time.monotonic() - 7200
+        fw._firmware_cache_at = fw._clock.monotonic() - 7200
 
         result2 = fw._get_firmware_list()
         assert result2 == result1  # Falls back to stale cache
@@ -1655,6 +1661,7 @@ class TestCheckPlatformBiosCached:
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             plugin_dir="/fake",
+            clock=_make_clock(),
             save_state=MagicMock(),
         )
         fw._firmware_cache = firmware_cache
@@ -1732,6 +1739,7 @@ class TestCheckPlatformBiosCached:
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             plugin_dir="/fake",
+            clock=_make_clock(),
             save_state=MagicMock(),
         )
         fw._firmware_cache = []
@@ -1754,19 +1762,22 @@ class TestFirmwareCachePersistence:
 
         cached_items = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
         load_fn = MagicMock(return_value={"items": cached_items, "cached_at": 1000.0})
+        clock = _make_clock()
         fw = FirmwareService(
             romm_api=MagicMock(),
             state={"shortcut_registry": {}, "downloaded_bios": {}},
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=clock,
             save_state=MagicMock(),
             save_firmware_cache=MagicMock(),
             load_firmware_cache=load_fn,
         )
         assert fw._firmware_cache == cached_items
         assert fw._firmware_cache_epoch == 1000.0
-        assert fw._firmware_cache_at > 0
+        # cache_at is set from the clock's monotonic reading (deterministic in tests)
+        assert fw._firmware_cache_at == clock.monotonic()
         load_fn.assert_called_once()
 
     def test_empty_disk_cache_leaves_memory_none(self):
@@ -1780,6 +1791,7 @@ class TestFirmwareCachePersistence:
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=_make_clock(),
             save_state=MagicMock(),
             save_firmware_cache=MagicMock(),
             load_firmware_cache=load_fn,
@@ -1797,6 +1809,7 @@ class TestFirmwareCachePersistence:
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=_make_clock(),
             save_state=MagicMock(),
             save_firmware_cache=MagicMock(),
             load_firmware_cache=load_fn,
@@ -1813,6 +1826,7 @@ class TestFirmwareCachePersistence:
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=_make_clock(),
             save_state=MagicMock(),
         )
         assert fw._firmware_cache is None

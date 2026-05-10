@@ -9,9 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import time
 from dataclasses import asdict
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from domain import es_de_config
@@ -23,7 +21,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-    from services.protocols import BiosPathProvider, RommApiProtocol, StatePersister
+    from services.protocols import BiosPathProvider, Clock, RommApiProtocol, StatePersister
 
 _FIRMWARE_CACHE_TTL = 3600  # 1 hour
 
@@ -39,6 +37,7 @@ class FirmwareService:
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         plugin_dir: str,
+        clock: Clock,
         save_state: StatePersister,
         save_firmware_cache: Callable[[dict], None] | None = None,
         load_firmware_cache: Callable[[], dict] | None = None,
@@ -49,6 +48,7 @@ class FirmwareService:
         self._loop = loop
         self._logger = logger
         self._plugin_dir = plugin_dir
+        self._clock = clock
         self._save_state = save_state
         self._save_firmware_cache = save_firmware_cache
         self._load_firmware_cache = load_firmware_cache
@@ -159,7 +159,7 @@ class FirmwareService:
             if data and "items" in data and "cached_at" in data:
                 self._firmware_cache = data["items"]
                 self._firmware_cache_epoch = data["cached_at"]
-                self._firmware_cache_at = time.monotonic()
+                self._firmware_cache_at = self._clock.monotonic()
                 self._logger.info("Restored firmware cache from disk (%d items)", len(data["items"]))
         except Exception as e:
             self._logger.warning(f"Failed to load firmware cache from disk: {e}")
@@ -178,15 +178,15 @@ class FirmwareService:
 
         On HTTP error, falls back to cached data (if any) or empty list.
         """
-        now = time.monotonic()
+        now = self._clock.monotonic()
         if self._firmware_cache is not None and (now - self._firmware_cache_at) < _FIRMWARE_CACHE_TTL:
             return self._firmware_cache
 
         try:
             result = self._romm_api.list_firmware()
             self._firmware_cache = result
-            self._firmware_cache_at = time.monotonic()
-            self._firmware_cache_epoch = time.time()
+            self._firmware_cache_at = self._clock.monotonic()
+            self._firmware_cache_epoch = self._clock.time()
             self._persist_firmware_cache()
             return result
         except Exception as e:
@@ -371,7 +371,7 @@ class FirmwareService:
             "file_path": dest,
             "firmware_id": firmware_id,
             "platform_slug": self._firmware_slug(fw.get("file_path", "")),
-            "downloaded_at": datetime.now(UTC).isoformat(),
+            "downloaded_at": self._clock.now().isoformat(),
         }
         self._save_state()
 

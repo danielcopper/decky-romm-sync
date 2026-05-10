@@ -127,6 +127,7 @@ def plugin(tmp_path):
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         plugin_dir=decky.DECKY_PLUGIN_DIR,
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         save_state=MagicMock(),
     )
 
