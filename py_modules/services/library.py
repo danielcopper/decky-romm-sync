@@ -10,9 +10,6 @@ Shortcut removal is delegated to ShortcutRemovalService.
 from __future__ import annotations
 
 import asyncio
-import time
-import uuid
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from domain.shortcut_data import build_registry_entry, build_shortcuts_data
@@ -24,13 +21,16 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         ArtworkManager,
+        Clock,
         DebugLogger,
         EventEmitter,
         MetadataExtractor,
         RommApiProtocol,
         SettingsPersister,
+        Sleeper,
         StatePersister,
         SteamConfigAdapter,
+        UuidGen,
     )
 
 
@@ -52,6 +52,9 @@ class LibraryService:
         logger: logging.Logger,
         plugin_dir: str,
         emit: EventEmitter,
+        clock: Clock,
+        uuid_gen: UuidGen,
+        sleeper: Sleeper,
         save_state: StatePersister,
         save_settings_to_disk: SettingsPersister,
         log_debug: DebugLogger,
@@ -67,6 +70,9 @@ class LibraryService:
         self._logger = logger
         self._plugin_dir = plugin_dir
         self._emit = emit
+        self._clock = clock
+        self._uuid_gen = uuid_gen
+        self._sleeper = sleeper
         self._save_state = save_state
         self._save_settings_to_disk = save_settings_to_disk
         self._log_debug = log_debug
@@ -242,7 +248,7 @@ class LibraryService:
         if self._sync_state != SyncState.IDLE:
             return {"success": False, "message": "Sync already in progress"}
         self._sync_state = SyncState.RUNNING
-        self._sync_last_heartbeat = time.monotonic()
+        self._sync_last_heartbeat = self._clock.monotonic()
         self._loop.create_task(self._do_sync())
         return {"success": True, "message": "Sync started"}
 
@@ -257,7 +263,7 @@ class LibraryService:
 
     def sync_heartbeat(self):
         """Called by frontend during shortcut application to keep safety timeout alive."""
-        self._sync_last_heartbeat = time.monotonic()
+        self._sync_last_heartbeat = self._clock.monotonic()
         return {"success": True}
 
     # ── Preview / Apply ──────────────────────────────────────
@@ -266,7 +272,7 @@ class LibraryService:
         if self._sync_state != SyncState.IDLE:
             return {"success": False, "message": "Sync already in progress"}
         self._sync_state = SyncState.RUNNING
-        self._sync_last_heartbeat = time.monotonic()
+        self._sync_last_heartbeat = self._clock.monotonic()
         try:
             fetch_result = await self._fetch_and_prepare()
             all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids = fetch_result
@@ -278,7 +284,7 @@ class LibraryService:
             delta_rom_ids = {sd["rom_id"] for sd in new + changed}
             delta_roms = [roms_by_id[rid] for rid in delta_rom_ids if rid in roms_by_id]
 
-            preview_id = str(uuid.uuid4())
+            preview_id = str(self._uuid_gen.uuid4())
             self._pending_delta = {
                 "preview_id": preview_id,
                 "new": new,
@@ -331,7 +337,7 @@ class LibraryService:
         delta = self._pending_delta
         self._pending_delta = None
         self._sync_state = SyncState.RUNNING
-        self._sync_last_heartbeat = time.monotonic()
+        self._sync_last_heartbeat = self._clock.monotonic()
 
         # Calculate apply step plan
         delta_roms = delta.get("delta_roms", [])
@@ -432,12 +438,12 @@ class LibraryService:
 
     def _start_safety_timeout(self, heartbeat_timeout_sec=30):
         """Launch a background task that auto-completes sync if no heartbeat arrives."""
-        self._sync_last_heartbeat = time.monotonic()
+        self._sync_last_heartbeat = self._clock.monotonic()
 
         async def _safety_timeout():
             while self._sync_progress.get("running"):
-                await asyncio.sleep(10)
-                elapsed = time.monotonic() - self._sync_last_heartbeat
+                await self._sleeper.sleep(10)
+                elapsed = self._clock.monotonic() - self._sync_last_heartbeat
                 if elapsed > heartbeat_timeout_sec:
                     self._logger.warning(f"Sync safety timeout: no heartbeat for {elapsed:.0f}s")
                     stats = self._state.get("sync_stats", {})
@@ -1012,7 +1018,7 @@ class LibraryService:
         )
 
         # Save state with the actual synced platforms/collections
-        self._state["last_sync"] = datetime.now(UTC).isoformat()
+        self._state["last_sync"] = self._clock.now().isoformat()
         self._state["last_synced_collections"] = list(pending_collection_memberships.keys())
         self._state["last_synced_platforms"] = list(platform_app_ids.keys())
         self._save_state()

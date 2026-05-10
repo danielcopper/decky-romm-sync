@@ -3,7 +3,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fakes.system_time import FakeClock
+from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -63,6 +63,9 @@ def plugin():
         logger=decky.logger,
         plugin_dir=decky.DECKY_PLUGIN_DIR,
         emit=decky.emit,
+        clock=FakeClock(),
+        uuid_gen=FakeUuidGen(),
+        sleeper=FakeSleeper(),
         save_state=p._save_state,
         save_settings_to_disk=p._save_settings_to_disk,
         log_debug=p._log_debug,
@@ -1439,10 +1442,9 @@ class TestSyncControl:
         assert "phase" in result
 
     def test_sync_heartbeat(self, plugin):
-        import time
-
         old = plugin._sync_service._sync_last_heartbeat
-        time.sleep(0.01)
+        # Advance the injected FakeClock so monotonic moves forward.
+        plugin._sync_service._clock.advance(0.01)
         result = plugin._sync_service.sync_heartbeat()
         assert result["success"] is True
         assert plugin._sync_service._sync_last_heartbeat > old

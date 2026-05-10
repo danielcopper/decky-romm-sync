@@ -8,7 +8,7 @@ import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
-from fakes.system_time import FakeClock, FakeSleeper
+from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.steam_config import SteamConfigAdapter
 from services.downloads import DownloadService
@@ -41,6 +41,9 @@ def plugin():
         logger=decky.logger,
         plugin_dir=decky.DECKY_PLUGIN_DIR,
         emit=decky.emit,
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+        uuid_gen=FakeUuidGen(),
+        sleeper=FakeSleeper(),
         save_state=p._save_state,
         save_settings_to_disk=p._save_settings_to_disk,
         log_debug=p._log_debug,

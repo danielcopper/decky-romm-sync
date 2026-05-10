@@ -9,7 +9,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
-from fakes.system_time import FakeClock
+from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.romm.http import RommHttpAdapter
@@ -66,6 +66,9 @@ def plugin(tmp_path):
         logger=decky.logger,
         plugin_dir=decky.DECKY_PLUGIN_DIR,
         emit=decky.emit,
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+        uuid_gen=FakeUuidGen(),
+        sleeper=FakeSleeper(),
         save_state=p._save_state,
         save_settings_to_disk=p._save_settings_to_disk,
         log_debug=p._log_debug,

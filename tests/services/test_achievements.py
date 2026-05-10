@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fakes.system_time import FakeClock
+from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.steam_config import SteamConfigAdapter
 
@@ -59,6 +59,9 @@ def plugin(clock):
         logger=decky.logger,
         plugin_dir=decky.DECKY_PLUGIN_DIR,
         emit=decky.emit,
+        clock=clock,
+        uuid_gen=FakeUuidGen(),
+        sleeper=FakeSleeper(),
         save_state=p._save_state,
         save_settings_to_disk=p._save_settings_to_disk,
         log_debug=p._log_debug,
