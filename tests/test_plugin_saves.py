@@ -86,6 +86,7 @@ def plugin(tmp_path):
         config=SaveServiceConfig(
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             runtime_dir=str(tmp_path),
             save_sync_state_persister=SaveSyncStatePersisterAdapter(
                 PersistenceAdapter(

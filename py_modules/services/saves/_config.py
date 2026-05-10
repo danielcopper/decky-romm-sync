@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from services.protocols import (
+        Clock,
         CoreNameProviderFn,
         CoreResolverFn,
         EventEmitter,
@@ -98,6 +99,7 @@ class SaveServiceConfig:
     save_sync_state_persister: SaveSyncStatePersister
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
+    clock: Clock
     get_saves_path: SavesPathProvider
     get_roms_path: RomsPathProvider
     get_active_core: CoreResolverFn

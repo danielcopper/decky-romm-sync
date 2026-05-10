@@ -6,11 +6,13 @@ import json
 import logging
 import os
 import time
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from fakes.fake_save_api import FakeSaveApi
+from fakes.system_time import FakeClock
 
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from lib.errors import RommApiError
@@ -50,6 +52,7 @@ _CONFIG_FIELDS = frozenset(
         "save_sync_state_persister",
         "loop",
         "logger",
+        "clock",
         "get_saves_path",
         "get_roms_path",
         "get_active_core",
@@ -70,6 +73,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
+        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         get_saves_path=lambda: str(tmp_path / "saves"),
         get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
         get_active_core=lambda system_name, rom_filename=None: (None, None),

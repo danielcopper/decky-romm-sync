@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from domain.emulator_tag import build_emulator_tag
@@ -11,7 +10,7 @@ from services.saves._messages import SAVE_SYNC_DISABLED
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import RetryStrategy, RommApiProtocol
+    from services.protocols import Clock, RetryStrategy, RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
     from services.saves.sync_engine import SyncEngine
@@ -32,6 +31,7 @@ class SlotsService:
         romm_api: RommApiProtocol,
         retry: RetryStrategy,
         logger: logging.Logger,
+        clock: Clock,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
@@ -39,6 +39,7 @@ class SlotsService:
         self._romm_api = romm_api
         self._retry = retry
         self._logger = logger
+        self._clock = clock
 
     # ------------------------------------------------------------------
     # Slot listing
@@ -321,7 +322,7 @@ class SlotsService:
 
         # 8. Update last_sync_check_at
         save_entry = self._state_svc.data["saves"].setdefault(rom_id_str, {})
-        save_entry["last_sync_check_at"] = datetime.now(UTC).isoformat()
+        save_entry["last_sync_check_at"] = self._clock.now().isoformat()
         self._state_svc.save_state()
 
         # 9. Return fresh status

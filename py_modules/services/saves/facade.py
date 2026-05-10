@@ -6,7 +6,6 @@ import hashlib
 import os
 import socket
 from dataclasses import asdict
-from datetime import UTC, datetime
 from typing import ClassVar
 
 from models.saves import SaveConflict
@@ -90,6 +89,7 @@ class SaveService:
         # via the ``_save_service`` back-ref) read these attributes directly.
         self._loop = config.loop
         self._logger = config.logger
+        self._clock = config.clock
         self._get_saves_path = config.get_saves_path
         self._get_roms_path = config.get_roms_path
         self._get_active_core = config.get_active_core
@@ -128,6 +128,7 @@ class SaveService:
             romm_api=self._romm_api,
             retry=self._retry,
             logger=self._logger,
+            clock=self._clock,
         )
 
     def _rom_lock(self, rom_id: int) -> asyncio.Lock:
@@ -989,7 +990,7 @@ class SaveService:
             file_state = files.setdefault(filename, {})
             file_state["tracked_save_id"] = server.get("id")
             file_state["last_sync_hash"] = local_hash
-            file_state["last_sync_at"] = datetime.now(UTC).isoformat()
+            file_state["last_sync_at"] = self._clock.now().isoformat()
             file_state["last_sync_server_updated_at"] = server.get("updated_at", "")
             file_state["last_sync_server_size"] = server.get("file_size_bytes")
             file_state["last_sync_local_mtime"] = os.path.getmtime(local_path)

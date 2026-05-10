@@ -216,6 +216,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         save_sync_state_persister=cfg.save_sync_state_persister,
         loop=cfg.loop,
         logger=cfg.logger,
+        clock=cfg.clock,
         get_saves_path=cfg.get_saves_path,
         get_roms_path=cfg.get_roms_path,
         get_active_core=_es_de_config.get_active_core,
