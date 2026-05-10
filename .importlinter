@@ -67,17 +67,23 @@ forbidden_modules =
     domain
     lib
 
-# Services must not import stdlib I/O or concurrency primitives directly.
-# Real I/O belongs behind adapters; sleep, sync, and HTTP must come from
-# Protocols (Sleeper, retry strategies, RommApiProtocol). This contract is a
-# pure guardrail — none of the listed modules are imported by services
-# today, and adding one is a Cosmic Python regression that should be
-# caught at PR time.
+# Services must not import stdlib I/O, concurrency, or non-deterministic
+# primitives directly. Real I/O belongs behind adapters; time, uuid, and
+# async sleep come from Protocols (Clock, UuidGen, Sleeper) so services
+# stay deterministic under test. ``time`` and ``uuid`` are banned now
+# that every service has been migrated onto the injection seam.
+#
+# ``services.protocols`` is exempted for ``uuid`` because it needs the
+# ``uuid.UUID`` type to declare ``UuidGen.uuid4() -> uuid.UUID``. The
+# Protocol module is the seam itself and never calls ``uuid.uuid4()``.
 #
 # ``urllib.request`` is intentionally omitted: import-linter rejects
 # subpackage names for forbidden external modules, and banning the
 # whole ``urllib`` parent would also lock out ``urllib.parse`` /
 # ``urllib.error`` which services legitimately need.
+#
+# ``datetime.now()`` and ``asyncio.sleep()`` are call-level — see #303
+# for a custom check that complements this import-level guardrail.
 [importlinter:contract:no-stdlib-io-in-services]
 name = Services must not import stdlib I/O or concurrency primitives
 type = forbidden
@@ -88,6 +94,10 @@ forbidden_modules =
     subprocess
     threading
     requests
+    time
+    uuid
+ignore_imports =
+    services.protocols -> uuid
 
 # Services must be independent of each other
 [importlinter:contract:service-independence]
