@@ -7,11 +7,10 @@ tests can assert on what the service requested.
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 _DEFAULT_NOW = datetime(2026, 1, 1, tzinfo=UTC)
-_DEFAULT_UUID = uuid.UUID("00000000-0000-4000-8000-000000000000")
+_DEFAULT_UUID = "00000000-0000-4000-8000-000000000000"
 
 
 class FakeClock:
@@ -64,11 +63,11 @@ class FakeUuidGen:
         returned so tests don't need to count exact call counts.
     """
 
-    def __init__(self, values: list[uuid.UUID] | None = None) -> None:
-        self._values: list[uuid.UUID] = list(values) if values else []
+    def __init__(self, values: list[str] | None = None) -> None:
+        self._values: list[str] = list(values) if values else []
         self.call_count = 0
 
-    def uuid4(self) -> uuid.UUID:
+    def uuid4(self) -> str:
         self.call_count += 1
         if self._values:
             return self._values.pop(0)

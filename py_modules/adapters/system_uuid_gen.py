@@ -12,5 +12,5 @@ import uuid
 class SystemUuidGen:
     """Real-entropy ``UuidGen`` backed by :func:`uuid.uuid4`."""
 
-    def uuid4(self) -> uuid.UUID:
-        return uuid.uuid4()
+    def uuid4(self) -> str:
+        return str(uuid.uuid4())

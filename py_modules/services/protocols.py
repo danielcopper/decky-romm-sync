@@ -7,7 +7,6 @@ services consume them.
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -319,8 +318,8 @@ class UuidGen(Protocol):
     tests can supply deterministic IDs.
     """
 
-    def uuid4(self) -> uuid.UUID:
-        """Return a new random (UUID4) identifier."""
+    def uuid4(self) -> str:
+        """Return a new random UUID4 in canonical string form (e.g. ``"a1b2…"``)."""
         ...
 
 

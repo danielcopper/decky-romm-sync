@@ -71,11 +71,9 @@ forbidden_modules =
 # primitives directly. Real I/O belongs behind adapters; time, uuid, and
 # async sleep come from Protocols (Clock, UuidGen, Sleeper) so services
 # stay deterministic under test. ``time`` and ``uuid`` are banned now
-# that every service has been migrated onto the injection seam.
-#
-# ``services.protocols`` is exempted for ``uuid`` because it needs the
-# ``uuid.UUID`` type to declare ``UuidGen.uuid4() -> uuid.UUID``. The
-# Protocol module is the seam itself and never calls ``uuid.uuid4()``.
+# that every service has been migrated onto the injection seam — the
+# UuidGen Protocol returns ``str`` so even ``services/protocols.py``
+# does not need to import ``uuid``.
 #
 # ``urllib.request`` is intentionally omitted: import-linter rejects
 # subpackage names for forbidden external modules, and banning the
@@ -96,8 +94,6 @@ forbidden_modules =
     requests
     time
     uuid
-ignore_imports =
-    services.protocols -> uuid
 
 # Services must be independent of each other
 [importlinter:contract:service-independence]

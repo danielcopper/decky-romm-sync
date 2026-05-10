@@ -8,11 +8,13 @@ from adapters.system_uuid_gen import SystemUuidGen
 
 
 class TestSystemUuidGen:
-    def test_uuid4_returns_uuid_instance_version_4(self):
+    def test_uuid4_returns_canonical_string_for_a_version_4_uuid(self):
         gen = SystemUuidGen()
         result = gen.uuid4()
-        assert isinstance(result, uuid.UUID)
-        assert result.version == 4
+        assert isinstance(result, str)
+        parsed = uuid.UUID(result)
+        assert parsed.version == 4
+        assert str(parsed) == result
 
     def test_consecutive_calls_return_distinct_uuids(self):
         gen = SystemUuidGen()

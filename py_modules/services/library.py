@@ -284,7 +284,7 @@ class LibraryService:
             delta_rom_ids = {sd["rom_id"] for sd in new + changed}
             delta_roms = [roms_by_id[rid] for rid in delta_rom_ids if rid in roms_by_id]
 
-            preview_id = str(self._uuid_gen.uuid4())
+            preview_id = self._uuid_gen.uuid4()
             self._pending_delta = {
                 "preview_id": preview_id,
                 "new": new,
