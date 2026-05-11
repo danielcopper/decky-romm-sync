@@ -12,6 +12,7 @@ import os
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
+from domain import firmware_paths
 from domain.bios import collect_firmware_status
 from lib.errors import error_response
 
@@ -118,27 +119,6 @@ class FirmwareService:
             file_dict["hash_valid"] = None
         return file_dict
 
-    def _firmware_slug(self, file_path):
-        """Extract firmware slug from file_path (e.g. 'bios/ps' -> 'ps')."""
-        parts = file_path.strip("/").split("/")
-        if len(parts) >= 2 and parts[0] == "bios":
-            return parts[1]
-        elif len(parts) >= 2:
-            return parts[0]
-        return ""
-
-    def _platform_to_firmware_slugs(self, platform_slug):
-        """Map platform slug to possible firmware directory slugs.
-
-        RomM uses different slugs for platforms vs firmware directories
-        (e.g. platform 'psx' -> firmware dir 'ps').
-        """
-        mapping = {
-            "psx": ["psx", "ps"],
-            "ps2": ["ps2"],
-        }
-        return mapping.get(platform_slug, [platform_slug])
-
     def _firmware_dest_path(self, firmware):
         """Determine local destination path for a firmware file.
 
@@ -219,7 +199,7 @@ class FirmwareService:
         if self._firmware_cache is None:
             return None
 
-        fw_slugs = self._platform_to_firmware_slugs(platform_slug)
+        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
         active_core_so, active_core_label = self._core_info.get_active_core(platform_slug, rom_filename=rom_filename)
 
         registry_platform = {}
@@ -233,7 +213,7 @@ class FirmwareService:
                 "dest": self._firmware_dest_path(fw),
             }
             for fw in self._firmware_cache
-            if self._firmware_slug(fw.get("file_path", "")) in fw_slugs
+            if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
         ]
         files = collect_firmware_status(items, registry_platform, active_core_so)
 
@@ -266,7 +246,7 @@ class FirmwareService:
         """Group server firmware list by platform slug."""
         platforms_map = {}
         for fw in firmware_list:
-            platform_slug = self._firmware_slug(fw.get("file_path", "")) or "unknown"
+            platform_slug = firmware_paths.parse_firmware_slug(fw.get("file_path", "")) or "unknown"
             if platform_slug not in platforms_map:
                 platforms_map[platform_slug] = {"platform_slug": platform_slug, "files": []}
             dest = self._firmware_dest_path(fw)
@@ -374,7 +354,7 @@ class FirmwareService:
         self._state["downloaded_bios"][file_name] = {
             "file_path": dest,
             "firmware_id": firmware_id,
-            "platform_slug": self._firmware_slug(fw.get("file_path", "")),
+            "platform_slug": firmware_paths.parse_firmware_slug(fw.get("file_path", "")),
             "downloaded_at": self._clock.now().isoformat(),
         }
         self._save_state()
@@ -422,10 +402,10 @@ class FirmwareService:
             return resp
 
         # Filter by platform slug (use mapped slugs, e.g. "psx" -> ["psx", "ps"])
-        fw_slugs = self._platform_to_firmware_slugs(platform_slug)
+        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
         platform_firmware = []
         for fw in firmware_list:
-            slug = self._firmware_slug(fw.get("file_path", ""))
+            slug = firmware_paths.parse_firmware_slug(fw.get("file_path", ""))
             if slug in fw_slugs:
                 platform_firmware.append(fw)
 
@@ -480,13 +460,13 @@ class FirmwareService:
             resp["downloaded"] = 0
             return resp
 
-        fw_slugs = self._platform_to_firmware_slugs(platform_slug)
+        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
         core_so, _ = self._core_info.get_active_core(platform_slug)
 
         platform_firmware = [
             fw
             for fw in firmware_list
-            if self._firmware_slug(fw.get("file_path", "")) in fw_slugs
+            if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
             and self._is_firmware_required(fw.get("file_name", ""), core_so) is True
         ]
 
@@ -499,7 +479,7 @@ class FirmwareService:
 
     async def check_platform_bios(self, platform_slug, rom_filename=None):
         """Check if RomM has firmware for this platform and whether it's downloaded."""
-        fw_slugs = self._platform_to_firmware_slugs(platform_slug)
+        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
         active_core_so, active_core_label = self._core_info.get_active_core(platform_slug, rom_filename=rom_filename)
 
         # Build combined registry entries for this platform from all mapped slugs
@@ -516,7 +496,7 @@ class FirmwareService:
                     "dest": self._firmware_dest_path(fw),
                 }
                 for fw in firmware_list
-                if self._firmware_slug(fw.get("file_path", "")) in fw_slugs
+                if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
             ]
             files = collect_firmware_status(items, registry_platform, active_core_so)
         except Exception:

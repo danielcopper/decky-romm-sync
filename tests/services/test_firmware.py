@@ -1418,19 +1418,6 @@ class TestLoadBiosRegistryErrors:
         assert fw._bios_registry == {}
 
 
-class TestFirmwareSlugEdgeCases:
-    """Tests for _firmware_slug edge cases."""
-
-    def test_single_part_returns_empty(self, fw):
-        assert fw._firmware_slug("bios") == ""
-
-    def test_non_bios_prefix(self, fw):
-        assert fw._firmware_slug("firmware/dc/boot.bin") == "firmware"
-
-    def test_empty_path(self, fw):
-        assert fw._firmware_slug("") == ""
-
-
 class TestDownloadFirmwarePostIORegistryHash:
     """Tests for _download_firmware_post_io registry hash verification."""
 
