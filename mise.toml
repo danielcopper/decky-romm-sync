@@ -20,8 +20,11 @@ description = "Run Python tests"
 run = "python -m pytest tests/ -q"
 
 [tasks.lint]
-description = "Check service/adapter layer boundaries"
-run = "PYTHONPATH=py_modules lint-imports"
+description = "Check Cosmic Python architecture rules (layer imports + forbidden service calls)"
+run = [
+    "PYTHONPATH=py_modules lint-imports",
+    "bash scripts/check_cosmic_call_bans.sh",
+]
 
 [tasks.deploy]
 description = "Deploy plugin files to Decky plugin directory"
