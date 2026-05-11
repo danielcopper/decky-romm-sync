@@ -312,7 +312,7 @@ class Clock(Protocol):
 class UuidGen(Protocol):
     """Sole source of UUID values for services.
 
-    Services consume this Protocol instead of ``uuid.uuid4()`` directly so
+    Services consume this Protocol instead of ``uuid.uuid4`` directly so
     tests can supply deterministic IDs.
     """
 

@@ -71,6 +71,9 @@ jobs:
       - name: Check import boundaries
         run: PYTHONPATH=py_modules lint-imports
 
+      - name: Check Cosmic Python call bans
+        run: bash scripts/check_cosmic_call_bans.sh
+
   sonarcloud:
     runs-on: ubuntu-latest
     needs: [test]

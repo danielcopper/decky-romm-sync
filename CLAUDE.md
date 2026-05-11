@@ -42,6 +42,7 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 - **Ruff**: Python linting in CI.
 - **basedpyright**: Type checking in CI.
 - **import-linter**: Layer boundary enforcement in CI (services ↛ adapters, adapters ↛ services, services independent).
+- **Cosmic Python call bans**: `scripts/check_cosmic_call_bans.sh` — services may not call `datetime.now()` / `asyncio.sleep()` / `time.time()` / `time.monotonic()` / `uuid.uuid4()` / `random.*` directly (use the corresponding Protocol).
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
 ## Architecture — Cosmic Python rules
@@ -69,10 +70,10 @@ If a refactor breaks one of these rules, that's a Cosmic Python regression — c
 
 The full Cosmic Python migration is tracked under [#277](https://github.com/danielcopper/decky-romm-sync/issues/277) (umbrella). Order is chosen to minimize rework: cross-cutting Protocols first, then domain promotions, then per-service vertical refactors smallest-to-largest.
 
-- **Wave 1 — Cross-cutting infrastructure** ([#256](https://github.com/danielcopper/decky-romm-sync/issues/256))
-  Protocols, persisters, bootstrap cleanup. Do first — every later vertical consumes the Protocols defined here.
-  Done: ~~#294~~ (Clock/UuidGen/Sleeper), ~~#289~~ (FirmwareCachePersister), ~~#292~~ (ArtworkRemover), ~~#296~~ (CoreInfoProvider, shipped as #310), ~~#205~~ (es_de_config I/O split, shipped as #311), ~~#168~~ (sync_state_box dead-code removal, shipped as #312).
-  Open: #169 (WiringConfig split — next), #259 (SonarCloud arch rules — deferred until Python supported).
+- **Wave 1 — Cross-cutting infrastructure** ([#256](https://github.com/danielcopper/decky-romm-sync/issues/256)) — **complete except for deferred CI gate**
+  Protocols, persisters, bootstrap cleanup. Done first so every later vertical consumes the Protocols defined here.
+  Done: ~~#294~~ (Clock/UuidGen/Sleeper), ~~#289~~ (FirmwareCachePersister), ~~#292~~ (ArtworkRemover), ~~#296~~ (CoreInfoProvider, shipped as #310), ~~#205~~ (es_de_config I/O split, shipped as #311), ~~#168~~ (sync_state_box dead-code removal, shipped as #312), ~~#169~~ (WiringConfig split, shipped as #313), ~~#303~~ (call-site clock/sleep ban, shipped as #314).
+  Deferred: #259 (SonarCloud arch rules — waiting on SonarCloud Python support).
 - **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295))
   Extract pure logic from non-saves services into `domain/`. Library sync_classification cluster first (highest value), then firmware paths, achievements, path safety, filename resolution.
 - **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2)
@@ -89,7 +90,7 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
 
 **Why this order**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical means every later PR is "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrinks the scariest service before lifting it. LibraryService last because it has the largest blast radius.
 
-When picking work: any unblocked Wave 1 issue is a safe pick. Wave 2 PRs can start once their Wave 1 dependencies (Clock for the affected service) ship.
+When picking work: Wave 1 is finished (modulo deferred #259), so every later vertical's Protocol dependencies are in place. Wave 2 (#295) is the next active wave.
 
 ## Sub-package layout — `__init__.py` is re-export only
 
