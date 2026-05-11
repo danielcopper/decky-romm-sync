@@ -7,6 +7,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.sync_diff import classify_roms
 from domain.sync_state import SyncState
 
 # conftest.py patches decky before this import
@@ -721,242 +722,6 @@ class TestShortcutDataFormat:
         id_b = SteamConfigAdapter.generate_artwork_id(exe, "Game B")
 
         assert id_a != id_b, "Different games should have different artwork IDs"
-
-
-class TestClassifyRoms:
-    """Tests for _classify_roms() delta classification."""
-
-    def _make_sd(
-        self,
-        rom_id,
-        name="Game",
-        platform_name="N64",
-        platform_slug="n64",
-        fs_name="game.z64",
-        igdb_id=None,
-        sgdb_id=None,
-    ):
-        """Helper to build a shortcut_data dict matching _fetch_and_prepare output."""
-        return {
-            "rom_id": rom_id,
-            "name": name,
-            "platform_name": platform_name,
-            "platform_slug": platform_slug,
-            "fs_name": fs_name,
-            "igdb_id": igdb_id,
-            "sgdb_id": sgdb_id,
-        }
-
-    def test_all_new_empty_registry(self, plugin):
-        """Empty registry -> all in new, none in changed/unchanged."""
-        sd = [self._make_sd(1, "Game A"), self._make_sd(2, "Game B")]
-        new, changed, unchanged_ids, stale, disabled = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(new) == 2
-        assert changed == []
-        assert unchanged_ids == []
-        assert stale == []
-        assert disabled == 0
-
-    def test_all_unchanged(self, plugin):
-        """Registry matches all items -> all in unchanged_ids."""
-        plugin._state["shortcut_registry"] = {
-            "1": {
-                "app_id": 1001,
-                "name": "Game A",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "gamea.z64",
-            },
-            "2": {
-                "app_id": 1002,
-                "name": "Game B",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "gameb.z64",
-            },
-        }
-        sd = [
-            self._make_sd(1, "Game A", fs_name="gamea.z64"),
-            self._make_sd(2, "Game B", fs_name="gameb.z64"),
-        ]
-        new, changed, unchanged_ids, stale, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert new == []
-        assert changed == []
-        assert set(unchanged_ids) == {1, 2}
-        assert stale == []
-
-    def test_mixed_new_changed_unchanged(self, plugin):
-        """Mix of new, changed, unchanged ROMs."""
-        plugin._state["shortcut_registry"] = {
-            "1": {
-                "app_id": 1001,
-                "name": "Game A",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "gamea.z64",
-            },
-            "2": {
-                "app_id": 1002,
-                "name": "Old Name",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "gameb.z64",
-            },
-        }
-        sd = [
-            self._make_sd(1, "Game A", fs_name="gamea.z64"),  # unchanged
-            self._make_sd(2, "New Name", fs_name="gameb.z64"),  # changed (name)
-            self._make_sd(3, "Game C", fs_name="gamec.z64"),  # new
-        ]
-        new, changed, unchanged_ids, _, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(new) == 1
-        assert new[0]["rom_id"] == 3
-        assert len(changed) == 1
-        assert changed[0]["rom_id"] == 2
-        assert changed[0]["existing_app_id"] == 1002
-        assert unchanged_ids == [1]
-
-    def test_stale_detection(self, plugin):
-        """Registry has ROM not in fetched set -> appears in stale."""
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
-            "99": {"app_id": 1099, "name": "Deleted Game", "platform_name": "N64"},
-        }
-        sd = [self._make_sd(1, "Game A", fs_name="")]
-        # Must also set fs_name in registry to match
-        plugin._state["shortcut_registry"]["1"]["fs_name"] = ""
-        plugin._state["shortcut_registry"]["1"]["platform_slug"] = "n64"
-        _, _, _, stale, disabled = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert 99 in stale
-        assert disabled == 0  # N64 is in fetched_platform_names
-
-    def test_disabled_platform_stale_count(self, plugin):
-        """Stale ROMs from platforms not in fetched_platform_names -> counted as disabled."""
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "SNES"},
-        }
-        sd = []  # nothing fetched
-        _, _, _, stale, disabled = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert 1 in stale
-        assert disabled == 1  # SNES is not in {"N64"}
-
-    def test_name_change_detected(self, plugin):
-        """ROM name changed -> classified as changed with existing_app_id."""
-        plugin._state["shortcut_registry"] = {
-            "1": {
-                "app_id": 1001,
-                "name": "Old Title",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "game.z64",
-            },
-        }
-        sd = [self._make_sd(1, "New Title")]
-        new, changed, unchanged_ids, _, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(changed) == 1
-        assert changed[0]["existing_app_id"] == 1001
-        assert new == []
-        assert unchanged_ids == []
-
-    def test_platform_name_change_detected(self, plugin):
-        """Platform name changed -> classified as changed."""
-        plugin._state["shortcut_registry"] = {
-            "1": {
-                "app_id": 1001,
-                "name": "Game A",
-                "platform_name": "Nintendo 64",
-                "platform_slug": "n64",
-                "fs_name": "game.z64",
-            },
-        }
-        sd = [self._make_sd(1, "Game A", platform_name="N64")]
-        _, changed, _, _, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(changed) == 1
-        assert changed[0]["rom_id"] == 1
-
-    def test_fs_name_change_detected(self, plugin):
-        """fs_name changed -> classified as changed."""
-        plugin._state["shortcut_registry"] = {
-            "1": {
-                "app_id": 1001,
-                "name": "Game A",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "old.z64",
-            },
-        }
-        sd = [self._make_sd(1, "Game A", fs_name="new.z64")]
-        _, changed, _, _, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(changed) == 1
-        assert changed[0]["rom_id"] == 1
-
-    def test_igdb_id_change_no_false_positive(self, plugin):
-        """Only igdb_id/sgdb_id changed -> still unchanged."""
-        plugin._state["shortcut_registry"] = {
-            "1": {
-                "app_id": 1001,
-                "name": "Game A",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "game.z64",
-            },
-        }
-        sd = [self._make_sd(1, "Game A", igdb_id=999, sgdb_id=888)]
-        new, changed, unchanged_ids, _, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert unchanged_ids == [1]
-        assert changed == []
-        assert new == []
-
-    def test_registry_without_app_id_is_new(self, plugin):
-        """Registry entry without app_id -> classified as new."""
-        plugin._state["shortcut_registry"] = {
-            "1": {"name": "Game A", "platform_name": "N64"},
-        }
-        sd = [self._make_sd(1, "Game A")]
-        new, changed, _, _, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(new) == 1
-        assert new[0]["rom_id"] == 1
-        assert changed == []
-
-    def test_first_sync_empty_registry_all_new(self, plugin):
-        """First sync (empty registry) -> all new."""
-        sd = [self._make_sd(i, f"Game {i}") for i in range(1, 6)]
-        new, changed, unchanged_ids, stale, disabled = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(new) == 5
-        assert changed == []
-        assert unchanged_ids == []
-        assert stale == []
-        assert disabled == 0
-
-    def test_no_changes(self, plugin):
-        """Exact match -> 0 new, 0 changed, 0 removed."""
-        plugin._state["shortcut_registry"] = {
-            "1": {
-                "app_id": 1001,
-                "name": "Game A",
-                "platform_name": "N64",
-                "platform_slug": "n64",
-                "fs_name": "game.z64",
-            },
-        }
-        sd = [self._make_sd(1, "Game A")]
-        new, changed, unchanged_ids, stale, _ = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(new) == 0
-        assert len(changed) == 0
-        assert len(stale) == 0
-        assert len(unchanged_ids) == 1
-
-    def test_all_stale_disabled_platforms(self, plugin):
-        """Everything stale from disabled platforms."""
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "GBA"},
-            "2": {"app_id": 1002, "name": "Game B", "platform_name": "SNES"},
-        }
-        sd = []  # nothing fetched
-        # Neither GBA nor SNES in fetched set
-        _, _, _, stale, disabled = plugin._sync_service._classify_roms(sd, {"N64"})
-        assert len(stale) == 2
-        assert disabled == 2
 
 
 class TestSyncPreview:
@@ -2707,7 +2472,7 @@ def _page(items):
 class TestCollectionSyncEdgeCases:
     """Edge-case tests for the merged platform + collection sync engine.
 
-    Tests exercise _classify_roms() and _report_sync_results_io() directly,
+    Tests exercise classify_roms() and _report_sync_results_io() directly,
     and use _fetch_collection_roms() for collection-fetch scenarios.
     """
 
@@ -2745,8 +2510,8 @@ class TestCollectionSyncEdgeCases:
         # GBA is not in fetched platform names (platform disabled)
         fetched_platform_names = set()
 
-        new, _changed, unchanged_ids, stale, _disabled_count = svc._classify_roms(
-            shortcuts_data, fetched_platform_names
+        new, _changed, unchanged_ids, stale, _disabled_count = classify_roms(
+            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
         )
 
         assert 1 in unchanged_ids, "ROM A should be unchanged (collection keeps it alive)"
@@ -2785,7 +2550,9 @@ class TestCollectionSyncEdgeCases:
         ]
         fetched_platform_names = {"Game Boy Advance"}
 
-        new, _changed, unchanged_ids, stale, disabled_count = svc._classify_roms(shortcuts_data, fetched_platform_names)
+        new, _changed, unchanged_ids, stale, disabled_count = classify_roms(
+            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
+        )
 
         assert 1 in unchanged_ids, "ROM A should be unchanged (platform still enabled)"
         assert 3 in stale, "ROM C should be stale (collection disabled, PSX not enabled)"
@@ -2817,8 +2584,8 @@ class TestCollectionSyncEdgeCases:
         ]
         fetched_platform_names = set()
 
-        _new, _changed, unchanged_ids, stale, _disabled_count = svc._classify_roms(
-            shortcuts_data, fetched_platform_names
+        _new, _changed, unchanged_ids, stale, _disabled_count = classify_roms(
+            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
         )
 
         assert 1 in unchanged_ids, "ROM A should stay alive via RPG collection"
@@ -2959,47 +2726,6 @@ class TestCollectionSyncEdgeCases:
         assert "PlayStation" in platform_app_ids
         assert 1002 in platform_app_ids["PlayStation"]
 
-    # ------------------------------------------------------------------
-    # Scenario 5b/6b: Platform groups toggle in _should_include_in_platform_collection
-    # These test the shared helper that both sync_apply_delta and
-    # _report_sync_results_io use — the bug was that sync_apply_delta
-    # didn't apply the toggle at all.
-    # ------------------------------------------------------------------
-
-    def test_sc5b_should_include_helper_excludes_collection_only_rom(self, plugin):
-        """Helper returns False for collection-only ROM when toggle is OFF."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = False
-        platform_rom_ids = {1, 2}  # ROM 3 is collection-only
-        assert svc._should_include_in_platform_collection(1, platform_rom_ids) is True
-        assert svc._should_include_in_platform_collection(3, platform_rom_ids) is False
-
-    def test_sc5b_should_include_helper_includes_all_when_toggle_on(self, plugin):
-        """Helper returns True for all ROMs when toggle is ON."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = True
-        platform_rom_ids = {1, 2}
-        assert svc._should_include_in_platform_collection(1, platform_rom_ids) is True
-        assert svc._should_include_in_platform_collection(3, platform_rom_ids) is True
-
-    def test_sc5b_should_include_helper_excludes_all_when_no_platforms_enabled(self, plugin):
-        """Empty set = no platforms enabled → exclude all (toggle OFF)."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = False
-        assert svc._should_include_in_platform_collection(1, set()) is False
-
-    def test_sc5b_should_include_helper_includes_all_when_no_tracking_data(self, plugin):
-        """None = legacy sync without platform tracking → include all."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = False
-        assert svc._should_include_in_platform_collection(1, None) is True
-
-    def test_sc5b_should_include_helper_includes_all_empty_set_when_toggle_on(self, plugin):
-        """Empty set + toggle ON → include all."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = True
-        assert svc._should_include_in_platform_collection(1, set()) is True
-
     def test_sc5c_build_collection_app_ids_excludes_collection_only_roms(self, plugin):
         """_build_collection_app_ids respects the toggle.
 
@@ -3138,7 +2864,9 @@ class TestCollectionSyncEdgeCases:
         shortcuts_data: list = []
         fetched_platform_names: set = set()
 
-        new, changed, unchanged_ids, stale, _disabled_count = svc._classify_roms(shortcuts_data, fetched_platform_names)
+        new, changed, unchanged_ids, stale, _disabled_count = classify_roms(
+            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
+        )
 
         assert 1 in stale
         assert len(new) == 0
@@ -3325,7 +3053,9 @@ class TestCollectionSyncEdgeCases:
             }
         ]
 
-        new, changed, unchanged_ids, stale, _disabled_count = svc._classify_roms(shortcuts_data, {"GBA"})
+        new, changed, unchanged_ids, stale, _disabled_count = classify_roms(
+            shortcuts_data, svc._state["shortcut_registry"], {"GBA"}
+        )
 
         assert len(new) == 1
         assert new[0]["rom_id"] == 1
@@ -3350,7 +3080,9 @@ class TestCollectionSyncEdgeCases:
             }
         ]
 
-        new, changed, unchanged_ids, _stale, _disabled_count = svc._classify_roms(shortcuts_data, {"GBA"})
+        new, changed, unchanged_ids, _stale, _disabled_count = classify_roms(
+            shortcuts_data, svc._state["shortcut_registry"], {"GBA"}
+        )
 
         assert len(changed) == 1
         assert changed[0]["rom_id"] == 1

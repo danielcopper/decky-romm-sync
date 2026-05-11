@@ -13,6 +13,12 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from domain.shortcut_data import build_registry_entry, build_shortcuts_data
+from domain.sync_diff import (
+    classify_roms,
+    compute_collection_diff,
+    compute_platform_collection_diff,
+    should_include_in_platform_collection,
+)
 from domain.sync_state import SyncState
 from lib.errors import classify_error
 
@@ -276,8 +282,12 @@ class LibraryService:
         try:
             fetch_result = await self._fetch_and_prepare()
             all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids = fetch_result
-            platform_names = {p.get("name") for p in platforms}
-            new, changed, unchanged_ids, stale, disabled_count = self._classify_roms(shortcuts_data, platform_names)
+            platform_names = {p["name"] for p in platforms if p.get("name")}
+            new, changed, unchanged_ids, stale, disabled_count = classify_roms(
+                shortcuts_data,
+                self._state["shortcut_registry"],
+                platform_names,
+            )
 
             # Build rom lookup for artwork download during apply
             roms_by_id = {r["id"]: r for r in all_roms}
@@ -309,9 +319,15 @@ class LibraryService:
                     "unchanged_count": len(unchanged_ids),
                     "remove_count": len(stale),
                     "disabled_platform_remove_count": disabled_count,
-                    "collection_diff": self._compute_collection_diff(collection_memberships),
-                    "platform_collection_diff": self._compute_platform_collection_diff(
-                        shortcuts_data, platform_rom_ids
+                    "collection_diff": compute_collection_diff(
+                        collection_memberships,
+                        self._state.get("last_synced_collections", []),
+                    ),
+                    "platform_collection_diff": compute_platform_collection_diff(
+                        shortcuts_data,
+                        platform_rom_ids,
+                        self._state.get("last_synced_platforms", []),
+                        self._settings.get("collection_create_platform_groups", False),
                     ),
                 },
                 "new_names": [s["name"] for s in new[:10]],
@@ -460,93 +476,6 @@ class LibraryService:
                     return
 
         self._loop.create_task(_safety_timeout())
-
-    # ── Classification ───────────────────────────────────────
-
-    def _classify_roms(self, shortcuts_data, fetched_platform_names):
-        """Classify each ROM as new/changed/unchanged/stale."""
-        registry = self._state["shortcut_registry"]
-        new, changed, unchanged_ids = [], [], []
-
-        for sd in shortcuts_data:
-            reg = registry.get(str(sd["rom_id"]))
-            if not reg or not reg.get("app_id"):
-                new.append(sd)
-            elif (
-                reg.get("name") != sd["name"]
-                or reg.get("platform_name") != sd.get("platform_name")
-                or reg.get("platform_slug") != sd.get("platform_slug")
-                or reg.get("fs_name") != sd.get("fs_name", "")
-            ):
-                sd["existing_app_id"] = reg["app_id"]
-                changed.append(sd)
-            else:
-                unchanged_ids.append(sd["rom_id"])
-
-        # Stale: in registry but not in fetched set
-        current_ids = {sd["rom_id"] for sd in shortcuts_data}
-        stale = [int(rid) for rid in registry if int(rid) not in current_ids]
-
-        # Classify stale by disabled platform
-        disabled_count = sum(
-            1 for rid in stale if registry.get(str(rid), {}).get("platform_name") not in fetched_platform_names
-        )
-
-        return new, changed, unchanged_ids, stale, disabled_count
-
-    def _compute_collection_diff(self, collection_memberships: dict[str, list[int]]) -> dict:
-        """Compare current enabled collections against last synced state."""
-        current = set(collection_memberships.keys())
-        previous = set(self._state.get("last_synced_collections", []))
-        added = sorted(current - previous)
-        removed = sorted(previous - current)
-        return {
-            "has_changes": bool(added or removed or current),
-            "added": added,
-            "removed": removed,
-        }
-
-    def _compute_platform_collection_diff(self, shortcuts_data: list[dict], platform_rom_ids: set[int]) -> dict:
-        """Compare future platform collections against current registry.
-
-        Respects the collection_create_platform_groups toggle — if OFF,
-        only platforms from platform-fetched ROMs get collections.
-        """
-        # Future: platforms that will have collections after sync
-        future_platforms: set[str] = set()
-        for sd in shortcuts_data:
-            rid = sd["rom_id"]
-            if self._should_include_in_platform_collection(rid, platform_rom_ids):
-                pname = sd.get("platform_name", "")
-                if pname:
-                    future_platforms.add(pname)
-
-        # Current: platforms that had collections at last sync
-        current_platforms = set(self._state.get("last_synced_platforms", []))
-
-        added = sorted(future_platforms - current_platforms)
-        removed = sorted(current_platforms - future_platforms)
-        return {
-            "has_changes": bool(added or removed),
-            "added_count": len(added),
-            "removed_count": len(removed),
-        }
-
-    def _should_include_in_platform_collection(self, rom_id: int, platform_rom_ids: set[int] | None) -> bool:
-        """Check if a ROM should appear in platform collections.
-
-        If collection_create_platform_groups is False (default), only ROMs
-        fetched via enabled platforms are included. Collection-only ROMs
-        are excluded from platform collections but still synced.
-
-        platform_rom_ids=None means no tracking data (legacy sync) → include all.
-        platform_rom_ids=set() means no platforms enabled → exclude all (unless toggle ON).
-        """
-        if self._settings.get("collection_create_platform_groups", False):
-            return True
-        if platform_rom_ids is None:
-            return True  # Legacy sync without platform tracking
-        return rom_id in platform_rom_ids
 
     # ── Fetch & prepare ──────────────────────────────────────
 
@@ -968,7 +897,11 @@ class LibraryService:
         """Build platform_app_ids and romm_collection_app_ids from the shortcut registry."""
         platform_app_ids: dict = {}
         for rid_str, entry in registry.items():
-            if not self._should_include_in_platform_collection(int(rid_str), pending_platform_rom_ids):
+            if not should_include_in_platform_collection(
+                int(rid_str),
+                pending_platform_rom_ids,
+                self._settings.get("collection_create_platform_groups", False),
+            ):
                 continue
             pname = entry.get("platform_name", "Unknown")
             platform_app_ids.setdefault(pname, []).append(entry.get("app_id"))

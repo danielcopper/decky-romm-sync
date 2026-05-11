@@ -74,8 +74,9 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
   Protocols, persisters, bootstrap cleanup. Done first so every later vertical consumes the Protocols defined here.
   Done: ~~#294~~ (Clock/UuidGen/Sleeper), ~~#289~~ (FirmwareCachePersister), ~~#292~~ (ArtworkRemover), ~~#296~~ (CoreInfoProvider, shipped as #310), ~~#205~~ (es_de_config I/O split, shipped as #311), ~~#168~~ (sync_state_box dead-code removal, shipped as #312), ~~#169~~ (WiringConfig split, shipped as #313), ~~#303~~ (call-site clock/sleep ban, shipped as #314).
   Deferred: #259 (SonarCloud arch rules — waiting on SonarCloud Python support).
-- **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295))
-  Extract pure logic from non-saves services into `domain/`. Library sync_classification cluster first (highest value), then firmware paths, achievements, path safety, filename resolution.
+- **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295)) — **complete**
+  Pure logic extracted from non-saves services into `domain/`.
+  Done: ~~#315~~ (firmware paths), ~~#316~~ (achievements), ~~#317~~ (path safety + mise lint bundle), ~~#318~~ (filename resolution), ~~#319~~ (sync_diff cluster).
 - **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2)
   - [#299](https://github.com/danielcopper/decky-romm-sync/issues/299) ArtworkService + SteamGridService — small, do as one chunk
   - [#297](https://github.com/danielcopper/decky-romm-sync/issues/297) DownloadService
@@ -90,7 +91,7 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
 
 **Why this order**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical means every later PR is "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrinks the scariest service before lifting it. LibraryService last because it has the largest blast radius.
 
-When picking work: Wave 1 is finished (modulo deferred #259), so every later vertical's Protocol dependencies are in place. Wave 2 (#295) is the next active wave.
+When picking work: Waves 1 and 2 are finished (modulo deferred #259), so every per-service vertical's Protocol and domain dependencies are in place. Wave 3 (#297–#302) is the next active wave.
 
 ## Sub-package layout — `__init__.py` is re-export only
 
