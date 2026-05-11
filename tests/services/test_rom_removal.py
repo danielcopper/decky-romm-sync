@@ -49,29 +49,6 @@ async def _sync_loop(service):
     service._loop = asyncio.get_event_loop()
 
 
-class TestIsSafeRomPath:
-    def test_path_inside_roms_dir_is_safe(self, service, tmp_path):
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        safe = str(tmp_path / "retrodeck" / "roms" / "n64" / "game.z64")
-        assert service._is_safe_rom_path(safe) is True
-
-    def test_path_outside_roms_dir_is_not_safe(self, service, tmp_path):
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        outside = str(tmp_path / "evil" / "game.z64")
-        assert service._is_safe_rom_path(outside) is False
-
-    def test_roms_base_itself_is_not_safe(self, service, tmp_path):
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        # Only 1 level deep — must be at least 2
-        base = str(tmp_path / "retrodeck" / "roms" / "n64")
-        assert service._is_safe_rom_path(base) is False
-
-    def test_etc_passwd_is_not_safe(self, service, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        assert service._is_safe_rom_path("/etc/passwd") is False
-
-
 class TestDeleteRomFiles:
     def test_deletes_single_file(self, service, tmp_path):
 

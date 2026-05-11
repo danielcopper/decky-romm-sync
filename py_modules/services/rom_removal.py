@@ -7,6 +7,8 @@ import os
 import shutil
 from typing import TYPE_CHECKING
 
+from domain.path_safety import is_safe_rom_path
+
 if TYPE_CHECKING:
     import logging
 
@@ -35,30 +37,18 @@ class RomRemovalService:
         self._save_save_sync_state = save_save_sync_state
         self._get_roms_path = get_roms_path
 
-    def _is_safe_rom_path(self, path: str) -> bool:
-        """Check that a path is safely contained within the roms base directory."""
-        roms_base = self._get_roms_path() if self._get_roms_path else ""
-        resolved = os.path.realpath(path)
-        real_base = os.path.realpath(roms_base)
-        if not resolved.startswith(real_base + os.sep):
-            return False
-        # Must be at least 2 levels deep (e.g. roms/gb/file.zip, not roms/gb/)
-        rel = os.path.relpath(resolved, real_base)
-        parts = rel.split(os.sep)
-        return len(parts) >= 2
-
     def _delete_rom_files(self, installed: dict) -> None:
         """Delete ROM files for an installed entry. Handles both single-file and multi-file ROMs."""
         rom_dir = installed.get("rom_dir", "")
         file_path = installed.get("file_path", "")
 
         if rom_dir and os.path.isdir(rom_dir):
-            if not self._is_safe_rom_path(rom_dir):
+            if not is_safe_rom_path(rom_dir, self._get_roms_path() if self._get_roms_path else ""):
                 self._logger.error(f"Refusing to delete path outside roms directory: {rom_dir}")
                 return
             shutil.rmtree(rom_dir)
         elif file_path:
-            if not self._is_safe_rom_path(file_path):
+            if not is_safe_rom_path(file_path, self._get_roms_path() if self._get_roms_path else ""):
                 self._logger.error(f"Refusing to delete path outside roms directory: {file_path}")
                 return
             if os.path.isdir(file_path):
