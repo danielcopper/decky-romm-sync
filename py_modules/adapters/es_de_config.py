@@ -1,43 +1,19 @@
-"""ES-DE configuration parser for active core resolution."""
+"""ES-DE configuration adapters.
+
+Owns the I/O for resolving active RetroArch cores from ES-DE's
+``gamelist.xml`` / ``es_systems.xml`` / ``core_defaults.json``, and for
+writing per-system / per-game core overrides back to ``gamelist.xml``.
+"""
+
+from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+from collections.abc import Callable
 
 _CORE_SO_RE = re.compile(r"%CORE_RETROARCH%/([\w-]+_libretro)\.so")
-
-# Module-level configuration — set via configure() during bootstrap.
-# Falls back to importing decky lazily if not configured (dev/test fallback).
-_logger = None
-_plugin_dir = None
-_get_retrodeck_home = None
-
-
-def configure(plugin_dir: str, logger, get_retrodeck_home=None) -> None:
-    """Configure module-level logger, plugin_dir, and optional retrodeck home provider.
-
-    Must be called once during bootstrap before the first use of CoreResolver
-    methods that load files from the plugin directory.
-    """
-    global _logger, _plugin_dir, _get_retrodeck_home
-    _logger = logger
-    _plugin_dir = plugin_dir
-    _get_retrodeck_home = get_retrodeck_home
-
-
-def _get_logger():
-    """Return the configured logger, raising if not configured."""
-    if _logger is not None:
-        return _logger
-    raise RuntimeError("es_de_config not configured — call configure() during bootstrap")
-
-
-def _get_plugin_dir():
-    """Return the configured plugin_dir, raising if not configured."""
-    if _plugin_dir is not None:
-        return _plugin_dir
-    raise RuntimeError("es_de_config not configured — call configure() during bootstrap")
-
 
 _GAMELIST_FILENAME = "gamelist.xml"
 
@@ -61,20 +37,38 @@ _ES_SYSTEMS_CANDIDATES = [
 class CoreResolver:
     """Resolves active RetroArch cores for ES-DE systems.
 
-    Owns the es_systems.xml and core_defaults.json caches as instance
-    attributes (no module-level globals).
+    Reads ``es_systems.xml`` from the RetroDECK flatpak install, falls back
+    to a bundled ``core_defaults.json``, and honours per-system /
+    per-game overrides written into ``gamelist.xml``. Caches its file
+    reads as instance attributes; call :meth:`reset_cache` after editing
+    the underlying files.
+
+    Implements the ``CoreInfoProvider`` Protocol structurally.
     """
 
-    def __init__(self) -> None:
-        self._es_systems_cache = None  # dict or None
-        self._es_systems_mtime = None  # float or None — mtime when cache was loaded
-        self._es_systems_path = None  # str or None — path that was cached
-        self._core_defaults_cache = None  # dict or None
-        self._core_defaults_mtime = None  # float or None
-        self._core_defaults_path = None  # str or None
+    def __init__(
+        self,
+        plugin_dir: str,
+        logger: logging.Logger,
+        get_retrodeck_home: Callable[[], str | None] | None = None,
+    ) -> None:
+        self._plugin_dir = plugin_dir
+        self._logger = logger
+        self._get_retrodeck_home = get_retrodeck_home
+        self._es_systems_cache: dict | None = None
+        self._es_systems_mtime: float | None = None
+        self._es_systems_path: str | None = None
+        self._core_defaults_cache: dict | None = None
+        self._core_defaults_mtime: float | None = None
+        self._core_defaults_path: str | None = None
 
     def reset_cache(self) -> None:
-        """Reset caches (for testing)."""
+        """Drop cached ``es_systems.xml`` and ``core_defaults.json`` reads.
+
+        Call after any process (including this plugin) edits a
+        ``gamelist.xml`` override, so the next resolution re-reads from
+        disk instead of returning a stale label.
+        """
         self._es_systems_cache = None
         self._es_systems_mtime = None
         self._es_systems_path = None
@@ -103,8 +97,8 @@ class CoreResolver:
         Returns (core_so, label) or None.
         """
         try:
-            if _get_retrodeck_home is not None:
-                retrodeck_home = _get_retrodeck_home()
+            if self._get_retrodeck_home is not None:
+                retrodeck_home = self._get_retrodeck_home()
             else:
                 return None
         except Exception:
@@ -115,11 +109,11 @@ class CoreResolver:
 
         # Per-game override (if rom_filename provided)
         if rom_filename:
-            game_label = _editor.get_game_override(retrodeck_home, system_name, rom_filename)
+            game_label = self._read_game_override(retrodeck_home, system_name, rom_filename)
             if game_label:
                 resolved = self._resolve_label(system_name, system_info, game_label)
                 if resolved:
-                    _get_logger().debug(
+                    self._logger.debug(
                         "es_de_config: per-game override for %s/%s -> %s",
                         system_name,
                         rom_filename,
@@ -128,7 +122,7 @@ class CoreResolver:
                     return resolved
 
         # Per-system override
-        override_label = _editor.get_system_override(retrodeck_home, system_name)
+        override_label = self._read_system_override(retrodeck_home, system_name)
         if not override_label:
             return None
         return self._resolve_label(system_name, system_info, override_label)
@@ -181,7 +175,7 @@ class CoreResolver:
                 {"core_so": core_so, "label": label, "is_default": core_so == default_core}
                 for core_so, label in system_info["cores"].items()
             ]
-            _get_logger().debug(
+            self._logger.debug(
                 "es_de_config: get_available_cores(%s) -> %d cores from es_systems.xml",
                 system_name,
                 len(cores),
@@ -197,21 +191,21 @@ class CoreResolver:
                 {"core_so": core_so, "label": label, "is_default": core_so == default_core}
                 for core_so, label in default_info["cores"].items()
             ]
-            _get_logger().debug(
+            self._logger.debug(
                 "es_de_config: get_available_cores(%s) -> %d cores from core_defaults.json (fallback)",
                 system_name,
                 len(cores),
             )
             return cores
 
-        _get_logger().debug("es_de_config: get_available_cores(%s) -> no cores found", system_name)
+        self._logger.debug("es_de_config: get_available_cores(%s) -> no cores found", system_name)
         return []
 
-    def get_system_override(self, retrodeck_home, system_name):
+    def _read_system_override(self, retrodeck_home, system_name):
         """Check for per-system alternative emulator override in gamelist.xml.
 
-        Reads {retrodeck_home}/ES-DE/gamelists/{system}/gamelist.xml
-        looking for <alternativeEmulator><label>X</label></alternativeEmulator>.
+        Reads ``{retrodeck_home}/ES-DE/gamelists/{system}/gamelist.xml``
+        looking for ``<alternativeEmulator><label>X</label></alternativeEmulator>``.
 
         Returns the label string or None.
         """
@@ -264,11 +258,11 @@ class CoreResolver:
 
         return result["label"]
 
-    def get_game_override(self, retrodeck_home, system_name, rom_filename):
+    def _read_game_override(self, retrodeck_home, system_name, rom_filename):
         """Check for per-game alternative emulator override in gamelist.xml.
 
-        Reads {retrodeck_home}/ES-DE/gamelists/{system}/gamelist.xml
-        looking for <game> entries with matching <path> and <altemulator>.
+        Reads ``{retrodeck_home}/ES-DE/gamelists/{system}/gamelist.xml``
+        looking for ``<game>`` entries with matching ``<path>`` and ``<altemulator>``.
 
         Returns the altemulator label string or None.
         """
@@ -380,36 +374,32 @@ class CoreResolver:
         state["path"].pop()
         state["text"] = ""
 
-    @staticmethod
-    def parse_es_systems(xml_path):
+    def parse_es_systems(self, xml_path):
         """Parse es_systems.xml and return per-system core info.
 
         Uses xml.parsers.expat (SAX-style) instead of xml.etree.ElementTree
         because Decky's PyInstaller-frozen Python does not bundle xml.etree.
 
-        Returns: {system_name: {
-            "default_core": str | None,
-            "default_label": str | None,
-            "cores": {core_so: label},
-            "label_to_core": {label: core_so},
-        }}
+        Returns: ``{system_name: {"default_core": str | None, "default_label":
+        str | None, "cores": {core_so: label}, "label_to_core": {label:
+        core_so}}}``.
 
         Returns empty dict if file can't be parsed or fails structural validation.
         """
         try:
             from xml.parsers import expat
         except ImportError:
-            _get_logger().warning("es_de_config: xml.parsers.expat not available")
+            self._logger.warning("es_de_config: xml.parsers.expat not available")
             return {}
 
         try:
             with open(xml_path, "rb") as f:
                 data = f.read()
         except OSError as e:
-            _get_logger().warning("es_de_config: failed to read %s: %s", xml_path, e)
+            self._logger.warning("es_de_config: failed to read %s: %s", xml_path, e)
             return {}
 
-        systems = {}
+        systems: dict = {}
         state = {
             "path": [],  # element name stack
             "text": "",  # accumulated character data
@@ -429,11 +419,11 @@ class CoreResolver:
         try:
             parser.Parse(data, True)
         except expat.ExpatError as e:
-            _get_logger().warning("es_de_config: failed to parse %s: %s", xml_path, e)
+            self._logger.warning("es_de_config: failed to parse %s: %s", xml_path, e)
             return {}
 
         if state["root_tag"] != "systemList":
-            _get_logger().warning(
+            self._logger.warning(
                 "es_de_config: unexpected root tag '%s' (expected 'systemList')",
                 state["root_tag"],
             )
@@ -443,15 +433,15 @@ class CoreResolver:
 
     # -- internal cache methods ----------------------------------------------
 
-    def _load_core_defaults(self):
+    def _load_core_defaults(self) -> dict:
         """Load the static core_defaults.json fallback.
 
         Re-reads from disk if the file's mtime has changed (handles plugin updates).
         """
         # Check plugin root first (Decky CLI moves defaults/ contents to root),
         # then defaults/ subdirectory (dev deploys via mise run deploy)
-        root_path = os.path.join(_get_plugin_dir(), "core_defaults.json")
-        dev_path = os.path.join(_get_plugin_dir(), "defaults", "core_defaults.json")
+        root_path = os.path.join(self._plugin_dir, "core_defaults.json")
+        dev_path = os.path.join(self._plugin_dir, "defaults", "core_defaults.json")
         defaults_path = root_path if os.path.exists(root_path) else dev_path
 
         try:
@@ -471,14 +461,14 @@ class CoreResolver:
                 data = json.load(f)
             self._core_defaults_cache = data.get("systems", {})
         except (OSError, json.JSONDecodeError) as e:
-            _get_logger().warning("es_de_config: failed to load core_defaults.json: %s", e)
+            self._logger.warning("es_de_config: failed to load core_defaults.json: %s", e)
             self._core_defaults_cache = {}
 
         self._core_defaults_path = defaults_path
         self._core_defaults_mtime = current_mtime
-        return self._core_defaults_cache
+        return self._core_defaults_cache or {}
 
-    def _load_es_systems(self):
+    def _load_es_systems(self) -> dict:
         """Load and cache es_systems.xml parse result.
 
         Re-reads from disk if the file's mtime has changed (handles flatpak updates).
@@ -502,12 +492,12 @@ class CoreResolver:
             self._es_systems_mtime = current_mtime
         else:
             if self._es_systems_cache is None:
-                _get_logger().info("es_de_config: es_systems.xml not found, using core_defaults.json fallback")
+                self._logger.info("es_de_config: es_systems.xml not found, using core_defaults.json fallback")
             self._es_systems_cache = {}
             self._es_systems_path = None
             self._es_systems_mtime = None
 
-        return self._es_systems_cache
+        return self._es_systems_cache or {}
 
 
 # ---------------------------------------------------------------------------
@@ -516,17 +506,25 @@ class CoreResolver:
 
 
 class GamelistXmlEditor:
-    """Reads and writes gamelist.xml for per-system and per-game core overrides."""
+    """Writes per-system and per-game core overrides into ES-DE's gamelist.xml.
+
+    Implements ``GamelistXmlEditorProtocol`` structurally. Reads
+    happen through :class:`CoreResolver`; this class only writes.
+    """
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
 
     # -- public API ----------------------------------------------------------
 
     def set_system_override(self, retrodeck_home, system_name, core_label):
         """Set or clear the system-wide core override in gamelist.xml.
 
-        Writes <alternativeEmulator><label>X</label></alternativeEmulator>.
-        If core_label is None or empty, removes the alternativeEmulator element.
-        Preserves all existing <game> entries.
-        Creates file/directories if they don't exist.
+        Writes ``<alternativeEmulator><label>X</label></alternativeEmulator>``.
+        If ``core_label`` is None or empty, removes the
+        ``alternativeEmulator`` element. Preserves all existing
+        ``<game>`` entries. Creates file/directories if they don't
+        exist.
         """
         path = self.gamelist_path(retrodeck_home, system_name)
         raw = self.read_gamelist_raw(path)
@@ -534,7 +532,7 @@ class GamelistXmlEditor:
         if raw:
             parsed = self.parse_gamelist_preserving(raw)
             if parsed is None:
-                _get_logger().warning("es_de_config: failed to parse %s for writing", path)
+                self._logger.warning("es_de_config: failed to parse %s for writing", path)
                 return False
             games_xml = [g["raw_xml"] for g in parsed["games"]]
         else:
@@ -543,15 +541,16 @@ class GamelistXmlEditor:
         content = self.reconstruct_gamelist(core_label or None, games_xml)
         self.write_gamelist_atomic(path, content)
         action = "cleared" if not core_label else f"set to '{core_label}'"
-        _get_logger().info("es_de_config: system override for %s %s (%s)", system_name, action, path)
+        self._logger.info("es_de_config: system override for %s %s (%s)", system_name, action, path)
         return True
 
     def set_game_override(self, retrodeck_home, system_name, rom_path, core_label):
         """Set or clear per-game core override in gamelist.xml.
 
-        rom_path: the relative path for the game (e.g. "./Pokemon.gba")
-        If core_label is None/empty, removes the altemulator from the game entry.
-        Creates game entry if not found. Preserves all other content.
+        ``rom_path`` is the relative path for the game (e.g.
+        ``"./Pokemon.gba"``). If ``core_label`` is None/empty, removes
+        the ``altemulator`` from the game entry. Creates the game entry
+        if not found. Preserves all other content.
         """
         path = self.gamelist_path(retrodeck_home, system_name)
         raw = self.read_gamelist_raw(path)
@@ -559,7 +558,7 @@ class GamelistXmlEditor:
         if raw:
             parsed = self.parse_gamelist_preserving(raw)
             if parsed is None:
-                _get_logger().warning("es_de_config: failed to parse %s for writing", path)
+                self._logger.warning("es_de_config: failed to parse %s for writing", path)
                 return False
             alt_label = parsed["alt_emulator_label"]
             games = parsed["games"]
@@ -589,16 +588,8 @@ class GamelistXmlEditor:
         content = self.reconstruct_gamelist(alt_label, new_games_xml)
         self.write_gamelist_atomic(path, content)
         action = "cleared" if not core_label else f"set to '{core_label}'"
-        _get_logger().info("es_de_config: game override for %s [%s] %s (%s)", system_name, rom_path, action, path)
+        self._logger.info("es_de_config: game override for %s [%s] %s (%s)", system_name, rom_path, action, path)
         return True
-
-    def get_system_override(self, retrodeck_home, system_name):
-        """Delegate to CoreResolver for backward compatibility."""
-        return _resolver.get_system_override(retrodeck_home, system_name)
-
-    def get_game_override(self, retrodeck_home, system_name, rom_filename):
-        """Delegate to CoreResolver for backward compatibility."""
-        return _resolver.get_game_override(retrodeck_home, system_name, rom_filename)
 
     # -- internal helpers (static, used by CoreResolver too) -----------------
 
@@ -681,22 +672,16 @@ class GamelistXmlEditor:
     def parse_gamelist_preserving(data):
         """Parse gamelist.xml into a structured representation that can be modified and reconstructed.
 
-        Returns: {
-            "alt_emulator_label": str | None,
-            "games": [{
-                "path": str,         # <path> value
-                "altemulator": str | None,  # <altemulator> value
-                "raw_xml": str,      # full <game>...</game> XML
-            }],
-            "other_content": str,    # any non-game, non-altEmulator content
-        } or None on parse failure.
+        Returns: ``{"alt_emulator_label": str | None, "games": [{"path":
+        str, "altemulator": str | None, "raw_xml": str}],
+        "other_content": str}`` or ``None`` on parse failure.
         """
         try:
             from xml.parsers import expat
         except ImportError:
             return None
 
-        result = {
+        result: dict = {
             "alt_emulator_label": None,
             "games": [],
         }
@@ -754,8 +739,8 @@ class GamelistXmlEditor:
     def reconstruct_gamelist(alt_label, games_xml_list):
         """Reconstruct gamelist.xml from components.
 
-        alt_label: the alternativeEmulator label, or None to omit
-        games_xml_list: list of raw <game>...</game> XML strings
+        ``alt_label``: the ``alternativeEmulator`` label, or ``None`` to omit.
+        ``games_xml_list``: list of raw ``<game>...</game>`` XML strings.
         """
         parts = ['<?xml version="1.0"?>\n<gameList>']
         if alt_label:
@@ -811,17 +796,17 @@ class GamelistXmlEditor:
 
     @staticmethod
     def rebuild_game_xml(raw_xml, core_label):
-        """Rebuild a <game> XML string with updated <altemulator> value.
+        """Rebuild a ``<game>`` XML string with updated ``<altemulator>`` value.
 
-        If core_label is None/empty, removes <altemulator> entirely.
-        Preserves all other child elements.
+        If ``core_label`` is ``None``/empty, removes ``<altemulator>``
+        entirely. Preserves all other child elements.
         """
         try:
             from xml.parsers import expat
         except ImportError:
             return raw_xml
 
-        elements = []
+        elements: list = []
         state = {"path": [], "text": "", "skip_altemulator": False}
 
         parser = expat.ParserCreate()
@@ -847,33 +832,3 @@ class GamelistXmlEditor:
             parts.append(f"<altemulator>{GamelistXmlEditor.escape_xml(core_label)}</altemulator>")
         parts.append("</game>")
         return "".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Module-level singletons + backward-compatible function delegates
-# ---------------------------------------------------------------------------
-
-_resolver = CoreResolver()
-_editor = GamelistXmlEditor()
-
-
-# CoreResolver delegates
-find_es_systems_xml = CoreResolver.find_es_systems_xml
-parse_es_systems = CoreResolver.parse_es_systems
-get_active_core = _resolver.get_active_core
-get_available_cores = _resolver.get_available_cores
-get_system_override = _resolver.get_system_override
-get_game_override = _resolver.get_game_override
-_load_es_systems = _resolver._load_es_systems
-_load_core_defaults = _resolver._load_core_defaults
-
-# GamelistXmlEditor delegates
-set_system_override = _editor.set_system_override
-set_game_override = _editor.set_game_override
-_gamelist_path = GamelistXmlEditor.gamelist_path
-_read_gamelist_raw = GamelistXmlEditor.read_gamelist_raw
-_write_gamelist_atomic = GamelistXmlEditor.write_gamelist_atomic
-_parse_gamelist_preserving = GamelistXmlEditor.parse_gamelist_preserving
-_escape_xml = GamelistXmlEditor.escape_xml
-_reconstruct_gamelist = GamelistXmlEditor.reconstruct_gamelist
-_rebuild_game_xml = GamelistXmlEditor.rebuild_game_xml

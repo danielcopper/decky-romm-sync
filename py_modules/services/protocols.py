@@ -440,8 +440,9 @@ class CoreResolverFn(Protocol):
 class CoreInfoProvider(Protocol):
     """Core resolution for ES-DE configured systems, consumed by FirmwareService.
 
-    Wraps the module-level functions in domain.es_de_config behind a boundary
-    so services can be tested without patching module symbols.
+    Exposes the read seam services need to ask "which RetroArch core is
+    active for this system/ROM?" without depending on the concrete
+    adapter. Implementations own the underlying file reads.
     """
 
     def get_active_core(
@@ -451,6 +452,30 @@ class CoreInfoProvider(Protocol):
     ) -> tuple[str | None, str | None]: ...
 
     def get_available_cores(self, system_name: str) -> list[dict]: ...
+
+
+class GamelistXmlEditorProtocol(Protocol):
+    """Write seam for ES-DE per-system / per-game core overrides.
+
+    Lets ``main.py`` callables mutate ``gamelist.xml`` without
+    depending on the concrete adapter. Reads remain a
+    ``CoreInfoProvider`` concern.
+    """
+
+    def set_system_override(
+        self,
+        retrodeck_home: str,
+        system_name: str,
+        core_label: str | None,
+    ) -> bool: ...
+
+    def set_game_override(
+        self,
+        retrodeck_home: str,
+        system_name: str,
+        rom_path: str,
+        core_label: str | None,
+    ) -> bool: ...
 
 
 class CoreNameProviderFn(Protocol):

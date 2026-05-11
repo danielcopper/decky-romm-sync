@@ -44,6 +44,53 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 - **import-linter**: Layer boundary enforcement in CI (services ↛ adapters, adapters ↛ services, services independent).
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
+## Architecture — Cosmic Python rules
+
+Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pure compute) / `lib/` (cross-cutting utilities) / `models/` (data shapes). `import-linter` enforces direction.
+
+**Services**:
+
+- Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes.
+- No raw I/O. Forbidden in `services/`: `os.*` (except pure path algebra: `realpath`, `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`.
+- No clocks or randomness: no `time.time()`, `time.monotonic()`, `datetime.now()`, `uuid.uuid4()`, `asyncio.sleep()`, `random.*` directly. Inject `Clock` / `UuidGen` / `Sleeper` Protocols.
+- No service-to-service concrete imports — services are independent. Cross-service deps are Protocol-typed.
+- Module functions from `domain/` are still a coupling — if tests need `patch("services.X.module_name.fn")`, wrap the module behind a Protocol and inject it.
+- God-class signal: services > ~600 LOC or `__init__` > 6 params (S107) — decompose into sub-services with constructor injection (see `services/saves/` for the reference pattern).
+
+**Adapters**: own all I/O. Never import from `services/`. Implement Protocols defined in `services/protocols.py`.
+
+**Domain**: pure compute only. No I/O, no state mutation, no service or adapter imports. Functions take inputs, return outputs. Anything stateless and I/O-free that's currently in a service belongs here.
+
+**Bootstrap (`bootstrap.py`)**: the only place where concrete adapters meet services. `WiringConfig` holds the wiring; protocols come in, services come out.
+
+If a refactor breaks one of these rules, that's a Cosmic Python regression — call it out and fix it in the same PR or open a follow-up.
+
+## Refactor wave plan (live — see #277 for current status)
+
+The full Cosmic Python migration is tracked under [#277](https://github.com/danielcopper/decky-romm-sync/issues/277) (umbrella). Order is chosen to minimize rework: cross-cutting Protocols first, then domain promotions, then per-service vertical refactors smallest-to-largest.
+
+- **Wave 1 — Cross-cutting infrastructure** ([#256](https://github.com/danielcopper/decky-romm-sync/issues/256))
+  Protocols, persisters, bootstrap cleanup. Do first — every later vertical consumes the Protocols defined here.
+  Done: ~~#294~~ (Clock/UuidGen/Sleeper), ~~#289~~ (FirmwareCachePersister), ~~#292~~ (ArtworkRemover), ~~#296~~ (CoreInfoProvider, shipped as #310).
+  Open: #205 (domain/es_de_config I/O split — next), #168 (`_sync_state_box`), #169 (WiringConfig split), #259 (SonarCloud arch rules — deferred until Python supported).
+- **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295))
+  Extract pure logic from non-saves services into `domain/`. Library sync_classification cluster first (highest value), then firmware paths, achievements, path safety, filename resolution.
+- **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2)
+  - [#299](https://github.com/danielcopper/decky-romm-sync/issues/299) ArtworkService + SteamGridService — small, do as one chunk
+  - [#297](https://github.com/danielcopper/decky-romm-sync/issues/297) DownloadService
+  - [#298](https://github.com/danielcopper/decky-romm-sync/issues/298) FirmwareService — fold [#301](https://github.com/danielcopper/decky-romm-sync/issues/301) GameDetailService in alongside (shares `CoreInfoProvider`)
+  - [#302](https://github.com/danielcopper/decky-romm-sync/issues/302) MigrationService — decision first (#293), then act
+  - [#300](https://github.com/danielcopper/decky-romm-sync/issues/300) LibraryService **last** — by then most of its un-injected deps and pure logic have moved out
+- **Wave 4 — Close-out**
+  - #274 main.py callable thinness audit (last, after services have settled)
+  - #277 final verification — tick all checklist items, close
+
+**Saves vertical** ([#254](https://github.com/danielcopper/decky-romm-sync/issues/254)) runs in parallel — independent of the waves above.
+
+**Why this order**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical means every later PR is "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrinks the scariest service before lifting it. LibraryService last because it has the largest blast radius.
+
+When picking work: any unblocked Wave 1 issue is a safe pick. Wave 2 PRs can start once their Wave 1 dependencies (Clock for the affected service) ship.
+
 ## Sub-package layout — `__init__.py` is re-export only
 
 For sub-packages (e.g. `services/saves/status/`, `services/saves/sync_engine/`), `__init__.py` holds only:

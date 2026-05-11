@@ -152,6 +152,8 @@ class Plugin:
         self._retrodeck_paths: RetroDeckPathsAdapter = adapters["retrodeck_paths"]
         self._retroarch_config: RetroArchConfigAdapter = adapters["retroarch_config"]
         self._retroarch_core_info: RetroArchCoreInfoAdapter = adapters["retroarch_core_info"]
+        self._core_resolver = adapters["core_resolver"]
+        self._gamelist_editor = adapters["gamelist_editor"]
 
         # ── 3. Load state ───────────────────────────────────────────────────
         self._state = {
@@ -201,7 +203,7 @@ class Plugin:
                 save_settings_to_disk=self._save_settings_to_disk,
                 save_metadata_cache=self._save_metadata_cache,
                 firmware_cache_persister=FirmwareCachePersisterAdapter(self._persistence),
-                core_info_provider=adapters["es_de_core_info"],
+                core_info_provider=adapters["core_resolver"],
                 save_sync_state_persister=SaveSyncStatePersisterAdapter(self._persistence),
                 log_debug=self._log_debug,
             )
@@ -443,23 +445,18 @@ class Plugin:
 
     async def get_available_cores(self, platform_slug):
         """Return available RetroArch cores for a platform."""
-        from domain import es_de_config
-
-        cores = es_de_config.get_available_cores(platform_slug)
-        active_core_so, active_core_label = es_de_config.get_active_core(platform_slug)
+        cores = self._core_resolver.get_available_cores(platform_slug)
+        active_core_so, active_core_label = self._core_resolver.get_active_core(platform_slug)
         return {
             "cores": cores,
             "active_core": active_core_so,
             "active_core_label": active_core_label,
         }
 
-    @staticmethod
-    def _set_system_core_io(retrodeck_home, platform_slug, core_label):
+    def _set_system_core_io(self, retrodeck_home, platform_slug, core_label):
         """Sync helper for set_system_core — XML read/parse/write in executor."""
-        from domain import es_de_config
-
-        es_de_config.set_system_override(retrodeck_home, platform_slug, core_label or None)
-        es_de_config._resolver.reset_cache()
+        self._gamelist_editor.set_system_override(retrodeck_home, platform_slug, core_label or None)
+        self._core_resolver.reset_cache()
 
     @migration_blocked
     async def set_system_core(self, platform_slug, core_label):
@@ -475,13 +472,10 @@ class Plugin:
             decky.logger.error(f"Failed to set system core: {e}")
             return {"success": False, "message": str(e)}
 
-    @staticmethod
-    def _set_game_core_io(retrodeck_home, platform_slug, rom_path, core_label):
+    def _set_game_core_io(self, retrodeck_home, platform_slug, rom_path, core_label):
         """Sync helper for set_game_core — XML read/parse/write in executor."""
-        from domain import es_de_config
-
-        es_de_config.set_game_override(retrodeck_home, platform_slug, rom_path, core_label or None)
-        es_de_config._resolver.reset_cache()
+        self._gamelist_editor.set_game_override(retrodeck_home, platform_slug, rom_path, core_label or None)
+        self._core_resolver.reset_cache()
 
     @migration_blocked
     async def set_game_core(self, platform_slug, rom_path, core_label):

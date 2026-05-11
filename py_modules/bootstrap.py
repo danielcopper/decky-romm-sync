@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass
 
 from adapters.asyncio_sleeper import AsyncioSleeper
-from adapters.es_de_core_info import EsDeCoreInfoAdapter
+from adapters.es_de_config import CoreResolver, GamelistXmlEditor
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -24,7 +24,6 @@ from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
-from domain import es_de_config as _es_de_config
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService
 from services.downloads import DownloadService
@@ -132,15 +131,15 @@ def bootstrap(
     dict with keys ``persistence``, ``http_adapter``, and ``wire_services``
     (a factory callable for deferred service creation).
     """
-    # Configure domain modules with runtime paths/logger (removes decky coupling from domain).
     retrodeck_paths = RetroDeckPathsAdapter(user_home=user_home, logger=logger)
     retroarch_config = RetroArchConfigAdapter(user_home=user_home, logger=logger)
     retroarch_core_info = RetroArchCoreInfoAdapter(user_home=user_home, logger=logger)
-    _es_de_config.configure(
+    core_resolver = CoreResolver(
         plugin_dir=plugin_dir,
         logger=logger,
         get_retrodeck_home=retrodeck_paths.get_retrodeck_home,
     )
+    gamelist_editor = GamelistXmlEditor(logger=logger)
 
     persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
     http_adapter = RommHttpAdapter(settings, plugin_dir, logger)
@@ -150,7 +149,6 @@ def bootstrap(
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
-    es_de_core_info = EsDeCoreInfoAdapter()
 
     return {
         "persistence": persistence,
@@ -164,7 +162,8 @@ def bootstrap(
         "clock": clock,
         "uuid_gen": uuid_gen,
         "sleeper": sleeper,
-        "es_de_core_info": es_de_core_info,
+        "core_resolver": core_resolver,
+        "gamelist_editor": gamelist_editor,
     }
 
 
@@ -211,7 +210,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         get_bios_path=cfg.get_bios_path,
         get_retroarch_save_sorting=cfg.get_retroarch_save_sorting,
         get_roms_path=cfg.get_roms_path,
-        get_active_core=_es_de_config.get_active_core,
+        get_active_core=cfg.core_info_provider.get_active_core,
         get_core_name=cfg.get_core_name,
     )
 
@@ -223,7 +222,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         clock=cfg.clock,
         get_saves_path=cfg.get_saves_path,
         get_roms_path=cfg.get_roms_path,
-        get_active_core=_es_de_config.get_active_core,
+        get_active_core=cfg.core_info_provider.get_active_core,
         get_core_name=cfg.get_core_name,
         plugin_version=_read_plugin_version(cfg.plugin_dir),
         emit=cfg.emit,

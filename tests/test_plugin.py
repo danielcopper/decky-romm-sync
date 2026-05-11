@@ -1098,7 +1098,8 @@ class TestMainStartupOrdering:
             "clock": MagicMock(),
             "uuid_gen": MagicMock(),
             "sleeper": MagicMock(),
-            "es_de_core_info": MagicMock(),
+            "core_resolver": MagicMock(),
+            "gamelist_editor": MagicMock(),
         }
 
         with (

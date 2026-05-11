@@ -1,5 +1,6 @@
-"""Tests for domain/es_de_config module."""
+"""Tests for adapters/es_de_config — CoreResolver and GamelistXmlEditor."""
 
+import logging
 import os
 import tempfile
 from typing import ClassVar
@@ -7,21 +8,37 @@ from unittest import mock
 
 import pytest
 
-from domain import es_de_config
+from adapters import es_de_config as es_de_config_mod
+from adapters.es_de_config import CoreResolver, GamelistXmlEditor
 
-# conftest.py patches decky before this import
-# main.py adds py_modules to sys.path (provides vdf, etc.)
+# conftest.py patches decky before this import.
+# main.py adds py_modules to sys.path (provides vdf, etc.).
 from main import Plugin  # noqa: F401
 
+_TEST_LOGGER = logging.getLogger("test_es_de")
 
-@pytest.fixture(autouse=True)
-def _reset_es_de_cache():
-    """Reset CoreResolver singleton caches between tests and ensure module is configured."""
-    import logging
 
-    plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    es_de_config.configure(plugin_dir=plugin_dir, logger=logging.getLogger("test_es_de"))
-    es_de_config._resolver.reset_cache()
+def _make_resolver(get_retrodeck_home=None) -> CoreResolver:
+    plugin_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return CoreResolver(
+        plugin_dir=plugin_dir,
+        logger=_TEST_LOGGER,
+        get_retrodeck_home=get_retrodeck_home,
+    )
+
+
+def _make_editor() -> GamelistXmlEditor:
+    return GamelistXmlEditor(logger=_TEST_LOGGER)
+
+
+@pytest.fixture
+def resolver() -> CoreResolver:
+    return _make_resolver()
+
+
+@pytest.fixture
+def editor() -> GamelistXmlEditor:
+    return _make_editor()
 
 
 # --- Helpers ---
@@ -73,35 +90,35 @@ def _write_temp_xml(content):
 
 
 class TestFindEsSystemsXml:
-    @mock.patch("domain.es_de_config.os.path.exists")
+    @mock.patch("adapters.es_de_config.os.path.exists")
     def test_finds_xml_in_linux_path(self, mock_exists):
         mock_exists.return_value = True
-        result = es_de_config.find_es_systems_xml()
+        result = CoreResolver.find_es_systems_xml()
         assert result is not None
-        assert result == es_de_config._ES_SYSTEMS_CANDIDATES[0]
+        assert result == es_de_config_mod._ES_SYSTEMS_CANDIDATES[0]
         assert "linux" in result
 
-    @mock.patch("domain.es_de_config.os.path.exists")
+    @mock.patch("adapters.es_de_config.os.path.exists")
     def test_falls_back_to_unix_path(self, mock_exists):
         # linux/ doesn't exist, unix/ does
         mock_exists.side_effect = [False, True]
-        result = es_de_config.find_es_systems_xml()
+        result = CoreResolver.find_es_systems_xml()
         assert result is not None
-        assert result == es_de_config._ES_SYSTEMS_CANDIDATES[1]
+        assert result == es_de_config_mod._ES_SYSTEMS_CANDIDATES[1]
         assert "unix" in result
 
-    @mock.patch("domain.es_de_config.os.path.exists")
+    @mock.patch("adapters.es_de_config.os.path.exists")
     def test_returns_none_when_not_found(self, mock_exists):
         mock_exists.return_value = False
-        result = es_de_config.find_es_systems_xml()
+        result = CoreResolver.find_es_systems_xml()
         assert result is None
 
 
 class TestParseEsSystems:
-    def test_parses_system_with_retroarch_cores(self):
+    def test_parses_system_with_retroarch_cores(self, resolver):
         path = _write_temp_xml(SAMPLE_ES_SYSTEMS_XML)
         try:
-            result = es_de_config.parse_es_systems(path)
+            result = resolver.parse_es_systems(path)
             assert "gba" in result
             gba = result["gba"]
             assert gba["default_core"] == "mgba_libretro"
@@ -119,20 +136,20 @@ class TestParseEsSystems:
         finally:
             os.unlink(path)
 
-    def test_first_retroarch_command_is_default(self):
+    def test_first_retroarch_command_is_default(self, resolver):
         path = _write_temp_xml(SAMPLE_ES_SYSTEMS_XML)
         try:
-            result = es_de_config.parse_es_systems(path)
+            result = resolver.parse_es_systems(path)
             snes = result["snes"]
             assert snes["default_core"] == "snes9x_libretro"
             assert snes["default_label"] == "Snes9x"
         finally:
             os.unlink(path)
 
-    def test_standalone_emulators_excluded(self):
+    def test_standalone_emulators_excluded(self, resolver):
         path = _write_temp_xml(SAMPLE_ES_SYSTEMS_XML)
         try:
-            result = es_de_config.parse_es_systems(path)
+            result = resolver.parse_es_systems(path)
             gba = result["gba"]
             # "mGBA Standalone" should NOT be in cores (no %CORE_RETROARCH%)
             assert "mGBA Standalone" not in gba["label_to_core"]
@@ -140,23 +157,23 @@ class TestParseEsSystems:
         finally:
             os.unlink(path)
 
-    def test_invalid_xml_returns_empty(self):
+    def test_invalid_xml_returns_empty(self, resolver):
         path = _write_temp_xml("this is not xml at all {{{")
         try:
-            result = es_de_config.parse_es_systems(path)
+            result = resolver.parse_es_systems(path)
             assert result == {}
         finally:
             os.unlink(path)
 
-    def test_wrong_root_tag_returns_empty(self):
+    def test_wrong_root_tag_returns_empty(self, resolver):
         path = _write_temp_xml('<?xml version="1.0"?><wrongTag><system><name>gba</name></system></wrongTag>')
         try:
-            result = es_de_config.parse_es_systems(path)
+            result = resolver.parse_es_systems(path)
             assert result == {}
         finally:
             os.unlink(path)
 
-    def test_system_with_only_standalone_cores(self):
+    def test_system_with_only_standalone_cores(self, resolver):
         xml = """\
 <?xml version="1.0"?>
 <systemList>
@@ -169,7 +186,7 @@ class TestParseEsSystems:
 """
         path = _write_temp_xml(xml)
         try:
-            result = es_de_config.parse_es_systems(path)
+            result = resolver.parse_es_systems(path)
             assert "switch" in result
             assert result["switch"]["default_core"] is None
             assert result["switch"]["default_label"] is None
@@ -177,10 +194,10 @@ class TestParseEsSystems:
         finally:
             os.unlink(path)
 
-    def test_label_to_core_mapping(self):
+    def test_label_to_core_mapping(self, resolver):
         path = _write_temp_xml(SAMPLE_ES_SYSTEMS_XML)
         try:
-            result = es_de_config.parse_es_systems(path)
+            result = resolver.parse_es_systems(path)
             gba = result["gba"]
             # Verify label -> core_so reverse mapping
             assert gba["label_to_core"]["mGBA"] == "mgba_libretro"
@@ -190,12 +207,14 @@ class TestParseEsSystems:
             os.unlink(path)
 
 
-class TestGetSystemOverride:
-    def test_no_gamelist_returns_none(self):
-        result = es_de_config.get_system_override("/nonexistent/path", "gba")
+class TestReadSystemOverride:
+    """Tests for ``CoreResolver._read_system_override`` (reads alternativeEmulator label)."""
+
+    def test_no_gamelist_returns_none(self, resolver):
+        result = resolver._read_system_override("/nonexistent/path", "gba")
         assert result is None
 
-    def test_gamelist_with_alternative_emulator(self):
+    def test_gamelist_with_alternative_emulator(self, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
             os.makedirs(gamelist_dir)
@@ -203,10 +222,10 @@ class TestGetSystemOverride:
             with open(gamelist_path, "w") as f:
                 f.write(SAMPLE_GAMELIST_WITH_OVERRIDE)
 
-            result = es_de_config.get_system_override(tmpdir, "gba")
+            result = resolver._read_system_override(tmpdir, "gba")
             assert result == "gpSP"
 
-    def test_gamelist_without_override_returns_none(self):
+    def test_gamelist_without_override_returns_none(self, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
             os.makedirs(gamelist_dir)
@@ -214,10 +233,10 @@ class TestGetSystemOverride:
             with open(gamelist_path, "w") as f:
                 f.write(SAMPLE_GAMELIST_NO_OVERRIDE)
 
-            result = es_de_config.get_system_override(tmpdir, "gba")
+            result = resolver._read_system_override(tmpdir, "gba")
             assert result is None
 
-    def test_malformed_gamelist_returns_none(self):
+    def test_malformed_gamelist_returns_none(self, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
             os.makedirs(gamelist_dir)
@@ -225,7 +244,7 @@ class TestGetSystemOverride:
             with open(gamelist_path, "w") as f:
                 f.write("this is garbage not xml {{{")
 
-            result = es_de_config.get_system_override(tmpdir, "gba")
+            result = resolver._read_system_override(tmpdir, "gba")
             assert result is None
 
 
@@ -247,53 +266,56 @@ class TestGetActiveCore:
         }
     }
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch.object(es_de_config.CoreResolver, "get_system_override", return_value=None)
-    @mock.patch("domain.es_de_config._get_retrodeck_home", return_value="/fake/retrodeck")
-    def test_default_core_from_live_xml(self, mock_home, mock_override, mock_load):
-        mock_load.return_value = self.GBA_SYSTEM_INFO
-        result = es_de_config.get_active_core("gba")
+    def test_default_core_from_live_xml(self):
+        resolver = _make_resolver(get_retrodeck_home=lambda: "/fake/retrodeck")
+        with (
+            mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO),
+            mock.patch.object(CoreResolver, "_read_system_override", return_value=None),
+        ):
+            result = resolver.get_active_core("gba")
         assert result == ("mgba_libretro", "mGBA")
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch.object(es_de_config.CoreResolver, "get_system_override", return_value="gpSP")
-    @mock.patch("domain.es_de_config._get_retrodeck_home", return_value="/fake/retrodeck")
-    def test_system_override_takes_precedence(self, mock_home, mock_override, mock_load):
-        mock_load.return_value = self.GBA_SYSTEM_INFO
-        result = es_de_config.get_active_core("gba")
+    def test_system_override_takes_precedence(self):
+        resolver = _make_resolver(get_retrodeck_home=lambda: "/fake/retrodeck")
+        with (
+            mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO),
+            mock.patch.object(CoreResolver, "_read_system_override", return_value="gpSP"),
+        ):
+            result = resolver.get_active_core("gba")
         assert result == ("gpsp_libretro", "gpSP")
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch.object(es_de_config.CoreResolver, "_load_core_defaults")
-    @mock.patch("domain.es_de_config._get_retrodeck_home", return_value=None)
-    def test_fallback_to_core_defaults(self, mock_home, mock_defaults, mock_load):
-        mock_load.return_value = {}
-        mock_defaults.return_value = {
+    def test_fallback_to_core_defaults(self):
+        resolver = _make_resolver(get_retrodeck_home=lambda: None)
+        defaults = {
             "gba": {
                 "default_core": "mgba_libretro",
                 "default_label": "mGBA",
                 "cores": {"mgba_libretro": "mGBA"},
             }
         }
-        result = es_de_config.get_active_core("gba")
+        with (
+            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
+            mock.patch.object(CoreResolver, "_load_core_defaults", return_value=defaults),
+        ):
+            result = resolver.get_active_core("gba")
         assert result == ("mgba_libretro", "mGBA")
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch.object(es_de_config.CoreResolver, "_load_core_defaults")
-    @mock.patch("domain.es_de_config._get_retrodeck_home", return_value=None)
-    def test_returns_none_when_all_fail(self, mock_home, mock_defaults, mock_load):
-        mock_load.return_value = {}
-        mock_defaults.return_value = {}
-        result = es_de_config.get_active_core("gba")
+    def test_returns_none_when_all_fail(self):
+        resolver = _make_resolver(get_retrodeck_home=lambda: None)
+        with (
+            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
+            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
+        ):
+            result = resolver.get_active_core("gba")
         assert result == (None, None)
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch.object(es_de_config.CoreResolver, "_load_core_defaults")
-    @mock.patch("domain.es_de_config._get_retrodeck_home", return_value=None)
-    def test_unknown_system_returns_none(self, mock_home, mock_defaults, mock_load):
-        mock_load.return_value = self.GBA_SYSTEM_INFO
-        mock_defaults.return_value = {}
-        result = es_de_config.get_active_core("totally_unknown_system")
+    def test_unknown_system_returns_none(self):
+        resolver = _make_resolver(get_retrodeck_home=lambda: None)
+        with (
+            mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO),
+            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
+        ):
+            result = resolver.get_active_core("totally_unknown_system")
         assert result == (None, None)
 
 
@@ -315,10 +337,9 @@ class TestGetAvailableCores:
         }
     }
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    def test_returns_cores_from_live_xml(self, mock_load):
-        mock_load.return_value = self.GBA_SYSTEM_INFO
-        result = es_de_config.get_available_cores("gba")
+    def test_returns_cores_from_live_xml(self, resolver):
+        with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
+            result = resolver.get_available_cores("gba")
         assert len(result) == 3
         labels = [c["label"] for c in result]
         assert "mGBA" in labels
@@ -329,37 +350,38 @@ class TestGetAvailableCores:
         assert len(default) == 1
         assert default[0]["core_so"] == "mgba_libretro"
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch.object(es_de_config.CoreResolver, "_load_core_defaults")
-    def test_falls_back_to_core_defaults(self, mock_defaults, mock_load):
-        mock_load.return_value = {}
-        mock_defaults.return_value = {
+    def test_falls_back_to_core_defaults(self, resolver):
+        defaults = {
             "gba": {
                 "default_core": "mgba_libretro",
                 "default_label": "mGBA",
                 "cores": {"mgba_libretro": "mGBA", "gpsp_libretro": "gpSP"},
             }
         }
-        result = es_de_config.get_available_cores("gba")
+        with (
+            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
+            mock.patch.object(CoreResolver, "_load_core_defaults", return_value=defaults),
+        ):
+            result = resolver.get_available_cores("gba")
         assert len(result) == 2
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch.object(es_de_config.CoreResolver, "_load_core_defaults")
-    def test_unknown_system_returns_empty(self, mock_defaults, mock_load):
-        mock_load.return_value = {}
-        mock_defaults.return_value = {}
-        result = es_de_config.get_available_cores("unknown_system")
+    def test_unknown_system_returns_empty(self, resolver):
+        with (
+            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
+            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
+        ):
+            result = resolver.get_available_cores("unknown_system")
         assert result == []
 
 
 class TestSetSystemOverride:
-    def test_creates_new_gamelist(self):
+    def test_creates_new_gamelist(self, editor, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
-            es_de_config.set_system_override(tmpdir, "gba", "gpSP")
-            result = es_de_config.get_system_override(tmpdir, "gba")
+            editor.set_system_override(tmpdir, "gba", "gpSP")
+            result = resolver._read_system_override(tmpdir, "gba")
             assert result == "gpSP"
 
-    def test_updates_existing_gamelist_preserves_games(self):
+    def test_updates_existing_gamelist_preserves_games(self, editor, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
             os.makedirs(gamelist_dir)
@@ -367,10 +389,10 @@ class TestSetSystemOverride:
             with open(gamelist_path, "w") as f:
                 f.write(SAMPLE_GAMELIST_NO_OVERRIDE)
 
-            es_de_config.set_system_override(tmpdir, "gba", "gpSP")
+            editor.set_system_override(tmpdir, "gba", "gpSP")
 
             # Override should be set
-            result = es_de_config.get_system_override(tmpdir, "gba")
+            result = resolver._read_system_override(tmpdir, "gba")
             assert result == "gpSP"
 
             # Game entry should be preserved
@@ -378,17 +400,17 @@ class TestSetSystemOverride:
                 content = f.read()
             assert "some_game.gba" in content
 
-    def test_clears_override(self):
+    def test_clears_override(self, editor, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             # First set an override
-            es_de_config.set_system_override(tmpdir, "gba", "gpSP")
-            assert es_de_config.get_system_override(tmpdir, "gba") == "gpSP"
+            editor.set_system_override(tmpdir, "gba", "gpSP")
+            assert resolver._read_system_override(tmpdir, "gba") == "gpSP"
 
             # Clear it
-            es_de_config.set_system_override(tmpdir, "gba", None)
-            assert es_de_config.get_system_override(tmpdir, "gba") is None
+            editor.set_system_override(tmpdir, "gba", None)
+            assert resolver._read_system_override(tmpdir, "gba") is None
 
-    def test_replaces_existing_override(self):
+    def test_replaces_existing_override(self, editor, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
             os.makedirs(gamelist_dir)
@@ -396,15 +418,15 @@ class TestSetSystemOverride:
             with open(gamelist_path, "w") as f:
                 f.write(SAMPLE_GAMELIST_WITH_OVERRIDE)
 
-            es_de_config.set_system_override(tmpdir, "gba", "VBA-M")
-            result = es_de_config.get_system_override(tmpdir, "gba")
+            editor.set_system_override(tmpdir, "gba", "VBA-M")
+            result = resolver._read_system_override(tmpdir, "gba")
             assert result == "VBA-M"
 
 
 class TestSetGameOverride:
-    def test_creates_new_game_entry(self):
+    def test_creates_new_game_entry(self, editor):
         with tempfile.TemporaryDirectory() as tmpdir:
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
+            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
 
             gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "gba", "gamelist.xml")
             with open(gamelist_path) as f:
@@ -413,7 +435,7 @@ class TestSetGameOverride:
             assert "gpSP" in content
             assert "<altemulator>" in content
 
-    def test_updates_existing_game_entry(self):
+    def test_updates_existing_game_entry(self, editor):
         with tempfile.TemporaryDirectory() as tmpdir:
             gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
             os.makedirs(gamelist_dir)
@@ -421,17 +443,17 @@ class TestSetGameOverride:
             with open(gamelist_path, "w") as f:
                 f.write(SAMPLE_GAMELIST_NO_OVERRIDE)
 
-            es_de_config.set_game_override(tmpdir, "gba", "./some_game.gba", "gpSP")
+            editor.set_game_override(tmpdir, "gba", "./some_game.gba", "gpSP")
 
             with open(gamelist_path) as f:
                 content = f.read()
             assert "gpSP" in content
             assert "Some Game" in content  # preserved
 
-    def test_clears_game_override(self):
+    def test_clears_game_override(self, editor):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Set an override
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
+            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
 
             gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "gba", "gamelist.xml")
             with open(gamelist_path) as f:
@@ -439,23 +461,23 @@ class TestSetGameOverride:
             assert "<altemulator>" in content
 
             # Clear it
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", None)
+            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", None)
 
             with open(gamelist_path) as f:
                 content = f.read()
             assert "<altemulator>" not in content
             assert "Pokemon.gba" in content  # game entry still there
 
-    def test_preserves_system_override(self):
+    def test_preserves_system_override(self, editor, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             # Set system override first
-            es_de_config.set_system_override(tmpdir, "gba", "VBA-M")
+            editor.set_system_override(tmpdir, "gba", "VBA-M")
 
             # Set per-game override
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
+            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
 
             # System override should still be there
-            result = es_de_config.get_system_override(tmpdir, "gba")
+            result = resolver._read_system_override(tmpdir, "gba")
             assert result == "VBA-M"
 
             gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "gba", "gamelist.xml")
@@ -464,19 +486,19 @@ class TestSetGameOverride:
             assert "gpSP" in content
             assert "VBA-M" in content
 
-    def test_round_trip_write_then_read(self):
+    def test_round_trip_write_then_read(self, editor, resolver):
         """Write system + game overrides, then read them back."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            es_de_config.set_system_override(tmpdir, "gba", "VBA-M")
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
-            es_de_config.set_game_override(tmpdir, "gba", "./Zelda.gba", "mGBA")
+            editor.set_system_override(tmpdir, "gba", "VBA-M")
+            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
+            editor.set_game_override(tmpdir, "gba", "./Zelda.gba", "mGBA")
 
             # Read system override
-            assert es_de_config.get_system_override(tmpdir, "gba") == "VBA-M"
+            assert resolver._read_system_override(tmpdir, "gba") == "VBA-M"
 
             # Read per-game overrides
-            assert es_de_config.get_game_override(tmpdir, "gba", "Pokemon.gba") == "gpSP"
-            assert es_de_config.get_game_override(tmpdir, "gba", "Zelda.gba") == "mGBA"
+            assert resolver._read_game_override(tmpdir, "gba", "Pokemon.gba") == "gpSP"
+            assert resolver._read_game_override(tmpdir, "gba", "Zelda.gba") == "mGBA"
 
             # Read gamelist — should have both games
             gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "gba", "gamelist.xml")
@@ -488,38 +510,40 @@ class TestSetGameOverride:
             assert "mGBA" in content
 
 
-class TestGetGameOverride:
-    def test_returns_none_when_no_gamelist(self):
+class TestReadGameOverride:
+    """Tests for ``CoreResolver._read_game_override`` (reads per-game altemulator label)."""
+
+    def test_returns_none_when_no_gamelist(self, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = es_de_config.get_game_override(tmpdir, "gba", "Pokemon.gba")
+            result = resolver._read_game_override(tmpdir, "gba", "Pokemon.gba")
             assert result is None
 
-    def test_returns_none_when_no_override(self):
+    def test_returns_none_when_no_override(self, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
             gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
             os.makedirs(gamelist_dir)
             with open(os.path.join(gamelist_dir, "gamelist.xml"), "w") as f:
                 f.write(SAMPLE_GAMELIST_NO_OVERRIDE)
-            result = es_de_config.get_game_override(tmpdir, "gba", "some_game.gba")
+            result = resolver._read_game_override(tmpdir, "gba", "some_game.gba")
             assert result is None
 
-    def test_reads_per_game_override(self):
+    def test_reads_per_game_override(self, editor, resolver):
         with tempfile.TemporaryDirectory() as tmpdir:
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
-            result = es_de_config.get_game_override(tmpdir, "gba", "Pokemon.gba")
+            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
+            result = resolver._read_game_override(tmpdir, "gba", "Pokemon.gba")
             assert result == "gpSP"
 
-    def test_matches_with_dot_slash_prefix(self):
+    def test_matches_with_dot_slash_prefix(self, editor, resolver):
         """ROM filename without ./ prefix should match path with ./ prefix."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
+            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
             # Should match even without "./" prefix
-            result = es_de_config.get_game_override(tmpdir, "gba", "Pokemon.gba")
+            result = resolver._read_game_override(tmpdir, "gba", "Pokemon.gba")
             assert result == "gpSP"
 
 
 class TestGetActiveCoreWithGameOverride:
-    """Test that get_active_core reads per-game overrides when rom_filename is provided."""
+    """``get_active_core`` reads per-game overrides when ``rom_filename`` is provided."""
 
     GBA_SYSTEM_INFO: ClassVar[dict] = {
         "gba": {
@@ -538,43 +562,41 @@ class TestGetActiveCoreWithGameOverride:
         }
     }
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch("domain.es_de_config._get_retrodeck_home")
-    def test_per_game_override_takes_precedence(self, mock_home, mock_load):
-        mock_load.return_value = self.GBA_SYSTEM_INFO
+    def test_per_game_override_takes_precedence(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_home.return_value = tmpdir
-            # Set system override to VBA-M
-            es_de_config.set_system_override(tmpdir, "gba", "VBA-M")
-            # Set per-game override to gpSP
-            es_de_config.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
+            resolver = _make_resolver(get_retrodeck_home=lambda: tmpdir)
+            editor = _make_editor()
+            with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
+                # Set system override to VBA-M
+                editor.set_system_override(tmpdir, "gba", "VBA-M")
+                # Set per-game override to gpSP
+                editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
 
-            # Without rom_filename: system override wins
-            result = es_de_config.get_active_core("gba")
-            assert result == ("vbam_libretro", "VBA-M")
+                # Without rom_filename: system override wins
+                result = resolver.get_active_core("gba")
+                assert result == ("vbam_libretro", "VBA-M")
 
-            # With rom_filename: per-game override wins
-            result = es_de_config.get_active_core("gba", rom_filename="Pokemon.gba")
-            assert result == ("gpsp_libretro", "gpSP")
+                # With rom_filename: per-game override wins
+                result = resolver.get_active_core("gba", rom_filename="Pokemon.gba")
+                assert result == ("gpsp_libretro", "gpSP")
 
-    @mock.patch.object(es_de_config.CoreResolver, "_load_es_systems")
-    @mock.patch("domain.es_de_config._get_retrodeck_home")
-    def test_falls_through_to_system_when_no_game_override(self, mock_home, mock_load):
-        mock_load.return_value = self.GBA_SYSTEM_INFO
+    def test_falls_through_to_system_when_no_game_override(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_home.return_value = tmpdir
-            es_de_config.set_system_override(tmpdir, "gba", "VBA-M")
+            resolver = _make_resolver(get_retrodeck_home=lambda: tmpdir)
+            editor = _make_editor()
+            with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
+                editor.set_system_override(tmpdir, "gba", "VBA-M")
 
-            # rom_filename provided but no per-game override: system override wins
-            result = es_de_config.get_active_core("gba", rom_filename="Pokemon.gba")
-            assert result == ("vbam_libretro", "VBA-M")
+                # rom_filename provided but no per-game override: system override wins
+                result = resolver.get_active_core("gba", rom_filename="Pokemon.gba")
+                assert result == ("vbam_libretro", "VBA-M")
 
 
 class TestMtimeInvalidation:
-    """Test that caches invalidate when underlying files change on disk."""
+    """Caches invalidate when underlying files change on disk."""
 
-    def test_es_systems_reloads_on_mtime_change(self):
-        """_load_es_systems should re-parse if es_systems.xml mtime changes."""
+    def test_es_systems_reloads_on_mtime_change(self, resolver):
+        """``_load_es_systems`` should re-parse if es_systems.xml mtime changes."""
         xml_v1 = """\
 <?xml version="1.0"?>
 <systemList>
@@ -596,8 +618,8 @@ class TestMtimeInvalidation:
 """
         path = _write_temp_xml(xml_v1)
         try:
-            with mock.patch.object(es_de_config.CoreResolver, "find_es_systems_xml", return_value=path):
-                result1 = es_de_config._load_es_systems()
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result1 = resolver._load_es_systems()
                 assert len(result1["gba"]["cores"]) == 1
 
                 # Overwrite file (changes mtime)
@@ -607,18 +629,18 @@ class TestMtimeInvalidation:
                 with open(path, "w") as f:
                     f.write(xml_v2)
 
-                result2 = es_de_config._load_es_systems()
+                result2 = resolver._load_es_systems()
                 assert len(result2["gba"]["cores"]) == 2
         finally:
             os.unlink(path)
 
-    def test_es_systems_cache_hit_when_unchanged(self):
-        """_load_es_systems should return cached result if mtime unchanged."""
+    def test_es_systems_cache_hit_when_unchanged(self, resolver):
+        """``_load_es_systems`` should return cached result if mtime unchanged."""
         path = _write_temp_xml(SAMPLE_ES_SYSTEMS_XML)
         try:
-            with mock.patch.object(es_de_config.CoreResolver, "find_es_systems_xml", return_value=path):
-                result1 = es_de_config._load_es_systems()
-                result2 = es_de_config._load_es_systems()
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result1 = resolver._load_es_systems()
+                result2 = resolver._load_es_systems()
                 # Same object reference means cache was used
                 assert result1 is result2
         finally:

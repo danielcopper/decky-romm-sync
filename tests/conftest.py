@@ -15,29 +15,8 @@ sys.path.insert(0, os.path.join(_project_root, "py_modules"))
 sys.path.insert(0, _tests_root)
 
 
-class _DeckyMock(MagicMock):
-    """MagicMock that keeps ``domain.es_de_config`` in sync when
-    DECKY_PLUGIN_DIR is reassigned in tests.
-
-    Without this, tests that do ``decky.DECKY_PLUGIN_DIR = str(tmp_path)``
-    would update the mock attribute but not the domain module's cached
-    value, which is stored via ``configure()`` rather than read lazily.
-    """
-
-    def __setattr__(self, name, value):
-        super().__setattr__(name, value)
-        if name == "DECKY_PLUGIN_DIR":
-            try:
-                from domain import es_de_config
-
-                logger = super().__getattribute__("logger")
-                es_de_config.configure(plugin_dir=value, logger=logger)
-            except Exception:
-                pass
-
-
 # Create mock decky module before any imports of main
-mock_decky = _DeckyMock()
+mock_decky = MagicMock()
 mock_decky.DECKY_PLUGIN_DIR = _project_root
 mock_decky.DECKY_PLUGIN_SETTINGS_DIR = tempfile.mkdtemp()
 mock_decky.DECKY_PLUGIN_RUNTIME_DIR = tempfile.mkdtemp()
@@ -162,21 +141,15 @@ class FakeCoreInfoProvider:
 
 
 @pytest.fixture(autouse=True)
-def _reset_es_de_config_user_home():
-    """Reset ``es_de_config`` module-level state between every test.
+def _reset_decky_mock_paths():
+    """Refresh per-test temp dirs on the mock decky module.
 
-    Calls ``configure()`` with the mock decky values so that services
-    using this module work without explicit ``configure()`` calls in
-    test bodies.
+    Fresh ``DECKY_PLUGIN_SETTINGS_DIR`` and ``DECKY_PLUGIN_RUNTIME_DIR``
+    per test prevents cross-test pollution from persistence-touching
+    tests.
     """
-    from domain import es_de_config
-
-    # Fresh temp dirs per test — ensures no cross-test pollution
     mock_decky.DECKY_USER_HOME = os.path.expanduser("~")
     mock_decky.DECKY_PLUGIN_DIR = _project_root
-    _fresh_settings = tempfile.mkdtemp()
-    _fresh_runtime = tempfile.mkdtemp()
-    mock_decky.DECKY_PLUGIN_SETTINGS_DIR = _fresh_settings
-    mock_decky.DECKY_PLUGIN_RUNTIME_DIR = _fresh_runtime
-    es_de_config.configure(plugin_dir=_project_root, logger=logging.getLogger("test_romm"))
+    mock_decky.DECKY_PLUGIN_SETTINGS_DIR = tempfile.mkdtemp()
+    mock_decky.DECKY_PLUGIN_RUNTIME_DIR = tempfile.mkdtemp()
     yield
