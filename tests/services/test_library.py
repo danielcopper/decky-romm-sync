@@ -49,7 +49,6 @@ def plugin():
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
         emit=decky.emit,
-        sync_state_ref=lambda: SyncState.IDLE,
     )
     p._artwork_service = artwork_service
 
@@ -72,8 +71,6 @@ def plugin():
         metadata_service=metadata_service,
         artwork=artwork_service,
     )
-
-    artwork_service._sync_state_ref = lambda: p._sync_service.sync_state
 
     p._shortcut_removal_service = ShortcutRemovalService(
         romm_api=p._romm_api,

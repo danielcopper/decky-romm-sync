@@ -8,7 +8,6 @@ import decky
 import pytest
 
 from adapters.steam_config import SteamConfigAdapter
-from domain.sync_state import SyncState
 from services.shortcut_removal import ShortcutRemovalService
 
 
@@ -234,7 +233,6 @@ class TestRemovalCleansUpArtwork:
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             emit=decky.emit,
-            sync_state_ref=lambda: SyncState.IDLE,
         )
 
         svc = ShortcutRemovalService(
@@ -271,7 +269,6 @@ class TestRemovalCleansUpArtwork:
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             emit=decky.emit,
-            sync_state_ref=lambda: SyncState.IDLE,
         )
 
         svc = ShortcutRemovalService(

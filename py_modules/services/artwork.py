@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-    from services.protocols import EventEmitter, RommApiProtocol, SteamConfigAdapter, SyncStateRef
+    from services.protocols import EventEmitter, RommApiProtocol, SteamConfigAdapter
 
 
 class ArtworkService:
@@ -27,7 +27,6 @@ class ArtworkService:
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         emit: EventEmitter,
-        sync_state_ref: SyncStateRef,
     ) -> None:
         self._romm_api = romm_api
         self._steam_config = steam_config
@@ -35,9 +34,6 @@ class ArtworkService:
         self._loop = loop
         self._logger = logger
         self._emit = emit
-        # A callable that returns the current SyncState value so artwork
-        # download can react to cancellation without importing library.py.
-        self._sync_state_ref = sync_state_ref
 
     # ── Existing cover path check ──────────────────────────────────────────
 

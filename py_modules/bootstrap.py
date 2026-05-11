@@ -260,13 +260,6 @@ def wire_services(cfg: WiringConfig) -> dict:
         log_debug=cfg.log_debug,
     )
 
-    # Mutable container to break the circular dependency:
-    # ArtworkService needs sync_state_ref but LibraryService isn't created yet.
-    # We put a mutable list with one element; after LibraryService is created we
-    # replace that element.  ArtworkService reads _sync_state_box[0]() so it always
-    # gets the live value without any post-construction attribute mutation.
-    _sync_state_box: list = [lambda: None]
-
     artwork_service = ArtworkService(
         romm_api=cfg.romm_api,
         steam_config=cfg.steam_config,
@@ -274,7 +267,6 @@ def wire_services(cfg: WiringConfig) -> dict:
         loop=cfg.loop,
         logger=cfg.logger,
         emit=cfg.emit,
-        sync_state_ref=lambda: _sync_state_box[0](),
     )
 
     shortcut_removal_service = ShortcutRemovalService(
@@ -307,9 +299,6 @@ def wire_services(cfg: WiringConfig) -> dict:
         metadata_service=metadata_service,
         artwork=artwork_service,
     )
-
-    # Resolve the circular dependency: point the box at the real sync_state getter.
-    _sync_state_box[0] = lambda: sync_service.sync_state
 
     download_service = DownloadService(
         romm_api=cfg.romm_api,

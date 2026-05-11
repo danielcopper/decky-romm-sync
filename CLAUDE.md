@@ -71,8 +71,8 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
 
 - **Wave 1 — Cross-cutting infrastructure** ([#256](https://github.com/danielcopper/decky-romm-sync/issues/256))
   Protocols, persisters, bootstrap cleanup. Do first — every later vertical consumes the Protocols defined here.
-  Done: ~~#294~~ (Clock/UuidGen/Sleeper), ~~#289~~ (FirmwareCachePersister), ~~#292~~ (ArtworkRemover), ~~#296~~ (CoreInfoProvider, shipped as #310).
-  Open: #205 (domain/es_de_config I/O split — next), #168 (`_sync_state_box`), #169 (WiringConfig split), #259 (SonarCloud arch rules — deferred until Python supported).
+  Done: ~~#294~~ (Clock/UuidGen/Sleeper), ~~#289~~ (FirmwareCachePersister), ~~#292~~ (ArtworkRemover), ~~#296~~ (CoreInfoProvider, shipped as #310), ~~#205~~ (es_de_config I/O split, shipped as #311).
+  Open: #168 (`_sync_state_box` — next), #169 (WiringConfig split), #259 (SonarCloud arch rules — deferred until Python supported).
 - **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295))
   Extract pure logic from non-saves services into `domain/`. Library sync_classification cluster first (highest value), then firmware paths, achievements, path safety, filename resolution.
 - **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2)

@@ -10,8 +10,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Protocol
 
-from domain.sync_state import SyncState
-
 
 class SteamConfigAdapter(Protocol):
     """Protocol for Steam configuration operations."""
@@ -489,12 +487,6 @@ class CoreNameProviderFn(Protocol):
     """
 
     def __call__(self, core_so: str) -> str | None: ...
-
-
-class SyncStateRef(Protocol):
-    """Return the current sync state value (used by ArtworkService)."""
-
-    def __call__(self) -> SyncState: ...
 
 
 class ArtworkRemover(Protocol):

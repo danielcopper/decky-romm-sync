@@ -11,7 +11,6 @@ import decky
 import pytest
 
 from adapters.steam_config import SteamConfigAdapter
-from domain.sync_state import SyncState
 from services.artwork import ArtworkService
 
 
@@ -34,7 +33,6 @@ def artwork_service(state, steam_config):
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
         emit=decky.emit,
-        sync_state_ref=lambda: SyncState.IDLE,
     )
     return svc
 
