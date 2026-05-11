@@ -59,24 +59,30 @@ from services.shortcut_removal import ShortcutRemovalService
 from services.steamgrid import SteamGridService
 
 
-@dataclass
-class WiringConfig:
-    """Configuration bundle for wire_services — groups the parameters
-    into a single object to keep the composition root readable."""
+@dataclass(frozen=True)
+class AdapterBundle:
+    """Concrete I/O adapters wired into services."""
 
-    # Adapters
     http_adapter: RommHttpAdapter
     romm_api: RommApiProtocol
     steam_config: SteamConfigProtocol
     sgdb_adapter: SteamGridDbAdapter
 
-    # State (live dict refs)
+
+@dataclass(frozen=True)
+class StateBundle:
+    """Live mutable state dicts shared across services."""
+
     state: dict
     settings: dict
     metadata_cache: dict
     save_sync_state: dict
 
-    # Runtime
+
+@dataclass(frozen=True)
+class RuntimeBundle:
+    """Process-level runtime infrastructure (event loop, logger, paths, time/UUID/sleep seams)."""
+
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
@@ -86,7 +92,11 @@ class WiringConfig:
     uuid_gen: UuidGen
     sleeper: Sleeper
 
-    # Callbacks
+
+@dataclass(frozen=True)
+class CallbackBundle:
+    """Provider callables and persister Protocols injected into services."""
+
     get_saves_path: SavesPathProvider
     get_roms_path: RomsPathProvider
     get_bios_path: BiosPathProvider
@@ -100,6 +110,16 @@ class WiringConfig:
     core_info_provider: CoreInfoProvider
     save_sync_state_persister: SaveSyncStatePersister
     log_debug: DebugLogger
+
+
+@dataclass(frozen=True)
+class WiringConfig:
+    """Composition-root inputs for ``wire_services`` grouped into four bundles."""
+
+    adapters: AdapterBundle
+    stores: StateBundle
+    runtime: RuntimeBundle
+    callbacks: CallbackBundle
 
 
 def bootstrap(
@@ -199,175 +219,175 @@ def wire_services(cfg: WiringConfig) -> dict:
     # lookup to call time, so it is safe to reference here even though
     # ``firmware_service`` is constructed later in this function.
     migration_service = MigrationService(
-        state=cfg.state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        save_state=cfg.save_state,
-        emit=cfg.emit,
+        state=cfg.stores.state,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        save_state=cfg.callbacks.save_state,
+        emit=cfg.runtime.emit,
         get_bios_files_index=lambda: firmware_service.bios_files_index,
-        get_retrodeck_home=cfg.get_retrodeck_home,
-        get_saves_path=cfg.get_saves_path,
-        get_bios_path=cfg.get_bios_path,
-        get_retroarch_save_sorting=cfg.get_retroarch_save_sorting,
-        get_roms_path=cfg.get_roms_path,
-        get_active_core=cfg.core_info_provider.get_active_core,
-        get_core_name=cfg.get_core_name,
+        get_retrodeck_home=cfg.callbacks.get_retrodeck_home,
+        get_saves_path=cfg.callbacks.get_saves_path,
+        get_bios_path=cfg.callbacks.get_bios_path,
+        get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
+        get_roms_path=cfg.callbacks.get_roms_path,
+        get_active_core=cfg.callbacks.core_info_provider.get_active_core,
+        get_core_name=cfg.callbacks.get_core_name,
     )
 
     save_service_config = SaveServiceConfig(
-        runtime_dir=cfg.runtime_dir,
-        save_sync_state_persister=cfg.save_sync_state_persister,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        clock=cfg.clock,
-        get_saves_path=cfg.get_saves_path,
-        get_roms_path=cfg.get_roms_path,
-        get_active_core=cfg.core_info_provider.get_active_core,
-        get_core_name=cfg.get_core_name,
-        plugin_version=_read_plugin_version(cfg.plugin_dir),
-        emit=cfg.emit,
+        runtime_dir=cfg.runtime.runtime_dir,
+        save_sync_state_persister=cfg.callbacks.save_sync_state_persister,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        clock=cfg.runtime.clock,
+        get_saves_path=cfg.callbacks.get_saves_path,
+        get_roms_path=cfg.callbacks.get_roms_path,
+        get_active_core=cfg.callbacks.core_info_provider.get_active_core,
+        get_core_name=cfg.callbacks.get_core_name,
+        plugin_version=_read_plugin_version(cfg.runtime.plugin_dir),
+        emit=cfg.runtime.emit,
         # SaveService must observe fresh sort state before computing saves_dir (#238).
         detect_sort_change=migration_service.detect_save_sort_change,
         is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
     )
     save_sync_service = SaveService(
-        romm_api=cfg.romm_api,
-        retry=cfg.http_adapter,
-        settings=cfg.settings,
-        state=cfg.state,
-        save_sync_state=cfg.save_sync_state,
+        romm_api=cfg.adapters.romm_api,
+        retry=cfg.adapters.http_adapter,
+        settings=cfg.stores.settings,
+        state=cfg.stores.state,
+        save_sync_state=cfg.stores.save_sync_state,
         config=save_service_config,
     )
 
     playtime_service = PlaytimeService(
-        romm_api=cfg.romm_api,
-        retry=cfg.http_adapter,
-        save_sync_state=cfg.save_sync_state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        clock=cfg.clock,
+        romm_api=cfg.adapters.romm_api,
+        retry=cfg.adapters.http_adapter,
+        save_sync_state=cfg.stores.save_sync_state,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        clock=cfg.runtime.clock,
         save_state=save_sync_service.save_state,
     )
 
     metadata_service = MetadataService(
-        romm_api=cfg.romm_api,
-        state=cfg.state,
-        metadata_cache=cfg.metadata_cache,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        clock=cfg.clock,
-        save_metadata_cache=cfg.save_metadata_cache,
-        log_debug=cfg.log_debug,
+        romm_api=cfg.adapters.romm_api,
+        state=cfg.stores.state,
+        metadata_cache=cfg.stores.metadata_cache,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        clock=cfg.runtime.clock,
+        save_metadata_cache=cfg.callbacks.save_metadata_cache,
+        log_debug=cfg.callbacks.log_debug,
     )
 
     artwork_service = ArtworkService(
-        romm_api=cfg.romm_api,
-        steam_config=cfg.steam_config,
-        state=cfg.state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        emit=cfg.emit,
+        romm_api=cfg.adapters.romm_api,
+        steam_config=cfg.adapters.steam_config,
+        state=cfg.stores.state,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        emit=cfg.runtime.emit,
     )
 
     shortcut_removal_service = ShortcutRemovalService(
-        romm_api=cfg.romm_api,
-        steam_config=cfg.steam_config,
-        state=cfg.state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        emit=cfg.emit,
-        save_state=cfg.save_state,
+        romm_api=cfg.adapters.romm_api,
+        steam_config=cfg.adapters.steam_config,
+        state=cfg.stores.state,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        emit=cfg.runtime.emit,
+        save_state=cfg.callbacks.save_state,
         artwork_remover=artwork_service,
     )
 
     sync_service = LibraryService(
-        romm_api=cfg.romm_api,
-        steam_config=cfg.steam_config,
-        state=cfg.state,
-        settings=cfg.settings,
-        metadata_cache=cfg.metadata_cache,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        plugin_dir=cfg.plugin_dir,
-        emit=cfg.emit,
-        clock=cfg.clock,
-        uuid_gen=cfg.uuid_gen,
-        sleeper=cfg.sleeper,
-        save_state=cfg.save_state,
-        save_settings_to_disk=cfg.save_settings_to_disk,
-        log_debug=cfg.log_debug,
+        romm_api=cfg.adapters.romm_api,
+        steam_config=cfg.adapters.steam_config,
+        state=cfg.stores.state,
+        settings=cfg.stores.settings,
+        metadata_cache=cfg.stores.metadata_cache,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        plugin_dir=cfg.runtime.plugin_dir,
+        emit=cfg.runtime.emit,
+        clock=cfg.runtime.clock,
+        uuid_gen=cfg.runtime.uuid_gen,
+        sleeper=cfg.runtime.sleeper,
+        save_state=cfg.callbacks.save_state,
+        save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
+        log_debug=cfg.callbacks.log_debug,
         metadata_service=metadata_service,
         artwork=artwork_service,
     )
 
     download_service = DownloadService(
-        romm_api=cfg.romm_api,
-        resolve_system=cfg.http_adapter.resolve_system,
-        state=cfg.state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        runtime_dir=cfg.runtime_dir,
-        emit=cfg.emit,
-        clock=cfg.clock,
-        sleeper=cfg.sleeper,
-        save_state=cfg.save_state,
-        get_roms_path=cfg.get_roms_path,
-        get_bios_path=cfg.get_bios_path,
+        romm_api=cfg.adapters.romm_api,
+        resolve_system=cfg.adapters.http_adapter.resolve_system,
+        state=cfg.stores.state,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        runtime_dir=cfg.runtime.runtime_dir,
+        emit=cfg.runtime.emit,
+        clock=cfg.runtime.clock,
+        sleeper=cfg.runtime.sleeper,
+        save_state=cfg.callbacks.save_state,
+        get_roms_path=cfg.callbacks.get_roms_path,
+        get_bios_path=cfg.callbacks.get_bios_path,
         is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
     )
 
     rom_removal_service = RomRemovalService(
-        state=cfg.state,
-        save_sync_state=cfg.save_sync_state,
-        logger=cfg.logger,
-        loop=cfg.loop,
-        save_state=cfg.save_state,
+        state=cfg.stores.state,
+        save_sync_state=cfg.stores.save_sync_state,
+        logger=cfg.runtime.logger,
+        loop=cfg.runtime.loop,
+        save_state=cfg.callbacks.save_state,
         save_save_sync_state=save_sync_service.save_state,
-        get_roms_path=cfg.get_roms_path,
+        get_roms_path=cfg.callbacks.get_roms_path,
     )
 
     firmware_service = FirmwareService(
-        romm_api=cfg.romm_api,
-        state=cfg.state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        plugin_dir=cfg.plugin_dir,
-        clock=cfg.clock,
-        save_state=cfg.save_state,
-        firmware_cache_persister=cfg.firmware_cache_persister,
-        get_bios_path=cfg.get_bios_path,
-        core_info=cfg.core_info_provider,
+        romm_api=cfg.adapters.romm_api,
+        state=cfg.stores.state,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        plugin_dir=cfg.runtime.plugin_dir,
+        clock=cfg.runtime.clock,
+        save_state=cfg.callbacks.save_state,
+        firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
+        get_bios_path=cfg.callbacks.get_bios_path,
+        core_info=cfg.callbacks.core_info_provider,
     )
 
     sgdb_service = SteamGridService(
-        sgdb_api=cfg.sgdb_adapter,
-        romm_api=cfg.romm_api,
-        steam_config=cfg.steam_config,
-        state=cfg.state,
-        settings=cfg.settings,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        runtime_dir=cfg.runtime_dir,
-        save_state=cfg.save_state,
-        save_settings_to_disk=cfg.save_settings_to_disk,
+        sgdb_api=cfg.adapters.sgdb_adapter,
+        romm_api=cfg.adapters.romm_api,
+        steam_config=cfg.adapters.steam_config,
+        state=cfg.stores.state,
+        settings=cfg.stores.settings,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        runtime_dir=cfg.runtime.runtime_dir,
+        save_state=cfg.callbacks.save_state,
+        save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
         get_pending_sync=lambda: sync_service.pending_sync,
     )
 
     achievements_service = AchievementsService(
-        romm_api=cfg.romm_api,
-        state=cfg.state,
-        loop=cfg.loop,
-        logger=cfg.logger,
-        clock=cfg.clock,
-        log_debug=cfg.log_debug,
+        romm_api=cfg.adapters.romm_api,
+        state=cfg.stores.state,
+        loop=cfg.runtime.loop,
+        logger=cfg.runtime.logger,
+        clock=cfg.runtime.clock,
+        log_debug=cfg.callbacks.log_debug,
     )
 
     game_detail_service = GameDetailService(
-        state=cfg.state,
-        metadata_cache=cfg.metadata_cache,
-        save_sync_state=cfg.save_sync_state,
-        logger=cfg.logger,
-        clock=cfg.clock,
+        state=cfg.stores.state,
+        metadata_cache=cfg.stores.metadata_cache,
+        save_sync_state=cfg.stores.save_sync_state,
+        logger=cfg.runtime.logger,
+        clock=cfg.runtime.clock,
         bios_checker=firmware_service,
         achievements=achievements_service,
     )

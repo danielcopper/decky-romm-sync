@@ -9,7 +9,15 @@ sys.path.insert(0, os.path.join(plugin_dir, "py_modules"))
 sys.path.insert(0, plugin_dir)
 
 import decky
-from bootstrap import WiringConfig, bootstrap, wire_services
+from bootstrap import (
+    AdapterBundle,
+    CallbackBundle,
+    RuntimeBundle,
+    StateBundle,
+    WiringConfig,
+    bootstrap,
+    wire_services,
+)
 
 from adapters.persistence import (
     FirmwareCachePersisterAdapter,
@@ -177,35 +185,43 @@ class Plugin:
         self._save_sync_state = SaveService.make_default_state()
         services = wire_services(
             WiringConfig(
-                http_adapter=self._http_adapter,
-                romm_api=self._romm_api,
-                steam_config=self._steam_config,
-                sgdb_adapter=self._sgdb_adapter,
-                state=self._state,
-                settings=self.settings,
-                metadata_cache=self._metadata_cache,
-                save_sync_state=self._save_sync_state,
-                loop=self.loop,
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
-                emit=decky.emit,
-                clock=adapters["clock"],
-                uuid_gen=adapters["uuid_gen"],
-                sleeper=adapters["sleeper"],
-                get_saves_path=self._retrodeck_paths.get_saves_path,
-                get_roms_path=self._retrodeck_paths.get_roms_path,
-                get_bios_path=self._retrodeck_paths.get_bios_path,
-                get_retrodeck_home=self._retrodeck_paths.get_retrodeck_home,
-                get_retroarch_save_sorting=self._retroarch_config.get_retroarch_save_sorting,
-                get_core_name=self._retroarch_core_info.get_corename,
-                save_state=self._save_state,
-                save_settings_to_disk=self._save_settings_to_disk,
-                save_metadata_cache=self._save_metadata_cache,
-                firmware_cache_persister=FirmwareCachePersisterAdapter(self._persistence),
-                core_info_provider=adapters["core_resolver"],
-                save_sync_state_persister=SaveSyncStatePersisterAdapter(self._persistence),
-                log_debug=self._log_debug,
+                adapters=AdapterBundle(
+                    http_adapter=self._http_adapter,
+                    romm_api=self._romm_api,
+                    steam_config=self._steam_config,
+                    sgdb_adapter=self._sgdb_adapter,
+                ),
+                stores=StateBundle(
+                    state=self._state,
+                    settings=self.settings,
+                    metadata_cache=self._metadata_cache,
+                    save_sync_state=self._save_sync_state,
+                ),
+                runtime=RuntimeBundle(
+                    loop=self.loop,
+                    logger=decky.logger,
+                    plugin_dir=decky.DECKY_PLUGIN_DIR,
+                    runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
+                    emit=decky.emit,
+                    clock=adapters["clock"],
+                    uuid_gen=adapters["uuid_gen"],
+                    sleeper=adapters["sleeper"],
+                ),
+                callbacks=CallbackBundle(
+                    get_saves_path=self._retrodeck_paths.get_saves_path,
+                    get_roms_path=self._retrodeck_paths.get_roms_path,
+                    get_bios_path=self._retrodeck_paths.get_bios_path,
+                    get_retrodeck_home=self._retrodeck_paths.get_retrodeck_home,
+                    get_retroarch_save_sorting=self._retroarch_config.get_retroarch_save_sorting,
+                    get_core_name=self._retroarch_core_info.get_corename,
+                    save_state=self._save_state,
+                    save_settings_to_disk=self._save_settings_to_disk,
+                    save_metadata_cache=self._save_metadata_cache,
+                    firmware_cache_persister=FirmwareCachePersisterAdapter(self._persistence),
+                    core_info_provider=adapters["core_resolver"],
+                    save_sync_state_persister=SaveSyncStatePersisterAdapter(self._persistence),
+                    log_debug=self._log_debug,
+                ),
             )
         )
         self._save_sync_service = services["save_sync_service"]

@@ -4,7 +4,15 @@ import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
-from bootstrap import WiringConfig, bootstrap, wire_services
+from bootstrap import (
+    AdapterBundle,
+    CallbackBundle,
+    RuntimeBundle,
+    StateBundle,
+    WiringConfig,
+    bootstrap,
+    wire_services,
+)
 from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
@@ -165,9 +173,52 @@ class TestWireServices:
             "log_debug": MagicMock(),
         }
 
+    @staticmethod
+    def _make_config(deps: dict) -> WiringConfig:
+        """Build a WiringConfig from the flat deps dict produced by ``_make_deps``."""
+        return WiringConfig(
+            adapters=AdapterBundle(
+                http_adapter=deps["http_adapter"],
+                romm_api=deps["romm_api"],
+                steam_config=deps["steam_config"],
+                sgdb_adapter=deps["sgdb_adapter"],
+            ),
+            stores=StateBundle(
+                state=deps["state"],
+                settings=deps["settings"],
+                metadata_cache=deps["metadata_cache"],
+                save_sync_state=deps["save_sync_state"],
+            ),
+            runtime=RuntimeBundle(
+                loop=deps["loop"],
+                logger=deps["logger"],
+                plugin_dir=deps["plugin_dir"],
+                runtime_dir=deps["runtime_dir"],
+                emit=deps["emit"],
+                clock=deps["clock"],
+                uuid_gen=deps["uuid_gen"],
+                sleeper=deps["sleeper"],
+            ),
+            callbacks=CallbackBundle(
+                get_saves_path=deps["get_saves_path"],
+                get_roms_path=deps["get_roms_path"],
+                get_bios_path=deps["get_bios_path"],
+                get_retrodeck_home=deps["get_retrodeck_home"],
+                get_retroarch_save_sorting=deps["get_retroarch_save_sorting"],
+                get_core_name=deps["get_core_name"],
+                save_state=deps["save_state"],
+                save_settings_to_disk=deps["save_settings_to_disk"],
+                save_metadata_cache=deps["save_metadata_cache"],
+                firmware_cache_persister=deps["firmware_cache_persister"],
+                core_info_provider=deps["core_info_provider"],
+                save_sync_state_persister=deps["save_sync_state_persister"],
+                log_debug=deps["log_debug"],
+            ),
+        )
+
     def test_returns_all_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         assert isinstance(result["save_sync_service"], SaveService)
         assert isinstance(result["playtime_service"], PlaytimeService)
         assert isinstance(result["sync_service"], LibraryService)
@@ -180,7 +231,7 @@ class TestWireServices:
 
     def test_services_share_state_reference(self, tmp_path):
         deps = self._make_deps(tmp_path)
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         # download_service and sync_service should share the same state dict
         assert result["download_service"]._state is deps["state"]
         assert result["sync_service"]._state is deps["state"]
@@ -188,7 +239,7 @@ class TestWireServices:
 
     def test_returns_expected_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         assert len(result) == 13
         assert "migration_service" in result
         assert "game_detail_service" in result
@@ -199,7 +250,7 @@ class TestWireServices:
         """MigrationService must receive the get_core_name callback from wire_services."""
         deps = self._make_deps(tmp_path)
         get_core_name_mock = deps["get_core_name"]
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         migration_service = result["migration_service"]
         # Callback is stored as _get_core_name on the service
         assert migration_service._get_core_name is get_core_name_mock
@@ -214,7 +265,7 @@ class TestWireServices:
         """
         deps = self._make_deps(tmp_path)
         get_core_name_mock = deps["get_core_name"]
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
         assert save_sync_service._get_core_name is get_core_name_mock
         deps["loop"].close()
@@ -230,7 +281,7 @@ class TestWireServices:
         migration step.
         """
         deps = self._make_deps(tmp_path)
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
         migration_service = result["migration_service"]
         # Bound method equality: same function + same bound instance.
@@ -250,7 +301,7 @@ class TestWireServices:
         stale copy — defeating the detect-first invariant.
         """
         deps = self._make_deps(tmp_path)
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
         migration_service = result["migration_service"]
         assert save_sync_service._state is deps["state"]
@@ -264,7 +315,7 @@ class TestWireServices:
         pre_launch_sync / post_exit_sync can short-circuit while the user
         still has files at the previous RetroDECK home."""
         deps = self._make_deps(tmp_path)
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
         migration_service = result["migration_service"]
         assert save_sync_service._is_retrodeck_migration_pending == migration_service.is_retrodeck_migration_pending
@@ -276,7 +327,7 @@ class TestWireServices:
         ``migration_service.is_retrodeck_migration_pending`` callback so
         the download poll loop pauses while a migration is pending."""
         deps = self._make_deps(tmp_path)
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         download_service = result["download_service"]
         migration_service = result["migration_service"]
         assert download_service._is_retrodeck_migration_pending == migration_service.is_retrodeck_migration_pending
@@ -295,7 +346,7 @@ class TestWireServices:
         deps = self._make_deps(tmp_path)
         # The default mock returns (True, False); no prior state seeded.
         assert "save_sort_settings" not in deps["state"]
-        result = wire_services(WiringConfig(**deps))
+        result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
 
         # Invoke the bound detect callback SaveService received.
