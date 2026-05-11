@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from domain.achievements import extract_achievements_from_rom, extract_game_progress
+
 if TYPE_CHECKING:
     import asyncio
     import logging
@@ -92,30 +94,6 @@ class AchievementsService:
             return None
         return entry
 
-    def _extract_achievements_from_rom(self, rom_data):
-        """Extract achievement list from RomM ROM detail ra_metadata."""
-        ra_metadata = rom_data.get("ra_metadata") or {}
-        # Also check merged_ra_metadata which has resolved badge paths
-        if not ra_metadata:
-            ra_metadata = rom_data.get("merged_ra_metadata") or {}
-        achievements = ra_metadata.get("achievements") or []
-        return [
-            {
-                "ra_id": a.get("ra_id"),
-                "title": a.get("title", ""),
-                "description": a.get("description", ""),
-                "points": a.get("points", 0),
-                "badge_id": a.get("badge_id", ""),
-                "badge_url": a.get("badge_url", ""),
-                "badge_url_lock": a.get("badge_url_lock", ""),
-                "display_order": a.get("display_order", 0),
-                "type": a.get("type", ""),
-                "num_awarded": a.get("num_awarded", 0),
-                "num_awarded_hardcore": a.get("num_awarded_hardcore", 0),
-            }
-            for a in achievements
-        ]
-
     async def get_achievements(self, rom_id):
         """Fetch achievement list for a ROM from RomM. Returns cached if fresh."""
         rom_id = int(rom_id)
@@ -136,7 +114,7 @@ class AchievementsService:
         # Fetch ROM detail from RomM (includes ra_metadata)
         try:
             rom_data = await self._loop.run_in_executor(None, self._romm_api.get_rom, rom_id)
-            achievements = self._extract_achievements_from_rom(rom_data)
+            achievements = extract_achievements_from_rom(rom_data)
 
             # Cache it
             if rom_id_str not in self._achievements_cache:
@@ -158,27 +136,6 @@ class AchievementsService:
                     "stale": True,
                 }
             return {"success": False, "achievements": [], "total": 0, "message": str(e)}
-
-    def _extract_game_progress(self, ra_progression, ra_id, total):
-        """Extract progress data for a specific game from RA progression results."""
-        results = (ra_progression or {}).get("results") or []
-        game_progress = next((entry for entry in results if entry.get("rom_ra_id") == ra_id), None)
-
-        if not game_progress:
-            return {
-                "earned": 0,
-                "earned_hardcore": 0,
-                "total": total,
-                "earned_achievements": [],
-                "cached_at": self._clock.time(),
-            }
-        return {
-            "earned": game_progress.get("num_awarded", 0) or 0,
-            "earned_hardcore": game_progress.get("num_awarded_hardcore", 0) or 0,
-            "total": game_progress.get("max_possible", total) or total,
-            "earned_achievements": game_progress.get("earned_achievements", []),
-            "cached_at": self._clock.time(),
-        }
 
     def _progress_data_response(self, progress_data):
         """Build a success response from progress_data, excluding cached_at."""
@@ -214,7 +171,7 @@ class AchievementsService:
             if fetched_username:
                 self._achievements_cache["_ra_user"] = {"username": fetched_username, "cached_at": self._clock.time()}
 
-            progress_data = self._extract_game_progress(user_data.get("ra_progression"), ra_id, total)
+            progress_data = extract_game_progress(user_data.get("ra_progression"), ra_id, total, self._clock.time())
 
             if rom_id_str not in self._achievements_cache:
                 self._achievements_cache[rom_id_str] = {}
