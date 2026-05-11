@@ -15,7 +15,7 @@ import urllib.parse
 import zipfile
 from typing import TYPE_CHECKING
 
-from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u
+from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u, resolve_local_file_name
 from lib.errors import error_response
 
 if TYPE_CHECKING:
@@ -36,23 +36,6 @@ if TYPE_CHECKING:
 _DOWNLOAD_QUEUE_MAX_TERMINAL = 50
 _ZIP_TMP_EXT = ".zip.tmp"
 _TMP_EXT = ".tmp"
-
-
-def _resolve_local_file_name(rom_detail: dict, logger: logging.Logger) -> str:
-    """Resolve the on-disk filename for a ROM.
-
-    For nested-single-file ROMs RomM reports ``fs_name`` as the parent folder,
-    so the actual filename (with extension) lives in ``files[0].file_name``.
-    For all other layouts ``fs_name`` is already the correct filename.
-    """
-    fs_name = rom_detail.get("fs_name", f"rom_{rom_detail.get('id', 'unknown')}")
-    if not rom_detail.get("has_nested_single_file"):
-        return fs_name
-    files = rom_detail.get("files") or []
-    if not files:
-        logger.warning(f"has_nested_single_file=true but files list is empty; falling back to fs_name='{fs_name}'")
-        return fs_name
-    return files[0].get("file_name") or fs_name
 
 
 class DownloadService:
@@ -241,7 +224,11 @@ class DownloadService:
         system = self._resolve_system(platform_slug, platform_fs_slug)
 
         roms_dir = os.path.join(self._get_roms_path() if self._get_roms_path else "", system)
-        file_name = _resolve_local_file_name(rom_detail, self._logger)
+        file_name, files_missing = resolve_local_file_name(rom_detail)
+        if files_missing:
+            self._logger.warning(
+                f"has_nested_single_file=true but files list is empty; falling back to fs_name='{file_name}'"
+            )
         # Fix 1: Sanitize fs_name to prevent path traversal
         safe_name = os.path.basename(file_name)
         if safe_name != file_name:

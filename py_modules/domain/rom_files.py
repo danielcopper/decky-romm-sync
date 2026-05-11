@@ -101,3 +101,30 @@ def detect_launch_file(files: list[tuple[str, int]]) -> str | None:
 
     # Largest file by pre-computed size
     return max(files, key=lambda t: t[1])[0]
+
+
+def resolve_local_file_name(rom_detail: dict) -> tuple[str, bool]:
+    """Resolve the on-disk filename for a ROM.
+
+    For nested-single-file ROMs RomM reports ``fs_name`` as the parent
+    folder, so the actual filename (with extension) lives in
+    ``files[0].file_name``. For all other layouts ``fs_name`` is already
+    the correct filename. When ``fs_name`` is missing the synthetic
+    ``rom_<id>`` (or ``rom_unknown`` if ``id`` is also missing) is used.
+
+    Returns
+    -------
+    tuple[str, bool]
+        ``(filename, has_inconsistency)`` where ``has_inconsistency`` is
+        ``True`` when ``has_nested_single_file=True`` but the ``files``
+        list is empty — the caller may want to log a warning. In that
+        inconsistent state the resolved name still falls back to
+        ``fs_name``.
+    """
+    fs_name = rom_detail.get("fs_name", f"rom_{rom_detail.get('id', 'unknown')}")
+    if not rom_detail.get("has_nested_single_file"):
+        return (fs_name, False)
+    files = rom_detail.get("files") or []
+    if not files:
+        return (fs_name, True)
+    return (files[0].get("file_name") or fs_name, False)

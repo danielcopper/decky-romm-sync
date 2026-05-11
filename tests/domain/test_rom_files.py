@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 
-from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u
+from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u, resolve_local_file_name
 
 
 def _with_sizes(paths: list[str]) -> list[tuple[str, int]]:
@@ -194,3 +194,50 @@ class TestDetectLaunchFile:
         open(m3u, "w").close()
         result = detect_launch_file(_with_sizes([m3u]))
         assert result == m3u
+
+
+class TestResolveLocalFileName:
+    def test_non_nested_returns_fs_name(self):
+        assert resolve_local_file_name({"fs_name": "game.zip"}) == ("game.zip", False)
+
+    def test_nested_returns_file_name_from_files_list(self):
+        rom_detail = {
+            "fs_name": "parent_folder",
+            "has_nested_single_file": True,
+            "files": [{"file_name": "actual.rom"}],
+        }
+        assert resolve_local_file_name(rom_detail) == ("actual.rom", False)
+
+    def test_nested_but_empty_files_returns_fs_name_with_inconsistent_flag(self):
+        rom_detail = {
+            "fs_name": "parent",
+            "has_nested_single_file": True,
+            "files": [],
+        }
+        name, inconsistent = resolve_local_file_name(rom_detail)
+        assert name == "parent"
+        assert inconsistent is True
+
+    def test_nested_with_missing_file_name_falls_back_to_fs_name(self):
+        rom_detail = {
+            "fs_name": "parent",
+            "has_nested_single_file": True,
+            "files": [{}],
+        }
+        assert resolve_local_file_name(rom_detail) == ("parent", False)
+
+    def test_missing_fs_name_uses_id_fallback(self):
+        assert resolve_local_file_name({"id": 42}) == ("rom_42", False)
+
+    def test_missing_fs_name_and_id_uses_unknown_fallback(self):
+        assert resolve_local_file_name({}) == ("rom_unknown", False)
+
+    def test_files_explicitly_none(self):
+        rom_detail = {
+            "fs_name": "parent",
+            "has_nested_single_file": True,
+            "files": None,
+        }
+        name, inconsistent = resolve_local_file_name(rom_detail)
+        assert name == "parent"
+        assert inconsistent is True
