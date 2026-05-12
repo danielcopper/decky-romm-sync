@@ -6,10 +6,12 @@ import contextlib
 import json
 import os
 import ssl
+import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
 
 from lib.certifi_bundle import ca_bundle as _ca_bundle
+from lib.errors import SgdbApiError
 
 if TYPE_CHECKING:
     import logging
@@ -37,8 +39,11 @@ class SteamGridDbAdapter:
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {api_key}")
         req.add_header("User-Agent", _USER_AGENT)
-        with urllib.request.urlopen(req, context=self._ssl_context(), timeout=30) as resp:
-            return json.loads(resp.read().decode())
+        try:
+            with urllib.request.urlopen(req, context=self._ssl_context(), timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            raise SgdbApiError(status_code=e.code, message=str(e)) from e
 
     def download_image(self, url: str, dest_path: str) -> bool:
         """Download image from URL to dest_path with atomic write."""
@@ -63,10 +68,17 @@ class SteamGridDbAdapter:
             return False
 
     def verify_api_key(self, api_key: str) -> dict:
-        """Verify an API key against SGDB."""
+        """Verify an API key against SGDB.
+
+        Raises ``SgdbApiError`` on non-2xx HTTP responses so callers can
+        react to auth failures without importing ``urllib``.
+        """
         url = f"{_SGDB_BASE_URL}/search/autocomplete/test"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {api_key}")
         req.add_header("User-Agent", _USER_AGENT)
-        with urllib.request.urlopen(req, context=self._ssl_context(), timeout=30) as resp:
-            return json.loads(resp.read().decode())
+        try:
+            with urllib.request.urlopen(req, context=self._ssl_context(), timeout=30) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            raise SgdbApiError(status_code=e.code, message=str(e)) from e

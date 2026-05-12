@@ -1,6 +1,17 @@
 """RomM API error types for structured error handling."""
 
 
+class SgdbApiError(Exception):
+    """Raised by SteamGridDb adapter for non-2xx HTTP responses.
+
+    Wraps urllib.error.HTTPError so callers never import urllib.
+    """
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class RommApiError(Exception):
     """Base exception for all RomM HTTP API errors."""
 

@@ -21,6 +21,7 @@ from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApi
+from adapters.sgdb_artwork_cache import SgdbArtworkCacheAdapter
 from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
@@ -50,6 +51,7 @@ from services.protocols import (
     SavesPathProvider,
     SaveSyncStatePersister,
     SettingsPersister,
+    SgdbArtworkCache,
     Sleeper,
     StatePersister,
     UuidGen,
@@ -70,6 +72,7 @@ class AdapterBundle:
     steam_config: SteamConfigProtocol
     sgdb_adapter: SteamGridDbAdapter
     cover_art_file_store: CoverArtFileStore
+    sgdb_artwork_cache: SgdbArtworkCache
 
 
 @dataclass(frozen=True)
@@ -170,6 +173,7 @@ def bootstrap(
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
     sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
     cover_art_file_store = CoverArtFileStoreAdapter()
+    sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
@@ -181,6 +185,7 @@ def bootstrap(
         "steam_config": steam_config,
         "sgdb_adapter": sgdb_adapter,
         "cover_art_file_store": cover_art_file_store,
+        "sgdb_artwork_cache": sgdb_artwork_cache,
         "retrodeck_paths": retrodeck_paths,
         "retroarch_config": retroarch_config,
         "retroarch_core_info": retroarch_core_info,
@@ -368,11 +373,11 @@ def wire_services(cfg: WiringConfig) -> dict:
         sgdb_api=cfg.adapters.sgdb_adapter,
         romm_api=cfg.adapters.romm_api,
         steam_config=cfg.adapters.steam_config,
+        sgdb_artwork_cache=cfg.adapters.sgdb_artwork_cache,
         state=cfg.stores.state,
         settings=cfg.stores.settings,
         loop=cfg.runtime.loop,
         logger=cfg.runtime.logger,
-        runtime_dir=cfg.runtime.runtime_dir,
         save_state=cfg.callbacks.save_state,
         save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
         get_pending_sync=lambda: sync_service.pending_sync,

@@ -13,7 +13,12 @@ from bootstrap import (
     bootstrap,
     wire_services,
 )
-from conftest import FakeCoreInfoProvider, FakeCoverArtFileStore, FakeFirmwareCachePersister
+from conftest import (
+    FakeCoreInfoProvider,
+    FakeCoverArtFileStore,
+    FakeFirmwareCachePersister,
+    FakeSgdbArtworkCache,
+)
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
@@ -147,6 +152,7 @@ class TestWireServices:
             "steam_config": steam_config,
             "sgdb_adapter": MagicMock(),
             "cover_art_file_store": FakeCoverArtFileStore(),
+            "sgdb_artwork_cache": FakeSgdbArtworkCache(),
             "state": state,
             "settings": settings,
             "metadata_cache": {},
@@ -184,6 +190,7 @@ class TestWireServices:
                 steam_config=deps["steam_config"],
                 sgdb_adapter=deps["sgdb_adapter"],
                 cover_art_file_store=deps["cover_art_file_store"],
+                sgdb_artwork_cache=deps["sgdb_artwork_cache"],
             ),
             stores=StateBundle(
                 state=deps["state"],

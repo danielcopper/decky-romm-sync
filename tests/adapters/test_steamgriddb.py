@@ -1,12 +1,15 @@
 """Tests for adapters.steamgriddb — SteamGridDB HTTP adapter."""
 
+import http.client
 import json
 import logging
+import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from adapters.steamgriddb import SteamGridDbAdapter
+from lib.errors import SgdbApiError
 
 
 @pytest.fixture
@@ -111,3 +114,32 @@ class TestVerifyApiKey:
             adapter.verify_api_key("different-key")
             req = mock_open.call_args[0][0]
             assert req.get_header("Authorization") == "Bearer different-key"
+
+    def test_http_error_raises_sgdb_api_error(self, adapter):
+        http_error = urllib.error.HTTPError(
+            "https://steamgriddb.com", 401, "Unauthorized", http.client.HTTPMessage(), None
+        )
+        with patch("urllib.request.urlopen", side_effect=http_error):
+            with pytest.raises(SgdbApiError) as exc_info:
+                adapter.verify_api_key("bad-key")
+            assert exc_info.value.status_code == 401
+
+    def test_http_500_raises_sgdb_api_error(self, adapter):
+        http_error = urllib.error.HTTPError(
+            "https://steamgriddb.com", 500, "Server Error", http.client.HTTPMessage(), None
+        )
+        with patch("urllib.request.urlopen", side_effect=http_error):
+            with pytest.raises(SgdbApiError) as exc_info:
+                adapter.verify_api_key("any-key")
+            assert exc_info.value.status_code == 500
+
+
+class TestRequestHttpErrorWrapping:
+    def test_request_wraps_http_error(self, adapter):
+        http_error = urllib.error.HTTPError(
+            "https://steamgriddb.com", 403, "Forbidden", http.client.HTTPMessage(), None
+        )
+        with patch("urllib.request.urlopen", side_effect=http_error):
+            with pytest.raises(SgdbApiError) as exc_info:
+                adapter.request("/games/igdb/123")
+            assert exc_info.value.status_code == 403

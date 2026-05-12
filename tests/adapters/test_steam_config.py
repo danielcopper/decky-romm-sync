@@ -193,6 +193,56 @@ class TestWriteShortcuts:
         assert (config_dir / "shortcuts.vdf").exists()
 
 
+# ── write_shortcut_icon ─────────────────────────────────────
+
+
+class TestWriteShortcutIcon:
+    def test_writes_png_to_grid_dir(self, tmp_path):
+        userdata = tmp_path / ".local" / "share" / "Steam" / "userdata" / "123"
+        userdata.mkdir(parents=True)
+        adapter = SteamConfigAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        result = adapter.write_shortcut_icon(12345, b"png-data")
+        grid_dir = userdata / "config" / "grid"
+        expected = grid_dir / "12345_icon.png"
+        assert result == str(expected)
+        assert expected.read_bytes() == b"png-data"
+
+    def test_atomic_write_leaves_no_tmp(self, tmp_path):
+        userdata = tmp_path / ".local" / "share" / "Steam" / "userdata" / "123"
+        userdata.mkdir(parents=True)
+        adapter = SteamConfigAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        adapter.write_shortcut_icon(12345, b"data")
+        grid_dir = userdata / "config" / "grid"
+        assert not (grid_dir / "12345_icon.png.tmp").exists()
+
+    def test_overwrites_existing(self, tmp_path):
+        userdata = tmp_path / ".local" / "share" / "Steam" / "userdata" / "123"
+        userdata.mkdir(parents=True)
+        adapter = SteamConfigAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        adapter.write_shortcut_icon(12345, b"first")
+        adapter.write_shortcut_icon(12345, b"second")
+        grid_dir = userdata / "config" / "grid"
+        assert (grid_dir / "12345_icon.png").read_bytes() == b"second"
+
+    def test_raises_when_no_grid_dir(self, tmp_path):
+        adapter = SteamConfigAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        with pytest.raises(RuntimeError, match="grid directory"):
+            adapter.write_shortcut_icon(12345, b"data")
+
+    def test_cleans_tmp_on_failure(self, tmp_path):
+        userdata = tmp_path / ".local" / "share" / "Steam" / "userdata" / "123"
+        userdata.mkdir(parents=True)
+        adapter = SteamConfigAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        with (
+            patch("adapters.steam_config.os.replace", side_effect=OSError("boom")),
+            pytest.raises(OSError, match="boom"),
+        ):
+            adapter.write_shortcut_icon(12345, b"data")
+        grid_dir = userdata / "config" / "grid"
+        assert not (grid_dir / "12345_icon.png.tmp").exists()
+        assert not (grid_dir / "12345_icon.png").exists()
+
+
 # ── set_steam_input_config ──────────────────────────────────
 
 

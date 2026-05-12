@@ -1,11 +1,14 @@
 import asyncio
 import http.client
+import os
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.steam_config import SteamConfigAdapter
+from lib.errors import SgdbApiError
 
 # conftest.py patches decky before this import
 from main import Plugin
@@ -14,7 +17,13 @@ from services.steamgrid import SteamGridService
 
 
 @pytest.fixture
-def plugin():
+def sgdb_artwork_cache():
+    """Fresh in-memory SGDB artwork cache per test."""
+    return FakeSgdbArtworkCache(cache_root="/runtime")
+
+
+@pytest.fixture
+def plugin(sgdb_artwork_cache):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
@@ -51,11 +60,11 @@ def plugin():
         sgdb_api=sgdb_api,
         romm_api=p._romm_api,
         steam_config=steam_config,
+        sgdb_artwork_cache=sgdb_artwork_cache,
         state=p._state,
         settings=p.settings,
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
-        runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
         save_state=MagicMock(),
         save_settings_to_disk=MagicMock(),
         get_pending_sync=lambda: p._sync_service._pending_sync,
@@ -67,6 +76,10 @@ def plugin():
 async def _set_event_loop(plugin):
     """Ensure plugin.loop matches the running event loop for async tests."""
     plugin.loop = asyncio.get_event_loop()
+
+
+def _cached_path(cache: FakeSgdbArtworkCache, rom_id: int, asset_type: str) -> str:
+    return os.path.join(cache.cache_dir(), f"{rom_id}_{asset_type}.png")
 
 
 class TestVerifySgdbApiKey:
@@ -83,12 +96,8 @@ class TestVerifySgdbApiKey:
 
     @pytest.mark.asyncio
     async def test_invalid_api_key_401(self, plugin):
-        import urllib.error
-
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = urllib.error.HTTPError(
-            "https://steamgriddb.com", 401, "Unauthorized", http.client.HTTPMessage(), None
-        )
+        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = SgdbApiError(401, "Unauthorized")
 
         result = await plugin.verify_sgdb_api_key("bad-key")
 
@@ -97,12 +106,8 @@ class TestVerifySgdbApiKey:
 
     @pytest.mark.asyncio
     async def test_invalid_api_key_403(self, plugin):
-        import urllib.error
-
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = urllib.error.HTTPError(
-            "https://steamgriddb.com", 403, "Forbidden", http.client.HTTPMessage(), None
-        )
+        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = SgdbApiError(403, "Forbidden")
 
         result = await plugin.verify_sgdb_api_key("bad-key")
 
@@ -169,33 +174,41 @@ class TestVerifySgdbApiKey:
 
     @pytest.mark.asyncio
     async def test_http_500_error(self, plugin):
-        import urllib.error
-
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = urllib.error.HTTPError(
-            "https://steamgriddb.com", 500, "Internal Server Error", http.client.HTTPMessage(), None
-        )
+        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = SgdbApiError(500, "Internal Server Error")
 
         result = await plugin.verify_sgdb_api_key("some-key")
 
         assert result["success"] is False
         assert "HTTP 500" in result["message"]
 
+    @pytest.mark.asyncio
+    async def test_legacy_urllib_http_error_still_handled(self, plugin):
+        """Defence-in-depth: a stray urllib.error.HTTPError should still be handled."""
+        import urllib.error
+
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = urllib.error.HTTPError(
+            "https://steamgriddb.com", 502, "Bad Gateway", http.client.HTTPMessage(), None
+        )
+
+        result = await plugin.verify_sgdb_api_key("some-key")
+
+        assert result["success"] is False
+        # Falls into the generic Exception branch since it's not an SgdbApiError.
+        assert "Connection failed" in result["message"]
+
 
 class TestGetSgdbArtworkBase64:
     @pytest.mark.asyncio
-    async def test_cached_artwork_returns_base64(self, plugin, tmp_path):
+    async def test_cached_artwork_returns_base64(self, plugin, sgdb_artwork_cache):
         import base64
 
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        # Create cached artwork file
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        art_file = art_dir / "42_hero.png"
-        art_file.write_bytes(b"fake png data")
+        # Pre-populate the in-memory cache
+        sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, "hero")] = b"fake png data"
 
         result = await plugin.get_sgdb_artwork_base64(42, 1)  # 1 = hero
         assert result["no_api_key"] is False
@@ -203,9 +216,7 @@ class TestGetSgdbArtworkBase64:
         assert base64.b64decode(result["base64"]) == b"fake png data"
 
     @pytest.mark.asyncio
-    async def test_no_api_key_returns_no_api_key_true(self, plugin, tmp_path):
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
+    async def test_no_api_key_returns_no_api_key_true(self, plugin):
         # No API key in settings
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
@@ -214,9 +225,7 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is True
 
     @pytest.mark.asyncio
-    async def test_invalid_asset_type(self, plugin, tmp_path):
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
+    async def test_invalid_asset_type(self, plugin):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
@@ -225,11 +234,9 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_no_igdb_id_fetched_from_romm(self, plugin, tmp_path):
+    async def test_no_igdb_id_fetched_from_romm(self, plugin, sgdb_artwork_cache):
         import base64
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -244,14 +251,11 @@ class TestGetSgdbArtworkBase64:
         # RomM API returns igdb_id
         romm_response = {"igdb_id": 1234}
 
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        art_file = art_dir / "42_hero.png"
+        art_path = _cached_path(sgdb_artwork_cache, 42, "hero")
 
         def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
-            # Simulate writing the file
-            art_file.write_bytes(b"hero artwork")
-            return str(art_file)
+            sgdb_artwork_cache.files[art_path] = b"hero artwork"
+            return art_path
 
         svc = plugin._sgdb_service
         with (
@@ -268,10 +272,8 @@ class TestGetSgdbArtworkBase64:
         assert plugin._state["shortcut_registry"]["42"]["igdb_id"] == 1234
 
     @pytest.mark.asyncio
-    async def test_no_igdb_id_anywhere(self, plugin, tmp_path):
+    async def test_no_igdb_id_anywhere(self, plugin):
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -291,10 +293,8 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_sgdb_game_lookup_no_match(self, plugin, tmp_path):
+    async def test_sgdb_game_lookup_no_match(self, plugin):
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -315,10 +315,8 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_download_fails_returns_null(self, plugin, tmp_path):
+    async def test_download_fails_returns_null(self, plugin):
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -339,11 +337,9 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_igdb_id_from_pending_sync(self, plugin, tmp_path):
+    async def test_igdb_id_from_pending_sync(self, plugin, sgdb_artwork_cache):
         import base64
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -355,13 +351,11 @@ class TestGetSgdbArtworkBase64:
             "igdb_id": 5678,
         }
 
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        art_file = art_dir / "42_logo.png"
+        art_path = _cached_path(sgdb_artwork_cache, 42, "logo")
 
         def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
-            art_file.write_bytes(b"logo data")
-            return str(art_file)
+            sgdb_artwork_cache.files[art_path] = b"logo data"
+            return art_path
 
         svc = plugin._sgdb_service
         with (
@@ -374,10 +368,8 @@ class TestGetSgdbArtworkBase64:
         assert base64.b64decode(result["base64"]) == b"logo data"
 
     @pytest.mark.asyncio
-    async def test_romm_api_fetch_fails_gracefully(self, plugin, tmp_path):
+    async def test_romm_api_fetch_fails_gracefully(self, plugin):
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -390,10 +382,8 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_sgdb_id_cached_in_registry(self, plugin, tmp_path):
+    async def test_sgdb_id_cached_in_registry(self, plugin, sgdb_artwork_cache):
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -407,14 +397,12 @@ class TestGetSgdbArtworkBase64:
             "sgdb_id": 9999,
         }
 
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        art_file = art_dir / "42_grid.png"
+        art_path = _cached_path(sgdb_artwork_cache, 42, "grid")
 
         def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
             assert sgdb_game_id == 9999  # Should use cached sgdb_id
-            art_file.write_bytes(b"grid data")
-            return str(art_file)
+            sgdb_artwork_cache.files[art_path] = b"grid data"
+            return art_path
 
         svc = plugin._sgdb_service
         # _get_sgdb_game_id should NOT be called since sgdb_id is cached
@@ -437,20 +425,15 @@ class TestIconSupport:
         assert plugin._sgdb_service._download_sgdb_artwork  # method exists
 
     @pytest.mark.asyncio
-    async def test_icon_asset_type_num_is_4(self, plugin, tmp_path):
+    async def test_icon_asset_type_num_is_4(self, plugin, sgdb_artwork_cache):
         """Asset type number 4 should map to 'icon'."""
         import base64
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        # Create cached icon file
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        art_file = art_dir / "42_icon.png"
-        art_file.write_bytes(b"icon png data")
+        # Pre-populate cache
+        sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, "icon")] = b"icon png data"
 
         result = await plugin.get_sgdb_artwork_base64(42, 4)  # 4 = icon
         assert result["no_api_key"] is False
@@ -458,12 +441,10 @@ class TestIconSupport:
         assert base64.b64decode(result["base64"]) == b"icon png data"
 
     @pytest.mark.asyncio
-    async def test_icon_download_from_sgdb(self, plugin, tmp_path):
+    async def test_icon_download_from_sgdb(self, plugin, sgdb_artwork_cache):
         """Icon should be downloadable from SGDB icons endpoint."""
         import base64
         from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -476,15 +457,13 @@ class TestIconSupport:
             "sgdb_id": 9999,
         }
 
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        art_file = art_dir / "42_icon.png"
+        art_path = _cached_path(sgdb_artwork_cache, 42, "icon")
 
         def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
             assert asset_type == "icon"
             assert sgdb_game_id == 9999
-            art_file.write_bytes(b"icon data")
-            return str(art_file)
+            sgdb_artwork_cache.files[art_path] = b"icon data"
+            return art_path
 
         with patch.object(plugin._sgdb_service, "_download_sgdb_artwork", side_effect=fake_download_sgdb):
             result = await plugin.get_sgdb_artwork_base64(42, 4)
@@ -492,13 +471,8 @@ class TestIconSupport:
         assert result["base64"] is not None
         assert base64.b64decode(result["base64"]) == b"icon data"
 
-    def test_download_sgdb_artwork_icon_endpoint(self, plugin, tmp_path):
+    def test_download_sgdb_artwork_icon_endpoint(self, plugin):
         """_download_sgdb_artwork should use /icons/ endpoint for icon type."""
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-
         # Track which SGDB path was requested
         requested_paths = []
 
@@ -517,122 +491,101 @@ class TestIconSupport:
 
 
 class TestPruneOrphanedArtworkCache:
-    def test_removes_orphan_artwork(self, plugin, tmp_path):
+    def test_removes_orphan_artwork(self, plugin, sgdb_artwork_cache):
         """Artwork for rom_id not in registry should be deleted."""
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        orphan = art_dir / "42_hero.png"
-        orphan.write_bytes(b"orphaned data")
+        orphan = _cached_path(sgdb_artwork_cache, 42, "hero")
+        sgdb_artwork_cache.files[orphan] = b"orphaned data"
 
         # Registry has no rom_id "42"
         plugin._state["shortcut_registry"] = {"99": {"app_id": 1}}
 
         plugin._sgdb_service.prune_orphaned_artwork_cache()
 
-        assert not orphan.exists()
+        assert orphan not in sgdb_artwork_cache.files
 
-    def test_keeps_artwork_in_registry(self, plugin, tmp_path):
+    def test_keeps_artwork_in_registry(self, plugin, sgdb_artwork_cache):
         """Artwork for rom_id in registry should survive."""
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        kept = art_dir / "42_hero.png"
-        kept.write_bytes(b"keep me")
+        kept = _cached_path(sgdb_artwork_cache, 42, "hero")
+        sgdb_artwork_cache.files[kept] = b"keep me"
 
         plugin._state["shortcut_registry"] = {"42": {"app_id": 1}}
 
         plugin._sgdb_service.prune_orphaned_artwork_cache()
 
-        assert kept.exists()
-        assert kept.read_bytes() == b"keep me"
+        assert sgdb_artwork_cache.files[kept] == b"keep me"
 
-    def test_removes_leftover_tmp(self, plugin, tmp_path):
+    def test_removes_leftover_tmp(self, plugin, sgdb_artwork_cache):
         """Leftover .tmp files should always be removed regardless of rom_id."""
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        tmp_file = art_dir / "42_hero.png.tmp"
-        tmp_file.write_bytes(b"tmp data")
+        tmp_path = _cached_path(sgdb_artwork_cache, 42, "hero") + ".tmp"
+        sgdb_artwork_cache.files[tmp_path] = b"tmp data"
 
         # rom_id "42" IS in registry, but .tmp should still be removed
         plugin._state["shortcut_registry"] = {"42": {"app_id": 1}}
 
         plugin._sgdb_service.prune_orphaned_artwork_cache()
 
-        assert not tmp_file.exists()
+        assert tmp_path not in sgdb_artwork_cache.files
 
-    def test_empty_artwork_dir(self, plugin, tmp_path):
+    def test_empty_artwork_dir(self, plugin):
         """No crash on empty artwork directory."""
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-
         plugin._sgdb_service.prune_orphaned_artwork_cache()
         # Should complete without error
 
-    def test_no_artwork_dir(self, plugin, tmp_path):
+    def test_no_artwork_dir(self, plugin, sgdb_artwork_cache):
         """No crash when artwork directory doesn't exist."""
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
-        # Don't create artwork dir
+        # Mark the cache directory as absent.
+        sgdb_artwork_cache.isdir_paths = set()
         plugin._sgdb_service.prune_orphaned_artwork_cache()
         # Should complete without error
 
-    def test_handles_os_error(self, plugin, tmp_path):
-        """OSError on os.remove should log warning, not crash."""
-        from unittest.mock import patch
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
-        art_dir = tmp_path / "artwork"
-        art_dir.mkdir()
-        orphan = art_dir / "42_hero.png"
-        orphan.write_bytes(b"orphaned data")
+    def test_handles_os_error(self, plugin, sgdb_artwork_cache):
+        """OSError on cache.remove should log warning, not crash."""
+        orphan = _cached_path(sgdb_artwork_cache, 42, "hero")
+        sgdb_artwork_cache.files[orphan] = b"orphaned data"
 
         plugin._state["shortcut_registry"] = {}
 
-        with patch("os.remove", side_effect=OSError("Permission denied")):
-            plugin._sgdb_service.prune_orphaned_artwork_cache()
+        def raising_remove(_path: str) -> None:
+            raise OSError("Permission denied")
 
-        # File still exists because os.remove was mocked to fail
-        assert orphan.exists()
-        # Warning should have been logged (no crash)
+        sgdb_artwork_cache.remove = raising_remove  # type: ignore[method-assign]
+        plugin._sgdb_service.prune_orphaned_artwork_cache()
+        # File still exists because remove was patched to fail
+        assert orphan in sgdb_artwork_cache.files
 
 
 class TestSaveShortcutIcon:
     """Tests for VDF-based icon saving (save_shortcut_icon callable)."""
 
     def test_save_icon_to_grid_writes_file(self, plugin, tmp_path):
-        """Icon PNG should be written to Steam's grid directory."""
-        grid_dir = tmp_path / "grid"
-        grid_dir.mkdir()
-        plugin._steam_config.grid_dir = lambda: str(grid_dir)
-        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}
-        plugin._steam_config.write_shortcuts = lambda data: None
+        """Icon PNG should be written via the SteamConfigAdapter seam."""
+        written: dict = {}
+
+        def fake_write_icon(app_id, icon_bytes):
+            path = os.path.join(str(tmp_path), f"{app_id}_icon.png")
+            written[path] = icon_bytes
+            return path
+
+        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
+        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = lambda data: None  # type: ignore[method-assign]
 
         result = plugin._sgdb_service._save_icon_to_grid(12345, b"fake png data")
 
         assert result is True
-        icon_path = grid_dir / "12345_icon.png"
-        assert icon_path.exists()
-        assert icon_path.read_bytes() == b"fake png data"
+        icon_path = os.path.join(str(tmp_path), "12345_icon.png")
+        assert written[icon_path] == b"fake png data"
 
     def test_save_icon_to_grid_updates_vdf(self, plugin, tmp_path):
         """VDF icon field should be updated for the matching shortcut."""
-        import struct
-
-        grid_dir = tmp_path / "grid"
-        grid_dir.mkdir()
-        plugin._steam_config.grid_dir = lambda: str(grid_dir)
+        from domain.sgdb_artwork import to_signed_app_id
 
         # app_id 3000000000 -> signed = -1294967296
         app_id = 3000000000
-        signed_id = struct.unpack("i", struct.pack("I", app_id & 0xFFFFFFFF))[0]
+        signed_id = to_signed_app_id(app_id)
+
+        def fake_write_icon(a, _b):
+            return os.path.join(str(tmp_path), f"{a}_icon.png")
 
         written_data = {}
 
@@ -642,8 +595,9 @@ class TestSaveShortcutIcon:
         def mock_write(data):
             written_data.update(data)
 
-        plugin._steam_config.read_shortcuts = mock_read
-        plugin._steam_config.write_shortcuts = mock_write
+        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
+        plugin._steam_config.read_shortcuts = mock_read  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = mock_write  # type: ignore[method-assign]
 
         result = plugin._sgdb_service._save_icon_to_grid(app_id, b"icon data")
 
@@ -652,17 +606,37 @@ class TestSaveShortcutIcon:
         assert shortcut["icon"].endswith(f"{app_id}_icon.png")
 
     def test_save_icon_to_grid_no_grid_dir(self, plugin):
-        """Should return False if grid directory cannot be found."""
-        plugin._steam_config.grid_dir = lambda: None
+        """Should return False if the grid directory cannot be found."""
+
+        def raise_runtime(_app_id, _bytes):
+            raise RuntimeError("Cannot find Steam grid directory")
+
+        plugin._steam_config.write_shortcut_icon = raise_runtime  # type: ignore[method-assign]
+
+        result = plugin._sgdb_service._save_icon_to_grid(12345, b"data")
+        assert result is False
+
+    def test_save_icon_to_grid_write_failure(self, plugin):
+        """Unexpected write failures should return False without crashing."""
+
+        def raise_oserror(_app_id, _bytes):
+            raise OSError("disk full")
+
+        plugin._steam_config.write_shortcut_icon = raise_oserror  # type: ignore[method-assign]
 
         result = plugin._sgdb_service._save_icon_to_grid(12345, b"data")
         assert result is False
 
     def test_save_icon_to_grid_vdf_mismatch_still_writes_file(self, plugin, tmp_path):
         """If VDF has no matching shortcut, icon file should still be saved."""
-        grid_dir = tmp_path / "grid"
-        grid_dir.mkdir()
-        plugin._steam_config.grid_dir = lambda: str(grid_dir)
+        written: dict = {}
+
+        def fake_write_icon(app_id, icon_bytes):
+            path = os.path.join(str(tmp_path), f"{app_id}_icon.png")
+            written[path] = icon_bytes
+            return path
+
+        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
 
         written_data = {}
 
@@ -672,13 +646,14 @@ class TestSaveShortcutIcon:
         def mock_write(data):
             written_data.update(data)
 
-        plugin._steam_config.read_shortcuts = mock_read
-        plugin._steam_config.write_shortcuts = mock_write
+        plugin._steam_config.read_shortcuts = mock_read  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = mock_write  # type: ignore[method-assign]
 
         result = plugin._sgdb_service._save_icon_to_grid(12345, b"icon data")
 
         assert result is True
-        assert (grid_dir / "12345_icon.png").exists()
+        icon_path = os.path.join(str(tmp_path), "12345_icon.png")
+        assert written[icon_path] == b"icon data"
         # VDF was written but icon field not set on any shortcut
         assert written_data["shortcuts"]["0"].get("icon") is None
 
@@ -687,21 +662,27 @@ class TestSaveShortcutIcon:
         """save_shortcut_icon callable should decode base64 and save."""
         import base64
 
-        grid_dir = tmp_path / "grid"
-        grid_dir.mkdir()
-        plugin._steam_config.grid_dir = lambda: str(grid_dir)
-        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}
-        plugin._steam_config.write_shortcuts = lambda data: None
+        written: dict = {}
+
+        def fake_write_icon(app_id, icon_bytes):
+            path = os.path.join(str(tmp_path), f"{app_id}_icon.png")
+            written[path] = icon_bytes
+            return path
+
+        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
+        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = lambda data: None  # type: ignore[method-assign]
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
         icon_b64 = base64.b64encode(b"real icon png").decode("ascii")
         result = await plugin.save_shortcut_icon(12345, icon_b64)
 
         assert result["success"] is True
-        assert (grid_dir / "12345_icon.png").read_bytes() == b"real icon png"
+        icon_path = os.path.join(str(tmp_path), "12345_icon.png")
+        assert written[icon_path] == b"real icon png"
 
     @pytest.mark.asyncio
-    async def test_save_shortcut_icon_invalid_base64(self, plugin, tmp_path):
+    async def test_save_shortcut_icon_invalid_base64(self, plugin):
         """Invalid base64 should return success=False."""
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 

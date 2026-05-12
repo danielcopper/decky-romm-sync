@@ -4,6 +4,7 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
@@ -60,11 +61,11 @@ def plugin():
         sgdb_api=MagicMock(),
         romm_api=p._romm_api,
         steam_config=steam_config,
+        sgdb_artwork_cache=FakeSgdbArtworkCache(cache_root=decky.DECKY_PLUGIN_RUNTIME_DIR),
         state=p._state,
         settings=p.settings,
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
-        runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
         save_state=MagicMock(),
         save_settings_to_disk=MagicMock(),
         get_pending_sync=lambda: p._sync_service._pending_sync,
@@ -298,8 +299,6 @@ class TestLogLevel:
 
         import decky
 
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
-
         plugin.settings["log_level"] = "warn"
         with patch.object(decky.logger, "info") as mock_info:
             result = await plugin.get_sgdb_artwork_base64(1, 99)
@@ -313,8 +312,6 @@ class TestLogLevel:
         from unittest.mock import patch
 
         import decky
-
-        plugin._sgdb_service._runtime_dir = str(tmp_path)
 
         plugin.settings["log_level"] = "debug"
         plugin.settings["steamgriddb_api_key"] = ""
@@ -1093,6 +1090,7 @@ class TestMainStartupOrdering:
             "steam_config": MagicMock(),
             "sgdb_adapter": MagicMock(),
             "cover_art_file_store": MagicMock(),
+            "sgdb_artwork_cache": MagicMock(),
             "retrodeck_paths": MagicMock(),
             "retroarch_config": MagicMock(),
             "retroarch_core_info": MagicMock(),

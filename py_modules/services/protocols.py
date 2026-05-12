@@ -18,6 +18,7 @@ class SteamConfigAdapter(Protocol):
     def read_shortcuts(self) -> dict: ...
     def write_shortcuts(self, data: dict) -> None: ...
     def set_steam_input_config(self, app_ids: list, mode: str = "default") -> None: ...
+    def write_shortcut_icon(self, app_id: int, icon_bytes: bytes) -> str: ...
 
 
 class RommApiProtocol(Protocol):
@@ -539,6 +540,54 @@ class CoverArtFileStore(Protocol):
         ...
 
 
+class SgdbArtworkCache(Protocol):
+    """Filesystem seam for the SteamGridDB artwork cache directory.
+
+    Owns the raw POSIX calls SteamGridService uses to manage cached
+    SGDB artwork (heroes, logos, grids, icons) under the plugin runtime
+    directory. Path construction and pruning policy remain a service
+    concern; this Protocol exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def cache_dir(self) -> str:
+        """Return the absolute path to the SGDB artwork cache directory.
+
+        Idempotently ensures the directory exists before returning.
+        """
+        ...
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def remove(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def listdir(self, directory: str) -> list[str]:
+        """Return the entries in *directory*."""
+        ...
+
+    def isdir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        ...
+
+    def write_bytes_atomic(self, path: str, data: bytes) -> None:
+        """Atomically write *data* to *path*.
+
+        Writes to a temp file beside *path* and ``os.replace``s it to the
+        final destination. The temp file is removed on any failure.
+        """
+        ...
+
+
 # ---------------------------------------------------------------------------
 # Multi-method cross-service Protocols
 # ---------------------------------------------------------------------------
@@ -609,6 +658,7 @@ class SteamGridDbApi(Protocol):
     def verify_api_key(self, api_key: str) -> dict:
         """Verify an API key against SGDB. Returns parsed JSON response.
 
-        Raises urllib.error.HTTPError on auth failures (401/403).
+        Raises ``lib.errors.SgdbApiError`` on non-2xx HTTP responses
+        (e.g. 401/403 for an invalid key).
         """
         ...

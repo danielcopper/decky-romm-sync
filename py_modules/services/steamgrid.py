@@ -1,17 +1,26 @@
-"""SteamGridService — SteamGridDB artwork management.
+"""SteamGridDB orchestration — API key flow, artwork fetch/cache, icon save.
 
-Handles SGDB API key verification, artwork fetching/caching, icon saving
-to Steam grid directory, and orphaned artwork cache pruning.
+Owns the runtime decisions for SteamGridDB integration: resolving SGDB
+game IDs from registry/RomM hints, fanning out cached vs. remote
+artwork requests, and routing icon writes into Steam's grid directory.
+All raw I/O is delegated to adapters (``SgdbArtworkCache``,
+``SteamConfigAdapter``); pure asset-type / endpoint compute lives in
+``domain.sgdb_artwork``.
 """
 
 from __future__ import annotations
 
 import base64
-import contextlib
 import os
-import pathlib
-import struct
 from typing import TYPE_CHECKING, ClassVar
+
+from domain.sgdb_artwork import (
+    asset_type_endpoint,
+    asset_type_name,
+    sgdb_endpoint_path,
+    to_signed_app_id,
+)
+from lib.errors import SgdbApiError
 
 if TYPE_CHECKING:
     import asyncio
@@ -21,6 +30,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         RommApiProtocol,
         SettingsPersister,
+        SgdbArtworkCache,
         StatePersister,
         SteamConfigAdapter,
         SteamGridDbApi,
@@ -28,7 +38,7 @@ if TYPE_CHECKING:
 
 
 class SteamGridService:
-    """SteamGridDB artwork: API key management, artwork fetch/cache, icon save."""
+    """SteamGridDB orchestration: API key flow, artwork fetch/cache, icon save."""
 
     def __init__(
         self,
@@ -36,11 +46,11 @@ class SteamGridService:
         sgdb_api: SteamGridDbApi,
         romm_api: RommApiProtocol,
         steam_config: SteamConfigAdapter,
+        sgdb_artwork_cache: SgdbArtworkCache,
         state: dict,
         settings: dict,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
-        runtime_dir: str,
         save_state: StatePersister,
         save_settings_to_disk: SettingsPersister,
         get_pending_sync: Callable[[], dict],
@@ -48,11 +58,11 @@ class SteamGridService:
         self._sgdb_api = sgdb_api
         self._romm_api = romm_api
         self._steam_config = steam_config
+        self._sgdb_artwork_cache = sgdb_artwork_cache
         self._state = state
         self._settings = settings
         self._loop = loop
         self._logger = logger
-        self._runtime_dir = runtime_dir
         self._save_state = save_state
         self._save_settings_to_disk = save_settings_to_disk
         self._get_pending_sync = get_pending_sync
@@ -65,13 +75,6 @@ class SteamGridService:
         configured = self._settings.get("log_level", "warn")
         if self._LOG_LEVELS.get("debug", 0) >= self._LOG_LEVELS.get(configured, 2):
             self._logger.info(msg)
-
-    # -- artwork dir -------------------------------------------------------
-
-    def _sgdb_artwork_dir(self):
-        art_dir = os.path.join(self._runtime_dir, "artwork")
-        os.makedirs(art_dir, exist_ok=True)
-        return art_dir
 
     # -- SGDB lookup -------------------------------------------------------
 
@@ -87,24 +90,17 @@ class SteamGridService:
     # -- artwork download --------------------------------------------------
 
     def _download_sgdb_artwork(self, sgdb_game_id, rom_id, asset_type):
-        type_map = {
-            "hero": "heroes",
-            "logo": "logos",
-            "grid": "grids",
-            "icon": "icons",
-        }
-        endpoint = type_map.get(asset_type)
-        if not endpoint:
+        if asset_type_endpoint(asset_type) is None:
             return None
 
-        art_dir = self._sgdb_artwork_dir()
+        art_dir = self._sgdb_artwork_cache.cache_dir()
         cached = os.path.join(art_dir, f"{rom_id}_{asset_type}.png")
-        if os.path.exists(cached):
+        if self._sgdb_artwork_cache.exists(cached):
             return cached
 
-        path = f"/{endpoint}/game/{sgdb_game_id}"
-        if asset_type == "grid":
-            path += "?dimensions=460x215,920x430"
+        path = sgdb_endpoint_path(asset_type, sgdb_game_id)
+        if path is None:
+            return None
 
         try:
             result = self._sgdb_api.request(path)
@@ -122,7 +118,7 @@ class SteamGridService:
     async def _read_file_as_base64(self, path):
         """Read a file and return base64-encoded string, or None on failure."""
         try:
-            data = await self._loop.run_in_executor(None, lambda: pathlib.Path(path).read_bytes())
+            data = await self._loop.run_in_executor(None, self._sgdb_artwork_cache.read_bytes, path)
             return base64.b64encode(data).decode("ascii")
         except Exception as e:
             self._logger.warning(f"Failed to read file {path}: {e}")
@@ -176,17 +172,16 @@ class SteamGridService:
     async def get_sgdb_artwork_base64(self, rom_id, asset_type_num):
         rom_id = int(rom_id)
         asset_type_num = int(asset_type_num)
-        type_names = {1: "hero", 2: "logo", 3: "grid", 4: "icon"}
-        asset_type = type_names.get(asset_type_num)
+        asset_type = asset_type_name(asset_type_num)
         self._log_debug(f"SGDB artwork request: rom_id={rom_id}, asset_type={asset_type_num}")
         if not asset_type:
             return {"base64": None, "no_api_key": False}
 
-        art_dir = self._sgdb_artwork_dir()
+        art_dir = self._sgdb_artwork_cache.cache_dir()
         cached = os.path.join(art_dir, f"{rom_id}_{asset_type}.png")
 
         # Return from cache if available
-        if os.path.exists(cached):
+        if self._sgdb_artwork_cache.exists(cached):
             self._log_debug(f"SGDB artwork cache hit: {cached}")
             b64 = await self._read_file_as_base64(cached)
             if b64:
@@ -202,7 +197,7 @@ class SteamGridService:
             return {"base64": None, "no_api_key": False}
 
         path = await self._loop.run_in_executor(None, self._download_sgdb_artwork, sgdb_id, rom_id, asset_type)
-        if path and os.path.exists(path):
+        if path and self._sgdb_artwork_cache.exists(path):
             self._log_debug(f"SGDB artwork download success: rom_id={rom_id}, asset_type={asset_type}")
             b64 = await self._read_file_as_base64(path)
             if b64:
@@ -215,8 +210,6 @@ class SteamGridService:
     # -- API key management ------------------------------------------------
 
     async def verify_sgdb_api_key(self, api_key=None):
-        import urllib.error
-
         # Use saved key if no valid key provided (modal pattern doesn't hold the real key)
         if not api_key or api_key == "••••":
             api_key = self._settings.get("steamgriddb_api_key", "")
@@ -227,11 +220,11 @@ class SteamGridService:
             if data.get("success"):
                 return {"success": True, "message": "API key is valid"}
             return {"success": False, "message": "API key rejected by SteamGridDB"}
-        except urllib.error.HTTPError as e:
-            self._logger.warning(f"SGDB API key verification HTTP error: {e.code}")
-            if e.code in (401, 403):
+        except SgdbApiError as e:
+            self._logger.warning(f"SGDB API key verification HTTP error: {e.status_code}")
+            if e.status_code in (401, 403):
                 return {"success": False, "message": "Invalid API key"}
-            return {"success": False, "message": f"SteamGridDB error: HTTP {e.code}"}
+            return {"success": False, "message": f"SteamGridDB error: HTTP {e.status_code}"}
         except Exception as e:
             self._logger.error(f"SGDB API key verification failed: {e}")
             return {"success": False, "message": f"Connection failed: {e}"}
@@ -246,16 +239,16 @@ class SteamGridService:
 
     def prune_orphaned_artwork_cache(self):
         """Remove SGDB artwork cache files for rom_ids not in the shortcut registry."""
-        art_dir = os.path.join(self._runtime_dir, "artwork")
-        if not os.path.isdir(art_dir):
+        art_dir = self._sgdb_artwork_cache.cache_dir()
+        if not self._sgdb_artwork_cache.isdir(art_dir):
             return
         registry = self._state.get("shortcut_registry", {})
         pruned = 0
-        for filename in os.listdir(art_dir):
+        for filename in self._sgdb_artwork_cache.listdir(art_dir):
             # Always remove leftover .tmp files
             if filename.endswith(".tmp"):
                 try:
-                    os.remove(os.path.join(art_dir, filename))
+                    self._sgdb_artwork_cache.remove(os.path.join(art_dir, filename))
                     pruned += 1
                     self._logger.info(f"Removed leftover artwork tmp: {filename}")
                 except OSError as e:
@@ -268,7 +261,7 @@ class SteamGridService:
             rom_id = parts[0]
             if rom_id not in registry:
                 try:
-                    os.remove(os.path.join(art_dir, filename))
+                    self._sgdb_artwork_cache.remove(os.path.join(art_dir, filename))
                     pruned += 1
                 except OSError as e:
                     self._logger.warning(f"Failed to remove orphaned artwork {filename}: {e}")
@@ -279,30 +272,19 @@ class SteamGridService:
 
     def _save_icon_to_grid(self, app_id, icon_bytes):
         """Write icon PNG to Steam's grid dir and update shortcuts.vdf icon field."""
-        grid_dir = self._steam_config.grid_dir()
-        if not grid_dir:
-            self._logger.warning("Cannot find Steam grid directory for icon save")
-            return False
-
-        # Write icon file to grid dir
-        icon_path = os.path.join(grid_dir, f"{app_id}_icon.png")
-        tmp_path = icon_path + ".tmp"
         try:
-            with open(tmp_path, "wb") as f:
-                f.write(icon_bytes)
-            os.replace(tmp_path, icon_path)
+            icon_path = self._steam_config.write_shortcut_icon(app_id, icon_bytes)
+        except RuntimeError as e:
+            self._logger.warning(f"Cannot save icon: {e}")
+            return False
         except Exception as e:
-            self._logger.error(f"Failed to write icon file {icon_path}: {e}")
-            if os.path.exists(tmp_path):
-                with contextlib.suppress(OSError):
-                    os.remove(tmp_path)
+            self._logger.error(f"Failed to write icon file for app_id {app_id}: {e}")
             return False
 
         # Update shortcuts.vdf icon field
         try:
             vdf_data = self._steam_config.read_shortcuts()
-            # Convert unsigned app_id to signed int32 for VDF comparison
-            signed_id = struct.unpack("i", struct.pack("I", app_id & 0xFFFFFFFF))[0]
+            signed_id = to_signed_app_id(app_id)
             shortcuts = vdf_data.get("shortcuts", {})
             for entry in shortcuts.values():
                 if entry.get("appid") == signed_id:
