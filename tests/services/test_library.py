@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.sync_diff import classify_roms
@@ -46,10 +47,10 @@ def plugin():
     artwork_service = ArtworkService(
         romm_api=p._romm_api,
         steam_config=steam_config,
+        cover_art_file_store=CoverArtFileStoreAdapter(),
         state=p._state,
         loop=asyncio.get_event_loop(),
         logger=decky.logger,
-        emit=decky.emit,
     )
     p._artwork_service = artwork_service
 

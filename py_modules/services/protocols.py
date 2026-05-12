@@ -501,6 +501,44 @@ class ArtworkRemover(Protocol):
     def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None: ...
 
 
+class CoverArtFileStore(Protocol):
+    """Filesystem seam for cover-art file operations.
+
+    Owns the raw POSIX calls (``exists``, ``remove``, atomic ``rename``,
+    ``listdir``, ``isdir``, ``read_bytes``) ArtworkService uses to manage
+    cover art under the Steam grid directory. Path construction, registry
+    lookups, and orphan detection remain a service concern; this Protocol
+    exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def remove(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
+        ...
+
+    def listdir(self, directory: str) -> list[str]:
+        """Return the entries in *directory*."""
+        ...
+
+    def isdir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        ...
+
+
 # ---------------------------------------------------------------------------
 # Multi-method cross-service Protocols
 # ---------------------------------------------------------------------------

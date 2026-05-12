@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass
 
 from adapters.asyncio_sleeper import AsyncioSleeper
+from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
@@ -38,6 +39,7 @@ from services.protocols import (
     Clock,
     CoreInfoProvider,
     CoreNameProviderFn,
+    CoverArtFileStore,
     DebugLogger,
     EventEmitter,
     FirmwareCachePersister,
@@ -67,6 +69,7 @@ class AdapterBundle:
     romm_api: RommApiProtocol
     steam_config: SteamConfigProtocol
     sgdb_adapter: SteamGridDbAdapter
+    cover_art_file_store: CoverArtFileStore
 
 
 @dataclass(frozen=True)
@@ -166,6 +169,7 @@ def bootstrap(
     romm_api = RommApi(http_adapter)
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
     sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
+    cover_art_file_store = CoverArtFileStoreAdapter()
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
@@ -176,6 +180,7 @@ def bootstrap(
         "romm_api": romm_api,
         "steam_config": steam_config,
         "sgdb_adapter": sgdb_adapter,
+        "cover_art_file_store": cover_art_file_store,
         "retrodeck_paths": retrodeck_paths,
         "retroarch_config": retroarch_config,
         "retroarch_core_info": retroarch_core_info,
@@ -283,10 +288,10 @@ def wire_services(cfg: WiringConfig) -> dict:
     artwork_service = ArtworkService(
         romm_api=cfg.adapters.romm_api,
         steam_config=cfg.adapters.steam_config,
+        cover_art_file_store=cfg.adapters.cover_art_file_store,
         state=cfg.stores.state,
         loop=cfg.runtime.loop,
         logger=cfg.runtime.logger,
-        emit=cfg.runtime.emit,
     )
 
     shortcut_removal_service = ShortcutRemovalService(

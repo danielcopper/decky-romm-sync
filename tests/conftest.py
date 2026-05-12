@@ -112,6 +112,57 @@ class FakeFirmwareCachePersister:
         return self.canned_load
 
 
+class FakeCoverArtFileStore:
+    """In-memory ``CoverArtFileStore`` for tests.
+
+    Backed by a ``dict[str, bytes]`` so file ops are deterministic and
+    free of filesystem side effects. ``remove`` is idempotent per the
+    Protocol contract. ``listdir`` returns entries whose path's parent
+    directory matches *directory* (no recursion). ``isdir`` reports True
+    for any path that is the parent of an entry, mirroring the loose
+    "directory exists when it contains files" semantics tests need.
+
+    Tests can pre-populate ``files`` directly to stage fixtures, and
+    inspect it after the act to assert removals/renames. ``isdir_paths``
+    can be set explicitly when a test needs to model an empty directory
+    or override the path-based default.
+    """
+
+    def __init__(self, files: dict[str, bytes] | None = None) -> None:
+        self.files: dict[str, bytes] = dict(files) if files else {}
+        # Explicit directory whitelist; when None, isdir is inferred from
+        # parent-of-files membership.
+        self.isdir_paths: set[str] | None = None
+
+    def exists(self, path: str) -> bool:
+        return path in self.files or self.isdir(path)
+
+    def remove(self, path: str) -> None:
+        self.files.pop(path, None)
+
+    def rename(self, src: str, dst: str) -> None:
+        if src not in self.files:
+            raise FileNotFoundError(src)
+        self.files[dst] = self.files.pop(src)
+
+    def listdir(self, directory: str) -> list[str]:
+        prefix = directory.rstrip("/") + "/"
+        return [
+            path[len(prefix) :] for path in self.files if path.startswith(prefix) and "/" not in path[len(prefix) :]
+        ]
+
+    def isdir(self, path: str) -> bool:
+        if self.isdir_paths is not None:
+            return path in self.isdir_paths
+        prefix = path.rstrip("/") + "/"
+        return any(stored.startswith(prefix) for stored in self.files)
+
+    def read_bytes(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+
 class FakeCoreInfoProvider:
     """In-memory CoreInfoProvider for tests.
 

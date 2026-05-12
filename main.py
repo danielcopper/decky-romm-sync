@@ -190,6 +190,7 @@ class Plugin:
                     romm_api=self._romm_api,
                     steam_config=self._steam_config,
                     sgdb_adapter=self._sgdb_adapter,
+                    cover_art_file_store=adapters["cover_art_file_store"],
                 ),
                 stores=StateBundle(
                     state=self._state,

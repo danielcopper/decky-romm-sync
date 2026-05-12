@@ -1092,6 +1092,7 @@ class TestMainStartupOrdering:
             "romm_api": MagicMock(),
             "steam_config": MagicMock(),
             "sgdb_adapter": MagicMock(),
+            "cover_art_file_store": MagicMock(),
             "retrodeck_paths": MagicMock(),
             "retroarch_config": MagicMock(),
             "retroarch_core_info": MagicMock(),

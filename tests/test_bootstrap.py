@@ -13,7 +13,7 @@ from bootstrap import (
     bootstrap,
     wire_services,
 )
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister
+from conftest import FakeCoreInfoProvider, FakeCoverArtFileStore, FakeFirmwareCachePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
@@ -146,6 +146,7 @@ class TestWireServices:
             "romm_api": romm_api,
             "steam_config": steam_config,
             "sgdb_adapter": MagicMock(),
+            "cover_art_file_store": FakeCoverArtFileStore(),
             "state": state,
             "settings": settings,
             "metadata_cache": {},
@@ -182,6 +183,7 @@ class TestWireServices:
                 romm_api=deps["romm_api"],
                 steam_config=deps["steam_config"],
                 sgdb_adapter=deps["sgdb_adapter"],
+                cover_art_file_store=deps["cover_art_file_store"],
             ),
             stores=StateBundle(
                 state=deps["state"],

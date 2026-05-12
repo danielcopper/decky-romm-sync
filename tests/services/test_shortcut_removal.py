@@ -224,15 +224,16 @@ class TestRemovalCleansUpArtwork:
         state["shortcut_registry"] = {"10": {"app_id": 100001, "name": "Game A", "cover_path": ""}}
         steam_config.grid_dir = lambda: str(grid_dir)
 
+        from adapters.cover_art_file_store import CoverArtFileStoreAdapter
         from services.artwork import ArtworkService
 
         artwork_svc = ArtworkService(
             romm_api=MagicMock(),
             steam_config=steam_config,
+            cover_art_file_store=CoverArtFileStoreAdapter(),
             state=state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            emit=decky.emit,
         )
 
         svc = ShortcutRemovalService(
@@ -260,15 +261,16 @@ class TestRemovalCleansUpArtwork:
         state["shortcut_registry"] = {"10": {"app_id": 100001, "name": "Game A", "cover_path": ""}}
         steam_config.grid_dir = lambda: str(grid_dir)
 
+        from adapters.cover_art_file_store import CoverArtFileStoreAdapter
         from services.artwork import ArtworkService
 
         artwork_svc = ArtworkService(
             romm_api=MagicMock(),
             steam_config=steam_config,
+            cover_art_file_store=CoverArtFileStoreAdapter(),
             state=state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            emit=decky.emit,
         )
 
         svc = ShortcutRemovalService(
