@@ -14,6 +14,8 @@ from dataclasses import dataclass
 
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
+from adapters.download_file import DownloadFileAdapter as DownloadFileAdapterImpl
+from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapterImpl
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
@@ -28,7 +30,7 @@ from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService
-from services.downloads import DownloadService
+from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService
 from services.game_detail import GameDetailService
 from services.library import LibraryService
@@ -42,6 +44,8 @@ from services.protocols import (
     CoreNameProviderFn,
     CoverArtFileStore,
     DebugLogger,
+    DownloadFileAdapter,
+    DownloadQueueAdapter,
     EventEmitter,
     FirmwareCachePersister,
     RetroArchSaveSortingProvider,
@@ -73,6 +77,8 @@ class AdapterBundle:
     sgdb_adapter: SteamGridDbAdapter
     cover_art_file_store: CoverArtFileStore
     sgdb_artwork_cache: SgdbArtworkCache
+    download_files: DownloadFileAdapter
+    download_queue: DownloadQueueAdapter
 
 
 @dataclass(frozen=True)
@@ -174,6 +180,8 @@ def bootstrap(
     sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
     cover_art_file_store = CoverArtFileStoreAdapter()
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
+    download_files = DownloadFileAdapterImpl()
+    download_queue = DownloadQueueAdapterImpl()
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
@@ -186,6 +194,8 @@ def bootstrap(
         "sgdb_adapter": sgdb_adapter,
         "cover_art_file_store": cover_art_file_store,
         "sgdb_artwork_cache": sgdb_artwork_cache,
+        "download_files": download_files,
+        "download_queue": download_queue,
         "retrodeck_paths": retrodeck_paths,
         "retroarch_config": retroarch_config,
         "retroarch_core_info": retroarch_core_info,
@@ -332,18 +342,22 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     download_service = DownloadService(
         romm_api=cfg.adapters.romm_api,
-        resolve_system=cfg.adapters.http_adapter.resolve_system,
         state=cfg.stores.state,
-        loop=cfg.runtime.loop,
-        logger=cfg.runtime.logger,
-        runtime_dir=cfg.runtime.runtime_dir,
-        emit=cfg.runtime.emit,
-        clock=cfg.runtime.clock,
-        sleeper=cfg.runtime.sleeper,
-        save_state=cfg.callbacks.save_state,
-        get_roms_path=cfg.callbacks.get_roms_path,
-        get_bios_path=cfg.callbacks.get_bios_path,
-        is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
+        download_files=cfg.adapters.download_files,
+        download_queue=cfg.adapters.download_queue,
+        config=DownloadServiceConfig(
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            runtime_dir=cfg.runtime.runtime_dir,
+            emit=cfg.runtime.emit,
+            clock=cfg.runtime.clock,
+            sleeper=cfg.runtime.sleeper,
+            save_state=cfg.callbacks.save_state,
+            get_roms_path=cfg.callbacks.get_roms_path,
+            get_bios_path=cfg.callbacks.get_bios_path,
+            is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
+        ),
     )
 
     rom_removal_service = RomRemovalService(

@@ -1,18 +1,16 @@
-"""DownloadService — ROM download engine.
+"""DownloadService — ROM download orchestration.
 
 Handles ROM downloads (single and multi-file), disk space checks,
-download queue management, and partial download cleanup.
+download queue management, and partial download cleanup. All raw
+filesystem I/O is delegated to the ``DownloadFileAdapter`` and
+``DownloadQueueAdapter`` Protocols.
 """
 
 from __future__ import annotations
 
 import asyncio
-import fcntl
-import json
 import os
-import shutil
-import urllib.parse
-import zipfile
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u, resolve_local_file_name
@@ -25,6 +23,8 @@ if TYPE_CHECKING:
     from services.protocols import (
         BiosPathProvider,
         Clock,
+        DownloadFileAdapter,
+        DownloadQueueAdapter,
         EventEmitter,
         RommApiProtocol,
         RomsPathProvider,
@@ -38,6 +38,30 @@ _ZIP_TMP_EXT = ".zip.tmp"
 _TMP_EXT = ".tmp"
 
 
+@dataclass(frozen=True)
+class DownloadServiceConfig:
+    """Frozen wiring bundle handed to ``DownloadService.__init__``.
+
+    Holds the runtime infrastructure, time/sleep seams, path providers,
+    and migration-aware callbacks DownloadService needs at construction
+    time. Protocol-typed adapters and the live state dict remain
+    explicit ctor parameters because they have different lifecycles
+    from this immutable wiring bundle.
+    """
+
+    resolve_system: SystemResolver
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    runtime_dir: str
+    emit: EventEmitter
+    clock: Clock
+    sleeper: Sleeper
+    save_state: StatePersister
+    get_roms_path: RomsPathProvider | None = None
+    get_bios_path: BiosPathProvider | None = None
+    is_retrodeck_migration_pending: Callable[[], bool] | None = None
+
+
 class DownloadService:
     """ROM download engine: downloads and queue management."""
 
@@ -45,32 +69,26 @@ class DownloadService:
         self,
         *,
         romm_api: RommApiProtocol,
-        resolve_system: SystemResolver,
         state: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        runtime_dir: str,
-        emit: EventEmitter,
-        clock: Clock,
-        sleeper: Sleeper,
-        save_state: StatePersister,
-        get_roms_path: RomsPathProvider | None = None,
-        get_bios_path: BiosPathProvider | None = None,
-        is_retrodeck_migration_pending: Callable[[], bool] | None = None,
+        download_files: DownloadFileAdapter,
+        download_queue: DownloadQueueAdapter,
+        config: DownloadServiceConfig,
     ):
         self._romm_api = romm_api
-        self._resolve_system = resolve_system
         self._state = state
-        self._loop = loop
-        self._logger = logger
-        self._runtime_dir = runtime_dir
-        self._emit = emit
-        self._clock = clock
-        self._sleeper = sleeper
-        self._save_state = save_state
-        self._get_roms_path = get_roms_path
-        self._get_bios_path = get_bios_path
-        self._is_retrodeck_migration_pending = is_retrodeck_migration_pending
+        self._download_files = download_files
+        self._download_queue_io = download_queue
+        self._resolve_system = config.resolve_system
+        self._loop = config.loop
+        self._logger = config.logger
+        self._runtime_dir = config.runtime_dir
+        self._emit = config.emit
+        self._clock = config.clock
+        self._sleeper = config.sleeper
+        self._save_state = config.save_state
+        self._get_roms_path = config.get_roms_path
+        self._get_bios_path = config.get_bios_path
+        self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
 
         # Owned state
         self._download_in_progress: set = set()
@@ -119,44 +137,19 @@ class DownloadService:
             del self._download_queue[rid]
         return {"success": True, "removed": len(terminal_ids)}
 
-    def _remove_tmp_file(self, filepath):
-        """Try to remove a tmp file, return True on success."""
-        try:
-            if os.path.isfile(filepath):
-                os.remove(filepath)
-                self._logger.info(f"Removed leftover tmp file: {filepath}")
-                return True
-        except OSError as e:
-            self._logger.warning(f"Failed to remove tmp file {filepath}: {e}")
-        return False
-
     def _clean_rom_tmp_files(self):
         """Remove leftover .tmp and .zip.tmp files from ROM directories."""
-        cleaned = 0
         roms_base = self._get_roms_path() if self._get_roms_path else ""
-        if not os.path.isdir(roms_base):
-            return cleaned
-        for system_dir in os.listdir(roms_base):
-            system_path = os.path.join(roms_base, system_dir)
-            if not os.path.isdir(system_path):
-                continue
-            for filename in os.listdir(system_path):
-                full_path = os.path.join(system_path, filename)
-                if filename.endswith((_TMP_EXT, _ZIP_TMP_EXT)) and self._remove_tmp_file(full_path):
-                    cleaned += 1
-        return cleaned
+        if not roms_base:
+            return 0
+        return self._download_files.clean_tmp_files(roms_base, (_TMP_EXT, _ZIP_TMP_EXT))
 
     def _clean_bios_tmp_files(self):
         """Remove leftover .tmp files from BIOS directory."""
-        cleaned = 0
         bios_base = self._get_bios_path() if self._get_bios_path else ""
-        if not os.path.isdir(bios_base):
-            return cleaned
-        for root, _dirs, files in os.walk(bios_base):
-            for filename in files:
-                if filename.endswith(_TMP_EXT) and self._remove_tmp_file(os.path.join(root, filename)):
-                    cleaned += 1
-        return cleaned
+        if not bios_base:
+            return 0
+        return self._download_files.clean_tmp_files(bios_base, (_TMP_EXT,))
 
     def cleanup_leftover_tmp_files(self):
         """Remove leftover .tmp and .zip.tmp files from ROM and BIOS directories on startup."""
@@ -166,21 +159,7 @@ class DownloadService:
 
     def _poll_download_requests_io(self, requests_path):
         """Sync helper for poll_download_requests — file lock + read + write in executor."""
-        try:
-            with open(requests_path, "r+") as f:
-                fcntl.flock(f, fcntl.LOCK_EX)
-                try:
-                    requests = json.load(f)
-                except json.JSONDecodeError:
-                    requests = []
-                if not requests:
-                    return []
-                f.seek(0)
-                f.truncate()
-                json.dump([], f)
-            return requests
-        except FileNotFoundError:
-            return []
+        return self._download_queue_io.poll_and_clear(requests_path)
 
     async def poll_download_requests(self):
         """Poll for download requests from the launcher script."""
@@ -237,8 +216,8 @@ class DownloadService:
         file_size = rom_detail.get("fs_size_bytes", 0)
 
         # Check disk space: multi-file ROMs need space for ZIP + extracted contents
-        os.makedirs(roms_dir, exist_ok=True)
-        free_space = shutil.disk_usage(roms_dir).free
+        self._download_files.make_dirs(roms_dir)
+        free_space = self._download_files.disk_free(roms_dir)
         buffer = 100 * 1024 * 1024
         required = file_size * 2 + buffer if rom_detail.get("has_multiple_files") else file_size + buffer
         if file_size and free_space < required:
@@ -272,40 +251,18 @@ class DownloadService:
         self._download_tasks[rom_id] = task
         return {"success": True, "message": "Download started"}
 
-    def _decode_url_encoded_names(self, directory: str) -> None:
-        """Rename URL-encoded filenames and directories (e.g. %20 -> space)."""
-        for root, dirs, files in os.walk(directory, topdown=False):
-            for fname in files:
-                decoded = urllib.parse.unquote(fname)
-                if decoded != fname:
-                    os.replace(os.path.join(root, fname), os.path.join(root, decoded))
-                    self._logger.info(f"Renamed URL-encoded file: {fname} -> {decoded}")
-            for dname in dirs:
-                decoded = urllib.parse.unquote(dname)
-                if decoded != dname:
-                    os.replace(os.path.join(root, dname), os.path.join(root, decoded))
-                    self._logger.info(f"Renamed URL-encoded dir: {dname} -> {decoded}")
-
     def _post_download_multi_io(self, rom_id, rom_detail, target_path, file_name, system):
         """Sync helper for _do_download multi-file — extraction + renames in executor."""
         rom_dir_name = os.path.splitext(file_name)[0]
         extract_dir = os.path.join(os.path.dirname(target_path), rom_dir_name)
-        os.makedirs(extract_dir, exist_ok=True)
-        # Fix 4: Validate extract_dir is within roms_dir
+        self._download_files.make_dirs(extract_dir)
         roms_base = self._get_roms_path() if self._get_roms_path else ""
-        if not os.path.realpath(extract_dir).startswith(os.path.realpath(roms_base) + os.sep):
-            raise ValueError(f"Extract directory would be outside roms directory: {extract_dir}")
         tmp_zip = target_path + _ZIP_TMP_EXT
-        with zipfile.ZipFile(tmp_zip, "r") as zf:
-            # Fix 3: ZIP slip protection
-            real_extract = os.path.realpath(extract_dir)
-            for member in zf.namelist():
-                member_path = os.path.realpath(os.path.join(extract_dir, member))
-                if not member_path.startswith(real_extract + os.sep):
-                    raise ValueError(f"ZIP member {member} would extract outside target directory")
-            zf.extractall(extract_dir)
-        os.remove(tmp_zip)
-        self._decode_url_encoded_names(extract_dir)
+        # ZIP-slip protection: adapter validates members resolve within extract_dir
+        # AND that extract_dir itself resolves within roms_base.
+        self._download_files.extract_zip(tmp_zip, extract_dir, roms_base)
+        self._download_files.remove(tmp_zip)
+        self._download_files.decode_url_encoded_names(extract_dir)
         # Auto-generate M3U if missing and multiple disc files exist
         self._maybe_generate_m3u_io(extract_dir, rom_detail)
         # Detect launch file: prefer M3U > CUE > largest file
@@ -328,7 +285,7 @@ class DownloadService:
     def _post_download_single_io(self, rom_id, rom_detail, target_path, file_name, system):
         """Sync helper for _do_download single-file — rename + state update in executor."""
         tmp_path = target_path + _TMP_EXT
-        os.replace(tmp_path, target_path)
+        self._download_files.rename(tmp_path, target_path)
 
         installed_entry = {
             "rom_id": rom_id,
@@ -444,42 +401,29 @@ class DownloadService:
 
     def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict) -> None:
         """Auto-generate an M3U playlist if none exists and multiple disc files are found."""
+        all_files = self._download_files.scan_files_with_sizes(extract_dir)
         # Check if an M3U already exists (search recursively)
-        for _root, _dirs, files in os.walk(extract_dir):
-            for f in files:
-                if f.lower().endswith(".m3u"):
-                    return
+        if any(path.lower().endswith(".m3u") for path, _size in all_files):
+            return
 
         # Collect disc files: .cue, .chd, .iso (search recursively)
-        disc_files = []
-        for root, _dirs, files in os.walk(extract_dir):
-            for f in files:
-                if f.lower().endswith((".cue", ".chd", ".iso")):
-                    # Store path relative to extract_dir for M3U entries
-                    rel_path = os.path.relpath(os.path.join(root, f), extract_dir)
-                    disc_files.append(rel_path)
+        disc_files = [
+            os.path.relpath(path, extract_dir)
+            for path, _size in all_files
+            if path.lower().endswith((".cue", ".chd", ".iso"))
+        ]
 
         if not needs_m3u(disc_files):
             return
 
         rom_name = rom_detail.get("fs_name_no_ext", rom_detail.get("name", "playlist"))
         m3u_path = os.path.join(extract_dir, f"{rom_name}.m3u")
-        with open(m3u_path, "w") as f:
-            f.write(build_m3u_content(disc_files))
+        self._download_files.write_text_atomic(m3u_path, build_m3u_content(disc_files))
         self._logger.info(f"Auto-generated M3U playlist: {m3u_path}")
 
     def _collect_and_detect_launch_file(self, extract_dir: str) -> str:
         """Find the best launch file in an extracted multi-file ROM directory."""
-        all_files: list[tuple[str, int]] = []
-        for root, _dirs, files in os.walk(extract_dir):
-            for f in files:
-                path = os.path.join(root, f)
-                try:
-                    size = os.path.getsize(path)
-                except OSError:
-                    size = 0
-                all_files.append((path, size))
-
+        all_files = self._download_files.scan_files_with_sizes(extract_dir)
         result = detect_launch_file(all_files)
         return result if result is not None else extract_dir
 
@@ -492,16 +436,14 @@ class DownloadService:
         ]
         for path in paths_to_remove:
             try:
-                if os.path.exists(path):
-                    os.remove(path)
+                self._download_files.remove(path)
             except Exception as e:
                 self._logger.warning(f"Cleanup failed for {path}: {e}")
         if has_multiple:
             rom_dir_name = os.path.splitext(file_name)[0]
             extract_dir = os.path.join(os.path.dirname(target_path), rom_dir_name)
             try:
-                if os.path.isdir(extract_dir):
-                    shutil.rmtree(extract_dir)
+                self._download_files.remove_tree(extract_dir)
             except Exception as e:
                 self._logger.warning(f"Cleanup failed for directory {extract_dir}: {e}")
 

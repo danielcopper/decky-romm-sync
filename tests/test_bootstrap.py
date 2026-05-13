@@ -16,6 +16,8 @@ from bootstrap import (
 from conftest import (
     FakeCoreInfoProvider,
     FakeCoverArtFileStore,
+    FakeDownloadFileAdapter,
+    FakeDownloadQueueAdapter,
     FakeFirmwareCachePersister,
     FakeSgdbArtworkCache,
 )
@@ -153,6 +155,8 @@ class TestWireServices:
             "sgdb_adapter": MagicMock(),
             "cover_art_file_store": FakeCoverArtFileStore(),
             "sgdb_artwork_cache": FakeSgdbArtworkCache(),
+            "download_files": FakeDownloadFileAdapter(),
+            "download_queue": FakeDownloadQueueAdapter(),
             "state": state,
             "settings": settings,
             "metadata_cache": {},
@@ -191,6 +195,8 @@ class TestWireServices:
                 sgdb_adapter=deps["sgdb_adapter"],
                 cover_art_file_store=deps["cover_art_file_store"],
                 sgdb_artwork_cache=deps["sgdb_artwork_cache"],
+                download_files=deps["download_files"],
+                download_queue=deps["download_queue"],
             ),
             stores=StateBundle(
                 state=deps["state"],

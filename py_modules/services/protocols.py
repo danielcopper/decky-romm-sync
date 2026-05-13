@@ -552,6 +552,114 @@ class CoverArtFileStore(Protocol):
         ...
 
 
+class DownloadFileAdapter(Protocol):
+    """Filesystem seam for ROM download target operations.
+
+    Owns the raw POSIX calls DownloadService uses to manage downloaded
+    ROM files: temp-file lifecycle, atomic renames, disk-space probes,
+    ZIP extraction with ZIP-slip protection, post-extract URL-decoding,
+    and file-size scans for launch-file detection. Path construction,
+    queue management, and progress callbacks remain a service concern;
+    this Protocol exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def remove(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def remove_tree(self, path: str) -> None:
+        """Recursively delete *path*. Idempotent: a missing directory is not an error."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
+        ...
+
+    def disk_free(self, path: str) -> int:
+        """Return the free space in bytes for the filesystem hosting *path*."""
+        ...
+
+    def clean_tmp_files(self, base_dir: str, suffixes: tuple[str, ...]) -> int:
+        """Recursively remove files under *base_dir* whose name ends with any of *suffixes*.
+
+        Returns the number of files removed. Idempotent on missing
+        *base_dir* (returns 0). Per-file errors are swallowed so a
+        single failure does not block the rest of the sweep.
+        """
+        ...
+
+    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> list[str]:
+        """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
+
+        *safe_root* is the boundary outside of which extraction is
+        rejected. Implementations resolve both *dest_dir* and *safe_root*
+        via ``os.path.realpath`` and verify that every member resolves
+        within *safe_root* before extracting. Returns the list of
+        extracted absolute file paths.
+        """
+        ...
+
+    def decode_url_encoded_names(self, directory: str) -> None:
+        """Recursively rename URL-encoded entries under *directory*.
+
+        Files and subdirectories whose names contain ``%XX`` escapes are
+        renamed in place to their decoded form. Walks bottom-up so
+        nested encoded directories are handled correctly.
+        """
+        ...
+
+    def scan_files_with_sizes(self, directory: str) -> list[tuple[str, int]]:
+        """Recursively list files under *directory* with their sizes.
+
+        Returns a list of ``(absolute_path, size_bytes)`` tuples. Files
+        whose size cannot be read report size ``0`` so callers can still
+        reason over the list.
+        """
+        ...
+
+    def write_text_atomic(self, path: str, content: str) -> None:
+        """Atomically write *content* to *path* as UTF-8 text.
+
+        Writes to a temp file beside *path* and ``os.replace``s it to
+        the final destination. The temp file is removed on any failure.
+        """
+        ...
+
+
+class DownloadQueueAdapter(Protocol):
+    """Filesystem seam for the launcher-script download request queue.
+
+    Owns the lock-and-poll round-trip DownloadService uses to consume
+    queued ROM-download requests written by the RetroDECK launcher
+    script. Path construction and request dispatch remain a service
+    concern; this Protocol exposes only the read-and-clear seam.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def poll_and_clear(self, path: str) -> list[dict]:
+        """Atomically read all pending requests from *path* and clear the file.
+
+        Acquires an exclusive ``fcntl`` lock for the read-and-truncate
+        round-trip so concurrent writers cannot lose requests. Returns
+        the list of request dicts that were in the file. Idempotent on
+        missing or malformed files: returns ``[]``.
+        """
+        ...
+
+
 class SgdbArtworkCache(Protocol):
     """Filesystem seam for the SteamGridDB artwork cache directory.
 

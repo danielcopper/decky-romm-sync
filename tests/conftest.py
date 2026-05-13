@@ -236,6 +236,171 @@ class FakeSgdbArtworkCache:
         self.tmp_files.discard(tmp_path)
 
 
+class FakeDownloadFileAdapter:
+    """In-memory ``DownloadFileAdapter`` for tests.
+
+    Backed by a ``dict[str, bytes]`` so file ops are deterministic and
+    free of filesystem side effects. ``remove`` / ``remove_tree`` are
+    idempotent per the Protocol contract. ``isdir`` reports True for any
+    path that is the parent of an entry or matches a directory created
+    via ``make_dirs``.
+
+    The fake captures enough state to model the download flow:
+    - ``files`` — ``{path: bytes}`` snapshot of the virtual filesystem.
+    - ``dirs`` — explicit set of directory paths (populated by
+      ``make_dirs`` and ``extract_zip``).
+    - ``disk_free_bytes`` — value returned by ``disk_free`` (default
+      large, override via ``set_disk_free``).
+    - ``fail_on_atomic_write`` — when True, ``write_text_atomic`` cleans
+      up the tmp file and raises ``OSError`` to mirror the real adapter
+      behaviour.
+    - ``decode_calls`` / ``extract_calls`` / ``clean_calls`` — captured
+      argument lists for tests that need to assert on adapter calls.
+    """
+
+    def __init__(self, files: dict[str, bytes] | None = None) -> None:
+        self.files: dict[str, bytes] = dict(files) if files else {}
+        self.dirs: set[str] = set()
+        self.disk_free_bytes: int = 10 * 1024 * 1024 * 1024  # 10 GiB
+        self.fail_on_atomic_write: bool = False
+        self.tmp_files: set[str] = set()
+        self.decode_calls: list[str] = []
+        self.extract_calls: list[tuple[str, str, str]] = []
+        self.clean_calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def set_disk_free(self, bytes_free: int) -> None:
+        self.disk_free_bytes = bytes_free
+
+    def exists(self, path: str) -> bool:
+        return path in self.files or self.isdir(path)
+
+    def remove(self, path: str) -> None:
+        self.files.pop(path, None)
+
+    def remove_tree(self, path: str) -> None:
+        prefix = path.rstrip("/") + "/"
+        for stored in list(self.files):
+            if stored == path or stored.startswith(prefix):
+                del self.files[stored]
+        self.dirs.discard(path)
+        for d in list(self.dirs):
+            if d.startswith(prefix):
+                self.dirs.discard(d)
+
+    def make_dirs(self, path: str) -> None:
+        self.dirs.add(path)
+
+    def rename(self, src: str, dst: str) -> None:
+        if src not in self.files:
+            raise FileNotFoundError(src)
+        self.files[dst] = self.files.pop(src)
+
+    def disk_free(self, path: str) -> int:
+        return self.disk_free_bytes
+
+    def isdir(self, path: str) -> bool:
+        if path in self.dirs:
+            return True
+        prefix = path.rstrip("/") + "/"
+        return any(stored.startswith(prefix) for stored in self.files)
+
+    def clean_tmp_files(self, base_dir: str, suffixes: tuple[str, ...]) -> int:
+        self.clean_calls.append((base_dir, suffixes))
+        if not self.isdir(base_dir):
+            return 0
+        prefix = base_dir.rstrip("/") + "/"
+        removed = 0
+        for stored in list(self.files):
+            if not (stored == base_dir or stored.startswith(prefix)):
+                continue
+            if stored.endswith(suffixes):
+                del self.files[stored]
+                removed += 1
+        return removed
+
+    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> list[str]:
+        self.extract_calls.append((archive_path, dest_dir, safe_root))
+        if archive_path not in self.files:
+            raise FileNotFoundError(archive_path)
+        # Model the slip-protection: dest_dir must live under safe_root
+        if not (dest_dir == safe_root or dest_dir.startswith(safe_root.rstrip("/") + "/")):
+            raise ValueError(f"Extract directory would be outside safe root: {dest_dir}")
+        # Fake-mode: derive extracted entries from a paired dict the test set.
+        members = getattr(self, "_zip_members", {}).get(archive_path, {})
+        extracted: list[str] = []
+        self.make_dirs(dest_dir)
+        for name, data in members.items():
+            full = os.path.join(dest_dir, name)
+            self.files[full] = data
+            extracted.append(full)
+        return extracted
+
+    def set_zip_members(self, archive_path: str, members: dict[str, bytes]) -> None:
+        if not hasattr(self, "_zip_members"):
+            self._zip_members: dict[str, dict[str, bytes]] = {}
+        self._zip_members[archive_path] = members
+
+    def decode_url_encoded_names(self, directory: str) -> None:
+        import urllib.parse
+
+        self.decode_calls.append(directory)
+        prefix = directory.rstrip("/") + "/"
+        for stored in list(self.files):
+            if not stored.startswith(prefix):
+                continue
+            rel = stored[len(prefix) :]
+            decoded = urllib.parse.unquote(rel)
+            if decoded != rel:
+                new_path = prefix + decoded
+                self.files[new_path] = self.files.pop(stored)
+
+    def scan_files_with_sizes(self, directory: str) -> list[tuple[str, int]]:
+        prefix = directory.rstrip("/") + "/"
+        out: list[tuple[str, int]] = []
+        for stored, data in self.files.items():
+            if stored == directory or stored.startswith(prefix):
+                out.append((stored, len(data)))
+        return out
+
+    def write_text_atomic(self, path: str, content: str) -> None:
+        tmp_path = path + ".tmp"
+        self.tmp_files.add(tmp_path)
+        if self.fail_on_atomic_write:
+            self.tmp_files.discard(tmp_path)
+            raise OSError("simulated atomic-write failure")
+        self.files[path] = content.encode("utf-8")
+        self.tmp_files.discard(tmp_path)
+
+
+class FakeDownloadQueueAdapter:
+    """In-memory ``DownloadQueueAdapter`` for tests.
+
+    Backed by a single ``entries`` list so ``poll_and_clear`` is
+    deterministic. Tests pre-populate ``entries`` to stage queued
+    requests and inspect ``poll_count`` / ``last_path`` for behaviour
+    assertions. ``set_missing(True)`` makes the next ``poll_and_clear``
+    behave as if the file were missing (returns ``[]`` without clearing).
+    """
+
+    def __init__(self, entries: list[dict] | None = None) -> None:
+        self.entries: list[dict] = list(entries) if entries else []
+        self.poll_count: int = 0
+        self.last_path: str | None = None
+        self.missing: bool = False
+
+    def set_missing(self, missing: bool) -> None:
+        self.missing = missing
+
+    def poll_and_clear(self, path: str) -> list[dict]:
+        self.poll_count += 1
+        self.last_path = path
+        if self.missing:
+            return []
+        out = list(self.entries)
+        self.entries.clear()
+        return out
+
+
 class FakeCoreInfoProvider:
     """In-memory CoreInfoProvider for tests.
 
