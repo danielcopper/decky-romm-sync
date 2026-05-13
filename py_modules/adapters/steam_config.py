@@ -14,6 +14,8 @@ import struct
 
 import vdf
 
+from lib.errors import SteamGridDirMissingError
+
 
 class SteamConfigAdapter:
     """Thin wrapper around Steam's on-disk config files."""
@@ -98,12 +100,12 @@ class SteamConfigAdapter:
         Uses a temp file + ``os.replace`` for atomicity; the temp file is
         cleaned up on any failure before the exception propagates.
 
-        Raises ``RuntimeError`` when the Steam grid directory cannot be
-        located.
+        Raises ``lib.errors.SteamGridDirMissingError`` when the Steam grid
+        directory cannot be located.
         """
         grid_dir = self.grid_dir()
         if not grid_dir:
-            raise RuntimeError("Cannot find Steam grid directory")
+            raise SteamGridDirMissingError("Cannot find Steam grid directory")
         icon_path = os.path.join(grid_dir, f"{app_id}_icon.png")
         tmp_path = icon_path + ".tmp"
         try:

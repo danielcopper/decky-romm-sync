@@ -351,6 +351,18 @@ class SettingsPersister(Protocol):
     def __call__(self) -> None: ...
 
 
+class PendingSyncReader(Protocol):
+    """Read seam for the LibraryService pending-sync map.
+
+    SteamGridService consults the pending-sync map when resolving SGDB
+    IDs for ROMs that are mid-sync (not yet in the registry). Exposing
+    this as a Protocol avoids a service-to-service concrete import and
+    keeps the typed seam narrow to "give me the current mapping".
+    """
+
+    def __call__(self) -> dict: ...
+
+
 class SaveSyncStatePersister(Protocol):
     """Read/write the on-disk save-sync state file.
 

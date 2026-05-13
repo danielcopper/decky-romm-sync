@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
 from domain.sgdb_artwork import (
@@ -20,14 +21,14 @@ from domain.sgdb_artwork import (
     sgdb_endpoint_path,
     to_signed_app_id,
 )
-from lib.errors import SgdbApiError
+from lib.errors import SgdbApiError, SteamGridDirMissingError
 
 if TYPE_CHECKING:
     import asyncio
     import logging
-    from collections.abc import Callable
 
     from services.protocols import (
+        PendingSyncReader,
         RommApiProtocol,
         SettingsPersister,
         SgdbArtworkCache,
@@ -35,6 +36,39 @@ if TYPE_CHECKING:
         SteamConfigAdapter,
         SteamGridDbApi,
     )
+
+
+@dataclass(frozen=True)
+class SteamGridConfig:
+    """Frozen wiring bundle handed to ``SteamGridService.__init__``.
+
+    Holds the runtime infrastructure and external callbacks SteamGridService
+    needs at construction time. Live mutable state references (``state``,
+    ``settings``) and abstract Protocol-typed adapters remain explicit ctor
+    parameters because they have different lifecycles from this immutable
+    wiring bundle.
+
+    Parameters
+    ----------
+    loop:
+        The plugin's ``asyncio`` event loop (for ``run_in_executor``).
+    logger:
+        Standard-library logger (replaces ``decky.logger``).
+    save_state:
+        Persists the main plugin state dict to disk.
+    save_settings_to_disk:
+        Persists the live settings dict to disk after API-key updates.
+    get_pending_sync:
+        Read seam returning the current LibraryService pending-sync map.
+        Used to resolve SGDB IDs for ROMs mid-sync that are not yet in
+        the registry.
+    """
+
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    save_state: StatePersister
+    save_settings_to_disk: SettingsPersister
+    get_pending_sync: PendingSyncReader
 
 
 class SteamGridService:
@@ -49,11 +83,7 @@ class SteamGridService:
         sgdb_artwork_cache: SgdbArtworkCache,
         state: dict,
         settings: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        save_state: StatePersister,
-        save_settings_to_disk: SettingsPersister,
-        get_pending_sync: Callable[[], dict],
+        config: SteamGridConfig,
     ) -> None:
         self._sgdb_api = sgdb_api
         self._romm_api = romm_api
@@ -61,11 +91,11 @@ class SteamGridService:
         self._sgdb_artwork_cache = sgdb_artwork_cache
         self._state = state
         self._settings = settings
-        self._loop = loop
-        self._logger = logger
-        self._save_state = save_state
-        self._save_settings_to_disk = save_settings_to_disk
-        self._get_pending_sync = get_pending_sync
+        self._loop = config.loop
+        self._logger = config.logger
+        self._save_state = config.save_state
+        self._save_settings_to_disk = config.save_settings_to_disk
+        self._get_pending_sync = config.get_pending_sync
 
     # -- logging -----------------------------------------------------------
 
@@ -274,7 +304,7 @@ class SteamGridService:
         """Write icon PNG to Steam's grid dir and update shortcuts.vdf icon field."""
         try:
             icon_path = self._steam_config.write_shortcut_icon(app_id, icon_bytes)
-        except RuntimeError as e:
+        except SteamGridDirMissingError as e:
             self._logger.warning(f"Cannot save icon: {e}")
             return False
         except Exception as e:

@@ -13,7 +13,7 @@ from adapters.steam_config import SteamConfigAdapter
 # conftest.py patches decky before this import
 from main import Plugin
 from services.library import LibraryService
-from services.steamgrid import SteamGridService
+from services.steamgrid import SteamGridConfig, SteamGridService
 
 
 @pytest.fixture
@@ -64,11 +64,13 @@ def plugin():
         sgdb_artwork_cache=FakeSgdbArtworkCache(cache_root=decky.DECKY_PLUGIN_RUNTIME_DIR),
         state=p._state,
         settings=p.settings,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        save_state=MagicMock(),
-        save_settings_to_disk=MagicMock(),
-        get_pending_sync=lambda: p._sync_service._pending_sync,
+        config=SteamGridConfig(
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            save_state=MagicMock(),
+            save_settings_to_disk=MagicMock(),
+            get_pending_sync=lambda: p._sync_service._pending_sync,
+        ),
     )
     return p
 

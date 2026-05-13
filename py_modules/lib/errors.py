@@ -12,6 +12,15 @@ class SgdbApiError(Exception):
         self.status_code = status_code
 
 
+class SteamGridDirMissingError(Exception):
+    """Raised when the Steam grid directory cannot be located.
+
+    Distinguishes the "expected, user-recoverable" missing-grid-dir
+    condition from generic write failures so callers can route the
+    two cases through different log levels.
+    """
+
+
 class RommApiError(Exception):
     """Base exception for all RomM HTTP API errors."""
 

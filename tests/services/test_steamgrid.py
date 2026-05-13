@@ -8,12 +8,12 @@ from conftest import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.steam_config import SteamConfigAdapter
-from lib.errors import SgdbApiError
+from lib.errors import SgdbApiError, SteamGridDirMissingError
 
 # conftest.py patches decky before this import
 from main import Plugin
 from services.library import LibraryService
-from services.steamgrid import SteamGridService
+from services.steamgrid import SteamGridConfig, SteamGridService
 
 
 @pytest.fixture
@@ -63,11 +63,13 @@ def plugin(sgdb_artwork_cache):
         sgdb_artwork_cache=sgdb_artwork_cache,
         state=p._state,
         settings=p.settings,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        save_state=MagicMock(),
-        save_settings_to_disk=MagicMock(),
-        get_pending_sync=lambda: p._sync_service._pending_sync,
+        config=SteamGridConfig(
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            save_state=MagicMock(),
+            save_settings_to_disk=MagicMock(),
+            get_pending_sync=lambda: p._sync_service._pending_sync,
+        ),
     )
     return p
 
@@ -608,10 +610,10 @@ class TestSaveShortcutIcon:
     def test_save_icon_to_grid_no_grid_dir(self, plugin):
         """Should return False if the grid directory cannot be found."""
 
-        def raise_runtime(_app_id, _bytes):
-            raise RuntimeError("Cannot find Steam grid directory")
+        def raise_missing(_app_id, _bytes):
+            raise SteamGridDirMissingError("Cannot find Steam grid directory")
 
-        plugin._steam_config.write_shortcut_icon = raise_runtime  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcut_icon = raise_missing  # type: ignore[method-assign]
 
         result = plugin._sgdb_service._save_icon_to_grid(12345, b"data")
         assert result is False
@@ -689,3 +691,34 @@ class TestSaveShortcutIcon:
         result = await plugin.save_shortcut_icon(12345, "not-valid-base64!!!")
 
         assert result["success"] is False
+
+
+class TestFakeSgdbArtworkCacheAtomicWrite:
+    """Unit tests for the in-memory fake's ``write_bytes_atomic`` round-trip.
+
+    Verifies the fake models the real adapter's ``path.tmp`` -> ``os.replace``
+    sequence so service-layer tests can exercise atomic-write failure paths
+    through the same Protocol seam.
+    """
+
+    def test_happy_path_writes_final_and_clears_tmp(self):
+        cache = FakeSgdbArtworkCache()
+        dest = os.path.join(cache.cache_dir(), "42_hero.png")
+
+        cache.write_bytes_atomic(dest, b"payload")
+
+        assert cache.files[dest] == b"payload"
+        assert (dest + ".tmp") not in cache.files
+        assert cache.tmp_files == set()
+
+    def test_failure_cleans_tmp_and_raises(self):
+        cache = FakeSgdbArtworkCache()
+        cache.fail_on_atomic_write = True
+        dest = os.path.join(cache.cache_dir(), "42_hero.png")
+
+        with pytest.raises(OSError, match="simulated atomic-write failure"):
+            cache.write_bytes_atomic(dest, b"payload")
+
+        assert dest not in cache.files
+        assert (dest + ".tmp") not in cache.files
+        assert cache.tmp_files == set()

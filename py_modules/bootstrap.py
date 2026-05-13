@@ -60,7 +60,7 @@ from services.protocols import SteamConfigAdapter as SteamConfigProtocol
 from services.rom_removal import RomRemovalService
 from services.saves import SaveService, SaveServiceConfig
 from services.shortcut_removal import ShortcutRemovalService
-from services.steamgrid import SteamGridService
+from services.steamgrid import SteamGridConfig, SteamGridService
 
 
 @dataclass(frozen=True)
@@ -376,11 +376,13 @@ def wire_services(cfg: WiringConfig) -> dict:
         sgdb_artwork_cache=cfg.adapters.sgdb_artwork_cache,
         state=cfg.stores.state,
         settings=cfg.stores.settings,
-        loop=cfg.runtime.loop,
-        logger=cfg.runtime.logger,
-        save_state=cfg.callbacks.save_state,
-        save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
-        get_pending_sync=lambda: sync_service.pending_sync,
+        config=SteamGridConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            save_state=cfg.callbacks.save_state,
+            save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
+            get_pending_sync=lambda: sync_service.pending_sync,
+        ),
     )
 
     achievements_service = AchievementsService(

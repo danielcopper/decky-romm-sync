@@ -6,6 +6,7 @@ import pytest
 import vdf
 
 from adapters.steam_config import SteamConfigAdapter
+from lib.errors import SteamGridDirMissingError
 
 
 @pytest.fixture
@@ -226,7 +227,7 @@ class TestWriteShortcutIcon:
 
     def test_raises_when_no_grid_dir(self, tmp_path):
         adapter = SteamConfigAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
-        with pytest.raises(RuntimeError, match="grid directory"):
+        with pytest.raises(SteamGridDirMissingError, match="grid directory"):
             adapter.write_shortcut_icon(12345, b"data")
 
     def test_cleans_tmp_on_failure(self, tmp_path):
