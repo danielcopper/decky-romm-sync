@@ -590,23 +590,22 @@ class DownloadFileAdapter(Protocol):
         """Return the free space in bytes for the filesystem hosting *path*."""
         ...
 
-    def clean_tmp_files(self, base_dir: str, suffixes: tuple[str, ...]) -> int:
-        """Recursively remove files under *base_dir* whose name ends with any of *suffixes*.
+    def walk_files_matching_suffixes(self, base_dir: str, suffixes: tuple[str, ...]) -> list[str]:
+        """Recursively list files under *base_dir* whose name ends with any of *suffixes*.
 
-        Returns the number of files removed. Idempotent on missing
-        *base_dir* (returns 0). Per-file errors are swallowed so a
-        single failure does not block the rest of the sweep.
+        Returns absolute paths. Idempotent on missing *base_dir*
+        (returns ``[]``). Pure listing — does not mutate the filesystem;
+        callers own the removal loop and any per-file error handling.
         """
         ...
 
-    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> list[str]:
+    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> None:
         """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
 
         *safe_root* is the boundary outside of which extraction is
         rejected. Implementations resolve both *dest_dir* and *safe_root*
         via ``os.path.realpath`` and verify that every member resolves
-        within *safe_root* before extracting. Returns the list of
-        extracted absolute file paths.
+        within *safe_root* before extracting.
         """
         ...
 

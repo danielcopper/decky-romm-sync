@@ -50,35 +50,27 @@ class DownloadFileAdapter:
         """Return the free space in bytes for the filesystem hosting *path*."""
         return shutil.disk_usage(path).free
 
-    def clean_tmp_files(self, base_dir: str, suffixes: tuple[str, ...]) -> int:
-        """Recursively remove files under *base_dir* matching any of *suffixes*.
+    def walk_files_matching_suffixes(self, base_dir: str, suffixes: tuple[str, ...]) -> list[str]:
+        """Recursively list files under *base_dir* matching any of *suffixes*.
 
-        Returns the number of files removed. Idempotent on missing
-        *base_dir* (returns ``0``). Per-file ``OSError``s are swallowed
-        so one permission failure doesn't block the remaining sweep.
+        Returns absolute paths. Idempotent on missing *base_dir*
+        (returns ``[]``). Pure listing — does not mutate the filesystem.
         """
         if not os.path.isdir(base_dir):
-            return 0
-        cleaned = 0
+            return []
+        matches: list[str] = []
         for root, _dirs, files in os.walk(base_dir):
             for filename in files:
-                if not filename.endswith(suffixes):
-                    continue
-                full_path = os.path.join(root, filename)
-                try:
-                    os.remove(full_path)
-                    cleaned += 1
-                except OSError:
-                    continue
-        return cleaned
+                if filename.endswith(suffixes):
+                    matches.append(os.path.join(root, filename))
+        return matches
 
-    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> list[str]:
+    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> None:
         """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
 
         Resolves both *dest_dir* and *safe_root* via ``os.path.realpath``
         and verifies that every ZIP member resolves within both before
         extracting. Raises ``ValueError`` on any escape attempt.
-        Returns the list of extracted absolute file paths.
         """
         real_dest = os.path.realpath(dest_dir)
         real_safe = os.path.realpath(safe_root)
@@ -90,8 +82,6 @@ class DownloadFileAdapter:
                 if not (member_path == real_dest or member_path.startswith(real_dest + os.sep)):
                     raise ValueError(f"ZIP member {member} would extract outside target directory")
             zf.extractall(real_dest)
-            names = zf.namelist()
-        return [os.path.join(real_dest, name) for name in names]
 
     def decode_url_encoded_names(self, directory: str) -> None:
         """Rename URL-encoded files and directories under *directory* in place.

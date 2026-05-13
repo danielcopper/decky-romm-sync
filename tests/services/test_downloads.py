@@ -509,38 +509,6 @@ class TestDiskSpaceMultiFile:
         assert result["success"] is True
 
 
-class TestPollDownloadRequestsIO:
-    """Tests for _poll_download_requests_io — file-based IPC."""
-
-    def test_reads_and_clears_requests(self, plugin, tmp_path):
-        requests_path = tmp_path / "download_requests.json"
-        requests_path.write_text(json.dumps([{"rom_id": 42}, {"rom_id": 99}]))
-        result = plugin._download_service._poll_download_requests_io(str(requests_path))
-        assert len(result) == 2
-        assert result[0]["rom_id"] == 42
-        assert result[1]["rom_id"] == 99
-        # File should be cleared
-        with open(str(requests_path)) as f:
-            remaining = json.load(f)
-        assert remaining == []
-
-    def test_empty_file_returns_empty(self, plugin, tmp_path):
-        requests_path = tmp_path / "download_requests.json"
-        requests_path.write_text(json.dumps([]))
-        result = plugin._download_service._poll_download_requests_io(str(requests_path))
-        assert result == []
-
-    def test_missing_file_returns_empty(self, plugin, tmp_path):
-        result = plugin._download_service._poll_download_requests_io(str(tmp_path / "nonexistent.json"))
-        assert result == []
-
-    def test_invalid_json_returns_empty(self, plugin, tmp_path):
-        requests_path = tmp_path / "download_requests.json"
-        requests_path.write_text("not valid json {{{{")
-        result = plugin._download_service._poll_download_requests_io(str(requests_path))
-        assert result == []
-
-
 class TestDownloadRequestPolling:
     @pytest.mark.asyncio
     async def test_processes_download_request(self, plugin, tmp_path):
@@ -612,21 +580,17 @@ class TestPollDownloadRequestsMigrationPause:
 
         plugin._download_service._sleeper = _CancellingSleeper()
 
-        # Track whether the request file IO was invoked.
-        io_called = [False]
-        original_io = plugin._download_service._poll_download_requests_io
+        # Track whether the request file IO was invoked via the queue adapter.
+        from conftest import FakeDownloadQueueAdapter
 
-        def tracking_io(path):
-            io_called[0] = True
-            return original_io(path)
-
-        plugin._download_service._poll_download_requests_io = tracking_io
+        tracking_queue = FakeDownloadQueueAdapter()
+        plugin._download_service._download_queue_io = tracking_queue
 
         with pytest.raises(asyncio.CancelledError):
             await plugin._download_service.poll_download_requests()
 
         # IO must NOT have been called while migration was pending.
-        assert io_called[0] is False
+        assert tracking_queue.poll_count == 0
         # Request file must still hold its original contents — not truncated.
         with open(requests_path) as f:
             assert json.load(f) == original_payload
@@ -1713,24 +1677,41 @@ class TestCleanupLeftoverTmpFiles:
         # No retrodeck/roms directory exists — should not crash
         plugin._download_service.cleanup_leftover_tmp_files()
 
-    def test_handles_permission_error(self, plugin, tmp_path):
+    def test_handles_permission_error(self, plugin, tmp_path, caplog):
+        import logging
+
         import decky
+        from conftest import FakeDownloadFileAdapter
 
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
         plugin._download_service._get_bios_path = lambda: str(tmp_path / "retrodeck" / "bios")
         plugin._rom_removal_service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
 
-        system_dir = tmp_path / "retrodeck" / "roms" / "n64"
-        system_dir.mkdir(parents=True)
-        tmp_file = system_dir / "zelda.z64.tmp"
-        tmp_file.write_text("partial")
+        # Stage a virtual tmp file via the fake adapter so the service can
+        # discover it via walk_files_matching_suffixes; the fake's
+        # ``remove_failures`` set makes the subsequent remove raise OSError.
+        roms_base = str(tmp_path / "retrodeck" / "roms")
+        bios_base = str(tmp_path / "retrodeck" / "bios")
+        tmp_file_path = os.path.join(roms_base, "n64", "zelda.z64.tmp")
 
-        # Adapter rejects deletion (e.g. permission denied) — the service
-        # must not raise; the file remains on disk.
-        plugin._download_service._download_files.clean_tmp_files = lambda _base, _suffixes: 0
-        plugin._download_service.cleanup_leftover_tmp_files()
-        assert tmp_file.exists()
+        fake = FakeDownloadFileAdapter()
+        fake.make_dirs(roms_base)
+        fake.make_dirs(bios_base)
+        fake.files[tmp_file_path] = b"partial"
+        fake.remove_failures.add(tmp_file_path)
+        plugin._download_service._download_files = fake
+
+        with caplog.at_level(logging.WARNING, logger="test_romm"):
+            plugin._download_service.cleanup_leftover_tmp_files()
+
+        # Per-file warning must be emitted; sister-PR pattern in
+        # SteamGridService.prune_orphaned_artwork_cache.
+        assert any(
+            "Failed to remove tmp file" in rec.message and tmp_file_path in rec.message for rec in caplog.records
+        ), f"expected warning about {tmp_file_path}, got {[r.message for r in caplog.records]}"
+        # File still present in fake — service swallowed the OSError.
+        assert tmp_file_path in fake.files
 
 
 class TestRemoveRomCleansSaveSyncState:

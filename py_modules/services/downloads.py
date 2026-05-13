@@ -137,29 +137,45 @@ class DownloadService:
             del self._download_queue[rid]
         return {"success": True, "removed": len(terminal_ids)}
 
+    def _remove_tmp_files(self, paths: list[str]) -> int:
+        """Remove each path in *paths*, logging a warning on per-file failure.
+
+        Returns the count of successful removals. Mirrors the
+        SteamGridService cache-prune pattern: service owns the loop +
+        ``try``/``except`` + ``logger.warning`` so the operational
+        signal on each failure is preserved instead of being swallowed
+        inside the adapter.
+        """
+        removed = 0
+        for path in paths:
+            try:
+                self._download_files.remove(path)
+                removed += 1
+            except OSError as e:
+                self._logger.warning(f"Failed to remove tmp file {path}: {e}")
+        return removed
+
     def _clean_rom_tmp_files(self):
         """Remove leftover .tmp and .zip.tmp files from ROM directories."""
         roms_base = self._get_roms_path() if self._get_roms_path else ""
         if not roms_base:
             return 0
-        return self._download_files.clean_tmp_files(roms_base, (_TMP_EXT, _ZIP_TMP_EXT))
+        paths = self._download_files.walk_files_matching_suffixes(roms_base, (_TMP_EXT, _ZIP_TMP_EXT))
+        return self._remove_tmp_files(paths)
 
     def _clean_bios_tmp_files(self):
         """Remove leftover .tmp files from BIOS directory."""
         bios_base = self._get_bios_path() if self._get_bios_path else ""
         if not bios_base:
             return 0
-        return self._download_files.clean_tmp_files(bios_base, (_TMP_EXT,))
+        paths = self._download_files.walk_files_matching_suffixes(bios_base, (_TMP_EXT,))
+        return self._remove_tmp_files(paths)
 
     def cleanup_leftover_tmp_files(self):
         """Remove leftover .tmp and .zip.tmp files from ROM and BIOS directories on startup."""
         cleaned = self._clean_rom_tmp_files() + self._clean_bios_tmp_files()
         if cleaned:
             self._logger.info(f"Cleaned {cleaned} leftover tmp file(s)")
-
-    def _poll_download_requests_io(self, requests_path):
-        """Sync helper for poll_download_requests — file lock + read + write in executor."""
-        return self._download_queue_io.poll_and_clear(requests_path)
 
     async def poll_download_requests(self):
         """Poll for download requests from the launcher script."""
@@ -168,12 +184,12 @@ class DownloadService:
             try:
                 await self._sleeper.sleep(2)
                 # Pause polling while a RetroDECK migration is pending — must
-                # short-circuit BEFORE _poll_download_requests_io reads + clears
-                # the request file, otherwise queued requests would be silently
+                # short-circuit BEFORE poll_and_clear reads + clears the
+                # request file, otherwise queued requests would be silently
                 # dropped on the floor.
                 if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
                     continue
-                requests = await self._loop.run_in_executor(None, self._poll_download_requests_io, requests_path)
+                requests = await self._loop.run_in_executor(None, self._download_queue_io.poll_and_clear, requests_path)
                 if not requests:
                     continue
                 for req in requests:

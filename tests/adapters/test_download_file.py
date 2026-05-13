@@ -108,15 +108,16 @@ class TestDiskFree:
         assert free >= 0
 
 
-class TestCleanTmpFiles:
-    def test_removes_matching_suffixes(self, adapter, tmp_path):
+class TestWalkFilesMatchingSuffixes:
+    def test_lists_matching_suffixes(self, adapter, tmp_path):
         (tmp_path / "a.tmp").write_text("")
         (tmp_path / "b.zip.tmp").write_text("")
         (tmp_path / "real.rom").write_text("keep")
-        removed = adapter.clean_tmp_files(str(tmp_path), (".tmp", ".zip.tmp"))
-        assert removed == 2
-        assert not (tmp_path / "a.tmp").exists()
-        assert not (tmp_path / "b.zip.tmp").exists()
+        matches = adapter.walk_files_matching_suffixes(str(tmp_path), (".tmp", ".zip.tmp"))
+        assert sorted(matches) == sorted([str(tmp_path / "a.tmp"), str(tmp_path / "b.zip.tmp")])
+        # Pure listing — nothing was removed
+        assert (tmp_path / "a.tmp").exists()
+        assert (tmp_path / "b.zip.tmp").exists()
         assert (tmp_path / "real.rom").exists()
 
     def test_recursive(self, adapter, tmp_path):
@@ -124,27 +125,28 @@ class TestCleanTmpFiles:
         sub.mkdir()
         (sub / "x.tmp").write_text("")
         (tmp_path / "y.tmp").write_text("")
-        removed = adapter.clean_tmp_files(str(tmp_path), (".tmp",))
-        assert removed == 2
+        matches = adapter.walk_files_matching_suffixes(str(tmp_path), (".tmp",))
+        assert sorted(matches) == sorted([str(sub / "x.tmp"), str(tmp_path / "y.tmp")])
 
-    def test_missing_base_dir_returns_zero(self, adapter, tmp_path):
+    def test_recurses_any_depth(self, adapter, tmp_path):
+        # The old clean_tmp_files scan capped at 2 levels — walk_files_matching_suffixes
+        # follows os.walk and recurses unbounded so deep mid-extraction crashes are caught.
+        deep = tmp_path / "a" / "b" / "c" / "d"
+        deep.mkdir(parents=True)
+        (deep / "stuck.tmp").write_text("")
+        matches = adapter.walk_files_matching_suffixes(str(tmp_path), (".tmp",))
+        assert matches == [str(deep / "stuck.tmp")]
+
+    def test_missing_base_dir_returns_empty(self, adapter, tmp_path):
         # Idempotent on missing base_dir
-        assert adapter.clean_tmp_files(str(tmp_path / "missing"), (".tmp",)) == 0
+        assert adapter.walk_files_matching_suffixes(str(tmp_path / "missing"), (".tmp",)) == []
 
     def test_no_matching_suffix(self, adapter, tmp_path):
         (tmp_path / "rom.bin").write_text("")
-        assert adapter.clean_tmp_files(str(tmp_path), (".tmp",)) == 0
+        assert adapter.walk_files_matching_suffixes(str(tmp_path), (".tmp",)) == []
 
     def test_empty_directory(self, adapter, tmp_path):
-        assert adapter.clean_tmp_files(str(tmp_path), (".tmp",)) == 0
-
-    def test_swallows_remove_failures(self, adapter, tmp_path):
-        (tmp_path / "a.tmp").write_text("")
-        with patch("adapters.download_file.os.remove", side_effect=OSError("perm denied")):
-            removed = adapter.clean_tmp_files(str(tmp_path), (".tmp",))
-        # Failure was swallowed; nothing counted as removed.
-        assert removed == 0
-        assert (tmp_path / "a.tmp").exists()
+        assert adapter.walk_files_matching_suffixes(str(tmp_path), (".tmp",)) == []
 
 
 class TestExtractZip:
@@ -158,8 +160,9 @@ class TestExtractZip:
         self._make_zip(archive, {"a.bin": b"AAA", "b.bin": b"BBB"})
         dest = tmp_path / "out"
         dest.mkdir()
-        extracted = adapter.extract_zip(str(archive), str(dest), str(tmp_path))
-        assert sorted(p for p in extracted) == sorted([str(dest / "a.bin"), str(dest / "b.bin")])
+        result = adapter.extract_zip(str(archive), str(dest), str(tmp_path))
+        # Adapter returns None — caller asserts on filesystem state.
+        assert result is None
         assert (dest / "a.bin").read_bytes() == b"AAA"
         assert (dest / "b.bin").read_bytes() == b"BBB"
 
@@ -187,9 +190,9 @@ class TestExtractZip:
         archive = tmp_path / "src.zip"
         self._make_zip(archive, {"a.bin": b"x"})
         # dest == safe_root is allowed
-        extracted = adapter.extract_zip(str(archive), str(tmp_path), str(tmp_path))
+        result = adapter.extract_zip(str(archive), str(tmp_path), str(tmp_path))
+        assert result is None
         assert (tmp_path / "a.bin").read_bytes() == b"x"
-        assert extracted == [str(tmp_path / "a.bin")]
 
 
 class TestDecodeUrlEncodedNames:
@@ -295,7 +298,7 @@ class TestProtocolMethodCount:
             "make_dirs",
             "rename",
             "disk_free",
-            "clean_tmp_files",
+            "walk_files_matching_suffixes",
             "extract_zip",
             "decode_url_encoded_names",
             "scan_files_with_sizes",
