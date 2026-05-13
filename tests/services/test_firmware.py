@@ -4,10 +4,11 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeFirmwareFileAdapter
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
 
+from adapters.firmware_file import FirmwareFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -51,6 +52,7 @@ def plugin():
         clock=_make_clock(),
         save_state=MagicMock(),
         firmware_cache_persister=FakeFirmwareCachePersister(),
+        firmware_files=FirmwareFileAdapter(),
         get_bios_path=MagicMock(return_value=""),
         core_info=FakeCoreInfoProvider(),
     )
@@ -1553,6 +1555,7 @@ class TestFirmwareListCache:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
+            firmware_files=FirmwareFileAdapter(),
             get_bios_path=MagicMock(return_value=""),
             core_info=FakeCoreInfoProvider(),
         )
@@ -1659,6 +1662,7 @@ class TestCheckPlatformBiosCached:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
+            firmware_files=FirmwareFileAdapter(),
             get_bios_path=MagicMock(return_value=""),
             core_info=core_info,
         )
@@ -1736,6 +1740,7 @@ class TestCheckPlatformBiosCached:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
+            firmware_files=FirmwareFileAdapter(),
             get_bios_path=MagicMock(return_value=""),
             core_info=core_info,
         )
@@ -1769,6 +1774,7 @@ class TestFirmwareCachePersistence:
             clock=clock,
             save_state=MagicMock(),
             firmware_cache_persister=persister,
+            firmware_files=FirmwareFileAdapter(),
             get_bios_path=MagicMock(return_value=""),
             core_info=FakeCoreInfoProvider(),
         )
@@ -1792,6 +1798,7 @@ class TestFirmwareCachePersistence:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=persister,
+            firmware_files=FirmwareFileAdapter(),
             get_bios_path=MagicMock(return_value=""),
             core_info=FakeCoreInfoProvider(),
         )
@@ -1811,6 +1818,7 @@ class TestFirmwareCachePersistence:
             clock=_make_clock(),
             save_state=MagicMock(),
             firmware_cache_persister=persister,
+            firmware_files=FirmwareFileAdapter(),
             get_bios_path=MagicMock(return_value=""),
             core_info=FakeCoreInfoProvider(),
         )
@@ -1855,3 +1863,100 @@ class TestFirmwareCachePersistence:
 
         assert result == firmware_list
         assert fw._firmware_cache == firmware_list
+
+
+class TestEnrichFirmwareFileReturnsNewDict:
+    """Regression coverage for #170 — _enrich_firmware_file must not mutate its input."""
+
+    def test_input_dict_is_not_mutated(self, fw):
+        """Calling _enrich_firmware_file leaves the caller's dict untouched."""
+        fw._bios_files_index = {
+            "scph5501.bin": {
+                "description": "PS1 BIOS",
+                "required": True,
+                "md5": "abc",
+                "platform": "psx",
+            },
+        }
+        original = {"file_name": "scph5501.bin", "md5": "abc"}
+        snapshot = dict(original)
+
+        result = fw._enrich_firmware_file(original)
+
+        # Caller's dict still has only the original keys.
+        assert original == snapshot
+        # Returned dict carries the enrichment.
+        assert result is not original
+        assert result["required"] is True
+        assert result["description"] == "PS1 BIOS"
+        assert result["classification"] == "required"
+        assert result["hash_valid"] is True
+
+    def test_unknown_file_does_not_mutate_input(self, fw):
+        """The unknown-file branch must also return a new dict."""
+        fw._bios_files_index = {}
+        original = {"file_name": "mystery.bin", "md5": ""}
+        snapshot = dict(original)
+
+        result = fw._enrich_firmware_file(original)
+
+        assert original == snapshot
+        assert result is not original
+        assert result["classification"] == "unknown"
+        assert result["required"] is False
+
+
+class TestDeletePlatformBiosIOLogsWarnings:
+    """Coverage for the OSError-warning path in _delete_platform_bios_io."""
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_and_collects_error_when_remove_fails(self, plugin, fw, caplog):
+        """A per-file OSError surfaces as a logger.warning and an error entry."""
+        import logging
+
+        fake_files = FakeFirmwareFileAdapter()
+        fake_files.remove_failures.add("/fake/bios/scph5501.bin")
+        fw._firmware_files = fake_files
+
+        async def mock_check(slug, rom_filename=None):
+            return {
+                "needs_bios": True,
+                "files": (
+                    BiosFileEntry(
+                        file_name="scph5501.bin",
+                        downloaded=True,
+                        local_path="/fake/bios/scph5501.bin",
+                        required=True,
+                        description="PS1 BIOS",
+                        classification="required",
+                        cores={},
+                        used_by_active=True,
+                    ),
+                    BiosFileEntry(
+                        file_name="scph5502.bin",
+                        downloaded=True,
+                        local_path="/fake/bios/scph5502.bin",
+                        required=True,
+                        description="PS1 BIOS (EU)",
+                        classification="required",
+                        cores={},
+                        used_by_active=True,
+                    ),
+                ),
+            }
+
+        fw.check_platform_bios = mock_check
+        plugin._state["downloaded_bios"]["scph5501.bin"] = {"file_path": "/fake/bios/scph5501.bin"}
+        plugin._state["downloaded_bios"]["scph5502.bin"] = {"file_path": "/fake/bios/scph5502.bin"}
+
+        with caplog.at_level(logging.WARNING):
+            result = await fw.delete_platform_bios("psx")
+
+        # One file deleted (the second), one failed with a logged warning.
+        assert result["success"] is False
+        assert result["deleted_count"] == 1
+        assert any("scph5501.bin" in record.getMessage() for record in caplog.records)
+        # The failing file's state entry must remain (it wasn't actually removed).
+        assert "scph5501.bin" in plugin._state["downloaded_bios"]
+        # The successful file's state entry is cleared.
+        assert "scph5502.bin" not in plugin._state["downloaded_bios"]

@@ -17,6 +17,7 @@ from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.download_file import DownloadFileAdapter as DownloadFileAdapterImpl
 from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapterImpl
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
+from adapters.firmware_file import FirmwareFileAdapter as FirmwareFileAdapterImpl
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -48,6 +49,7 @@ from services.protocols import (
     DownloadQueueAdapter,
     EventEmitter,
     FirmwareCachePersister,
+    FirmwareFileAdapter,
     RetroArchSaveSortingProvider,
     RetroDeckHomeProvider,
     RommApiProtocol,
@@ -79,6 +81,7 @@ class AdapterBundle:
     sgdb_artwork_cache: SgdbArtworkCache
     download_files: DownloadFileAdapter
     download_queue: DownloadQueueAdapter
+    firmware_files: FirmwareFileAdapter
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,7 @@ def bootstrap(
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
     download_files = DownloadFileAdapterImpl()
     download_queue = DownloadQueueAdapterImpl()
+    firmware_files = FirmwareFileAdapterImpl()
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
@@ -196,6 +200,7 @@ def bootstrap(
         "sgdb_artwork_cache": sgdb_artwork_cache,
         "download_files": download_files,
         "download_queue": download_queue,
+        "firmware_files": firmware_files,
         "retrodeck_paths": retrodeck_paths,
         "retroarch_config": retroarch_config,
         "retroarch_core_info": retroarch_core_info,
@@ -379,6 +384,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         clock=cfg.runtime.clock,
         save_state=cfg.callbacks.save_state,
         firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
+        firmware_files=cfg.adapters.firmware_files,
         get_bios_path=cfg.callbacks.get_bios_path,
         core_info=cfg.callbacks.core_info_provider,
     )

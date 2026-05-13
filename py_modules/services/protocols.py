@@ -659,6 +659,45 @@ class DownloadQueueAdapter(Protocol):
         ...
 
 
+class FirmwareFileAdapter(Protocol):
+    """Filesystem seam for firmware/BIOS file operations.
+
+    Owns the raw POSIX calls FirmwareService uses to manage firmware
+    downloads under the RetroDECK BIOS directory: existence probes,
+    atomic temp-file lifecycle, parent-directory creation, MD5 hashing
+    of downloaded payloads, and BIOS registry JSON reads. Path
+    construction, registry lookups, and download orchestration remain a
+    service concern; this Protocol exposes only the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def remove(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def checksum_md5(self, path: str) -> str:
+        """Return the hex-encoded MD5 digest of *path*'s contents."""
+        ...
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        ...
+
+
 class SgdbArtworkCache(Protocol):
     """Filesystem seam for the SteamGridDB artwork cache directory.
 
