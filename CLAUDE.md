@@ -77,21 +77,24 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
 - **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295)) — **complete**
   Pure logic extracted from non-saves services into `domain/`.
   Done: ~~#315~~ (firmware paths), ~~#316~~ (achievements), ~~#317~~ (path safety + mise lint bundle), ~~#318~~ (filename resolution), ~~#319~~ (sync_diff cluster).
-- **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2)
-  - [#299](https://github.com/danielcopper/decky-romm-sync/issues/299) ArtworkService + SteamGridService — small, do as one chunk
-  - [#297](https://github.com/danielcopper/decky-romm-sync/issues/297) DownloadService
-  - [#298](https://github.com/danielcopper/decky-romm-sync/issues/298) FirmwareService — fold [#301](https://github.com/danielcopper/decky-romm-sync/issues/301) GameDetailService in alongside (shares `CoreInfoProvider`)
-  - [#302](https://github.com/danielcopper/decky-romm-sync/issues/302) MigrationService — decision first (#293), then act
-  - [#300](https://github.com/danielcopper/decky-romm-sync/issues/300) LibraryService **last** — by then most of its un-injected deps and pure logic have moved out
+- **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2). Each epic body lists exact remaining work; native Sub-Issues panel is source of truth for open sub-issues.
+  - [#299](https://github.com/danielcopper/decky-romm-sync/issues/299) ArtworkService + SteamGridService — two sub-issues: #290 (artwork file I/O), #291 (steamgrid file I/O). Do as one chunk.
+  - [#297](https://github.com/danielcopper/decky-romm-sync/issues/297) DownloadService — one sub-issue: #243 (file I/O). Clock+Sleeper already wired; `_resolve_local_file_name` already in `domain/rom_files`.
+  - [#298](https://github.com/danielcopper/decky-romm-sync/issues/298) FirmwareService — two sub-issues: #288 (file I/O), #170 (mutation fix). Cache persister, Clock, CoreInfoProvider, firmware path helpers all wired in Wave 1/2.
+  - ~~#301~~ GameDetailService — **closed as superseded**. All scope (Clock, CoreInfoProvider) wired via Wave 1.
+  - [#302](https://github.com/danielcopper/decky-romm-sync/issues/302) MigrationService — decision first (#293), then act.
+  - [#300](https://github.com/danielcopper/decky-romm-sync/issues/300) LibraryService **last** — one sub-issue: #172 (ctor params). Service has zero remaining direct-I/O / time / random violations after Waves 1+2; what's left is structural.
 - **Wave 4 — Close-out**
   - #274 main.py callable thinness audit (last, after services have settled)
   - #277 final verification — tick all checklist items, close
 
 **Saves vertical** ([#254](https://github.com/danielcopper/decky-romm-sync/issues/254)) runs in parallel — independent of the waves above.
 
-**Why this order**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical means every later PR is "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrinks the scariest service before lifting it. LibraryService last because it has the largest blast radius.
+**Why this order**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical means every later PR is "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrunk the scariest service before lifting it. LibraryService last because it has the largest blast radius.
 
-When picking work: Waves 1 and 2 are finished (modulo deferred #259), so every per-service vertical's Protocol and domain dependencies are in place. Wave 3 (#297–#302) is the next active wave.
+When picking work: Waves 1 and 2 are finished (modulo deferred #259), so every per-service vertical's Protocol and domain dependencies are in place. Wave 3 (#297, #298, #299, #300, #302) is the next active wave.
+
+**Sub-issue policy**: Epic bodies do **not** carry markdown sub-issue lists — open work is tracked via GitHub's native Sub-Issues panel on each epic. If a new sub-issue is needed, link it natively (don't add a body bullet).
 
 ## Sub-package layout — `__init__.py` is re-export only
 
