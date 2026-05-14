@@ -4,9 +4,9 @@ from typing import TYPE_CHECKING
 
 from models.saves import SaveConflict
 
+from domain.save_attribution import compute_uploaded_by_us
 from domain.sync_action import Conflict, Skip
 from lib.iso_time import parse_iso_to_epoch
-from services.saves._helpers import _compute_uploaded_by_us
 from services.saves.status.builders import (
     _build_file_status,
     _resolve_chosen_server,
@@ -66,7 +66,7 @@ class StatusService:
             last_sync_at=outcome.file_state.get("last_sync_at"),
             status=_status_from_action(action),
             server_device_id=server_device_id,
-            uploaded_by_us=_compute_uploaded_by_us(chosen_server, own_upload_ids),
+            uploaded_by_us=compute_uploaded_by_us(chosen_server, own_upload_ids),
         )
         conflict_entry: dict | None = None
         if isinstance(action, Conflict):

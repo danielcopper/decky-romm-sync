@@ -1,7 +1,9 @@
-"""Save file path resolution for RetroArch save directory layouts.
+"""Save file path and filename resolution for RetroArch save directory layouts.
 
 Handles the various save directory structures created by RetroArch's
-sort_savefiles_by_content_enable and sort_savefiles_enable settings.
+sort_savefiles_by_content_enable and sort_savefiles_enable settings,
+plus deriving the canonical local filename for a server-supplied save
+record.
 
 No I/O, no service/adapter/lib imports. Pure functions only.
 """
@@ -9,6 +11,7 @@ No I/O, no service/adapter/lib imports. Pure functions only.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 
 def resolve_save_dir(
@@ -110,6 +113,51 @@ def sanitize_save_filename(name: str) -> str:
     if base in ("", ".", ".."):
         raise ValueError(f"filename has no valid basename: {name!r}")
     return base
+
+
+@dataclass(frozen=True)
+class LocalSaveTarget:
+    """Resolved local filename for a server save with sanitization diagnostics.
+
+    ``filename`` is the canonical on-disk name.
+
+    ``fallback_extension`` is set to the offending value when the
+    server-supplied ``file_extension`` produced an unusable filename and
+    the function fell back to ``"srm"``. Service callers should log a
+    warning when this is non-None.
+
+    ``sanitized_from`` is set to the pre-sanitization filename when
+    path-traversal characters were stripped (e.g. ``../etc/passwd``).
+    Service callers should log a warning when this is non-None.
+
+    Both flags are mutually exclusive: an unusable extension triggers
+    fallback; a sanitizable one triggers strip-and-keep.
+    """
+
+    filename: str
+    fallback_extension: str | None = None
+    sanitized_from: str | None = None
+
+
+def compute_local_save_target(server_save: dict, rom_name: str) -> LocalSaveTarget:
+    """The canonical local filename for a server save: ``<rom_name>.<ext>``.
+
+    ``rom_name`` is the deterministic identity from RetroArch's
+    perspective — the ROM file's basename without extension, the same
+    string RetroArch uses to look up SRAM. Callers must have already
+    resolved the ROM via an "installed?" check; there is no fallback to
+    server-derived names because those can mismatch RetroArch's lookup
+    path and silently break the sync.
+    """
+    ext = server_save.get("file_extension", "srm")
+    target = f"{rom_name}.{ext}"
+    try:
+        sanitized = sanitize_save_filename(target)
+    except ValueError:
+        return LocalSaveTarget(f"{rom_name}.srm", fallback_extension=ext)
+    if sanitized != target:
+        return LocalSaveTarget(sanitized, sanitized_from=target)
+    return LocalSaveTarget(sanitized)
 
 
 def detect_path_change(stored_path: str | None, resolved_path: str) -> bool:
