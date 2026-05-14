@@ -14,7 +14,7 @@ from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
 from main import Plugin
-from services.firmware import FirmwareService
+from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 
@@ -41,17 +41,19 @@ def plugin():
 
     p._romm_api = MagicMock()
     p._firmware_service = FirmwareService(
-        romm_api=p._romm_api,
-        state=p._state,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        plugin_dir=decky.DECKY_PLUGIN_DIR,
-        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-        save_state=MagicMock(),
-        firmware_cache_persister=FakeFirmwareCachePersister(),
-        firmware_files=FirmwareFileAdapter(),
-        get_bios_path=MagicMock(return_value=""),
-        core_info=FakeCoreInfoProvider(),
+        config=FirmwareServiceConfig(
+            romm_api=p._romm_api,
+            state=p._state,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+            save_state=MagicMock(),
+            firmware_cache_persister=FakeFirmwareCachePersister(),
+            firmware_files=FirmwareFileAdapter(),
+            get_bios_path=MagicMock(return_value=""),
+            core_info=FakeCoreInfoProvider(),
+        ),
     )
 
     p._sync_service = LibraryService(

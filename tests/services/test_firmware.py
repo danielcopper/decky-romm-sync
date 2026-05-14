@@ -13,7 +13,7 @@ from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
 from main import Plugin
-from services.firmware import FirmwareService
+from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 
 
@@ -44,17 +44,19 @@ def plugin():
     p._steam_config = steam_config
 
     p._firmware_service = FirmwareService(
-        romm_api=p._romm_api,
-        state=p._state,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        plugin_dir=decky.DECKY_PLUGIN_DIR,
-        clock=_make_clock(),
-        save_state=MagicMock(),
-        firmware_cache_persister=FakeFirmwareCachePersister(),
-        firmware_files=FirmwareFileAdapter(),
-        get_bios_path=MagicMock(return_value=""),
-        core_info=FakeCoreInfoProvider(),
+        config=FirmwareServiceConfig(
+            romm_api=p._romm_api,
+            state=p._state,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=_make_clock(),
+            save_state=MagicMock(),
+            firmware_cache_persister=FakeFirmwareCachePersister(),
+            firmware_files=FirmwareFileAdapter(),
+            get_bios_path=MagicMock(return_value=""),
+            core_info=FakeCoreInfoProvider(),
+        ),
     )
 
     p._sync_service = LibraryService(
@@ -1549,17 +1551,19 @@ class TestFirmwareListCache:
         import decky
 
         return FirmwareService(
-            romm_api=romm_api,
-            state={"shortcut_registry": {}, "downloaded_bios": {}},
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
-            clock=_make_clock(),
-            save_state=MagicMock(),
-            firmware_cache_persister=FakeFirmwareCachePersister(),
-            firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
-            core_info=FakeCoreInfoProvider(),
+            config=FirmwareServiceConfig(
+                romm_api=romm_api,
+                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                clock=_make_clock(),
+                save_state=MagicMock(),
+                firmware_cache_persister=FakeFirmwareCachePersister(),
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=FakeCoreInfoProvider(),
+            ),
         )
 
     def test_firmware_list_cached(self):
@@ -1656,17 +1660,19 @@ class TestCheckPlatformBiosCached:
 
         core_info = FakeCoreInfoProvider()
         fw = FirmwareService(
-            romm_api=MagicMock(),
-            state=state or {"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
-            loop=asyncio.get_event_loop(),
-            logger=logging.getLogger("test"),
-            plugin_dir="/fake",
-            clock=_make_clock(),
-            save_state=MagicMock(),
-            firmware_cache_persister=FakeFirmwareCachePersister(),
-            firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
-            core_info=core_info,
+            config=FirmwareServiceConfig(
+                romm_api=MagicMock(),
+                state=state or {"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=logging.getLogger("test"),
+                plugin_dir="/fake",
+                clock=_make_clock(),
+                save_state=MagicMock(),
+                firmware_cache_persister=FakeFirmwareCachePersister(),
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=core_info,
+            ),
         )
         fw._firmware_cache = firmware_cache
         fw._firmware_cache_at = firmware_cache_at
@@ -1734,17 +1740,19 @@ class TestCheckPlatformBiosCached:
 
         core_info = FakeCoreInfoProvider()
         fw = FirmwareService(
-            romm_api=api,
-            state={"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
-            loop=asyncio.get_event_loop(),
-            logger=logging.getLogger("test"),
-            plugin_dir="/fake",
-            clock=_make_clock(),
-            save_state=MagicMock(),
-            firmware_cache_persister=FakeFirmwareCachePersister(),
-            firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
-            core_info=core_info,
+            config=FirmwareServiceConfig(
+                romm_api=api,
+                state={"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=logging.getLogger("test"),
+                plugin_dir="/fake",
+                clock=_make_clock(),
+                save_state=MagicMock(),
+                firmware_cache_persister=FakeFirmwareCachePersister(),
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=core_info,
+            ),
         )
         fw._firmware_cache = []
         fw._firmware_cache_at = 1.0
@@ -1768,17 +1776,19 @@ class TestFirmwareCachePersistence:
         persister = FakeFirmwareCachePersister(canned_load={"items": cached_items, "cached_at": 1000.0})
         clock = _make_clock()
         fw = FirmwareService(
-            romm_api=MagicMock(),
-            state={"shortcut_registry": {}, "downloaded_bios": {}},
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
-            clock=clock,
-            save_state=MagicMock(),
-            firmware_cache_persister=persister,
-            firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
-            core_info=FakeCoreInfoProvider(),
+            config=FirmwareServiceConfig(
+                romm_api=MagicMock(),
+                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                clock=clock,
+                save_state=MagicMock(),
+                firmware_cache_persister=persister,
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=FakeCoreInfoProvider(),
+            ),
         )
         assert fw._firmware_cache == cached_items
         assert fw._firmware_cache_epoch == 1000.0
@@ -1792,17 +1802,19 @@ class TestFirmwareCachePersistence:
 
         persister = FakeFirmwareCachePersister(canned_load={})
         fw = FirmwareService(
-            romm_api=MagicMock(),
-            state={"shortcut_registry": {}, "downloaded_bios": {}},
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
-            clock=_make_clock(),
-            save_state=MagicMock(),
-            firmware_cache_persister=persister,
-            firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
-            core_info=FakeCoreInfoProvider(),
+            config=FirmwareServiceConfig(
+                romm_api=MagicMock(),
+                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                clock=_make_clock(),
+                save_state=MagicMock(),
+                firmware_cache_persister=persister,
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=FakeCoreInfoProvider(),
+            ),
         )
         assert fw._firmware_cache is None
 
@@ -1812,17 +1824,19 @@ class TestFirmwareCachePersistence:
 
         persister = FakeFirmwareCachePersister(load_side_effect=FileNotFoundError("no file"))
         fw = FirmwareService(
-            romm_api=MagicMock(),
-            state={"shortcut_registry": {}, "downloaded_bios": {}},
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
-            clock=_make_clock(),
-            save_state=MagicMock(),
-            firmware_cache_persister=persister,
-            firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
-            core_info=FakeCoreInfoProvider(),
+            config=FirmwareServiceConfig(
+                romm_api=MagicMock(),
+                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                clock=_make_clock(),
+                save_state=MagicMock(),
+                firmware_cache_persister=persister,
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=FakeCoreInfoProvider(),
+            ),
         )
         assert fw._firmware_cache is None
 

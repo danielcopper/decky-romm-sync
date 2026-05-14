@@ -6,9 +6,10 @@ deletion, and per-core filtering for RetroArch emulators.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from domain import firmware_paths
@@ -16,7 +17,6 @@ from domain.bios import collect_firmware_status
 from lib.errors import error_response
 
 if TYPE_CHECKING:
-    import asyncio
     import logging
 
     from services.protocols import (
@@ -32,35 +32,49 @@ if TYPE_CHECKING:
 _FIRMWARE_CACHE_TTL = 3600  # 1 hour
 
 
+@dataclass(frozen=True)
+class FirmwareServiceConfig:
+    """Frozen wiring bundle handed to ``FirmwareService.__init__``.
+
+    Holds the API adapter, live state dict, runtime infrastructure,
+    Protocol-typed file/cache adapters, and the provider callables
+    FirmwareService needs at construction time. Decomposes the ctor
+    so a new dependency does not push past the S107 parameter-count
+    limit.
+    """
+
+    romm_api: RommApiProtocol
+    state: dict
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    plugin_dir: str
+    clock: Clock
+    save_state: StatePersister
+    firmware_cache_persister: FirmwareCachePersister
+    firmware_files: FirmwareFileAdapter
+    get_bios_path: BiosPathProvider
+    core_info: CoreInfoProvider
+
+
 class FirmwareService:
     """BIOS/firmware management: registry, status, downloads, deletion."""
 
     def __init__(
         self,
         *,
-        romm_api: RommApiProtocol,
-        state: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        plugin_dir: str,
-        clock: Clock,
-        save_state: StatePersister,
-        firmware_cache_persister: FirmwareCachePersister,
-        firmware_files: FirmwareFileAdapter,
-        get_bios_path: BiosPathProvider,
-        core_info: CoreInfoProvider,
+        config: FirmwareServiceConfig,
     ) -> None:
-        self._romm_api = romm_api
-        self._state = state
-        self._loop = loop
-        self._logger = logger
-        self._plugin_dir = plugin_dir
-        self._clock = clock
-        self._save_state = save_state
-        self._firmware_cache_persister = firmware_cache_persister
-        self._firmware_files = firmware_files
-        self._get_bios_path = get_bios_path
-        self._core_info = core_info
+        self._romm_api = config.romm_api
+        self._state = config.state
+        self._loop = config.loop
+        self._logger = config.logger
+        self._plugin_dir = config.plugin_dir
+        self._clock = config.clock
+        self._save_state = config.save_state
+        self._firmware_cache_persister = config.firmware_cache_persister
+        self._firmware_files = config.firmware_files
+        self._get_bios_path = config.get_bios_path
+        self._core_info = config.core_info
         self._bios_registry: dict = {}
         self._bios_files_index: dict = {}
         self._firmware_cache: list | None = None

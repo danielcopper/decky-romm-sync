@@ -14,7 +14,7 @@ from adapters.firmware_file import FirmwareFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.achievements import AchievementsService
-from services.firmware import FirmwareService
+from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService
 from services.library import LibraryService, LibraryServiceConfig
 from services.playtime import PlaytimeService
@@ -127,17 +127,19 @@ def plugin(tmp_path):
     )
 
     p._firmware_service = FirmwareService(
-        romm_api=MagicMock(),
-        state=p._state,
-        loop=asyncio.get_event_loop(),
-        logger=logging.getLogger("test"),
-        plugin_dir=decky.DECKY_PLUGIN_DIR,
-        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-        save_state=MagicMock(),
-        firmware_cache_persister=FakeFirmwareCachePersister(),
-        firmware_files=FirmwareFileAdapter(),
-        get_bios_path=MagicMock(return_value=""),
-        core_info=FakeCoreInfoProvider(),
+        config=FirmwareServiceConfig(
+            romm_api=MagicMock(),
+            state=p._state,
+            loop=asyncio.get_event_loop(),
+            logger=logging.getLogger("test"),
+            plugin_dir=decky.DECKY_PLUGIN_DIR,
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+            save_state=MagicMock(),
+            firmware_cache_persister=FakeFirmwareCachePersister(),
+            firmware_files=FirmwareFileAdapter(),
+            get_bios_path=MagicMock(return_value=""),
+            core_info=FakeCoreInfoProvider(),
+        ),
     )
 
     # Store fake_api on plugin for test access

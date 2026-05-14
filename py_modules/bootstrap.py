@@ -37,7 +37,7 @@ from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.connection import ConnectionService, ConnectionServiceConfig
 from services.cores import CoreService, CoreServiceConfig
 from services.downloads import DownloadService, DownloadServiceConfig
-from services.firmware import FirmwareService
+from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService
@@ -414,17 +414,19 @@ def wire_services(cfg: WiringConfig) -> dict:
     )
 
     firmware_service = FirmwareService(
-        romm_api=cfg.adapters.romm_api,
-        state=cfg.stores.state,
-        loop=cfg.runtime.loop,
-        logger=cfg.runtime.logger,
-        plugin_dir=cfg.runtime.plugin_dir,
-        clock=cfg.runtime.clock,
-        save_state=cfg.callbacks.save_state,
-        firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
-        firmware_files=cfg.adapters.firmware_files,
-        get_bios_path=cfg.callbacks.get_bios_path,
-        core_info=cfg.callbacks.core_info_provider,
+        config=FirmwareServiceConfig(
+            romm_api=cfg.adapters.romm_api,
+            state=cfg.stores.state,
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            plugin_dir=cfg.runtime.plugin_dir,
+            clock=cfg.runtime.clock,
+            save_state=cfg.callbacks.save_state,
+            firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
+            firmware_files=cfg.adapters.firmware_files,
+            get_bios_path=cfg.callbacks.get_bios_path,
+            core_info=cfg.callbacks.core_info_provider,
+        ),
     )
 
     sgdb_service = SteamGridService(
