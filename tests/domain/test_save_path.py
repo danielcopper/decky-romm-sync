@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from domain.save_path import (
@@ -300,29 +302,23 @@ class TestComputeLocalSaveTarget:
         assert result.fallback_extension is None
         assert result.sanitized_from is None
 
-    def test_dotdot_extension_falls_back(self) -> None:
-        """``file_extension="."`` makes target ``pokemon..`` — sanitizable, no fallback.
+    def test_dotdot_extension_survives_untouched(self) -> None:
+        """``..`` as an extension is accepted: ``pokemon...`` is a valid basename.
 
-        ``..`` as an extension produces ``pokemon...`` whose basename is
-        the string itself; ``sanitize_save_filename`` accepts that. The
-        real fallback trigger is a value that drives the basename empty
-        or to ``.``/``..``.
+        Fallback only kicks in when ``sanitize_save_filename`` raises,
+        which happens for empty basenames or basenames of exactly
+        ``"."`` / ``".."`` — none of which a ``rom_name + "." + ext``
+        join can produce when ``rom_name`` is non-empty.
         """
-        # The explicit fallback test: an extension producing exactly ``"."``
-        # after join — there isn't one, since ``rom_name`` is always
-        # prepended. Use trailing-separator instead (covered above).
-        # Here just confirm a typical ``..`` extension survives untouched
-        # because the joined basename is non-trivial.
         result = compute_local_save_target({"file_extension": ".."}, "pokemon")
-        # ``pokemon...`` is the basename — no path separators, no fallback.
         assert result.filename == "pokemon..."
         assert result.fallback_extension is None
         assert result.sanitized_from is None
 
     def test_result_is_frozen_dataclass(self) -> None:
-        """``LocalSaveTarget`` is immutable — assignment raises."""
+        """``LocalSaveTarget`` is immutable — assignment raises ``FrozenInstanceError``."""
         result = compute_local_save_target({"file_extension": "srm"}, "pokemon")
-        with pytest.raises((AttributeError, Exception)):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             result.filename = "other"  # type: ignore[misc]
 
     def test_result_is_hashable(self) -> None:
