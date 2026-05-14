@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.path_safety import is_safe_rom_path
@@ -12,7 +13,27 @@ from domain.path_safety import is_safe_rom_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import RomsPathProvider, StatePersister
+    from services.protocols import DownloadQueueCleanup, RomsPathProvider, StatePersister
+
+
+@dataclass(frozen=True)
+class RomRemovalServiceConfig:
+    """Frozen wiring bundle handed to ``RomRemovalService.__init__``.
+
+    Holds the live state dicts, runtime infrastructure, persistence
+    callbacks, optional roms-path provider, and the optional
+    ``DownloadQueueCleanup`` eviction seam. Decomposes the ctor so a
+    new dependency does not push past the S107 parameter-count limit.
+    """
+
+    state: dict
+    save_sync_state: dict
+    logger: logging.Logger
+    loop: asyncio.AbstractEventLoop
+    save_state: StatePersister
+    save_save_sync_state: StatePersister
+    get_roms_path: RomsPathProvider | None = None
+    download_queue_cleanup: DownloadQueueCleanup | None = None
 
 
 class RomRemovalService:
@@ -21,21 +42,16 @@ class RomRemovalService:
     def __init__(
         self,
         *,
-        state: dict,
-        save_sync_state: dict,
-        logger: logging.Logger,
-        loop: asyncio.AbstractEventLoop,
-        save_state: StatePersister,
-        save_save_sync_state: StatePersister,
-        get_roms_path: RomsPathProvider | None = None,
+        config: RomRemovalServiceConfig,
     ):
-        self._state = state
-        self._save_sync_state = save_sync_state
-        self._logger = logger
-        self._loop = loop
-        self._save_state = save_state
-        self._save_save_sync_state = save_save_sync_state
-        self._get_roms_path = get_roms_path
+        self._state = config.state
+        self._save_sync_state = config.save_sync_state
+        self._logger = config.logger
+        self._loop = config.loop
+        self._save_state = config.save_state
+        self._save_save_sync_state = config.save_save_sync_state
+        self._get_roms_path = config.get_roms_path
+        self._download_queue_cleanup = config.download_queue_cleanup
 
     def _delete_rom_files(self, installed: dict) -> None:
         """Delete ROM files for an installed entry. Handles both single-file and multi-file ROMs."""
@@ -84,6 +100,9 @@ class RomRemovalService:
             self._logger.error(f"Failed to delete ROM files: {e}")
             return {"success": False, "message": "Failed to delete ROM files"}
 
+        if self._download_queue_cleanup is not None:
+            self._download_queue_cleanup.evict(int(rom_id))
+
         return {"success": True, "message": "ROM removed"}
 
     def _uninstall_all_roms_io(self) -> tuple[int, list[str]]:
@@ -117,6 +136,8 @@ class RomRemovalService:
     async def uninstall_all_roms(self) -> dict:
         """Remove all installed ROMs: delete files and clear state."""
         count, errors = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
+        if self._download_queue_cleanup is not None:
+            self._download_queue_cleanup.clear()
         msg = f"Removed {count} ROMs"
         if errors:
             msg += f" ({len(errors)} errors)"

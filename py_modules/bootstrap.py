@@ -65,7 +65,7 @@ from services.protocols import (
     UuidGen,
 )
 from services.protocols import SteamConfigAdapter as SteamConfigProtocol
-from services.rom_removal import RomRemovalService
+from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
 from services.shortcut_removal import ShortcutRemovalService
 from services.steamgrid import SteamGridConfig, SteamGridService
@@ -383,13 +383,16 @@ def wire_services(cfg: WiringConfig) -> dict:
     )
 
     rom_removal_service = RomRemovalService(
-        state=cfg.stores.state,
-        save_sync_state=cfg.stores.save_sync_state,
-        logger=cfg.runtime.logger,
-        loop=cfg.runtime.loop,
-        save_state=cfg.callbacks.save_state,
-        save_save_sync_state=save_sync_service.save_state,
-        get_roms_path=cfg.callbacks.get_roms_path,
+        config=RomRemovalServiceConfig(
+            state=cfg.stores.state,
+            save_sync_state=cfg.stores.save_sync_state,
+            logger=cfg.runtime.logger,
+            loop=cfg.runtime.loop,
+            save_state=cfg.callbacks.save_state,
+            save_save_sync_state=save_sync_service.save_state,
+            get_roms_path=cfg.callbacks.get_roms_path,
+            download_queue_cleanup=download_service,
+        ),
     )
 
     firmware_service = FirmwareService(

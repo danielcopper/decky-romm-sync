@@ -476,3 +476,13 @@ class DownloadService:
 
     def get_installed_rom(self, rom_id):
         return self._state["installed_roms"].get(str(int(rom_id)))
+
+    # ── DownloadQueueCleanup Protocol ──────────────────────────────
+
+    def evict(self, rom_id: int) -> None:
+        """Remove the queue entry for *rom_id* if present. Idempotent."""
+        self._download_queue.pop(int(rom_id), None)
+
+    def clear(self) -> None:
+        """Remove all entries from the download queue."""
+        self._download_queue.clear()

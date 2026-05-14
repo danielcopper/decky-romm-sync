@@ -7,12 +7,13 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import FakeDownloadQueueCleanup
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 sys.path.insert(0, os.path.dirname(__file__))
 
 # conftest.py patches decky before this import
-from services.rom_removal import RomRemovalService
+from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 
 
 @pytest.fixture
@@ -31,15 +32,23 @@ def logger():
 
 
 @pytest.fixture
-def service(state, save_sync_state, logger):
+def queue_cleanup() -> FakeDownloadQueueCleanup:
+    return FakeDownloadQueueCleanup()
+
+
+@pytest.fixture
+def service(state, save_sync_state, logger, queue_cleanup):
     return RomRemovalService(
-        state=state,
-        save_sync_state=save_sync_state,
-        logger=logger,
-        loop=asyncio.new_event_loop(),
-        save_state=MagicMock(),
-        save_save_sync_state=MagicMock(),
-        get_roms_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
+        config=RomRemovalServiceConfig(
+            state=state,
+            save_sync_state=save_sync_state,
+            logger=logger,
+            loop=asyncio.new_event_loop(),
+            save_state=MagicMock(),
+            save_save_sync_state=MagicMock(),
+            get_roms_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
+            download_queue_cleanup=queue_cleanup,
+        ),
     )
 
 
@@ -395,3 +404,69 @@ class TestUninstallAllRoms:
 
         assert result["success"] is True
         assert "errors" in result["message"]
+
+
+class TestDownloadQueueCleanup:
+    """Eviction of the download queue on successful ROM removal."""
+
+    @pytest.mark.asyncio
+    async def test_remove_rom_evicts_queue_on_success(self, service, state, queue_cleanup, tmp_path):
+        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
+        rom = tmp_path / "retrodeck" / "roms" / "n64" / "zelda.z64"
+        rom.parent.mkdir(parents=True)
+        rom.write_bytes(b"\x00" * 100)
+
+        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": str(rom), "system": "n64"}
+
+        result = await service.remove_rom(42)
+        assert result["success"] is True
+        assert queue_cleanup.evicted == [42]
+        assert queue_cleanup.cleared == 0
+
+    @pytest.mark.asyncio
+    async def test_remove_rom_does_not_evict_when_not_installed(self, service, queue_cleanup):
+        result = await service.remove_rom(999)
+        assert result["success"] is False
+        assert queue_cleanup.evicted == []
+
+    @pytest.mark.asyncio
+    async def test_uninstall_all_roms_clears_queue(self, service, state, queue_cleanup, tmp_path):
+        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        rom = roms_dir / "game.z64"
+        rom.write_bytes(b"\x00" * 100)
+
+        state["installed_roms"] = {
+            "1": {"rom_id": 1, "file_path": str(rom), "system": "n64"},
+        }
+
+        result = await service.uninstall_all_roms()
+        assert result["success"] is True
+        assert queue_cleanup.cleared == 1
+
+    @pytest.mark.asyncio
+    async def test_no_cleanup_dependency_is_safe(self, state, save_sync_state, logger, tmp_path):
+        """Without a ``DownloadQueueCleanup`` wired, eviction is skipped."""
+        svc = RomRemovalService(
+            config=RomRemovalServiceConfig(
+                state=state,
+                save_sync_state=save_sync_state,
+                logger=logger,
+                loop=asyncio.get_event_loop(),
+                save_state=MagicMock(),
+                save_save_sync_state=MagicMock(),
+                get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
+                download_queue_cleanup=None,
+            ),
+        )
+        rom = tmp_path / "retrodeck" / "roms" / "n64" / "g.z64"
+        rom.parent.mkdir(parents=True)
+        rom.write_bytes(b"\x00" * 100)
+        state["installed_roms"]["7"] = {"rom_id": 7, "file_path": str(rom), "system": "n64"}
+
+        result = await svc.remove_rom(7)
+        assert result["success"] is True
+
+        result2 = await svc.uninstall_all_roms()
+        assert result2["success"] is True

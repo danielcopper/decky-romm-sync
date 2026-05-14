@@ -640,17 +640,11 @@ class Plugin:
 
     @migration_blocked
     async def remove_rom(self, rom_id):
-        result = await self._rom_removal_service.remove_rom(rom_id)
-        if result.get("success"):
-            self._download_service._download_queue.pop(int(rom_id), None)
-        return result
+        return await self._rom_removal_service.remove_rom(rom_id)
 
     @migration_blocked
     async def uninstall_all_roms(self):
-        result = await self._rom_removal_service.uninstall_all_roms()
-        if result.get("success"):
-            self._download_service._download_queue.clear()
-        return result
+        return await self._rom_removal_service.uninstall_all_roms()
 
     # ── Save Sync / Playtime delegation to services ──────────
 

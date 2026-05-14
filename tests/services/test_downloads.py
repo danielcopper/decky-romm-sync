@@ -15,7 +15,7 @@ from adapters.download_queue import DownloadQueueAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
-from services.rom_removal import RomRemovalService
+from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 
 
 @pytest.fixture
@@ -72,13 +72,16 @@ def plugin():
         ),
     )
     p._rom_removal_service = RomRemovalService(
-        state=p._state,
-        save_sync_state=p._save_sync_state,
-        logger=decky.logger,
-        loop=asyncio.get_event_loop(),
-        save_state=MagicMock(),
-        save_save_sync_state=MagicMock(),
-        get_roms_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
+        config=RomRemovalServiceConfig(
+            state=p._state,
+            save_sync_state=p._save_sync_state,
+            logger=decky.logger,
+            loop=asyncio.get_event_loop(),
+            save_state=MagicMock(),
+            save_save_sync_state=MagicMock(),
+            get_roms_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
+            download_queue_cleanup=p._download_service,
+        ),
     )
     return p
 

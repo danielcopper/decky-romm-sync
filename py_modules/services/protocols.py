@@ -363,6 +363,20 @@ class PendingSyncReader(Protocol):
     def __call__(self) -> dict: ...
 
 
+class DownloadQueueCleanup(Protocol):
+    """Eviction seam for the in-memory ROM download queue.
+
+    Consumed by ``RomRemovalService`` to remove queue entries when a ROM
+    is deleted. Exposing this as a Protocol avoids a service-to-service
+    concrete import and keeps the typed seam narrow to "evict one entry"
+    and "clear all entries".
+    """
+
+    def evict(self, rom_id: int) -> None: ...
+
+    def clear(self) -> None: ...
+
+
 class SaveSyncStatePersister(Protocol):
     """Read/write the on-disk save-sync state file.
 
