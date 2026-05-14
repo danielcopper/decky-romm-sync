@@ -600,7 +600,9 @@ class FakeCoreInfoProvider:
 
     Returns the configured active_core and available_cores for any system.
     Both attributes are mutable so tests can set them directly on the
-    instance before exercising the code under test.
+    instance before exercising the code under test. ``reset_cache``
+    increments ``reset_cache_count`` so writers can assert the cache
+    was invalidated after a write.
     """
 
     def __init__(
@@ -611,6 +613,7 @@ class FakeCoreInfoProvider:
     ) -> None:
         self.active_core = active_core
         self.available_cores: list[dict] = available_cores if available_cores is not None else []
+        self.reset_cache_count = 0
 
     def get_active_core(
         self,
@@ -621,6 +624,9 @@ class FakeCoreInfoProvider:
 
     def get_available_cores(self, system_name: str) -> list[dict]:
         return self.available_cores
+
+    def reset_cache(self) -> None:
+        self.reset_cache_count += 1
 
 
 @pytest.fixture(autouse=True)

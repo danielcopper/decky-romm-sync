@@ -33,6 +33,7 @@ from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApi
 from adapters.steam_config import SteamConfigAdapter
 from services.achievements import AchievementsService
+from services.cores import CoreService
 from services.downloads import DownloadService
 from services.firmware import FirmwareService
 from services.library import LibraryService
@@ -161,6 +162,7 @@ class TestWireServices:
             "download_queue": FakeDownloadQueueAdapter(),
             "firmware_files": FakeFirmwareFileAdapter(),
             "migration_files": FakeMigrationFileAdapter(),
+            "gamelist_editor": MagicMock(),
             "state": state,
             "settings": settings,
             "metadata_cache": {},
@@ -203,6 +205,7 @@ class TestWireServices:
                 download_queue=deps["download_queue"],
                 firmware_files=deps["firmware_files"],
                 migration_files=deps["migration_files"],
+                gamelist_editor=deps["gamelist_editor"],
             ),
             stores=StateBundle(
                 state=deps["state"],
@@ -261,11 +264,13 @@ class TestWireServices:
     def test_returns_expected_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        assert len(result) == 14
+        assert len(result) == 15
         assert "migration_service" in result
         assert "game_detail_service" in result
         assert "rom_removal_service" in result
         assert "settings_service" in result
+        assert "core_service" in result
+        assert isinstance(result["core_service"], CoreService)
         deps["loop"].close()
 
     def test_migration_service_receives_get_core_name(self, tmp_path):

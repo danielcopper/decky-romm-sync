@@ -32,6 +32,7 @@ from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService, ArtworkServiceConfig
+from services.cores import CoreService, CoreServiceConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService
 from services.game_detail import GameDetailService
@@ -51,6 +52,7 @@ from services.protocols import (
     EventEmitter,
     FirmwareCachePersister,
     FirmwareFileAdapter,
+    GamelistXmlEditorProtocol,
     MigrationFileAdapter,
     RetroArchSaveSortingProvider,
     RetroDeckHomeProvider,
@@ -86,6 +88,7 @@ class AdapterBundle:
     download_queue: DownloadQueueAdapter
     firmware_files: FirmwareFileAdapter
     migration_files: MigrationFileAdapter
+    gamelist_editor: GamelistXmlEditorProtocol
 
 
 @dataclass(frozen=True)
@@ -455,6 +458,17 @@ def wire_services(cfg: WiringConfig) -> dict:
         ),
     )
 
+    core_service = CoreService(
+        config=CoreServiceConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            core_info=cfg.callbacks.core_info_provider,
+            gamelist_editor=cfg.adapters.gamelist_editor,
+            retrodeck_home=cfg.callbacks.get_retrodeck_home,
+            bios_checker=firmware_service,
+        ),
+    )
+
     return {
         "save_sync_service": save_sync_service,
         "playtime_service": playtime_service,
@@ -470,4 +484,5 @@ def wire_services(cfg: WiringConfig) -> dict:
         "artwork_service": artwork_service,
         "shortcut_removal_service": shortcut_removal_service,
         "settings_service": settings_service,
+        "core_service": core_service,
     }

@@ -474,11 +474,13 @@ class CoreResolverFn(Protocol):
 
 
 class CoreInfoProvider(Protocol):
-    """Core resolution for ES-DE configured systems, consumed by FirmwareService.
+    """Core resolution for ES-DE configured systems, consumed by services.
 
     Exposes the read seam services need to ask "which RetroArch core is
     active for this system/ROM?" without depending on the concrete
-    adapter. Implementations own the underlying file reads.
+    adapter. Implementations own the underlying file reads and may
+    cache parse results; ``reset_cache`` lets writers invalidate the
+    cache after editing the underlying configuration.
     """
 
     def get_active_core(
@@ -488,6 +490,8 @@ class CoreInfoProvider(Protocol):
     ) -> tuple[str | None, str | None]: ...
 
     def get_available_cores(self, system_name: str) -> list[dict]: ...
+
+    def reset_cache(self) -> None: ...
 
 
 class GamelistXmlEditorProtocol(Protocol):
@@ -864,6 +868,23 @@ class BiosChecker(Protocol):
     def check_platform_bios_cached(self, platform_slug: str, rom_filename: str | None = None) -> dict | None: ...
 
     async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict: ...
+
+
+class PlatformBiosChecker(Protocol):
+    """Cross-service read seam: ask the firmware service whether a
+    platform's required BIOS files are present, optionally narrowed
+    by a per-game core override.
+
+    Exposes only the single async ``check_platform_bios`` entry point
+    CoreService needs after writing a core override, without dragging
+    in the rest of FirmwareService's surface.
+    """
+
+    async def check_platform_bios(
+        self,
+        platform_slug: str,
+        rom_filename: str | None = None,
+    ) -> dict: ...
 
 
 class AchievementsReader(Protocol):

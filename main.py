@@ -161,8 +161,6 @@ class Plugin:
         self._retrodeck_paths: RetroDeckPathsAdapter = adapters["retrodeck_paths"]
         self._retroarch_config: RetroArchConfigAdapter = adapters["retroarch_config"]
         self._retroarch_core_info: RetroArchCoreInfoAdapter = adapters["retroarch_core_info"]
-        self._core_resolver = adapters["core_resolver"]
-        self._gamelist_editor = adapters["gamelist_editor"]
 
         # ── 3. Load state ───────────────────────────────────────────────────
         self._state = {
@@ -196,6 +194,7 @@ class Plugin:
                     download_queue=adapters["download_queue"],
                     firmware_files=adapters["firmware_files"],
                     migration_files=adapters["migration_files"],
+                    gamelist_editor=adapters["gamelist_editor"],
                 ),
                 stores=StateBundle(
                     state=self._state,
@@ -244,6 +243,7 @@ class Plugin:
         self._artwork_service = services["artwork_service"]
         self._shortcut_removal_service = services["shortcut_removal_service"]
         self._settings_service = services["settings_service"]
+        self._core_service = services["core_service"]
         self._firmware_service.load_bios_registry()
 
         # ── 5. Startup healing ──────────────────────────────────────────────
@@ -388,56 +388,15 @@ class Plugin:
         return self._game_detail_service.get_cached_game_detail(app_id)
 
     async def get_available_cores(self, platform_slug):
-        """Return available RetroArch cores for a platform."""
-        cores = self._core_resolver.get_available_cores(platform_slug)
-        active_core_so, active_core_label = self._core_resolver.get_active_core(platform_slug)
-        return {
-            "cores": cores,
-            "active_core": active_core_so,
-            "active_core_label": active_core_label,
-        }
-
-    def _set_system_core_io(self, retrodeck_home, platform_slug, core_label):
-        """Sync helper for set_system_core — XML read/parse/write in executor."""
-        self._gamelist_editor.set_system_override(retrodeck_home, platform_slug, core_label or None)
-        self._core_resolver.reset_cache()
+        return await self._core_service.get_available_cores(platform_slug)
 
     @migration_blocked
     async def set_system_core(self, platform_slug, core_label):
-        """Set system-wide core override. Pass empty string to reset to default."""
-        retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
-        if not retrodeck_home:
-            return {"success": False, "message": "RetroDECK home not found"}
-        try:
-            await self.loop.run_in_executor(None, self._set_system_core_io, retrodeck_home, platform_slug, core_label)
-            bios = await self._firmware_service.check_platform_bios(platform_slug)
-            return {"success": True, "bios_status": bios}
-        except Exception as e:
-            decky.logger.error(f"Failed to set system core: {e}")
-            return {"success": False, "message": str(e)}
-
-    def _set_game_core_io(self, retrodeck_home, platform_slug, rom_path, core_label):
-        """Sync helper for set_game_core — XML read/parse/write in executor."""
-        self._gamelist_editor.set_game_override(retrodeck_home, platform_slug, rom_path, core_label or None)
-        self._core_resolver.reset_cache()
+        return await self._core_service.set_system_core(platform_slug, core_label)
 
     @migration_blocked
     async def set_game_core(self, platform_slug, rom_path, core_label):
-        """Set per-game core override. Pass empty string to reset to platform default."""
-        retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
-        if not retrodeck_home:
-            return {"success": False, "message": "RetroDECK home not found"}
-        try:
-            await self.loop.run_in_executor(
-                None, self._set_game_core_io, retrodeck_home, platform_slug, rom_path, core_label
-            )
-            # Extract rom filename from path for per-game core detection
-            rom_filename = rom_path.lstrip("./") if rom_path else None
-            bios = await self._firmware_service.check_platform_bios(platform_slug, rom_filename=rom_filename)
-            return {"success": True, "bios_status": bios}
-        except Exception as e:
-            decky.logger.error(f"Failed to set game core: {e}")
-            return {"success": False, "message": str(e)}
+        return await self._core_service.set_game_core(platform_slug, rom_path, core_label)
 
     # ── Firmware delegation to FirmwareService ──────────────
 

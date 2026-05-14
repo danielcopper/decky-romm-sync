@@ -102,6 +102,7 @@ type = independence
 modules =
     services.achievements
     services.artwork
+    services.cores
     services.downloads
     services.firmware
     services.game_detail

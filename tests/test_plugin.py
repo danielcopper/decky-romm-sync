@@ -1076,6 +1076,7 @@ class TestMainStartupOrdering:
             "artwork_service": artwork_service,
             "shortcut_removal_service": MagicMock(),
             "settings_service": MagicMock(),
+            "core_service": MagicMock(),
         }
 
         bootstrapped_adapters = {
