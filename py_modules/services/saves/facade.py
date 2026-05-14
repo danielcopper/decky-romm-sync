@@ -772,7 +772,14 @@ class SaveService:
         chosen_slot: str,
         migrate_from_slot: str | None | object = _NO_MIGRATION,
     ) -> dict:
-        """Confirm which slot to use for a game's save sync."""
+        """Confirm which slot to use for a game's save sync.
+
+        ``migrate_from_slot`` may be the ``_NO_MIGRATION`` sentinel, ``None``,
+        or ``"__no_migration__"`` (the string the frontend sends when no
+        migration is requested). All three are treated as "no migration".
+        """
+        if migrate_from_slot is None or migrate_from_slot == "__no_migration__":
+            migrate_from_slot = _NO_MIGRATION
         return await self._slots.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)
 
     async def sync_all_saves(self) -> dict:

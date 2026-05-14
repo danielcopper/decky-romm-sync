@@ -713,11 +713,7 @@ class Plugin:
 
     @migration_blocked
     async def confirm_slot_choice(self, rom_id, chosen_slot, migrate_from_slot="__no_migration__"):
-        from services.saves import _NO_MIGRATION
-
-        # null from frontend = None in Python — treat same as no migration
-        actual = _NO_MIGRATION if migrate_from_slot in ("__no_migration__", None) else migrate_from_slot
-        return await self._save_sync_service.confirm_slot_choice(rom_id, chosen_slot, actual)
+        return await self._save_sync_service.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)
 
     @migration_blocked
     async def sync_all_saves(self):
