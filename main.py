@@ -27,6 +27,7 @@ from adapters.persistence import (
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
+from domain.version import meets_min_version
 from lib.migration_gate import migration_blocked
 
 
@@ -298,15 +299,6 @@ class Plugin:
 
     _MIN_REQUIRED_VERSION = (4, 8, 1)
 
-    @staticmethod
-    def _meets_min_version(version_str: str) -> bool:
-        """Return True if *version_str* (e.g. ``'4.8.1'``) >= ``_MIN_REQUIRED_VERSION``."""
-        try:
-            parts = tuple(int(p) for p in version_str.split("."))
-        except (ValueError, AttributeError):
-            return False
-        return parts >= Plugin._MIN_REQUIRED_VERSION
-
     # ── Callables ──────────────────────────────────────────────────────
     # All methods below are exposed to the frontend via Decky's callable()
     # framework, which requires `async def` even when no `await` is used.
@@ -343,7 +335,7 @@ class Plugin:
 
         # Enforce minimum version
         version = self._romm_version
-        if version and version != "development" and not self._meets_min_version(version):
+        if version and version != "development" and not meets_min_version(version, self._MIN_REQUIRED_VERSION):
             min_str = ".".join(str(v) for v in self._MIN_REQUIRED_VERSION)
             return {
                 "success": False,
