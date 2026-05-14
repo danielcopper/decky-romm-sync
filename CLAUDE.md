@@ -85,15 +85,15 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
   - ~~#301~~ GameDetailService — closed as superseded. All scope (Clock + CoreInfoProvider) wired in Wave 1.
   - ~~#302~~ MigrationService — shipped as #325 (`MigrationFileAdapter` with cross-device `move` (`shutil.move`) vs same-fs `rename` (`os.replace`) distinction; ctor 13 → 2 via `MigrationServiceConfig`; closed discussion #293 with "extract" verdict).
   - ~~#300~~ LibraryService — shipped as #326 (ctor 17 → 8 via `LibraryServiceConfig`; no I/O extraction — Waves 1+2 had already removed all violations).
-- **Wave 4 — Close-out** — **active**
+- **Wave 4 — Close-out** — **complete**
   - ~~#274~~ shipped as #328 + #329 + #330 + #331 (callable thinness audit)
-  - #277 final verification — tick all 11 compliance-checklist items in the umbrella body, then close.
+  - ~~#277~~ closed: all 11 Cosmic Python compliance items ticked. Final prereqs in #333 (`RomFileAdapter` for `RomRemovalService` raw I/O, `FirmwareServiceConfig` ctor decomposition, `check_cosmic_call_bans.sh` false-positive fix).
 
 **Saves vertical** ([#254](https://github.com/danielcopper/decky-romm-sync/issues/254)) runs in parallel — independent of the waves above.
 
 **Why the order chosen**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical meant every later PR was "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrunk the scariest service before lifting it. LibraryService last because it had the largest blast radius — by the time it was lifted, only ctor decomposition remained.
 
-When picking work: Waves 1, 2, and 3 are complete (modulo deferred #259). Wave 4 is the close-out — start with #274, then tick the #277 checklist and close the umbrella. Wave 3 sister-PR patterns (Protocol + adapter + `FakeXxxAdapter` in conftest + `*ServiceConfig` decomposition) are the canonical reference for any future service-level work.
+The Cosmic Python migration is complete (modulo deferred #259 — SonarCloud arch rules, blocked on SonarCloud Python support). Wave 3 sister-PR patterns (Protocol + adapter + `FakeXxxAdapter` in conftest + `*ServiceConfig` decomposition) remain the canonical reference for any future service-level work.
 
 **Sub-issue policy**: Epic bodies do **not** carry markdown sub-issue lists — open work is tracked via GitHub's native Sub-Issues panel on each epic. If a new sub-issue is needed, link it natively (don't add a body bullet).
 
