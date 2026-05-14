@@ -1096,6 +1096,7 @@ class TestMainStartupOrdering:
             "download_files": MagicMock(),
             "firmware_files": MagicMock(),
             "download_queue": MagicMock(),
+            "migration_files": MagicMock(),
             "retrodeck_paths": MagicMock(),
             "retroarch_config": MagicMock(),
             "retroarch_core_info": MagicMock(),

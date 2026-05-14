@@ -1,15 +1,17 @@
-"""MigrationService — RetroDECK path migration.
+"""MigrationService — RetroDECK path and save-sort migration orchestration.
 
-Detects when RetroDECK home path changes (e.g., internal SSD to SD card)
-and migrates downloaded ROMs, BIOS files, and save files to the new location.
-Also detects RetroArch save sorting setting changes and migrates affected save files.
+Owns the runtime decisions for relocating ROMs, BIOS, and save files
+when the RetroDECK home path changes or RetroArch save sorting flips.
+All raw filesystem I/O is delegated to the ``MigrationFileAdapter``
+Protocol; conflict resolution, state mutations, and event emission
+remain the service's responsibility.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-import shutil
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.save_extensions import get_save_extensions
@@ -24,6 +26,7 @@ if TYPE_CHECKING:
         CoreNameProviderFn,
         CoreResolverFn,
         EventEmitter,
+        MigrationFileAdapter,
         RetroArchSaveSortingProvider,
         RetroDeckHomeProvider,
         RomsPathProvider,
@@ -32,39 +35,55 @@ if TYPE_CHECKING:
     )
 
 
+@dataclass(frozen=True)
+class MigrationServiceConfig:
+    """Frozen wiring bundle handed to ``MigrationService.__init__``.
+
+    Holds the live state dict, runtime infrastructure, persistence
+    callback, event emitter, and the provider callables MigrationService
+    needs at construction time. Protocol-typed adapters remain explicit
+    ctor parameters because they have different lifecycles from this
+    immutable wiring bundle.
+    """
+
+    state: dict
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    save_state: StatePersister
+    emit: EventEmitter
+    get_bios_files_index: Callable[[], dict]
+    get_retrodeck_home: RetroDeckHomeProvider | None = None
+    get_saves_path: SavesPathProvider | None = None
+    get_bios_path: BiosPathProvider | None = None
+    get_retroarch_save_sorting: RetroArchSaveSortingProvider | None = None
+    get_roms_path: RomsPathProvider | None = None
+    get_active_core: CoreResolverFn | None = None
+    get_core_name: CoreNameProviderFn | None = None
+
+
 class MigrationService:
     """Handles RetroDECK path change detection and file migration."""
 
     def __init__(
         self,
         *,
-        state: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        save_state: StatePersister,
-        emit: EventEmitter,
-        get_bios_files_index: Callable[[], dict],
-        get_retrodeck_home: RetroDeckHomeProvider | None = None,
-        get_saves_path: SavesPathProvider | None = None,
-        get_bios_path: BiosPathProvider | None = None,
-        get_retroarch_save_sorting: RetroArchSaveSortingProvider | None = None,
-        get_roms_path: RomsPathProvider | None = None,
-        get_active_core: CoreResolverFn | None = None,
-        get_core_name: CoreNameProviderFn | None = None,
+        migration_files: MigrationFileAdapter,
+        config: MigrationServiceConfig,
     ) -> None:
-        self._state = state
-        self._loop = loop
-        self._logger = logger
-        self._save_state = save_state
-        self._emit = emit
-        self._get_bios_files_index = get_bios_files_index
-        self._get_retrodeck_home = get_retrodeck_home
-        self._get_saves_path = get_saves_path
-        self._get_bios_path = get_bios_path
-        self._get_retroarch_save_sorting = get_retroarch_save_sorting
-        self._get_roms_path = get_roms_path
-        self._get_active_core = get_active_core
-        self._get_core_name = get_core_name
+        self._migration_files = migration_files
+        self._state = config.state
+        self._loop = config.loop
+        self._logger = config.logger
+        self._save_state = config.save_state
+        self._emit = config.emit
+        self._get_bios_files_index = config.get_bios_files_index
+        self._get_retrodeck_home = config.get_retrodeck_home
+        self._get_saves_path = config.get_saves_path
+        self._get_bios_path = config.get_bios_path
+        self._get_retroarch_save_sorting = config.get_retroarch_save_sorting
+        self._get_roms_path = config.get_roms_path
+        self._get_active_core = config.get_active_core
+        self._get_core_name = config.get_core_name
 
     def detect_retrodeck_path_change(self) -> None:
         """Check if RetroDECK home path changed since last run."""
@@ -74,7 +93,7 @@ class MigrationService:
         if not current_home:
             return
 
-        if not os.path.isdir(current_home):
+        if not self._migration_files.is_dir(current_home):
             self._logger.warning(f"RetroDECK home path does not exist, skipping: {current_home}")
             return
 
@@ -194,7 +213,7 @@ class MigrationService:
         items = []
         old_bios = os.path.join(old_home, "bios")
         new_bios = self._get_bios_path() if self._get_bios_path else ""
-        if not os.path.isdir(old_bios):
+        if not self._migration_files.is_dir(old_bios):
             return items
         downloaded_bios = self._state.get("downloaded_bios", {})
         for file_name, reg_entry in self._get_bios_files_index().items():
@@ -203,20 +222,30 @@ class MigrationService:
             firmware_path = reg_entry.get("firmware_path", file_name)
             old_file = os.path.join(old_bios, firmware_path)
             new_file = os.path.join(new_bios, firmware_path)
-            if not os.path.exists(old_file):
+            if not self._migration_files.exists(old_file):
                 continue
             items.append((file_name, old_file, new_file, lambda: None, "bios"))
         return items
 
     def _collect_save_items(self, old_home):
-        """Collect save file migration items by scanning old saves directory."""
+        """Collect save file migration items by scanning old saves directory.
+
+        Hidden directories (those whose name begins with ``.``) and the
+        files they contain are skipped: the RomM plugin's ``.romm-backup``
+        sidecars and any ad-hoc user dotdirs must not be migrated.
+        """
         items = []
         old_saves = os.path.join(old_home, "saves")
         new_saves = self._get_saves_path() if self._get_saves_path else ""
-        if not os.path.isdir(old_saves):
+        if not self._migration_files.is_dir(old_saves):
             return items
-        for dirpath, _dirs, filenames in os.walk(old_saves):
-            _dirs[:] = [d for d in _dirs if not d.startswith(".")]
+        for dirpath, _dirs, filenames in self._migration_files.walk_files(old_saves):
+            rel_dir = os.path.relpath(dirpath, old_saves)
+            # Skip any descendant of a hidden directory by inspecting the
+            # relative-path segments. ``rel_dir == "."`` for the saves
+            # root itself, which is never hidden.
+            if rel_dir != "." and any(part.startswith(".") for part in rel_dir.split(os.sep)):
+                continue
             for fname in filenames:
                 if fname.startswith("."):
                     continue
@@ -239,12 +268,11 @@ class MigrationService:
         items.extend(self._collect_save_items(old_home))
         return items
 
-    @staticmethod
-    def _find_conflicts(items):
+    def _find_conflicts(self, items):
         """Return sorted list of labels where both source and destination exist."""
         conflict_set = set()
         for label, old_path, new_path, _updater, _kind in items:
-            if os.path.exists(new_path) and os.path.exists(old_path):
+            if self._migration_files.exists(new_path) and self._migration_files.exists(old_path):
                 conflict_set.add(label)
         return sorted(conflict_set)
 
@@ -252,14 +280,14 @@ class MigrationService:
         """Migrate a single file/directory item. Updates counts and errors in place."""
         count_key = kind if kind != "rom_dir" else None
 
-        if not os.path.exists(old_path):
-            if os.path.exists(new_path):
+        if not self._migration_files.exists(old_path):
+            if self._migration_files.exists(new_path):
                 state_updater()
                 if count_key:
                     counts[count_key] = counts.get(count_key, 0) + 1
             return
 
-        if os.path.exists(new_path):
+        if self._migration_files.exists(new_path):
             self._migrate_conflict_item(
                 label,
                 old_path,
@@ -273,8 +301,8 @@ class MigrationService:
             return
 
         try:
-            os.makedirs(os.path.dirname(new_path), exist_ok=True)
-            shutil.move(old_path, new_path)
+            self._migration_files.make_dirs(os.path.dirname(new_path))
+            self._migration_files.move(old_path, new_path)
             state_updater()
             if count_key:
                 counts[count_key] = counts.get(count_key, 0) + 1
@@ -297,12 +325,12 @@ class MigrationService:
         """Handle migration when destination already exists."""
         if conflict_strategy == "overwrite":
             try:
-                if os.path.isdir(new_path):
-                    shutil.rmtree(new_path)
+                if self._migration_files.is_dir(new_path):
+                    self._migration_files.remove_tree(new_path)
                 else:
-                    os.remove(new_path)
-                os.makedirs(os.path.dirname(new_path), exist_ok=True)
-                shutil.move(old_path, new_path)
+                    self._migration_files.remove(new_path)
+                self._migration_files.make_dirs(os.path.dirname(new_path))
+                self._migration_files.move(old_path, new_path)
                 state_updater()
                 if count_key:
                     counts[count_key] = counts.get(count_key, 0) + 1
@@ -561,7 +589,7 @@ class MigrationService:
             filename = rom_name + ext
             old_file = os.path.join(old_dir, filename)
             new_file = os.path.join(new_dir, filename)
-            if os.path.exists(old_file):
+            if self._migration_files.exists(old_file):
                 items.append((filename, old_file, new_file, lambda: None, "save"))
 
     def _get_save_sort_migration_status_io(self, old_settings: dict, new_settings: dict) -> dict:
@@ -608,8 +636,8 @@ class MigrationService:
         fails the server still holds the authoritative copy.
         """
         try:
-            old_mtime = os.path.getmtime(old_path)
-            new_mtime = os.path.getmtime(new_path)
+            old_mtime = self._migration_files.getmtime(old_path)
+            new_mtime = self._migration_files.getmtime(new_path)
         except OSError as e:
             errors.append(f"{label}: {e}")
             self._logger.error(f"Save-sort conflict mtime read failed: {old_path}: {e}")
@@ -618,7 +646,7 @@ class MigrationService:
         if new_mtime >= old_mtime:
             # Destination is newer — keep it, delete the stale orphan at old_path.
             try:
-                os.remove(old_path)
+                self._migration_files.remove(old_path)
                 state_updater()
                 counts[count_key] = counts.get(count_key, 0) + 1
                 self._logger.info(f"Save-sort conflict: kept newer {new_path}, removed stale {old_path}")
@@ -629,8 +657,8 @@ class MigrationService:
 
         # Source is newer — atomically overwrite destination.
         try:
-            os.makedirs(os.path.dirname(new_path), exist_ok=True)
-            os.replace(old_path, new_path)
+            self._migration_files.make_dirs(os.path.dirname(new_path))
+            self._migration_files.rename(old_path, new_path)
             state_updater()
             counts[count_key] = counts.get(count_key, 0) + 1
             self._logger.info(f"Save-sort conflict: moved newer {old_path} -> {new_path}")
@@ -653,7 +681,7 @@ class MigrationService:
         counts: dict[str, int] = {"rom": 0, "bios": 0, "save": 0}
         errors: list[str] = []
         for label, old_path, new_path, updater, _kind in items:
-            if os.path.exists(old_path) and os.path.exists(new_path):
+            if self._migration_files.exists(old_path) and self._migration_files.exists(new_path):
                 self._resolve_save_sort_conflict(label, old_path, new_path, updater, counts, "save", errors)
             else:
                 self._migrate_single_item(label, old_path, new_path, updater, "save", None, counts, errors)

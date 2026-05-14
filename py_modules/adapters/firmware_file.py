@@ -46,9 +46,11 @@ class FirmwareFileAdapter:
         """Return the hex-encoded MD5 digest of *path*'s contents.
 
         Streams the file in fixed-size chunks so memory use stays
-        bounded for large firmware blobs.
+        bounded for large firmware blobs. Non-security use: MD5 here
+        matches the digest published alongside the firmware download
+        (RomM server / BIOS registry) to verify the file arrived intact.
         """
-        h = hashlib.md5()
+        h = hashlib.md5(usedforsecurity=False)
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(_MD5_CHUNK_SIZE), b""):
                 h.update(chunk)
