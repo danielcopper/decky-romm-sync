@@ -102,6 +102,7 @@ type = independence
 modules =
     services.achievements
     services.artwork
+    services.connection
     services.cores
     services.downloads
     services.firmware
@@ -114,4 +115,5 @@ modules =
     services.saves
     services.settings
     services.shortcut_removal
+    services.startup_healing
     services.steamgrid

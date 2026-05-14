@@ -21,6 +21,7 @@ from conftest import (
     FakeFirmwareCachePersister,
     FakeFirmwareFileAdapter,
     FakeMigrationFileAdapter,
+    FakePathProbe,
     FakeSgdbArtworkCache,
 )
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -163,6 +164,7 @@ class TestWireServices:
             "firmware_files": FakeFirmwareFileAdapter(),
             "migration_files": FakeMigrationFileAdapter(),
             "gamelist_editor": MagicMock(),
+            "path_probe": FakePathProbe(),
             "state": state,
             "settings": settings,
             "metadata_cache": {},
@@ -175,6 +177,7 @@ class TestWireServices:
             "clock": FakeClock(),
             "uuid_gen": FakeUuidGen(),
             "sleeper": FakeSleeper(),
+            "min_required_version": (4, 8, 1),
             "get_saves_path": MagicMock(return_value=str(tmp_path / "saves")),
             "get_roms_path": MagicMock(return_value=str(tmp_path / "retrodeck" / "roms")),
             "get_bios_path": MagicMock(return_value=str(tmp_path / "retrodeck" / "bios")),
@@ -206,6 +209,7 @@ class TestWireServices:
                 firmware_files=deps["firmware_files"],
                 migration_files=deps["migration_files"],
                 gamelist_editor=deps["gamelist_editor"],
+                path_probe=deps["path_probe"],
             ),
             stores=StateBundle(
                 state=deps["state"],
@@ -222,6 +226,7 @@ class TestWireServices:
                 clock=deps["clock"],
                 uuid_gen=deps["uuid_gen"],
                 sleeper=deps["sleeper"],
+                min_required_version=deps["min_required_version"],
             ),
             callbacks=CallbackBundle(
                 get_saves_path=deps["get_saves_path"],
@@ -264,13 +269,15 @@ class TestWireServices:
     def test_returns_expected_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        assert len(result) == 15
+        assert len(result) == 17
         assert "migration_service" in result
         assert "game_detail_service" in result
         assert "rom_removal_service" in result
         assert "settings_service" in result
         assert "core_service" in result
         assert isinstance(result["core_service"], CoreService)
+        assert "connection_service" in result
+        assert "startup_healing_service" in result
         deps["loop"].close()
 
     def test_migration_service_receives_get_core_name(self, tmp_path):

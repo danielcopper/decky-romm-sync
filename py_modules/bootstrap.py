@@ -19,6 +19,7 @@ from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapter
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
 from adapters.firmware_file import FirmwareFileAdapter as FirmwareFileAdapterImpl
 from adapters.migration_file import MigrationFileAdapter as MigrationFileAdapterImpl
+from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -32,6 +33,7 @@ from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService, ArtworkServiceConfig
+from services.connection import ConnectionService, ConnectionServiceConfig
 from services.cores import CoreService, CoreServiceConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService
@@ -54,6 +56,7 @@ from services.protocols import (
     FirmwareFileAdapter,
     GamelistXmlEditorProtocol,
     MigrationFileAdapter,
+    PathExistsProbe,
     RetroArchSaveSortingProvider,
     RetroDeckHomeProvider,
     RommApiProtocol,
@@ -71,6 +74,7 @@ from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
 from services.settings import SettingsService, SettingsServiceConfig
 from services.shortcut_removal import ShortcutRemovalService
+from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 from services.steamgrid import SteamGridConfig, SteamGridService
 
 
@@ -89,6 +93,7 @@ class AdapterBundle:
     firmware_files: FirmwareFileAdapter
     migration_files: MigrationFileAdapter
     gamelist_editor: GamelistXmlEditorProtocol
+    path_probe: PathExistsProbe
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,7 @@ class RuntimeBundle:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
+    min_required_version: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -194,6 +200,7 @@ def bootstrap(
     download_queue = DownloadQueueAdapterImpl()
     firmware_files = FirmwareFileAdapterImpl()
     migration_files = MigrationFileAdapterImpl()
+    path_probe = PathProbeAdapter()
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
@@ -210,6 +217,7 @@ def bootstrap(
         "download_queue": download_queue,
         "firmware_files": firmware_files,
         "migration_files": migration_files,
+        "path_probe": path_probe,
         "retrodeck_paths": retrodeck_paths,
         "retroarch_config": retroarch_config,
         "retroarch_core_info": retroarch_core_info,
@@ -469,6 +477,26 @@ def wire_services(cfg: WiringConfig) -> dict:
         ),
     )
 
+    connection_service = ConnectionService(
+        config=ConnectionServiceConfig(
+            settings=cfg.stores.settings,
+            romm_api=cfg.adapters.romm_api,
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            min_required_version=cfg.runtime.min_required_version,
+        ),
+    )
+
+    startup_healing_service = StartupHealingService(
+        config=StartupHealingServiceConfig(
+            state=cfg.stores.state,
+            logger=cfg.runtime.logger,
+            save_state=cfg.callbacks.save_state,
+            retrodeck_home=cfg.callbacks.get_retrodeck_home,
+            path_probe=cfg.adapters.path_probe,
+        ),
+    )
+
     return {
         "save_sync_service": save_sync_service,
         "playtime_service": playtime_service,
@@ -485,4 +513,6 @@ def wire_services(cfg: WiringConfig) -> dict:
         "shortcut_removal_service": shortcut_removal_service,
         "settings_service": settings_service,
         "core_service": core_service,
+        "connection_service": connection_service,
+        "startup_healing_service": startup_healing_service,
     }

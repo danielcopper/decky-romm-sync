@@ -4,7 +4,7 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeSgdbArtworkCache
+from conftest import FakePathProbe, FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.persistence import PersistenceAdapter
@@ -12,8 +12,10 @@ from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
 from main import Plugin
+from services.connection import ConnectionService, ConnectionServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.settings import SettingsService, SettingsServiceConfig
+from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 from services.steamgrid import SteamGridConfig, SteamGridService
 
 
@@ -85,6 +87,26 @@ def plugin():
             steam_config=steam_config,
         ),
     )
+
+    p._connection_service = ConnectionService(
+        config=ConnectionServiceConfig(
+            settings=p.settings,
+            romm_api=p._romm_api,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            min_required_version=Plugin._MIN_REQUIRED_VERSION,
+        ),
+    )
+
+    p._startup_healing_service = StartupHealingService(
+        config=StartupHealingServiceConfig(
+            state=p._state,
+            logger=decky.logger,
+            save_state=p._save_state,
+            retrodeck_home=p._retrodeck_paths.get_retrodeck_home,
+            path_probe=FakePathProbe(),
+        ),
+    )
     return p
 
 
@@ -124,10 +146,23 @@ class TestSettings:
 class TestConnection:
     @pytest.mark.asyncio
     async def test_test_connection_sets_version_on_romm_api(self, plugin):
+        import decky
+
         plugin.loop = asyncio.get_event_loop()
         plugin.settings["romm_url"] = "http://romm.local"
         plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
         plugin._romm_api.list_platforms.return_value = [{"id": 1, "slug": "n64"}]
+        # Rebuild connection service with the live event loop so executor
+        # callbacks dispatch on the same loop the test awaits.
+        plugin._connection_service = ConnectionService(
+            config=ConnectionServiceConfig(
+                settings=plugin.settings,
+                romm_api=plugin._romm_api,
+                loop=plugin.loop,
+                logger=decky.logger,
+                min_required_version=Plugin._MIN_REQUIRED_VERSION,
+            ),
+        )
         result = await plugin.test_connection()
         assert result["success"] is True
         plugin._romm_api.set_version.assert_called_once_with("4.8.1")
@@ -419,257 +454,6 @@ class TestSettingsFilePermissions:
         assert os.stat(settings_path).st_mode & 0o777 == 0o600
 
 
-class TestPruneStaleState:
-    def test_prunes_missing_files(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/nonexistent/game.z64", "system": "n64"},
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert "1" not in plugin._state["installed_roms"]
-
-    def test_keeps_existing_files(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        rom_file = tmp_path / "game.z64"
-        rom_file.write_text("data")
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(rom_file), "system": "n64"},
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert "1" in plugin._state["installed_roms"]
-
-    def test_keeps_existing_rom_dir(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        rom_dir = tmp_path / "FF7"
-        rom_dir.mkdir()
-
-        plugin._state["installed_roms"] = {
-            "1": {
-                "rom_id": 1,
-                "file_path": str(rom_dir / "FF7.m3u"),  # file missing but dir exists
-                "rom_dir": str(rom_dir),
-                "system": "psx",
-            },
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert "1" in plugin._state["installed_roms"]
-
-    def test_saves_state_only_when_pruned(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        rom_file = tmp_path / "game.z64"
-        rom_file.write_text("data")
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(rom_file), "system": "n64"},
-        }
-
-        # No pruning needed — state file should NOT be written
-        state_path = tmp_path / "state.json"
-        plugin._prune_stale_installed_roms()
-        assert not state_path.exists()
-
-    def test_prunes_mixed(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        rom_file = tmp_path / "game.z64"
-        rom_file.write_text("data")
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(rom_file), "system": "n64"},
-            "2": {"rom_id": 2, "file_path": "/gone/game.z64", "system": "snes"},
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert "1" in plugin._state["installed_roms"]
-        assert "2" not in plugin._state["installed_roms"]
-
-
-class TestPruneStaleStateEdgeCases:
-    """Edge case tests for _prune_stale_installed_roms."""
-
-    def test_empty_installed_roms_no_crash(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["installed_roms"] = {}
-        plugin._prune_stale_installed_roms()
-        # Should not crash, _save_state should NOT be called
-        state_path = tmp_path / "state.json"
-        assert not state_path.exists()
-
-    def test_all_entries_stale(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/gone/a.z64", "system": "n64"},
-            "2": {"rom_id": 2, "file_path": "/gone/b.z64", "system": "snes"},
-            "3": {"rom_id": 3, "file_path": "/gone/c.z64", "system": "gb"},
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert plugin._state["installed_roms"] == {}
-        # _save_state should have been called (state.json written)
-        state_path = tmp_path / "state.json"
-        assert state_path.exists()
-
-    def test_skips_when_retrodeck_home_unavailable(self, plugin, tmp_path):
-        """Guard: if retrodeck home doesn't exist on disk (SD card not mounted yet
-        at boot), prune skips entirely rather than wiping every entry whose
-        file_path lives on the unmounted volume."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-        plugin._retrodeck_paths.get_retrodeck_home.return_value = "/run/media/deck/Emulation/retrodeck-not-mounted"
-
-        plugin._state["installed_roms"] = {
-            "1": {
-                "rom_id": 1,
-                "file_path": "/run/media/deck/Emulation/retrodeck-not-mounted/roms/n64/a.z64",
-                "system": "n64",
-            },
-        }
-
-        plugin._prune_stale_installed_roms()
-        # Entry preserved despite stale file_path — guard short-circuited.
-        assert "1" in plugin._state["installed_roms"]
-
-    def test_skips_when_retrodeck_home_unset(self, plugin, tmp_path):
-        """Guard: empty retrodeck_home (first-run before path is detected) also
-        skips the prune."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-        plugin._retrodeck_paths.get_retrodeck_home.return_value = ""
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/somewhere/a.z64", "system": "n64"},
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert "1" in plugin._state["installed_roms"]
-
-    def test_skip_preserves_entry_at_old_home_during_migration(self, plugin, tmp_path):
-        """Pending migration: entries living under old home are preserved (#251)."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
-        plugin._state["retrodeck_home_path_previous"] = "/run/media/old/retrodeck"
-
-        plugin._state["installed_roms"] = {
-            "1": {
-                "rom_id": 1,
-                "file_path": "/run/media/old/retrodeck/roms/n64/zelda.z64",
-                "system": "n64",
-            },
-            "2": {
-                "rom_id": 2,
-                "file_path": "/run/media/old/retrodeck/roms/psx/FF7/FF7.m3u",
-                "rom_dir": "/run/media/old/retrodeck/roms/psx/FF7",
-                "system": "psx",
-            },
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert "1" in plugin._state["installed_roms"]
-        assert "2" in plugin._state["installed_roms"]
-
-    def test_skip_does_not_preserve_unrelated_path(self, plugin, tmp_path):
-        """Pending migration: ``old_home="/foo"`` does NOT preserve entry at ``/foobar/x``.
-
-        Path comparison must use the trailing separator to avoid prefix
-        false matches like /foo matching /foobar.
-        """
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
-        plugin._state["retrodeck_home_path_previous"] = "/foo"
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/foobar/x.z64", "system": "n64"},
-        }
-
-        plugin._prune_stale_installed_roms()
-        # /foobar/x is NOT under /foo (with separator), file does not exist → pruned.
-        assert "1" not in plugin._state["installed_roms"]
-
-    def test_skip_does_not_fire_when_old_home_is_empty(self, plugin, tmp_path):
-        """No migration marker — prune behaves normally."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
-        plugin._state.pop("retrodeck_home_path_previous", None)
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/gone/a.z64", "system": "n64"},
-        }
-
-        plugin._prune_stale_installed_roms()
-        assert "1" not in plugin._state["installed_roms"]
-
-    def test_skip_clears_after_migration_completes(self, plugin, tmp_path):
-        """After migration completes (marker dropped), normal prune behavior resumes."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
-
-        # First pass: marker set, entry preserved.
-        plugin._state["retrodeck_home_path_previous"] = "/old/retrodeck"
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/old/retrodeck/roms/n64/a.z64", "system": "n64"},
-        }
-        plugin._prune_stale_installed_roms()
-        assert "1" in plugin._state["installed_roms"]
-
-        # Second pass: marker cleared (post-migration), file still missing → pruned.
-        plugin._state.pop("retrodeck_home_path_previous", None)
-        plugin._prune_stale_installed_roms()
-        assert "1" not in plugin._state["installed_roms"]
-
-    def test_skip_logs_info_when_preserving(self, plugin, tmp_path, caplog):
-        """Skip emits an info log naming the preserved rom_id and old home."""
-        import logging
-
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-        plugin._retrodeck_paths.get_retrodeck_home.return_value = str(tmp_path)
-        plugin._state["retrodeck_home_path_previous"] = "/old/retrodeck"
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/old/retrodeck/roms/n64/a.z64", "system": "n64"},
-        }
-
-        with caplog.at_level(logging.INFO):
-            plugin._prune_stale_installed_roms()
-
-        assert any("Skipping prune" in rec.message and "/old/retrodeck" in rec.message for rec in caplog.records)
-
-
 class TestAtomicSettingsWrite:
     def test_settings_written_atomically(self, plugin, tmp_path):
         import decky
@@ -774,76 +558,6 @@ class TestWhitelistSettings:
         assert result["success"] is True
         assert plugin.settings["whitelist_disabled_defaults"] == ["moonlight"]
         assert plugin.settings["whitelist_custom_names"] == ["Custom Game"]
-
-
-class TestPruneStaleRegistry:
-    def test_prunes_missing_app_id(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "1": {"name": "Game A"},
-        }
-        plugin._prune_stale_registry()
-        assert "1" not in plugin._state["shortcut_registry"]
-
-    def test_prunes_zero_app_id(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 0, "name": "Game A"},
-        }
-        plugin._prune_stale_registry()
-        assert "1" not in plugin._state["shortcut_registry"]
-
-    def test_prunes_non_int_app_id(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": "abc", "name": "Game A"},
-        }
-        plugin._prune_stale_registry()
-        assert "1" not in plugin._state["shortcut_registry"]
-
-    def test_keeps_valid_entry(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 12345678, "name": "Game A"},
-        }
-        plugin._prune_stale_registry()
-        assert "1" in plugin._state["shortcut_registry"]
-
-    def test_saves_only_when_pruned(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 12345678, "name": "Game A"},
-        }
-        plugin._prune_stale_registry()
-        # No pruning needed — state file should NOT be written
-        state_path = tmp_path / "state.json"
-        assert not state_path.exists()
-
-    def test_empty_registry_no_crash(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(decky.DECKY_PLUGIN_SETTINGS_DIR, str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {}
-        plugin._prune_stale_registry()
-        # Should not crash, state file should NOT be written
-        state_path = tmp_path / "state.json"
-        assert not state_path.exists()
 
 
 class TestRefreshMigrationState:
@@ -1017,8 +731,8 @@ class TestMigrationBlockedDecoratorCoverage:
 
 
 class TestMainStartupOrdering:
-    """Lock-in test for the #251 startup-order invariant: detect_retrodeck_path_change
-    must run BEFORE _prune_stale_installed_roms so the prune skips entries living
+    """Lock-in test for the #251 startup-order invariant: ``detect_retrodeck_path_change``
+    must run BEFORE ``prune_stale_installed_roms`` so the prune skips entries living
     under a pending migration's previous home. Brittle by design — the assertion
     is intentionally narrow."""
 
@@ -1061,6 +775,12 @@ class TestMainStartupOrdering:
         firmware_service = MagicMock()
         firmware_service.load_bios_registry = MagicMock()
 
+        startup_healing_service = MagicMock()
+        startup_healing_service.prune_stale_installed_roms.side_effect = lambda: call_order.append(
+            "prune_stale_installed_roms"
+        )
+        startup_healing_service.prune_stale_registry.side_effect = lambda: call_order.append("prune_stale_registry")
+
         wired_services = {
             "save_sync_service": save_sync_service,
             "playtime_service": MagicMock(),
@@ -1077,6 +797,8 @@ class TestMainStartupOrdering:
             "shortcut_removal_service": MagicMock(),
             "settings_service": MagicMock(),
             "core_service": MagicMock(),
+            "connection_service": MagicMock(),
+            "startup_healing_service": startup_healing_service,
         }
 
         bootstrapped_adapters = {
@@ -1091,6 +813,7 @@ class TestMainStartupOrdering:
             "firmware_files": MagicMock(),
             "download_queue": MagicMock(),
             "migration_files": MagicMock(),
+            "path_probe": MagicMock(),
             "retrodeck_paths": MagicMock(),
             "retroarch_config": MagicMock(),
             "retroarch_core_info": MagicMock(),
@@ -1104,22 +827,12 @@ class TestMainStartupOrdering:
         with (
             patch("main.bootstrap", return_value=bootstrapped_adapters),
             patch("main.wire_services", return_value=wired_services),
-            patch.object(
-                Plugin,
-                "_prune_stale_installed_roms",
-                lambda self: call_order.append("_prune_stale_installed_roms"),
-            ),
-            patch.object(
-                Plugin,
-                "_prune_stale_registry",
-                lambda self: call_order.append("_prune_stale_registry"),
-            ),
         ):
             await plugin._main()
 
         assert "detect_retrodeck_path_change" in call_order
-        assert "_prune_stale_installed_roms" in call_order
-        assert call_order.index("detect_retrodeck_path_change") < call_order.index("_prune_stale_installed_roms")
+        assert "prune_stale_installed_roms" in call_order
+        assert call_order.index("detect_retrodeck_path_change") < call_order.index("prune_stale_installed_roms")
 
 
 class TestCancelCallablesNotBlockedByMigration:

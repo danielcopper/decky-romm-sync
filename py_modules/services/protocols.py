@@ -543,6 +543,22 @@ class ArtworkRemover(Protocol):
     def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None: ...
 
 
+class PathExistsProbe(Protocol):
+    """Generic filesystem existence probe.
+
+    Used by services that need to check whether a path is currently
+    present on disk without touching ``os.path`` directly. Distinct from
+    the domain-shaped ``CoverArtFileStore`` / ``DownloadFileAdapter`` /
+    ``MigrationFileAdapter`` Protocols: this one exposes only the
+    semantic question "does this path exist?" and carries no implication
+    about which subtree of the filesystem the caller is reasoning about.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+
 class CoverArtFileStore(Protocol):
     """Filesystem seam for cover-art file operations.
 

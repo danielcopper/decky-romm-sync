@@ -23,6 +23,7 @@ from lib.errors import (
 
 # conftest.py patches decky before this import
 from main import Plugin
+from services.connection import ConnectionService, ConnectionServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 
 
@@ -59,6 +60,16 @@ def plugin():
             save_state=p._save_state,
             save_settings_to_disk=p._save_settings_to_disk,
             log_debug=p._log_debug,
+        ),
+    )
+
+    p._connection_service = ConnectionService(
+        config=ConnectionServiceConfig(
+            settings=p.settings,
+            romm_api=p._romm_api,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            min_required_version=Plugin._MIN_REQUIRED_VERSION,
         ),
     )
     return p
@@ -300,11 +311,29 @@ class TestPlatformMap:
 
 
 def _setup_plugin(plugin):
-    """Configure plugin with valid settings for HTTP tests."""
+    """Configure plugin with valid settings for HTTP tests.
+
+    Also rebuilds the connection service on the live event loop so
+    executor calls dispatch on the loop the test awaits — pytest-asyncio
+    creates a fresh loop per test in auto mode, so the loop the fixture
+    captured at setup time is not the loop the test runs on.
+    """
+    import decky
+
     plugin.settings["romm_url"] = "http://romm.local"
     plugin.settings["romm_user"] = "user"
     plugin.settings["romm_pass"] = "pass"
     plugin.settings["romm_allow_insecure_ssl"] = False
+    plugin.loop = asyncio.get_event_loop()
+    plugin._connection_service = ConnectionService(
+        config=ConnectionServiceConfig(
+            settings=plugin.settings,
+            romm_api=plugin._romm_api,
+            loop=plugin.loop,
+            logger=decky.logger,
+            min_required_version=Plugin._MIN_REQUIRED_VERSION,
+        ),
+    )
 
 
 class TestTranslateHttpError:

@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import os
 import sys
 from typing import ClassVar
@@ -27,13 +26,14 @@ from adapters.persistence import (
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
-from domain.version import meets_min_version
 from lib.migration_gate import migration_blocked
 
 
 class Plugin:
     settings: dict
     loop: asyncio.AbstractEventLoop
+
+    _MIN_REQUIRED_VERSION = (4, 8, 1)
 
     # -- logging ---------------------------------------------------------------
 
@@ -73,66 +73,6 @@ class Plugin:
 
     def _load_metadata_cache(self):
         self._metadata_cache = self._persistence.load_metadata_cache()
-
-    # -- pruning ---------------------------------------------------------------
-
-    def _is_pending_migration_path(self, file_path: str, rom_dir: str) -> bool:
-        """True when an installed_roms entry lives under the pre-migration home."""
-        pending = self._state.get("retrodeck_home_path_previous", "")
-        if not pending:
-            return False
-        prefix = pending + os.sep
-        return file_path.startswith(prefix) or rom_dir.startswith(prefix)
-
-    def _prune_stale_installed_roms(self):
-        """Remove installed_roms entries whose files no longer exist on disk.
-
-        Skipped entirely when the RetroDECK home path is not yet available on
-        disk — that almost always means the SD card hasn't finished mounting
-        (boot-time race), and a naive os.path.exists() check would wipe every
-        entry that lives on the card. The next plugin reload, with the
-        filesystem ready, will run the prune normally.
-
-        Entries living under a pending migration's previous home are also
-        preserved — RetroDECK has moved away from that path so the files
-        won't exist there, but the user hasn't migrated yet and the entries
-        must survive until they do.
-        """
-        retrodeck_home = self._retrodeck_paths.get_retrodeck_home()
-        if not retrodeck_home or not os.path.exists(retrodeck_home):
-            decky.logger.info(
-                f"Skipping installed_roms prune: retrodeck home unavailable ({retrodeck_home or 'unset'})"
-            )
-            return
-
-        pruned = []
-        for rom_id, entry in list(self._state["installed_roms"].items()):  # list(): dict mutated below
-            file_path = entry.get("file_path", "")
-            rom_dir = entry.get("rom_dir", "")
-            if self._is_pending_migration_path(file_path, rom_dir):
-                decky.logger.info(f"Skipping prune of {rom_id} ({file_path}): pending migration")
-                continue
-            if (file_path and os.path.exists(file_path)) or (rom_dir and os.path.exists(rom_dir)):
-                continue
-            decky.logger.info(f"Pruned stale installed_roms entry: {rom_id} ({file_path})")
-            pruned.append(rom_id)
-        for rom_id in pruned:
-            del self._state["installed_roms"][rom_id]
-        if pruned:
-            self._save_state()
-
-    def _prune_stale_registry(self):
-        """Remove shortcut_registry entries with missing or invalid app_id."""
-        pruned = []
-        for rom_id, entry in list(self._state["shortcut_registry"].items()):  # list(): dict mutated below
-            app_id = entry.get("app_id")
-            if not app_id or not isinstance(app_id, int):
-                decky.logger.info(f"Pruned stale registry entry: rom_id={rom_id} (invalid app_id={app_id})")
-                pruned.append(rom_id)
-        for rom_id in pruned:
-            del self._state["shortcut_registry"][rom_id]
-        if pruned:
-            self._save_state()
 
     async def _main(self):  # Decky lifecycle — must be async
         self.loop = asyncio.get_event_loop()
@@ -195,6 +135,7 @@ class Plugin:
                     firmware_files=adapters["firmware_files"],
                     migration_files=adapters["migration_files"],
                     gamelist_editor=adapters["gamelist_editor"],
+                    path_probe=adapters["path_probe"],
                 ),
                 stores=StateBundle(
                     state=self._state,
@@ -211,6 +152,7 @@ class Plugin:
                     clock=adapters["clock"],
                     uuid_gen=adapters["uuid_gen"],
                     sleeper=adapters["sleeper"],
+                    min_required_version=self._MIN_REQUIRED_VERSION,
                 ),
                 callbacks=CallbackBundle(
                     get_saves_path=self._retrodeck_paths.get_saves_path,
@@ -244,6 +186,8 @@ class Plugin:
         self._shortcut_removal_service = services["shortcut_removal_service"]
         self._settings_service = services["settings_service"]
         self._core_service = services["core_service"]
+        self._connection_service = services["connection_service"]
+        self._startup_healing_service = services["startup_healing_service"]
         self._firmware_service.load_bios_registry()
 
         # ── 5. Startup healing ──────────────────────────────────────────────
@@ -252,8 +196,8 @@ class Plugin:
         # Detect retrodeck path changes BEFORE pruning so the prune can skip
         # entries living under a pending migration's previous home.
         self._migration_service.detect_retrodeck_path_change()
-        self._prune_stale_installed_roms()
-        self._prune_stale_registry()
+        self._startup_healing_service.prune_stale_installed_roms()
+        self._startup_healing_service.prune_stale_registry()
         self._save_sync_service.prune_orphaned_state()
         self._sgdb_service.prune_orphaned_artwork_cache()
         self._artwork_service.prune_orphaned_staging_artwork()
@@ -292,63 +236,13 @@ class Plugin:
         self._download_service.shutdown()
         decky.logger.info("RomM Sync plugin unloaded")
 
-    _MIN_REQUIRED_VERSION = (4, 8, 1)
-
     # ── Callables ──────────────────────────────────────────────────────
     # All methods below are exposed to the frontend via Decky's callable()
     # framework, which requires `async def` even when no `await` is used.
     # S7503 warnings are suppressed in sonar-project.properties (fp1).
 
     async def test_connection(self):
-        from lib.errors import error_response
-
-        if not self.settings.get("romm_url"):
-            return {"success": False, "message": "No server URL configured", "error_code": "config_error"}
-        # Test basic connectivity (heartbeat may not require auth)
-        try:
-            heartbeat = await self.loop.run_in_executor(None, self._romm_api.heartbeat)
-        except Exception as e:
-            self._romm_api.set_version(None)
-            return error_response(e)
-
-        # Extract server version from heartbeat
-        version: str | None = None
-        with contextlib.suppress(AttributeError, TypeError):
-            version = heartbeat.get("SYSTEM", {}).get("VERSION")
-        self._romm_api.set_version(version)
-        if version:
-            decky.logger.info(f"RomM server version: {version}")
-
-        # Test authenticated access
-        try:
-            await self.loop.run_in_executor(None, self._romm_api.list_platforms)
-        except Exception as e:
-            resp = error_response(e)
-            if resp["error_code"] not in ("auth_error", "forbidden_error"):
-                resp["message"] = f"Server reachable but API request failed: {resp['message']}"
-            return resp
-
-        # Enforce minimum version
-        if version and version != "development" and not meets_min_version(version, self._MIN_REQUIRED_VERSION):
-            min_str = ".".join(str(v) for v in self._MIN_REQUIRED_VERSION)
-            return {
-                "success": False,
-                "message": (
-                    f"This plugin requires RomM {min_str} or newer. "
-                    f"Your server is running {version}. "
-                    "Please update your RomM server to continue using this plugin."
-                ),
-                "error_code": "version_error",
-                "romm_version": version,
-            }
-
-        result = {"success": True, "message": "Connected to RomM"}
-        if version and version != "development":
-            result["message"] = f"Connected to RomM {version}"
-            result["romm_version"] = version
-        elif version == "development":
-            result["romm_version"] = version
-        return result
+        return await self._connection_service.test_connection()
 
     async def get_romm_version(self):
         """Return cached RomM version (detected on last test_connection or device probe)."""
