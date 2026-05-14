@@ -22,6 +22,10 @@ class RommApi:
         """Store the detected server version string."""
         self._version = version
 
+    def get_version(self) -> str | None:
+        """Return the detected server version string, or ``None`` if unset."""
+        return self._version
+
     # ── Server / Auth ─────────────────────────────────────────────────
 
     def heartbeat(self) -> dict:

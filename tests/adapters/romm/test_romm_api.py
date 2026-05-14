@@ -341,6 +341,17 @@ class TestSetVersion:
         assert api._version == "4.7.0"
 
 
+class TestGetVersion:
+    def test_returns_none_when_unset(self):
+        api, _client = _make_api()
+        assert api.get_version() is None
+
+    def test_returns_stored_version(self):
+        api, _client = _make_api()
+        api.set_version("4.8.1")
+        assert api.get_version() == "4.8.1"
+
+
 class TestListSaves:
     def test_base_call(self):
         api, client = _make_api()

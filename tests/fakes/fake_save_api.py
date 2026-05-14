@@ -43,7 +43,10 @@ class FakeSaveApi:
     # ------------------------------------------------------------------
 
     def set_version(self, version: str) -> None:
-        raise NotImplementedError
+        self.version = version
+
+    def get_version(self) -> str | None:
+        return getattr(self, "version", None)
 
     def heartbeat(self) -> dict:
         if self.heartbeat_raises is not None:

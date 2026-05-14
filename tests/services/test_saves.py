@@ -500,6 +500,86 @@ class TestDeviceRegistrationServer:
         assert result["success"] is True
         assert result["device_id"] == "existing-id"
 
+    @pytest.mark.asyncio
+    async def test_probes_version_when_unset(self, tmp_path):
+        """ensure_device_registered probes the version when adapter has none."""
+
+        class VersionedFakeApi(FakeSaveApi):
+            def __init__(self) -> None:
+                super().__init__()
+                self.heartbeat_calls = 0
+
+            def heartbeat(self) -> dict:
+                self.heartbeat_calls += 1
+                return {"SYSTEM": {"VERSION": "4.8.5"}}
+
+        fake = VersionedFakeApi()
+        svc, _ = make_service(tmp_path, fake_api=fake)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+
+        await svc.ensure_device_registered()
+
+        assert fake.heartbeat_calls == 1
+        assert fake.get_version() == "4.8.5"
+
+    @pytest.mark.asyncio
+    async def test_skips_probe_when_version_already_set(self, tmp_path):
+        """No probe when adapter already has a version."""
+
+        class VersionedFakeApi(FakeSaveApi):
+            def __init__(self) -> None:
+                super().__init__()
+                self.heartbeat_calls = 0
+
+            def heartbeat(self) -> dict:
+                self.heartbeat_calls += 1
+                return {"SYSTEM": {"VERSION": "4.8.5"}}
+
+        fake = VersionedFakeApi()
+        fake.set_version("4.8.1")
+        svc, _ = make_service(tmp_path, fake_api=fake)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+
+        await svc.ensure_device_registered()
+
+        assert fake.heartbeat_calls == 0
+        assert fake.get_version() == "4.8.1"
+
+    @pytest.mark.asyncio
+    async def test_probe_failure_is_non_fatal(self, tmp_path):
+        """Heartbeat failure during version probe does not prevent registration."""
+        fake = FakeSaveApi()
+        fake.heartbeat_raises = ConnectionError("offline")
+        svc, _ = make_service(tmp_path, fake_api=fake)
+        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert fake.get_version() is None
+
+    @pytest.mark.asyncio
+    async def test_probe_skipped_when_disabled(self, tmp_path):
+        """Disabled save sync short-circuits before any probe."""
+
+        class VersionedFakeApi(FakeSaveApi):
+            def __init__(self) -> None:
+                super().__init__()
+                self.heartbeat_calls = 0
+
+            def heartbeat(self) -> dict:
+                self.heartbeat_calls += 1
+                return {"SYSTEM": {"VERSION": "4.8.5"}}
+
+        fake = VersionedFakeApi()
+        svc, _ = make_service(tmp_path, fake_api=fake)
+        # save_sync_enabled defaults to False
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is False
+        assert result.get("disabled") is True
+        assert fake.heartbeat_calls == 0
+
 
 # ---------------------------------------------------------------------------
 # TestListDevices

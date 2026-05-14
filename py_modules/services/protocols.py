@@ -33,6 +33,10 @@ class RommApiProtocol(Protocol):
         """Store the detected RomM server version string."""
         ...
 
+    def get_version(self) -> str | None:
+        """Return the detected RomM server version string, or ``None`` if unset."""
+        ...
+
     def heartbeat(self) -> dict:
         """Check server connectivity and retrieve version info.
 

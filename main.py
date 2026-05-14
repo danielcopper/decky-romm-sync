@@ -644,16 +644,6 @@ class Plugin:
     # ── Save Sync / Playtime delegation to services ──────────
 
     async def ensure_device_registered(self):
-        # Ensure RomM version is detected before device registration.
-        if not getattr(self, "_romm_version", None):
-            try:
-                heartbeat = await self.loop.run_in_executor(None, self._romm_api.heartbeat)
-                with contextlib.suppress(AttributeError, TypeError):
-                    self._romm_version = heartbeat.get("SYSTEM", {}).get("VERSION")
-                if self._romm_version:
-                    self._romm_api.set_version(self._romm_version)
-            except Exception as e:
-                decky.logger.debug(f"ensure_device_registered: heartbeat failed (non-fatal): {e}")
         return await self._save_sync_service.ensure_device_registered()
 
     async def list_devices(self):

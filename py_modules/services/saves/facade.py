@@ -423,6 +423,23 @@ class SaveService:
         if not self._is_save_sync_enabled():
             return {"success": False, "device_id": "", "device_name": "", "disabled": True}
 
+        # Probe the RomM version when it has not been observed yet. Device
+        # registration is the entrypoint reached from background launchers
+        # that never call test_connection first, so the version on the API
+        # adapter would otherwise stay None and version-gated server-side
+        # features couldn't be enabled until the next manual connection
+        # test. Probe failures are non-fatal — the registration call below
+        # still proceeds and the adapter just retains its current version.
+        if not self._romm_api.get_version():
+            try:
+                heartbeat = await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+                with contextlib.suppress(AttributeError, TypeError):
+                    version = heartbeat.get("SYSTEM", {}).get("VERSION")
+                    if version:
+                        self._romm_api.set_version(version)
+            except Exception as e:
+                self._logger.debug(f"ensure_device_registered: version probe failed (non-fatal): {e}")
+
         # Already registered
         has_device_id = self._save_sync_state.get("device_id")
         has_server_id = self._save_sync_state.get("server_device_id")
