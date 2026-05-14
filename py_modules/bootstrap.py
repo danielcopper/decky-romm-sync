@@ -67,6 +67,7 @@ from services.protocols import (
 from services.protocols import SteamConfigAdapter as SteamConfigProtocol
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
+from services.settings import SettingsService, SettingsServiceConfig
 from services.shortcut_removal import ShortcutRemovalService
 from services.steamgrid import SteamGridConfig, SteamGridService
 
@@ -444,6 +445,16 @@ def wire_services(cfg: WiringConfig) -> dict:
         achievements=achievements_service,
     )
 
+    settings_service = SettingsService(
+        config=SettingsServiceConfig(
+            settings=cfg.stores.settings,
+            state=cfg.stores.state,
+            logger=cfg.runtime.logger,
+            save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
+            steam_config=cfg.adapters.steam_config,
+        ),
+    )
+
     return {
         "save_sync_service": save_sync_service,
         "playtime_service": playtime_service,
@@ -458,4 +469,5 @@ def wire_services(cfg: WiringConfig) -> dict:
         "game_detail_service": game_detail_service,
         "artwork_service": artwork_service,
         "shortcut_removal_service": shortcut_removal_service,
+        "settings_service": settings_service,
     }

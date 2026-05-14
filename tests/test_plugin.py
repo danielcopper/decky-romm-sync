@@ -13,6 +13,7 @@ from adapters.steam_config import SteamConfigAdapter
 # conftest.py patches decky before this import
 from main import Plugin
 from services.library import LibraryService, LibraryServiceConfig
+from services.settings import SettingsService, SettingsServiceConfig
 from services.steamgrid import SteamGridConfig, SteamGridService
 
 
@@ -72,6 +73,16 @@ def plugin():
             save_state=MagicMock(),
             save_settings_to_disk=MagicMock(),
             get_pending_sync=lambda: p._sync_service._pending_sync,
+        ),
+    )
+
+    p._settings_service = SettingsService(
+        config=SettingsServiceConfig(
+            settings=p.settings,
+            state=p._state,
+            logger=decky.logger,
+            save_settings_to_disk=p._save_settings_to_disk,
+            steam_config=steam_config,
         ),
     )
     return p
@@ -1064,6 +1075,7 @@ class TestMainStartupOrdering:
             "game_detail_service": MagicMock(),
             "artwork_service": artwork_service,
             "shortcut_removal_service": MagicMock(),
+            "settings_service": MagicMock(),
         }
 
         bootstrapped_adapters = {

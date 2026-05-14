@@ -111,5 +111,6 @@ modules =
     services.playtime
     services.rom_removal
     services.saves
+    services.settings
     services.shortcut_removal
     services.steamgrid

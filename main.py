@@ -243,6 +243,7 @@ class Plugin:
         self._game_detail_service = services["game_detail_service"]
         self._artwork_service = services["artwork_service"]
         self._shortcut_removal_service = services["shortcut_removal_service"]
+        self._settings_service = services["settings_service"]
         self._firmware_service.load_bios_registry()
 
         # ── 5. Startup healing ──────────────────────────────────────────────
@@ -354,98 +355,34 @@ class Plugin:
         return {"version": self._romm_api.get_version()}
 
     async def save_settings(self, romm_url, romm_user, romm_pass, allow_insecure_ssl=None):
-        try:
-            self.settings["romm_url"] = romm_url
-            self.settings["romm_user"] = romm_user
-            # Only update password if user entered a new one (not the masked placeholder)
-            if romm_pass and romm_pass != "••••":
-                self.settings["romm_pass"] = romm_pass
-            if allow_insecure_ssl is not None:
-                self.settings["romm_allow_insecure_ssl"] = bool(allow_insecure_ssl)
-            self._save_settings_to_disk()
-            return {"success": True, "message": "Settings saved"}
-        except Exception as e:
-            decky.logger.error(f"Failed to save settings: {e}")
-            return {"success": False, "message": f"Save failed: {e}"}
+        return self._settings_service.save_settings(romm_url, romm_user, romm_pass, allow_insecure_ssl)
 
     async def frontend_log(self, level, message):
-        """Log a frontend message. Respects log_level setting."""
-        configured = self.settings.get("log_level", "warn")
-        if self.LOG_LEVELS.get(level, 0) >= self.LOG_LEVELS.get(configured, 2):
-            if level == "error":
-                decky.logger.error(f"[FE] {message}")
-            elif level == "warn":
-                decky.logger.warning(f"[FE] {message}")
-            else:
-                decky.logger.info(f"[FE] {message}")
+        self._settings_service.frontend_log(level, message)
 
     async def debug_log(self, message):
-        """Backward-compat wrapper: logs at debug level."""
         await self.frontend_log("debug", message)
 
     async def save_log_level(self, level):
-        if level not in ("debug", "info", "warn", "error"):
-            return {"success": False, "message": "Invalid log level"}
-        self.settings["log_level"] = level
-        self._save_settings_to_disk()
-        return {"success": True}
+        return self._settings_service.save_log_level(level)
 
     async def save_steam_input_setting(self, mode):
-        if mode not in ("default", "force_on", "force_off"):
-            return {"success": False, "message": f"Invalid mode: {mode}"}
-        self.settings["steam_input_mode"] = mode
-        self._save_settings_to_disk()
-        return {"success": True}
+        return self._settings_service.save_steam_input_setting(mode)
 
     async def apply_steam_input_setting(self):
-        """Apply current Steam Input setting to all existing ROM shortcuts."""
-        mode = self.settings.get("steam_input_mode", "default")
-        app_ids = [entry["app_id"] for entry in self._state["shortcut_registry"].values() if "app_id" in entry]
-        if not app_ids:
-            return {"success": True, "message": "No shortcuts to update"}
-        try:
-            self._steam_config.set_steam_input_config(app_ids, mode=mode)
-            return {"success": True, "message": f"Steam Input set to '{mode}' for {len(app_ids)} shortcuts"}
-        except Exception as e:
-            decky.logger.error(f"Failed to apply Steam Input setting: {e}")
-            return {"success": False, "message": "Operation failed"}
+        return self._settings_service.apply_steam_input_setting()
 
     async def fix_retroarch_input_driver(self):
-        """Change RetroArch input_driver from 'x' to 'sdl2'."""
-        return self._steam_config.fix_retroarch_input_driver()
+        return self._settings_service.fix_retroarch_input_driver()
 
     async def get_settings(self):
-        has_credentials = bool(self.settings.get("romm_user") and self.settings.get("romm_pass"))
-        return {
-            "romm_url": self.settings.get("romm_url", ""),
-            "romm_user": self.settings.get("romm_user", ""),
-            "romm_pass_masked": "••••" if self.settings.get("romm_pass") else "",
-            "has_credentials": has_credentials,
-            "steam_input_mode": self.settings.get("steam_input_mode", "default"),
-            "sgdb_api_key_masked": "••••" if self.settings.get("steamgriddb_api_key") else "",
-            "retroarch_input_check": self._steam_config.check_retroarch_input_driver(),
-            "log_level": self.settings.get("log_level", "warn"),
-            "romm_allow_insecure_ssl": self.settings.get("romm_allow_insecure_ssl", False),
-            "collection_create_platform_groups": self.settings.get("collection_create_platform_groups", False),
-        }
+        return self._settings_service.get_settings()
 
     async def get_whitelist_settings(self):
-        """Return whitelist settings for the non-Steam game removal feature."""
-        return {
-            "disabled_defaults": self.settings.get("whitelist_disabled_defaults", []),
-            "custom_names": self.settings.get("whitelist_custom_names", []),
-        }
+        return self._settings_service.get_whitelist_settings()
 
     async def update_whitelist_settings(self, disabled_defaults, custom_names):
-        """Update whitelist settings. Both params must be lists of strings."""
-        if not isinstance(disabled_defaults, list) or not all(isinstance(s, str) for s in disabled_defaults):
-            return {"success": False, "message": "disabled_defaults must be a list of strings"}
-        if not isinstance(custom_names, list) or not all(isinstance(s, str) for s in custom_names):
-            return {"success": False, "message": "custom_names must be a list of strings"}
-        self.settings["whitelist_disabled_defaults"] = disabled_defaults
-        self.settings["whitelist_custom_names"] = custom_names
-        self._save_settings_to_disk()
-        return {"success": True}
+        return self._settings_service.update_whitelist_settings(disabled_defaults, custom_names)
 
     async def get_cached_game_detail(self, app_id):
         return self._game_detail_service.get_cached_game_detail(app_id)
@@ -554,9 +491,7 @@ class Plugin:
         return await self._sync_service.set_all_collections_sync(enabled, category)
 
     async def save_collection_platform_groups(self, enabled):
-        self.settings["collection_create_platform_groups"] = bool(enabled)
-        self._save_settings_to_disk()
-        return {"success": True}
+        return self._settings_service.save_collection_platform_groups(enabled)
 
     @migration_blocked
     async def start_sync(self):
