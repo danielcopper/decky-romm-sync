@@ -101,12 +101,6 @@ class SaveService:
         # Per-rom lock dict — serializes concurrent sync operations on the
         # same rom_id (pre_launch_sync, post_exit_sync, manual sync, resolve).
         self._rom_sync_locks: dict[int, asyncio.Lock] = {}
-        self._versions = VersionsService(
-            save_service=self,
-            state_svc=self._state_svc,
-            romm_api=self._romm_api,
-            logger=self._logger,
-        )
         self._sync_engine = SyncEngine(
             save_service=self,
             state_svc=self._state_svc,
@@ -115,6 +109,13 @@ class SaveService:
             logger=self._logger,
             clock=self._clock,
             save_file=self._save_file,
+        )
+        self._versions = VersionsService(
+            save_service=self,
+            state_svc=self._state_svc,
+            sync_engine=self._sync_engine,
+            romm_api=self._romm_api,
+            logger=self._logger,
         )
         self._status = StatusService(
             save_service=self,
@@ -346,68 +347,9 @@ class SaveService:
                 results.append({"path": save_path, "filename": rom_name + ext})
         return results
 
-    # ------------------------------------------------------------------
-    # SyncEngine delegates
-    # ------------------------------------------------------------------
-
-    def _get_server_save_hash(self, server_save: dict) -> str | None:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        return self._sync_engine._get_server_save_hash(server_save)
-
-    def _update_file_sync_state(
-        self,
-        rom_id_str: str,
-        filename: str,
-        server_response: dict,
-        local_path: str,
-        system: str,
-        *,
-        emulator_tag: str | None = None,
-        core_so: str | None = None,
-    ) -> None:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        self._sync_engine._update_file_sync_state(
-            rom_id_str,
-            filename,
-            server_response,
-            local_path,
-            system,
-            emulator_tag=emulator_tag,
-            core_so=core_so,
-        )
-
-    def _do_download_save(self, server_save: dict, saves_dir: str, filename: str, rom_id_str: str, system: str) -> None:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        self._sync_engine._do_download_save(server_save, saves_dir, filename, rom_id_str, system)
-
-    def _do_upload_save(
-        self,
-        rom_id: int,
-        file_path: str,
-        filename: str,
-        rom_id_str: str,
-        system: str,
-        server_save: dict | None = None,
-    ) -> dict:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        return self._sync_engine._do_upload_save(rom_id, file_path, filename, rom_id_str, system, server_save)
-
-    @staticmethod
-    def _filter_server_saves_to_slot(server_saves: list[dict], active_slot: str | None) -> list[dict]:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        return SyncEngine._filter_server_saves_to_slot(server_saves, active_slot)
-
-    def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
-        """Delegate to :class:`SyncEngine` — see its docstring."""
-        return self._sync_engine._sync_rom_saves(rom_id)
-
     def _is_save_sync_enabled(self) -> bool:
         """Check if save sync feature is enabled."""
         return self._save_sync_state.get("settings", {}).get("save_sync_enabled", False)
-
-    def _get_save_status_io(self, rom_id: int, server_saves: list[dict]) -> dict:
-        """Delegate to :class:`StatusService` — see its docstring."""
-        return self._status._get_save_status_io(rom_id, server_saves)
 
     # ------------------------------------------------------------------
     # Public async API (callable endpoints)
@@ -641,7 +583,9 @@ class SaveService:
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
-            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            synced, errors, conflicts = await self._loop.run_in_executor(
+                None, self._sync_engine._sync_rom_saves, rom_id
+            )
             self.save_state()
 
             msg = f"Downloaded {synced} save(s)"
@@ -696,7 +640,9 @@ class SaveService:
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
-            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            synced, errors, conflicts = await self._loop.run_in_executor(
+                None, self._sync_engine._sync_rom_saves, rom_id
+            )
             self.save_state()
 
             self._logger.info(
@@ -738,7 +684,9 @@ class SaveService:
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
-            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            synced, errors, conflicts = await self._loop.run_in_executor(
+                None, self._sync_engine._sync_rom_saves, rom_id
+            )
             self.save_state()
 
             msg = f"Synced {synced} save(s)"
@@ -823,7 +771,9 @@ class SaveService:
             rom_count += 1
             rom_id_int = int(rom_id_str)
             async with self._rom_lock(rom_id_int):
-                synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id_int)
+                synced, errors, conflicts = await self._loop.run_in_executor(
+                    None, self._sync_engine._sync_rom_saves, rom_id_int
+                )
             total_synced += synced
             total_errors.extend(errors)
             all_conflicts.extend(conflicts)
@@ -913,7 +863,7 @@ class SaveService:
 
             save_state = self._save_sync_state["saves"].get(rom_id_str, {})
             active_slot = save_state.get("active_slot")
-            server_in_slot = self._filter_server_saves_to_slot(server_saves, active_slot)
+            server_in_slot = SyncEngine._filter_server_saves_to_slot(server_saves, active_slot)
             if not server_in_slot:
                 return {"success": False, "message": "No server save in active slot"}
             server = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
@@ -975,7 +925,7 @@ class SaveService:
         lands at.
         """
         target = _local_save_target(server, rom_name)
-        self._do_download_save(server, saves_dir, target, rom_id_str, system)
+        self._sync_engine._do_download_save(server, saves_dir, target, rom_id_str, system)
         self.save_state()
 
     def _resolve_conflict_keep_local(
@@ -995,7 +945,7 @@ class SaveService:
             raise FileNotFoundError(f"Local save not found: {local_path}")
         local_hash = self._file_md5(local_path)
         try:
-            server_hash = self._retry.with_retry(self._get_server_save_hash, server)
+            server_hash = self._retry.with_retry(self._sync_engine._get_server_save_hash, server)
         except Exception:
             server_hash = None
 
@@ -1019,7 +969,7 @@ class SaveService:
             return
 
         # Upload local content as a PUT against the existing server save.
-        self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server)
+        self._sync_engine._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server)
         self.save_state()
 
     # ------------------------------------------------------------------

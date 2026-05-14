@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from services.protocols import RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
+    from services.saves.sync_engine import SyncEngine
 
 
 class VersionsService:
@@ -36,11 +37,13 @@ class VersionsService:
         *,
         save_service: SaveService,
         state_svc: StateService,
+        sync_engine: SyncEngine,
         romm_api: RommApiProtocol,
         logger: logging.Logger,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
+        self._sync_engine = sync_engine
         self._romm_api = romm_api
         self._logger = logger
 
@@ -160,10 +163,10 @@ class VersionsService:
         target_filename = _local_save_target(target_save, rom_name)
         local_path = os.path.join(saves_dir, target_filename)
 
-        self._save_service._do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
+        self._sync_engine._do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
 
         try:
-            self._save_service._do_upload_save(
+            self._sync_engine._do_upload_save(
                 rom_id=int(rom_id_str),
                 file_path=local_path,
                 filename=target_filename,
@@ -237,7 +240,7 @@ class VersionsService:
             # Matrix pre-flight: get the tracked save in sync first, or surface
             # a conflict that the user must resolve before any switch can run.
             _synced, errors, conflicts = await self._save_service._loop.run_in_executor(
-                None, self._save_service._sync_rom_saves, rom_id
+                None, self._sync_engine._sync_rom_saves, rom_id
             )
             if conflicts:
                 self._state_svc.save_state()

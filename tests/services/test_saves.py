@@ -675,7 +675,7 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
         assert synced == 1
         assert errors == []
         assert conflicts == []
@@ -689,7 +689,7 @@ class TestSyncRomSaves:
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, _ = svc._sync_rom_saves(42)
+        synced, errors, _ = svc._sync_engine._sync_rom_saves(42)
         assert synced == 1
         assert errors == []
         # Verify the file was downloaded
@@ -698,7 +698,7 @@ class TestSyncRomSaves:
 
     def test_rom_not_installed(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        synced, errors, _ = svc._sync_rom_saves(999)
+        synced, errors, _ = svc._sync_engine._sync_rom_saves(999)
         assert synced == 0
         assert errors == []
 
@@ -707,7 +707,7 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         fake.fail_on_next(RommApiError("Server error"))
 
-        synced, errors, _ = svc._sync_rom_saves(42)
+        synced, errors, _ = svc._sync_engine._sync_rom_saves(42)
         assert synced == 0
         assert len(errors) == 1
         assert "Failed to fetch saves" in errors[0]
@@ -731,7 +731,7 @@ class TestSyncRomSaves:
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 0
         assert errors == []
@@ -752,7 +752,7 @@ class TestSyncRomSaves:
         # Local save at the (previous == current, same layout) location.
         _create_save(tmp_path, content=b"user progress")
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -781,13 +781,13 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
-        orig_sync = svc._sync_rom_saves
+        orig_sync = svc._sync_engine._sync_rom_saves
 
         def wrapped_sync(rom_id):
             call_order.append("sync")
             return orig_sync(rom_id)
 
-        svc._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
         result = await svc.sync_rom_saves(42)
 
@@ -813,7 +813,7 @@ class TestSyncRomSaves:
         def stub_sync(rom_id):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
-        svc._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.sync_rom_saves(42)
 
@@ -899,13 +899,13 @@ class TestSyncAllSaves:
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
-        orig_sync = svc._sync_rom_saves
+        orig_sync = svc._sync_engine._sync_rom_saves
 
         def wrapped_sync(rom_id):
             call_order.append("sync")
             return orig_sync(rom_id)
 
-        svc._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
         result = await svc.sync_all_saves()
 
@@ -931,7 +931,7 @@ class TestSyncAllSaves:
         def stub_sync(rom_id):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
-        svc._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.sync_all_saves()
 
@@ -1054,7 +1054,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
         plugin._migration_service.is_retrodeck_migration_pending.return_value = True
 
         spy = MagicMock(name="_sync_rom_saves_spy")
-        svc._sync_rom_saves = spy  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = spy  # type: ignore[method-assign]
 
         result = await plugin.sync_all_saves()
 
@@ -1134,13 +1134,13 @@ class TestPostExitSync:
         _create_save(tmp_path, content=b"progress")
 
         # Patch _sync_rom_saves to record call ordering.
-        orig_sync = svc._sync_rom_saves
+        orig_sync = svc._sync_engine._sync_rom_saves
 
         def wrapped_sync(rom_id):
             call_order.append("sync")
             return orig_sync(rom_id)
 
-        svc._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
         result = await svc.post_exit_sync(42)
 
@@ -1201,7 +1201,7 @@ class TestPostExitSync:
         def stub_sync(rom_id):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
-        svc._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.post_exit_sync(42)
 
@@ -1533,7 +1533,9 @@ class TestEmulatorTag:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
-        svc._do_upload_save(42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_upload_save(
+            42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba"
+        )
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -1547,7 +1549,9 @@ class TestEmulatorTag:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
-        svc._do_upload_save(42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_upload_save(
+            42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba"
+        )
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -2059,7 +2063,7 @@ class TestUpdateFileSyncState:
         save_file = _create_save(tmp_path)
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._update_file_sync_state("42", "pokemon.srm", server_resp, str(save_file), "gba")
+        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_resp, str(save_file), "gba")
 
         entry = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert entry["last_sync_hash"] == svc._file_md5(str(save_file))
@@ -2071,7 +2075,7 @@ class TestUpdateFileSyncState:
         save_file = _create_save(tmp_path)
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._update_file_sync_state(
+        svc._sync_engine._update_file_sync_state(
             "42",
             "pokemon.srm",
             server_resp,
@@ -2103,7 +2107,7 @@ class TestUpdateFileSyncState:
         }
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._update_file_sync_state(
+        svc._sync_engine._update_file_sync_state(
             "42",
             "pokemon.srm",
             server_resp,
@@ -2130,7 +2134,7 @@ class TestUpdateFileSyncState:
         }
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._update_file_sync_state(
+        svc._sync_engine._update_file_sync_state(
             "42",
             "pokemon.srm",
             server_resp,
@@ -2149,7 +2153,7 @@ class TestUpdateFileSyncState:
         local_path = str(save_file)
         server_response = _server_save()
 
-        svc._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
+        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert isinstance(file_state["last_sync_local_mtime"], float)
@@ -2161,7 +2165,7 @@ class TestUpdateFileSyncState:
         local_path = str(save_file)
         server_response = _server_save()
 
-        svc._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
+        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert isinstance(file_state["last_sync_local_size"], int)
@@ -2173,7 +2177,7 @@ class TestUpdateFileSyncState:
         local_path = str(save_file)
         server_response = _server_save()
 
-        svc._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
+        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert "local_mtime_at_last_sync" not in file_state
@@ -2183,7 +2187,7 @@ class TestUpdateFileSyncState:
         local_path = str(tmp_path / "saves" / "gba" / "missing.srm")
         server_response = _server_save()
 
-        svc._update_file_sync_state("42", "missing.srm", server_response, local_path, "gba")
+        svc._sync_engine._update_file_sync_state("42", "missing.srm", server_response, local_path, "gba")
 
         file_state = svc._save_sync_state["saves"]["42"]["files"]["missing.srm"]
         assert file_state["last_sync_local_mtime"] is None
@@ -2286,7 +2290,7 @@ class TestStateBackwardCompat:
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
-        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
 
         game_state = svc._save_sync_state["saves"]["42"]
         assert game_state["emulator"] == "retroarch-mgba"
@@ -2304,7 +2308,7 @@ class TestStateBackwardCompat:
         os.makedirs(saves_dir, exist_ok=True)
         server_save = _server_save(save_id=99)
 
-        svc._do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
 
         file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
         assert file_state.get("tracked_save_id") == 99
@@ -2326,7 +2330,7 @@ class TestV47SyncFlow:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
-        svc._sync_rom_saves(42)
+        svc._sync_engine._sync_rom_saves(42)
 
         list_calls = [c for c in fake.call_log if c[0] == "list_saves"]
         assert len(list_calls) >= 1
@@ -2341,7 +2345,7 @@ class TestV47SyncFlow:
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
-        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -2380,7 +2384,7 @@ class TestV47SyncFlow:
             "device_syncs": [{"device_id": "dev-1", "is_current": True}],
         }
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
         assert synced == 0
         assert errors == []
         assert conflicts == []
@@ -2416,7 +2420,7 @@ class TestV47SyncFlow:
             "device_syncs": [{"device_id": "dev-1", "is_current": False}],
         }
 
-        synced, errors, _conflicts = svc._sync_rom_saves(42)
+        synced, errors, _conflicts = svc._sync_engine._sync_rom_saves(42)
         assert synced == 1
         assert errors == []
         # Verify download happened
@@ -2447,7 +2451,7 @@ class TestConfirmDownloadAfterSync:
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
-        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -2469,7 +2473,7 @@ class TestConfirmDownloadAfterSync:
         fake.saves[100] = _server_save(save_id=100, rom_id=42)
         server_save = fake.saves[100]
 
-        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba", server_save=server_save)
+        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba", server_save=server_save)
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -2487,7 +2491,7 @@ class TestConfirmDownloadAfterSync:
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
-        svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
 
         confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
         assert confirm_calls == []
@@ -2508,7 +2512,7 @@ class TestConfirmDownloadAfterSync:
 
         fake.confirm_download = boom  # type: ignore[method-assign]
         try:
-            result = svc._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+            result = svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
         finally:
             fake.confirm_download = original_confirm  # type: ignore[method-assign]
 
@@ -2531,7 +2535,7 @@ class TestConfirmDownloadAfterSync:
         os.makedirs(saves_dir, exist_ok=True)
         server_save = _server_save(save_id=99)
 
-        svc._do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
+        svc._sync_engine._do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
 
         dl_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(dl_calls) == 1
@@ -3122,7 +3126,7 @@ class TestTrackedSaveIdMatching:
         }
 
         # Sync should NOT download the timestamp-named file as a new server-only save
-        _synced, errors, _conflicts = svc._sync_rom_saves(42)
+        _synced, errors, _conflicts = svc._sync_engine._sync_rom_saves(42)
         assert len(errors) == 0
         # No downloads should have occurred (files are in sync)
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
@@ -3248,7 +3252,7 @@ class TestTrackedSaveIdMatching:
             "files": {},
         }
 
-        synced, errors, _conflicts = svc._sync_rom_saves(42)
+        synced, errors, _conflicts = svc._sync_engine._sync_rom_saves(42)
         assert len(errors) == 0
         assert synced == 1  # only ONE download
 
@@ -3341,7 +3345,7 @@ class TestOlderVersionSkipping:
             },
         }
 
-        _synced, _errors, _conflicts = svc._sync_rom_saves(42)
+        _synced, _errors, _conflicts = svc._sync_engine._sync_rom_saves(42)
         # pokemon [old].srm in slot=portable is filtered out — no download
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
@@ -4806,7 +4810,7 @@ class TestOwnUploadIds:
         fake.saves[1000] = _server_save(save_id=1000, rom_id=42)
 
         # Call internal upload with no server_save (POST path)
-        svc._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=None)
+        svc._sync_engine._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=None)
 
         rom_state = svc._save_sync_state["saves"]["42"]
         # Should still have exactly one entry for that id
@@ -4829,7 +4833,7 @@ class TestOwnUploadIds:
         }
 
         server_save = fake.saves[100]
-        svc._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=server_save)
+        svc._sync_engine._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=server_save)
 
         rom_state = svc._save_sync_state["saves"]["42"]
         # own_upload_ids must not have changed (100 not added, 99 still there)
@@ -4961,7 +4965,7 @@ class TestSyncRomSavesDispatch:
             }
         }
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 0
         assert errors == []
@@ -4976,7 +4980,7 @@ class TestSyncRomSavesDispatch:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"new local")
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -5013,7 +5017,7 @@ class TestSyncRomSavesDispatch:
             }
         }
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -5050,7 +5054,7 @@ class TestSyncRomSavesDispatch:
             }
         }
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 0
         assert errors == []
@@ -5080,7 +5084,7 @@ class TestSyncRomSavesDispatch:
         )
         fake.saves[100] = ss
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -5112,7 +5116,7 @@ class TestSyncRomSavesDispatch:
             }
         }
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -5142,7 +5146,7 @@ class TestSyncRomSavesDispatch:
         # No file_state at all — no baseline yet.
         svc._save_sync_state["saves"]["42"] = {"files": {}}
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 0
         assert errors == []
@@ -5176,7 +5180,7 @@ class TestSyncRomSavesDispatch:
             }
         }
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -5213,7 +5217,7 @@ class TestSyncRomSavesDispatch:
             }
         }
 
-        synced, errors, conflicts = svc._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -5235,7 +5239,7 @@ class TestSyncRomSavesDispatch:
         before = svc._save_sync_state["saves"].get("42", {}).get("last_sync_check_at")
         assert before is None
 
-        svc._sync_rom_saves(42)
+        svc._sync_engine._sync_rom_saves(42)
 
         after = svc._save_sync_state["saves"]["42"]["last_sync_check_at"]
         assert after is not None and isinstance(after, str)
@@ -5270,7 +5274,7 @@ class TestGetSaveStatusComputeAction:
             }
         }
 
-        result = svc._get_save_status_io(42, [ss])
+        result = svc._status._get_save_status_io(42, [ss])
 
         assert len(result["conflicts"]) == 1
         c = result["conflicts"][0]
@@ -5302,13 +5306,13 @@ class TestGetSaveStatusComputeAction:
                 }
             }
         }
-        result_skip = svc._get_save_status_io(42, [ss_skip])
+        result_skip = svc._status._get_save_status_io(42, [ss_skip])
         assert result_skip["files"][0]["status"] == "synced"
 
         # ---------- Upload ----------
         # Reset state for next case: no server saves
         svc._save_sync_state["saves"]["42"] = {"files": {}}
-        result_upload = svc._get_save_status_io(42, [])
+        result_upload = svc._status._get_save_status_io(42, [])
         assert result_upload["files"][0]["status"] == "upload"
 
         # ---------- Download ----------
@@ -5326,7 +5330,7 @@ class TestGetSaveStatusComputeAction:
                 }
             }
         }
-        result_dl = svc._get_save_status_io(42, [ss_dl])
+        result_dl = svc._status._get_save_status_io(42, [ss_dl])
         assert result_dl["files"][0]["status"] == "download"
 
         # ---------- Conflict ----------
@@ -5339,7 +5343,7 @@ class TestGetSaveStatusComputeAction:
                 }
             }
         }
-        result_conflict = svc._get_save_status_io(42, [ss_dl])
+        result_conflict = svc._status._get_save_status_io(42, [ss_dl])
         assert result_conflict["files"][0]["status"] == "conflict"
 
     def test_get_save_status_server_only_collapses_to_one_entry(self, tmp_path):
@@ -5366,7 +5370,7 @@ class TestGetSaveStatusComputeAction:
 
         svc._save_sync_state["saves"]["42"] = {"files": {}}
 
-        result = svc._get_save_status_io(42, [ss_old, ss_new])
+        result = svc._status._get_save_status_io(42, [ss_old, ss_new])
 
         assert len(result["files"]) == 1
         entry = result["files"][0]
@@ -5382,7 +5386,7 @@ class TestGetSaveStatusComputeAction:
 
         svc._save_sync_state["saves"]["42"] = {"files": {}}
 
-        result = svc._get_save_status_io(42, [])
+        result = svc._status._get_save_status_io(42, [])
 
         assert result["files"] == []
         assert result["conflicts"] == []
@@ -5650,7 +5654,7 @@ class TestPerRomLockSerialization:
         # async wrapper around run_in_executor, so the inner call's
         # entry/exit windows for two concurrent invocations must not overlap.
         events: list[tuple[str, float]] = []
-        original = svc._sync_rom_saves
+        original = svc._sync_engine._sync_rom_saves
 
         def wrapped(rom_id: int):
             events.append(("enter", time.time()))
@@ -5661,7 +5665,7 @@ class TestPerRomLockSerialization:
             finally:
                 events.append(("exit", time.time()))
 
-        svc._sync_rom_saves = wrapped  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = wrapped  # type: ignore[method-assign]
 
         await asyncio.gather(svc.sync_rom_saves(42), svc.sync_rom_saves(42))
 
@@ -5680,7 +5684,7 @@ class TestPerRomLockSerialization:
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"b")
 
         events: list[tuple[int, str, float]] = []
-        original = svc._sync_rom_saves
+        original = svc._sync_engine._sync_rom_saves
 
         def wrapped(rom_id: int):
             events.append((rom_id, "enter", time.time()))
@@ -5690,7 +5694,7 @@ class TestPerRomLockSerialization:
             finally:
                 events.append((rom_id, "exit", time.time()))
 
-        svc._sync_rom_saves = wrapped  # type: ignore[method-assign]
+        svc._sync_engine._sync_rom_saves = wrapped  # type: ignore[method-assign]
 
         await asyncio.gather(svc.sync_rom_saves(1), svc.sync_rom_saves(2))
 
