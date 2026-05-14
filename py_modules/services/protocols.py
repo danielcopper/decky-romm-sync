@@ -846,6 +846,75 @@ class RomFileAdapter(Protocol):
         ...
 
 
+class SaveFileAdapter(Protocol):
+    """Filesystem seam for local save file operations.
+
+    Owns the raw POSIX, ``open()``, ``tempfile``, and ``hashlib``-on-file
+    calls SaveService and its sub-services use when reading, writing,
+    backing up, hashing, and removing local save files under the
+    RetroDECK saves directory. Path construction and platform-specific
+    extension lookup remain a domain concern; this Protocol exposes only
+    the I/O seams.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def is_file(self, path: str) -> bool:
+        """Return True when *path* exists and is a regular file."""
+        ...
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def remove(self, path: str) -> None:
+        """Delete *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*.
+
+        Uses ``os.replace`` semantics — same-filesystem only.
+        """
+        ...
+
+    def get_mtime(self, path: str) -> float:
+        """Return the mtime of *path* as a Unix timestamp."""
+        ...
+
+    def get_size(self, path: str) -> int:
+        """Return the size of *path* in bytes."""
+        ...
+
+    def checksum_md5(self, path: str) -> str:
+        """Return the hex-encoded MD5 digest of *path*'s contents.
+
+        Non-security use: drift detection between the local file and the
+        recorded ``last_sync_hash`` baseline. A collision here would mean
+        two different save files treated as identical — "sync misses an
+        update", not a security breach.
+        """
+        ...
+
+    def make_temp_path(self, suffix: str = "") -> str:
+        """Return a fresh, unique path safe to write to.
+
+        Backed by ``tempfile.mkstemp`` so the file is created atomically
+        (``O_EXCL``) before the fd is closed. The caller owns the file
+        and is responsible for removing it.
+        """
+        ...
+
+
 class SgdbArtworkCache(Protocol):
     """Filesystem seam for the SteamGridDB artwork cache directory.
 

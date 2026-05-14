@@ -15,6 +15,7 @@ from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
 
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
+from adapters.save_file import SaveFileAdapter
 from lib.errors import RommApiError
 from services.saves import SaveService, SaveServiceConfig
 
@@ -50,6 +51,7 @@ _CONFIG_FIELDS = frozenset(
     {
         "runtime_dir",
         "save_sync_state_persister",
+        "save_file",
         "loop",
         "logger",
         "clock",
@@ -71,6 +73,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
     config_kwargs: dict[str, Any] = dict(
         runtime_dir=str(tmp_path),
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
+        save_file=SaveFileAdapter(),
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
@@ -1712,33 +1715,37 @@ class TestFileMd5:
     """Tests for _file_md5."""
 
     def test_known_content(self, tmp_path):
+        svc, _ = make_service(tmp_path)
         f = tmp_path / "test.srm"
         content = b"Hello, save file!"
         f.write_bytes(content)
 
-        assert SaveService._file_md5(str(f)) == hashlib.md5(content).hexdigest()
+        assert svc._file_md5(str(f)) == hashlib.md5(content).hexdigest()
 
     def test_empty_file(self, tmp_path):
+        svc, _ = make_service(tmp_path)
         f = tmp_path / "empty.srm"
         f.write_bytes(b"")
 
-        assert SaveService._file_md5(str(f)) == hashlib.md5(b"").hexdigest()
+        assert svc._file_md5(str(f)) == hashlib.md5(b"").hexdigest()
 
     def test_large_file_chunked(self, tmp_path):
+        svc, _ = make_service(tmp_path)
         f = tmp_path / "large.srm"
         content = os.urandom(2 * 1024 * 1024)
         f.write_bytes(content)
 
-        assert SaveService._file_md5(str(f)) == hashlib.md5(content).hexdigest()
+        assert svc._file_md5(str(f)) == hashlib.md5(content).hexdigest()
 
     def test_permission_error(self, tmp_path):
+        svc, _ = make_service(tmp_path)
         f = tmp_path / "locked.srm"
         f.write_bytes(b"data")
         f.chmod(0o000)
 
         try:
             with pytest.raises(PermissionError):
-                SaveService._file_md5(str(f))
+                svc._file_md5(str(f))
         finally:
             f.chmod(0o644)
 
@@ -2055,7 +2062,7 @@ class TestUpdateFileSyncState:
         svc._update_file_sync_state("42", "pokemon.srm", server_resp, str(save_file), "gba")
 
         entry = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert entry["last_sync_hash"] == SaveService._file_md5(str(save_file))
+        assert entry["last_sync_hash"] == svc._file_md5(str(save_file))
         assert entry["last_sync_at"] is not None
         assert entry["last_sync_server_save_id"] == 200
 

@@ -23,6 +23,7 @@ from conftest import (
     FakeMigrationFileAdapter,
     FakePathProbe,
     FakeRomFileAdapter,
+    FakeSaveFileAdapter,
     FakeSgdbArtworkCache,
 )
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -165,6 +166,7 @@ class TestWireServices:
             "firmware_files": FakeFirmwareFileAdapter(),
             "migration_files": FakeMigrationFileAdapter(),
             "rom_files": FakeRomFileAdapter(),
+            "save_file": FakeSaveFileAdapter(),
             "gamelist_editor": MagicMock(),
             "path_probe": FakePathProbe(),
             "state": state,
@@ -211,6 +213,7 @@ class TestWireServices:
                 firmware_files=deps["firmware_files"],
                 migration_files=deps["migration_files"],
                 rom_files=deps["rom_files"],
+                save_file=deps["save_file"],
                 gamelist_editor=deps["gamelist_editor"],
                 path_probe=deps["path_probe"],
             ),

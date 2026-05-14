@@ -14,6 +14,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from adapters.migration_file import MigrationFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.romm.http import RommHttpAdapter
+from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
@@ -101,6 +102,7 @@ def plugin(tmp_path):
                     logger=logging.getLogger("test"),
                 )
             ),
+            save_file=SaveFileAdapter(),
             get_saves_path=lambda: saves_path,
             get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
             get_active_core=lambda system_name, rom_filename=None: (None, None),

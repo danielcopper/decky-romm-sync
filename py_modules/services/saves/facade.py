@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import os
 import socket
 from dataclasses import asdict
@@ -90,6 +89,7 @@ class SaveService:
         self._loop = config.loop
         self._logger = config.logger
         self._clock = config.clock
+        self._save_file = config.save_file
         self._get_saves_path = config.get_saves_path
         self._get_roms_path = config.get_roms_path
         self._get_active_core = config.get_active_core
@@ -114,6 +114,7 @@ class SaveService:
             retry=self._retry,
             logger=self._logger,
             clock=self._clock,
+            save_file=self._save_file,
         )
         self._status = StatusService(
             save_service=self,
@@ -130,6 +131,7 @@ class SaveService:
             retry=self._retry,
             logger=self._logger,
             clock=self._clock,
+            save_file=self._save_file,
         )
 
     def _rom_lock(self, rom_id: int) -> asyncio.Lock:
@@ -313,23 +315,16 @@ class SaveService:
     # File Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _file_md5(path: str) -> str:
+    def _file_md5(self, path: str) -> str:
         """Compute MD5 hash of a file for sync drift detection.
 
-        ``usedforsecurity=False`` documents (and silences Sonar S4790) that
-        this hash is for content-comparison only — drift detection between
-        local file and the recorded ``last_sync_hash`` baseline. Not used
-        for passwords, signing, certificates, or any security-critical
-        purpose. A hash collision here would mean two different save files
-        treated as identical → "sync misses an update", not a security
-        breach.
+        Delegates to the injected ``SaveFileAdapter``. The hash is used
+        for content-comparison only — drift detection between local
+        file and the recorded ``last_sync_hash`` baseline. A collision
+        here would mean two different save files treated as identical
+        → "sync misses an update", not a security breach.
         """
-        h = hashlib.md5(usedforsecurity=False)
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                h.update(chunk)
-        return h.hexdigest()
+        return self._save_file.checksum_md5(path)
 
     def _find_save_files(self, rom_id: int) -> list[dict]:
         """Find local save files for a ROM.
@@ -342,12 +337,12 @@ class SaveService:
         rom_name = info["rom_name"]
         saves_dir = info["saves_dir"]
         platform_slug = info["platform_slug"]
-        if not os.path.isdir(saves_dir):
+        if not self._save_file.is_dir(saves_dir):
             return []
         results = []
         for ext in get_save_extensions(platform_slug):
             save_path = os.path.join(saves_dir, rom_name + ext)
-            if os.path.isfile(save_path):
+            if self._save_file.is_file(save_path):
                 results.append({"path": save_path, "filename": rom_name + ext})
         return results
 
@@ -996,7 +991,7 @@ class SaveService:
         local content already matches the server's content hash.
         """
         local_path = os.path.join(saves_dir, filename)
-        if not os.path.isfile(local_path):
+        if not self._save_file.is_file(local_path):
             raise FileNotFoundError(f"Local save not found: {local_path}")
         local_hash = self._file_md5(local_path)
         try:
@@ -1018,8 +1013,8 @@ class SaveService:
             file_state["last_sync_at"] = self._clock.now().isoformat()
             file_state["last_sync_server_updated_at"] = server.get("updated_at", "")
             file_state["last_sync_server_size"] = server.get("file_size_bytes")
-            file_state["last_sync_local_mtime"] = os.path.getmtime(local_path)
-            file_state["last_sync_local_size"] = os.path.getsize(local_path)
+            file_state["last_sync_local_mtime"] = self._save_file.get_mtime(local_path)
+            file_state["last_sync_local_size"] = self._save_file.get_size(local_path)
             self.save_state()
             return
 
@@ -1111,7 +1106,7 @@ class SaveService:
             files = self._find_save_files(rom_id)
             for f in files:
                 try:
-                    os.remove(f["path"])
+                    self._save_file.remove(f["path"])
                     total_deleted += 1
                 except Exception as e:
                     errors.append(f"{f['filename']}: {e}")

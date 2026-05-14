@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,7 +24,7 @@ from services.saves._helpers import _local_save_target
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import Clock, RetryStrategy, RommApiProtocol
+    from services.protocols import Clock, RetryStrategy, RommApiProtocol, SaveFileAdapter
     from services.saves import SaveService
     from services.saves.state import StateService
 
@@ -62,6 +61,7 @@ class SyncEngine:
         retry: RetryStrategy,
         logger: logging.Logger,
         clock: Clock,
+        save_file: SaveFileAdapter,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
@@ -69,6 +69,7 @@ class SyncEngine:
         self._retry = retry
         self._logger = logger
         self._clock = clock
+        self._save_file = save_file
 
     # ------------------------------------------------------------------
     # Server Save Hash Helper
@@ -84,10 +85,9 @@ class SyncEngine:
         save_id = server_save.get("id")
         if not save_id:
             return None
-        tmp_path = None
+        tmp_path: str | None = None
         try:
-            fd, tmp_path = tempfile.mkstemp(suffix=".tmp")
-            os.close(fd)
+            tmp_path = self._save_file.make_temp_path(suffix=".tmp")
             self._romm_api.download_save(save_id, tmp_path)
             return self._save_service._file_md5(tmp_path)
         except Exception as e:
@@ -98,7 +98,7 @@ class SyncEngine:
         finally:
             if tmp_path:
                 with contextlib.suppress(OSError):
-                    os.remove(tmp_path)
+                    self._save_file.remove(tmp_path)
 
     def _update_file_sync_state(
         self,
@@ -129,7 +129,8 @@ class SyncEngine:
             save_entry["last_synced_core"] = core_so
 
         now = self._clock.now().isoformat()
-        local_hash = self._save_service._file_md5(local_path) if os.path.isfile(local_path) else ""
+        local_exists = self._save_file.is_file(local_path)
+        local_hash = self._save_service._file_md5(local_path) if local_exists else ""
 
         save_entry["files"][filename] = {
             "last_sync_hash": local_hash,
@@ -137,8 +138,8 @@ class SyncEngine:
             "last_sync_server_updated_at": server_response.get("updated_at", now),
             "last_sync_server_save_id": server_response.get("id"),
             "last_sync_server_size": server_response.get("file_size_bytes"),
-            "last_sync_local_mtime": os.path.getmtime(local_path) if os.path.isfile(local_path) else None,
-            "last_sync_local_size": os.path.getsize(local_path) if os.path.isfile(local_path) else None,
+            "last_sync_local_mtime": self._save_file.get_mtime(local_path) if local_exists else None,
+            "last_sync_local_size": self._save_file.get_size(local_path) if local_exists else None,
             "tracked_save_id": server_response.get("id"),
         }
 
@@ -149,7 +150,7 @@ class SyncEngine:
     def _do_download_save(self, server_save: dict, saves_dir: str, filename: str, rom_id_str: str, system: str) -> None:
         """Download a save file from server. Backs up existing local file first."""
         local_path = os.path.join(saves_dir, filename)
-        os.makedirs(saves_dir, exist_ok=True)
+        self._save_file.make_dirs(saves_dir)
         tmp_path = local_path + ".tmp"
 
         device_id = self._save_service._get_server_device_id()
@@ -163,14 +164,14 @@ class SyncEngine:
         )
 
         # Backup existing local save before overwriting
-        if os.path.isfile(local_path):
+        if self._save_file.is_file(local_path):
             backup_dir = os.path.join(saves_dir, ".romm-backup")
-            os.makedirs(backup_dir, exist_ok=True)
+            self._save_file.make_dirs(backup_dir)
             ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
             name, ext = os.path.splitext(filename)
-            os.replace(local_path, os.path.join(backup_dir, f"{name}_{ts}{ext}"))
+            self._save_file.rename(local_path, os.path.join(backup_dir, f"{name}_{ts}{ext}"))
 
-        os.replace(tmp_path, local_path)
+        self._save_file.rename(tmp_path, local_path)
         self._update_file_sync_state(rom_id_str, filename, server_save, local_path, system)
         self._save_service._log_debug(f"Downloaded save: {filename} for rom {rom_id_str}")
 
@@ -260,7 +261,7 @@ class SyncEngine:
         errors.append(f"{filename}: {_msg}")
         tmp = os.path.join(saves_dir, filename + ".tmp")
         with contextlib.suppress(OSError):
-            os.remove(tmp)
+            self._save_file.remove(tmp)
 
     @staticmethod
     def _filter_server_saves_to_slot(server_saves: list[dict], active_slot: str | None) -> list[dict]:
@@ -273,14 +274,14 @@ class SyncEngine:
             return [ss for ss in server_saves if ss.get("slot") == active_slot or ss.get("slot") is None]
         return [ss for ss in server_saves if not ss.get("slot")]
 
-    @staticmethod
-    def _build_local_input(local_path: str, filename: str) -> dict:
+    def _build_local_input(self, local_path: str, filename: str) -> dict:
         """Build the dict shape consumed by ``compute_sync_action``."""
+        exists = self._save_file.is_file(local_path)
         return {
             "filename": filename,
             "path": local_path,
-            "size": os.path.getsize(local_path) if os.path.isfile(local_path) else None,
-            "mtime": os.path.getmtime(local_path) if os.path.isfile(local_path) else None,
+            "size": self._save_file.get_size(local_path) if exists else None,
+            "mtime": self._save_file.get_mtime(local_path) if exists else None,
         }
 
     def _build_sync_conflict_entry(
@@ -294,9 +295,9 @@ class SyncEngine:
         """Build a Phase-2 ``sync_conflict`` descriptor for the frontend."""
         local_mtime = None
         local_size = None
-        if local_path and os.path.isfile(local_path):
-            local_mtime = datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
-            local_size = os.path.getsize(local_path)
+        if local_path and self._save_file.is_file(local_path):
+            local_mtime = datetime.fromtimestamp(self._save_file.get_mtime(local_path), tz=UTC).isoformat()
+            local_size = self._save_file.get_size(local_path)
         return {
             "type": "sync_conflict",
             "rom_id": rom_id,
@@ -462,14 +463,15 @@ class SyncEngine:
             filename = lf["filename"]
             local_path = lf["path"]
             handled_filenames.add(filename)
-            local_hash = self._save_service._file_md5(local_path) if os.path.isfile(local_path) else None
+            local_exists = self._save_file.is_file(local_path)
+            local_hash = self._save_service._file_md5(local_path) if local_exists else None
             file_state = files_state.get(filename, {})
             local_mtime_iso = (
-                datetime.fromtimestamp(os.path.getmtime(local_path), tz=UTC).isoformat()
-                if os.path.isfile(local_path)
+                datetime.fromtimestamp(self._save_file.get_mtime(local_path), tz=UTC).isoformat()
+                if local_exists
                 else None
             )
-            local_size = os.path.getsize(local_path) if os.path.isfile(local_path) else None
+            local_size = self._save_file.get_size(local_path) if local_exists else None
             action = compute_sync_action(
                 local_file=self._build_local_input(local_path, filename),
                 server_saves_in_slot=server_in_slot,

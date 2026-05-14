@@ -12,6 +12,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
+from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.achievements import AchievementsService
 from services.firmware import FirmwareService, FirmwareServiceConfig
@@ -100,6 +101,7 @@ def plugin(tmp_path):
                     logger=logging.getLogger("test"),
                 )
             ),
+            save_file=SaveFileAdapter(),
             get_saves_path=lambda: saves_path,
             get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
             get_active_core=lambda system_name, rom_filename=None: (None, None),

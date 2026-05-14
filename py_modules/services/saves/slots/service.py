@@ -10,7 +10,7 @@ from services.saves._messages import SAVE_SYNC_DISABLED
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import Clock, RetryStrategy, RommApiProtocol
+    from services.protocols import Clock, RetryStrategy, RommApiProtocol, SaveFileAdapter
     from services.saves import SaveService
     from services.saves.state import StateService
     from services.saves.sync_engine import SyncEngine
@@ -32,6 +32,7 @@ class SlotsService:
         retry: RetryStrategy,
         logger: logging.Logger,
         clock: Clock,
+        save_file: SaveFileAdapter,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
@@ -40,6 +41,7 @@ class SlotsService:
         self._retry = retry
         self._logger = logger
         self._clock = clock
+        self._save_file = save_file
 
     # ------------------------------------------------------------------
     # Slot listing
@@ -357,7 +359,7 @@ class SlotsService:
         local_files = self._save_service._find_save_files(rom_id)
         for lf in local_files:
             try:
-                os.remove(lf["path"])
+                self._save_file.remove(lf["path"])
                 self._save_service._log_debug(f"Deleted local save for switch: {lf['filename']}")
             except Exception as e:
                 self._save_service._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")
@@ -397,7 +399,7 @@ class SlotsService:
             local_file_info.append(
                 {
                     "filename": lf["filename"],
-                    "size": os.path.getsize(lf["path"]) if os.path.isfile(lf["path"]) else 0,
+                    "size": self._save_file.get_size(lf["path"]) if self._save_file.is_file(lf["path"]) else 0,
                 }
             )
 
@@ -543,7 +545,7 @@ class SlotsService:
         for old_save in old_slot_saves:
             fname = old_save.get("file_name", "")
             local_file = local_by_name.get(fname)
-            if local_file and os.path.isfile(local_file["path"]):
+            if local_file and self._save_file.is_file(local_file["path"]):
                 # Upload to new slot
                 await self._save_service._loop.run_in_executor(
                     None,

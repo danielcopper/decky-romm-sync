@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         CoreResolverFn,
         EventEmitter,
         RomsPathProvider,
+        SaveFileAdapter,
         SavesPathProvider,
         SaveSyncStatePersister,
     )
@@ -45,6 +46,11 @@ class SaveServiceConfig:
         Protocol-typed I/O wrapper for ``save_sync_state.json``. The
         ``StateService`` uses ``.save(data)`` / ``.load() -> dict | None``
         — file path, locking, and atomic-write are adapter-internal.
+    save_file:
+        Protocol-typed filesystem adapter for local save files. Owns the
+        raw POSIX, ``open()``, ``tempfile``, and ``hashlib``-on-file
+        calls SaveService and its sub-services use when reading,
+        writing, backing up, hashing, and removing local save files.
     loop:
         The plugin's ``asyncio`` event loop (for ``run_in_executor``).
     logger:
@@ -97,6 +103,7 @@ class SaveServiceConfig:
 
     runtime_dir: str
     save_sync_state_persister: SaveSyncStatePersister
+    save_file: SaveFileAdapter
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
