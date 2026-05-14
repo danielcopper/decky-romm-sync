@@ -1012,3 +1012,20 @@ class TestRefreshState:
 
         ordered = [name for name, _args, _kwargs in manager.mock_calls]
         assert ordered == ["detect_retrodeck_path_change", "detect_save_sort_change"]
+
+    @pytest.mark.asyncio
+    async def test_short_circuits_when_first_detect_raises(self, plugin):
+        from unittest.mock import AsyncMock
+
+        mig = plugin._migration_service
+        mig.detect_retrodeck_path_change = MagicMock(side_effect=RuntimeError("boom"))
+        mig.detect_save_sort_change = MagicMock()
+        mig.get_migration_status = AsyncMock()
+        mig.get_save_sort_migration_status = AsyncMock()
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await mig.refresh_state()
+
+        mig.detect_save_sort_change.assert_not_called()
+        mig.get_migration_status.assert_not_called()
+        mig.get_save_sort_migration_status.assert_not_called()

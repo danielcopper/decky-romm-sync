@@ -29,8 +29,13 @@ class RommApiProtocol(Protocol):
     Requires RomM >= 4.8.1.
     """
 
-    def set_version(self, version: str) -> None:
-        """Store the detected RomM server version string."""
+    def set_version(self, version: str | None) -> None:
+        """Store the detected RomM server version string.
+
+        Passing ``None`` clears the cached version (used when the server
+        becomes unreachable and the cached version should no longer be
+        trusted).
+        """
         ...
 
     def get_version(self) -> str | None:

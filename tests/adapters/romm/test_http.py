@@ -709,7 +709,7 @@ class TestTestConnectionErrors:
         assert result["success"] is True
         assert "Connected to RomM 4.8.1" in result["message"]
         assert result["romm_version"] == "4.8.1"
-        assert plugin._romm_version == "4.8.1"
+        plugin._romm_api.set_version.assert_called_with("4.8.1")
 
     @pytest.mark.asyncio
     async def test_server_reachable_but_api_failed(self, plugin):
@@ -740,7 +740,7 @@ class TestVersionDetection:
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["romm_version"] == "4.8.1"
-        assert plugin._romm_version == "4.8.1"
+        plugin._romm_api.set_version.assert_called_with("4.8.1")
 
     @pytest.mark.asyncio
     async def test_old_version_rejected(self, plugin):
@@ -831,7 +831,7 @@ class TestVersionDetection:
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["success"] is True
-        assert plugin._romm_version is None
+        plugin._romm_api.set_version.assert_called_with(None)
 
     @pytest.mark.asyncio
     async def test_version_cleared_on_connection_failure(self, plugin):
@@ -840,23 +840,23 @@ class TestVersionDetection:
 
         _setup_plugin(plugin)
         plugin.loop = asyncio.get_event_loop()
-        plugin._romm_version = "4.8.1"  # previously detected
+        plugin._romm_api.get_version.return_value = "4.8.1"  # previously detected
         plugin._romm_api.heartbeat.side_effect = RommConnectionError("refused")
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert plugin._romm_version is None
+        plugin._romm_api.set_version.assert_called_with(None)
 
     @pytest.mark.asyncio
     async def test_get_romm_version_returns_cached(self, plugin):
         """get_romm_version returns the last detected version."""
-        plugin._romm_version = "4.8.1"
+        plugin._romm_api.get_version.return_value = "4.8.1"
         result = await plugin.get_romm_version()
         assert result == {"version": "4.8.1"}
 
     @pytest.mark.asyncio
     async def test_get_romm_version_returns_none_before_connect(self, plugin):
         """get_romm_version returns None before any connection."""
-        plugin._romm_version = None
+        plugin._romm_api.get_version.return_value = None
         result = await plugin.get_romm_version()
         assert result == {"version": None}
 
