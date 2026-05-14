@@ -837,49 +837,28 @@ class TestPruneStaleRegistry:
 
 class TestRefreshMigrationState:
     @pytest.mark.asyncio
-    async def test_calls_both_detect_methods(self, plugin):
+    async def test_delegates_to_migration_service_refresh_state(self, plugin):
+        """Plugin callable forwards to MigrationService.refresh_state."""
         from unittest.mock import AsyncMock
 
-        retrodeck_sentinel = {"pending": True, "old_path": "/a", "new_path": "/b"}
-        save_sort_sentinel = {"pending": True, "saves_count": 3}
+        sentinel = {
+            "retrodeck": {"pending": True, "old_path": "/a", "new_path": "/b"},
+            "save_sort": {"pending": True, "saves_count": 3},
+        }
         plugin._migration_service = MagicMock()
-        plugin._migration_service.detect_retrodeck_path_change = MagicMock()
-        plugin._migration_service.detect_save_sort_change = MagicMock()
-        plugin._migration_service.get_migration_status = AsyncMock(return_value=retrodeck_sentinel)
-        plugin._migration_service.get_save_sort_migration_status = AsyncMock(return_value=save_sort_sentinel)
+        plugin._migration_service.refresh_state = AsyncMock(return_value=sentinel)
         result = await plugin.refresh_migration_state()
-        plugin._migration_service.detect_retrodeck_path_change.assert_called_once_with()
-        plugin._migration_service.detect_save_sort_change.assert_called_once_with()
-        assert result == {"retrodeck": retrodeck_sentinel, "save_sort": save_sort_sentinel}
+        plugin._migration_service.refresh_state.assert_awaited_once_with()
+        assert result is sentinel
 
     @pytest.mark.asyncio
     async def test_propagates_exceptions(self, plugin):
         from unittest.mock import AsyncMock
 
         plugin._migration_service = MagicMock()
-        plugin._migration_service.detect_retrodeck_path_change = MagicMock(side_effect=RuntimeError("boom"))
-        plugin._migration_service.detect_save_sort_change = MagicMock()
-        plugin._migration_service.get_migration_status = AsyncMock(return_value={"pending": False})
-        plugin._migration_service.get_save_sort_migration_status = AsyncMock(return_value={"pending": False})
+        plugin._migration_service.refresh_state = AsyncMock(side_effect=RuntimeError("boom"))
         with pytest.raises(RuntimeError, match="boom"):
             await plugin.refresh_migration_state()
-        plugin._migration_service.detect_save_sort_change.assert_not_called()
-        plugin._migration_service.get_migration_status.assert_not_called()
-        plugin._migration_service.get_save_sort_migration_status.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_detect_order_preserved(self, plugin):
-        from unittest.mock import AsyncMock
-
-        plugin._migration_service = MagicMock()
-        manager = MagicMock()
-        plugin._migration_service.detect_retrodeck_path_change = manager.detect_retrodeck_path_change
-        plugin._migration_service.detect_save_sort_change = manager.detect_save_sort_change
-        plugin._migration_service.get_migration_status = AsyncMock(return_value={"pending": False})
-        plugin._migration_service.get_save_sort_migration_status = AsyncMock(return_value={"pending": False})
-        await plugin.refresh_migration_state()
-        ordered = [name for name, _args, _kwargs in manager.mock_calls]
-        assert ordered == ["detect_retrodeck_path_change", "detect_save_sort_change"]
 
 
 _MIGRATION_BLOCKED_WHITELIST: set[str] = {

@@ -973,3 +973,42 @@ class TestMigrationFailureInjection:
         assert len(errors) == 1
         assert "gba/game.srm" in errors[0]
         assert counts.get("save", 0) == 0
+
+
+class TestRefreshState:
+    """Tests for ``MigrationService.refresh_state``."""
+
+    @pytest.mark.asyncio
+    async def test_calls_both_detect_methods_and_returns_combined_status(self, plugin):
+        from unittest.mock import AsyncMock
+
+        mig = plugin._migration_service
+        mig.detect_retrodeck_path_change = MagicMock()
+        mig.detect_save_sort_change = MagicMock()
+
+        retrodeck_status = {"pending": True, "old_path": "/a", "new_path": "/b"}
+        save_sort_status = {"pending": True, "saves_count": 3}
+        mig.get_migration_status = AsyncMock(return_value=retrodeck_status)
+        mig.get_save_sort_migration_status = AsyncMock(return_value=save_sort_status)
+
+        result = await mig.refresh_state()
+
+        mig.detect_retrodeck_path_change.assert_called_once_with()
+        mig.detect_save_sort_change.assert_called_once_with()
+        assert result == {"retrodeck": retrodeck_status, "save_sort": save_sort_status}
+
+    @pytest.mark.asyncio
+    async def test_detect_order_preserved(self, plugin):
+        from unittest.mock import AsyncMock
+
+        mig = plugin._migration_service
+        manager = MagicMock()
+        mig.detect_retrodeck_path_change = manager.detect_retrodeck_path_change
+        mig.detect_save_sort_change = manager.detect_save_sort_change
+        mig.get_migration_status = AsyncMock(return_value={"pending": False})
+        mig.get_save_sort_migration_status = AsyncMock(return_value={"pending": False})
+
+        await mig.refresh_state()
+
+        ordered = [name for name, _args, _kwargs in manager.mock_calls]
+        assert ordered == ["detect_retrodeck_path_change", "detect_save_sort_change"]

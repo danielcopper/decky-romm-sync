@@ -614,6 +614,19 @@ class MigrationService:
             return {"pending": False}
         return await self._loop.run_in_executor(None, self._get_save_sort_migration_status_io, old, new)
 
+    async def refresh_state(self) -> dict:
+        """Run both detection passes and return combined migration state.
+
+        Detects any RetroDECK home-path change and any RetroArch save-sort
+        change, then returns the current status of both migrations.
+        """
+        self.detect_retrodeck_path_change()
+        self.detect_save_sort_change()
+        return {
+            "retrodeck": await self.get_migration_status(),
+            "save_sort": await self.get_save_sort_migration_status(),
+        }
+
     def _resolve_save_sort_conflict(
         self,
         label: str,
