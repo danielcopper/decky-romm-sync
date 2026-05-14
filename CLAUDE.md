@@ -86,7 +86,7 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
   - ~~#302~~ MigrationService — shipped as #325 (`MigrationFileAdapter` with cross-device `move` (`shutil.move`) vs same-fs `rename` (`os.replace`) distinction; ctor 13 → 2 via `MigrationServiceConfig`; closed discussion #293 with "extract" verdict).
   - ~~#300~~ LibraryService — shipped as #326 (ctor 17 → 8 via `LibraryServiceConfig`; no I/O extraction — Waves 1+2 had already removed all violations).
 - **Wave 4 — Close-out** — **active**
-  - ~~#274~~ shipped as #328 + #329 + #330 + this PR (callable thinness audit)
+  - ~~#274~~ shipped as #328 + #329 + #330 + #331 (callable thinness audit)
   - #277 final verification — tick all 11 compliance-checklist items in the umbrella body, then close.
 
 **Saves vertical** ([#254](https://github.com/danielcopper/decky-romm-sync/issues/254)) runs in parallel — independent of the waves above.
