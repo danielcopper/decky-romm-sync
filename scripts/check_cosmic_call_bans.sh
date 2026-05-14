@@ -23,7 +23,11 @@ readonly PATTERNS=(
 
 found_any=0
 for pattern in "${PATTERNS[@]}"; do
-    if matches=$(grep -rnE "$pattern" "$SERVICES_DIR" 2>/dev/null); then
+    # `|| true` keeps `set -e` happy when grep returns 1 on no-match;
+    # checking `$matches` directly avoids a false-positive that the
+    # assignment-as-if-test form triggered in this loop construct.
+    matches=$(grep -rnE "$pattern" "$SERVICES_DIR" 2>/dev/null || true)
+    if [[ -n "$matches" ]]; then
         echo "Forbidden Cosmic Python call '$pattern' in $SERVICES_DIR:"
         echo "$matches"
         echo
