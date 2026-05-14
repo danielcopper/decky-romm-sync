@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from services.protocols import SettingsPersister, SteamConfigAdapter
 
 
-_MASKED_PASSWORD = "••••"
+_MASK_PLACEHOLDER = "••••"
 _VALID_LOG_LEVELS = ("debug", "info", "warn", "error")
 _VALID_STEAM_INPUT_MODES = ("default", "force_on", "force_off")
 
@@ -74,7 +74,7 @@ class SettingsService:
         try:
             self._settings["romm_url"] = romm_url
             self._settings["romm_user"] = romm_user
-            if romm_pass and romm_pass != _MASKED_PASSWORD:
+            if romm_pass and romm_pass != _MASK_PLACEHOLDER:
                 self._settings["romm_pass"] = romm_pass
             if allow_insecure_ssl is not None:
                 self._settings["romm_allow_insecure_ssl"] = bool(allow_insecure_ssl)
@@ -94,10 +94,10 @@ class SettingsService:
         return {
             "romm_url": self._settings.get("romm_url", ""),
             "romm_user": self._settings.get("romm_user", ""),
-            "romm_pass_masked": _MASKED_PASSWORD if self._settings.get("romm_pass") else "",
+            "romm_pass_masked": _MASK_PLACEHOLDER if self._settings.get("romm_pass") else "",
             "has_credentials": has_credentials,
             "steam_input_mode": self._settings.get("steam_input_mode", "default"),
-            "sgdb_api_key_masked": _MASKED_PASSWORD if self._settings.get("steamgriddb_api_key") else "",
+            "sgdb_api_key_masked": _MASK_PLACEHOLDER if self._settings.get("steamgriddb_api_key") else "",
             "retroarch_input_check": self._steam_config.check_retroarch_input_driver(),
             "log_level": self._settings.get("log_level", "warn"),
             "romm_allow_insecure_ssl": self._settings.get("romm_allow_insecure_ssl", False),
