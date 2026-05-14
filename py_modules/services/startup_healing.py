@@ -67,7 +67,7 @@ class StartupHealingService:
 
         pending_home = self._state.get("retrodeck_home_path_previous", "")
         pruned: list[str] = []
-        for rom_id, entry in list(self._state["installed_roms"].items()):  # list(): dict mutated below
+        for rom_id, entry in self._state["installed_roms"].items():
             file_path = entry.get("file_path", "")
             rom_dir = entry.get("rom_dir", "")
             if is_pending_migration_path(file_path, rom_dir, pending_home):
@@ -91,7 +91,7 @@ class StartupHealingService:
         registry to keep state honest.
         """
         pruned: list[str] = []
-        for rom_id, entry in list(self._state["shortcut_registry"].items()):  # list(): dict mutated below
+        for rom_id, entry in self._state["shortcut_registry"].items():
             app_id = entry.get("app_id")
             if not app_id or not isinstance(app_id, int):
                 self._logger.info(f"Pruned stale registry entry: rom_id={rom_id} (invalid app_id={app_id})")
