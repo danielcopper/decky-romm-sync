@@ -1095,6 +1095,7 @@ class TestMainStartupOrdering:
             "sgdb_artwork_cache": MagicMock(),
             "download_files": MagicMock(),
             "download_queue": MagicMock(),
+            "migration_files": MagicMock(),
             "retrodeck_paths": MagicMock(),
             "retroarch_config": MagicMock(),
             "retroarch_core_info": MagicMock(),

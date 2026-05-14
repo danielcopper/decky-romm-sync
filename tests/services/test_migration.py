@@ -4,9 +4,10 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeMigrationFileAdapter
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.migration_file import MigrationFileAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
 
@@ -14,7 +15,7 @@ from adapters.steam_config import SteamConfigAdapter
 from main import Plugin
 from services.firmware import FirmwareService
 from services.library import LibraryService
-from services.migration import MigrationService
+from services.migration import MigrationService, MigrationServiceConfig
 
 
 @pytest.fixture
@@ -70,19 +71,22 @@ def plugin():
     )
 
     p._migration_service = MigrationService(
-        state=p._state,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        save_state=p._save_state,
-        emit=decky.emit,
-        get_bios_files_index=lambda: p._firmware_service.bios_files_index,
-        get_retrodeck_home=MagicMock(return_value=""),
-        get_saves_path=MagicMock(return_value=""),
-        get_bios_path=MagicMock(return_value=""),
-        get_retroarch_save_sorting=MagicMock(return_value=(True, False)),
-        get_roms_path=MagicMock(return_value=""),
-        get_active_core=MagicMock(return_value=(None, None)),
-        get_core_name=MagicMock(return_value=None),
+        migration_files=MigrationFileAdapter(),
+        config=MigrationServiceConfig(
+            state=p._state,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            save_state=p._save_state,
+            emit=decky.emit,
+            get_bios_files_index=lambda: p._firmware_service.bios_files_index,
+            get_retrodeck_home=MagicMock(return_value=""),
+            get_saves_path=MagicMock(return_value=""),
+            get_bios_path=MagicMock(return_value=""),
+            get_retroarch_save_sorting=MagicMock(return_value=(True, False)),
+            get_roms_path=MagicMock(return_value=""),
+            get_active_core=MagicMock(return_value=(None, None)),
+            get_core_name=MagicMock(return_value=None),
+        ),
     )
     return p
 
@@ -835,3 +839,133 @@ class TestDetectSaveSortChangeThreadSafety:
             "sort_by_content": True,
             "sort_by_core": True,
         }
+
+
+class TestMigrationFailureInjection:
+    """Adapter-level failure injection tests using FakeMigrationFileAdapter.
+
+    These tests exercise paths the tmp_path-based integration tests cannot
+    reach: simulated ``OSError`` during ``move`` / ``rename`` / ``remove``
+    must be caught by the service, appended to the ``errors`` list, and
+    must not abort the rest of the migration loop. The previous path
+    marker is also retained on partial failure so the user can retry.
+    """
+
+    def _make_service(self, fake_files, **overrides):
+        defaults = {
+            "state": {
+                "installed_roms": {},
+                "downloaded_bios": {},
+            },
+            "loop": asyncio.get_event_loop(),
+            "logger": MagicMock(),
+            "save_state": MagicMock(),
+            "emit": MagicMock(),
+            "get_bios_files_index": lambda: {},
+            "get_retrodeck_home": MagicMock(return_value=""),
+            "get_saves_path": MagicMock(return_value=""),
+            "get_bios_path": MagicMock(return_value=""),
+            "get_retroarch_save_sorting": MagicMock(return_value=(False, False)),
+            "get_roms_path": MagicMock(return_value=""),
+            "get_active_core": MagicMock(return_value=(None, None)),
+            "get_core_name": MagicMock(return_value=None),
+        }
+        defaults.update(overrides)
+        return MigrationService(
+            migration_files=fake_files,
+            config=MigrationServiceConfig(**defaults),
+        )
+
+    def test_move_failure_records_error_and_continues(self):
+        """Mid-batch ``move`` failure is captured in ``errors``; other items still move."""
+        fake = FakeMigrationFileAdapter()
+        old_home = "/old"
+        new_home = "/new"
+        bad_rom = "/old/roms/n64/bad.z64"
+        good_rom = "/old/roms/n64/good.z64"
+        fake.files[bad_rom] = b"bad"
+        fake.files[good_rom] = b"good"
+        fake.move_failures.add(bad_rom)
+
+        service = self._make_service(
+            fake,
+            state={
+                "installed_roms": {
+                    "1": {"rom_id": 1, "file_path": bad_rom, "system": "n64"},
+                    "2": {"rom_id": 2, "file_path": good_rom, "system": "n64"},
+                },
+                "downloaded_bios": {},
+                "retrodeck_home_path_previous": old_home,
+                "retrodeck_home_path": new_home,
+            },
+        )
+
+        result = service._migrate_retrodeck_files_io(old_home, new_home, None)
+
+        assert result["success"] is False
+        assert len(result["errors"]) == 1
+        assert "bad.z64" in result["errors"][0]
+        # Good ROM was moved successfully despite the bad one failing.
+        assert result["roms_moved"] == 1
+        # Marker is retained so the user can retry.
+        assert service._state.get("retrodeck_home_path_previous") == old_home
+
+    def test_rename_failure_records_save_sort_error(self):
+        """``OSError`` from ``rename`` during save-sort overwrite path is captured."""
+        fake = FakeMigrationFileAdapter()
+        old_path = "/saves/old/game.srm"
+        new_path = "/saves/new/game.srm"
+        fake.files[old_path] = b"new content"
+        fake.files[new_path] = b"old content"
+        # Source is newer => triggers rename path.
+        fake.mtimes[old_path] = 2000.0
+        fake.mtimes[new_path] = 1000.0
+        fake.rename_failures.add(old_path)
+
+        service = self._make_service(fake)
+
+        counts: dict[str, int] = {}
+        errors: list = []
+        service._resolve_save_sort_conflict(
+            label="gba/game.srm",
+            old_path=old_path,
+            new_path=new_path,
+            state_updater=MagicMock(),
+            counts=counts,
+            count_key="save",
+            errors=errors,
+        )
+
+        assert len(errors) == 1
+        assert "gba/game.srm" in errors[0]
+        assert counts.get("save", 0) == 0
+
+    def test_remove_failure_records_save_sort_orphan_cleanup_error(self):
+        """``OSError`` from ``remove`` during save-sort newest-wins cleanup is captured."""
+        fake = FakeMigrationFileAdapter()
+        old_path = "/saves/old/game.srm"
+        new_path = "/saves/new/game.srm"
+        fake.files[old_path] = b"stale"
+        fake.files[new_path] = b"fresh"
+        # Destination is newer => triggers orphan-removal path.
+        fake.mtimes[old_path] = 1000.0
+        fake.mtimes[new_path] = 2000.0
+        fake.remove_failures.add(old_path)
+
+        service = self._make_service(fake)
+
+        counts: dict[str, int] = {}
+        errors: list = []
+        service._resolve_save_sort_conflict(
+            label="gba/game.srm",
+            old_path=old_path,
+            new_path=new_path,
+            state_updater=MagicMock(),
+            counts=counts,
+            count_key="save",
+            errors=errors,
+        )
+
+        assert len(errors) == 1
+        assert "gba/game.srm" in errors[0]
+        assert counts.get("save", 0) == 0

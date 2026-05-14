@@ -11,11 +11,12 @@ from conftest import _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.migration_file import MigrationFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.library import LibraryService
-from services.migration import MigrationService
+from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService
 from services.saves import SaveService, SaveServiceConfig
 
@@ -434,13 +435,16 @@ class TestPostExitSync:
         # (NEW: sort_by_content=False, sort_by_core=False) — the mismatch
         # with state is what detect will discover.
         real_migration = MigrationService(
-            state=plugin._state,
-            loop=asyncio.get_event_loop(),
-            logger=logging.getLogger("test"),
-            save_state=plugin._save_state,
-            emit=MagicMock(),
-            get_bios_files_index=lambda: {},
-            get_retroarch_save_sorting=lambda: (False, False),
+            migration_files=MigrationFileAdapter(),
+            config=MigrationServiceConfig(
+                state=plugin._state,
+                loop=asyncio.get_event_loop(),
+                logger=logging.getLogger("test"),
+                save_state=plugin._save_state,
+                emit=MagicMock(),
+                get_bios_files_index=lambda: {},
+                get_retroarch_save_sorting=lambda: (False, False),
+            ),
         )
         # Sanity: same state object — mutations through migration will be
         # visible to SaveService on the next state read.

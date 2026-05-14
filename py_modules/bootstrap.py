@@ -17,6 +17,7 @@ from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.download_file import DownloadFileAdapter as DownloadFileAdapterImpl
 from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapterImpl
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
+from adapters.migration_file import MigrationFileAdapter as MigrationFileAdapterImpl
 from adapters.persistence import PersistenceAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -35,7 +36,7 @@ from services.firmware import FirmwareService
 from services.game_detail import GameDetailService
 from services.library import LibraryService
 from services.metadata import MetadataService
-from services.migration import MigrationService
+from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService
 from services.protocols import (
     BiosPathProvider,
@@ -48,6 +49,7 @@ from services.protocols import (
     DownloadQueueAdapter,
     EventEmitter,
     FirmwareCachePersister,
+    MigrationFileAdapter,
     RetroArchSaveSortingProvider,
     RetroDeckHomeProvider,
     RommApiProtocol,
@@ -79,6 +81,7 @@ class AdapterBundle:
     sgdb_artwork_cache: SgdbArtworkCache
     download_files: DownloadFileAdapter
     download_queue: DownloadQueueAdapter
+    migration_files: MigrationFileAdapter
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,7 @@ def bootstrap(
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
     download_files = DownloadFileAdapterImpl()
     download_queue = DownloadQueueAdapterImpl()
+    migration_files = MigrationFileAdapterImpl()
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
@@ -196,6 +200,7 @@ def bootstrap(
         "sgdb_artwork_cache": sgdb_artwork_cache,
         "download_files": download_files,
         "download_queue": download_queue,
+        "migration_files": migration_files,
         "retrodeck_paths": retrodeck_paths,
         "retroarch_config": retroarch_config,
         "retroarch_core_info": retroarch_core_info,
@@ -239,19 +244,22 @@ def wire_services(cfg: WiringConfig) -> dict:
     # lookup to call time, so it is safe to reference here even though
     # ``firmware_service`` is constructed later in this function.
     migration_service = MigrationService(
-        state=cfg.stores.state,
-        loop=cfg.runtime.loop,
-        logger=cfg.runtime.logger,
-        save_state=cfg.callbacks.save_state,
-        emit=cfg.runtime.emit,
-        get_bios_files_index=lambda: firmware_service.bios_files_index,
-        get_retrodeck_home=cfg.callbacks.get_retrodeck_home,
-        get_saves_path=cfg.callbacks.get_saves_path,
-        get_bios_path=cfg.callbacks.get_bios_path,
-        get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
-        get_roms_path=cfg.callbacks.get_roms_path,
-        get_active_core=cfg.callbacks.core_info_provider.get_active_core,
-        get_core_name=cfg.callbacks.get_core_name,
+        migration_files=cfg.adapters.migration_files,
+        config=MigrationServiceConfig(
+            state=cfg.stores.state,
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            save_state=cfg.callbacks.save_state,
+            emit=cfg.runtime.emit,
+            get_bios_files_index=lambda: firmware_service.bios_files_index,
+            get_retrodeck_home=cfg.callbacks.get_retrodeck_home,
+            get_saves_path=cfg.callbacks.get_saves_path,
+            get_bios_path=cfg.callbacks.get_bios_path,
+            get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
+            get_roms_path=cfg.callbacks.get_roms_path,
+            get_active_core=cfg.callbacks.core_info_provider.get_active_core,
+            get_core_name=cfg.callbacks.get_core_name,
+        ),
     )
 
     save_service_config = SaveServiceConfig(

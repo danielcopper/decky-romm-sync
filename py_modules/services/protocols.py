@@ -659,6 +659,80 @@ class DownloadQueueAdapter(Protocol):
         ...
 
 
+class MigrationFileAdapter(Protocol):
+    """Filesystem seam for RetroDECK path and save-sort migration I/O.
+
+    Owns the raw POSIX calls MigrationService uses to walk source
+    locations, create destination directories, and relocate files when
+    the RetroDECK home path changes or RetroArch save sorting flips.
+    Path construction, conflict policy, and state updates remain a
+    service concern; this Protocol exposes only the I/O seams.
+
+    The Protocol distinguishes ``move`` from ``rename`` because the two
+    migration flows have different filesystem semantics. ``move`` is
+    the cross-device-safe shutil-style relocation used for RetroDECK
+    home changes (e.g., internal SSD to SD card); it falls back to
+    copy+delete on ``EXDEV``. ``rename`` is the same-filesystem atomic
+    ``os.replace`` used inside the saves tree where source and
+    destination are guaranteed to share a filesystem.
+
+    Implementations are synchronous — services that call from an async
+    context offload via ``loop.run_in_executor``.
+    """
+
+    def exists(self, path: str) -> bool:
+        """Return True when *path* refers to an existing file or directory."""
+        ...
+
+    def is_dir(self, path: str) -> bool:
+        """Return True when *path* exists and is a directory."""
+        ...
+
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
+    def remove(self, path: str) -> None:
+        """Delete the file at *path*. Idempotent: a missing file is not an error."""
+        ...
+
+    def remove_tree(self, path: str) -> None:
+        """Recursively delete *path*. Idempotent: a missing directory is not an error."""
+        ...
+
+    def move(self, src: str, dst: str) -> None:
+        """Cross-filesystem-safe move from *src* to *dst*.
+
+        Uses ``shutil.move`` semantics: a same-filesystem rename when
+        possible, falling back to copy+delete on ``EXDEV``. Use this
+        for RetroDECK home migrations where source and destination may
+        live on different filesystems.
+        """
+        ...
+
+    def rename(self, src: str, dst: str) -> None:
+        """Atomically rename *src* to *dst*, replacing any existing file at *dst*.
+
+        Uses ``os.replace`` semantics — same-filesystem only. Use this
+        for save-sort migrations inside the saves tree where source
+        and destination are guaranteed to share a filesystem.
+        """
+        ...
+
+    def getmtime(self, path: str) -> float:
+        """Return the mtime of *path* as a Unix timestamp."""
+        ...
+
+    def walk_files(self, base_dir: str) -> list[tuple[str, list[str], list[str]]]:
+        """Return ``os.walk``-style ``(dirpath, dirnames, filenames)`` triples for *base_dir*.
+
+        Mirrors ``os.walk`` exactly: returns raw triples so callers
+        retain control over directory pruning (e.g., skipping hidden
+        directories).
+        """
+        ...
+
+
 class SgdbArtworkCache(Protocol):
     """Filesystem seam for the SteamGridDB artwork cache directory.
 

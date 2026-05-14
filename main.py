@@ -194,6 +194,7 @@ class Plugin:
                     sgdb_artwork_cache=adapters["sgdb_artwork_cache"],
                     download_files=adapters["download_files"],
                     download_queue=adapters["download_queue"],
+                    migration_files=adapters["migration_files"],
                 ),
                 stores=StateBundle(
                     state=self._state,

@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from services.migration import MigrationService
+from adapters.migration_file import MigrationFileAdapter
+from services.migration import MigrationService, MigrationServiceConfig
 
 
 def _active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
@@ -48,19 +49,22 @@ def _make_service(
     save_state_mock = MagicMock()
 
     svc = MigrationService(
-        state=state,
-        loop=asyncio.get_event_loop(),
-        logger=logging.getLogger("test"),
-        save_state=save_state_mock,
-        emit=MagicMock(),
-        get_bios_files_index=lambda: {},
-        get_retrodeck_home=lambda: str(tmp_path),
-        get_saves_path=lambda: saves_path,
-        get_bios_path=lambda: str(tmp_path / "bios"),
-        get_retroarch_save_sorting=lambda: sort_settings,
-        get_roms_path=lambda: roms_path,
-        get_active_core=active_core,
-        get_core_name=get_core_name,
+        migration_files=MigrationFileAdapter(),
+        config=MigrationServiceConfig(
+            state=state,
+            loop=asyncio.get_event_loop(),
+            logger=logging.getLogger("test"),
+            save_state=save_state_mock,
+            emit=MagicMock(),
+            get_bios_files_index=lambda: {},
+            get_retrodeck_home=lambda: str(tmp_path),
+            get_saves_path=lambda: saves_path,
+            get_bios_path=lambda: str(tmp_path / "bios"),
+            get_retroarch_save_sorting=lambda: sort_settings,
+            get_roms_path=lambda: roms_path,
+            get_active_core=active_core,
+            get_core_name=get_core_name,
+        ),
     )
     return svc, save_state_mock
 
@@ -137,12 +141,15 @@ class TestDetectSaveSortChange:
         """No get_retroarch_save_sorting callback — method is a no-op."""
         save_state_mock = MagicMock()
         svc = MigrationService(
-            state={"save_sort_settings": None, "installed_roms": {}},
-            loop=asyncio.get_event_loop(),
-            logger=logging.getLogger("test"),
-            save_state=save_state_mock,
-            emit=MagicMock(),
-            get_bios_files_index=lambda: {},
+            migration_files=MigrationFileAdapter(),
+            config=MigrationServiceConfig(
+                state={"save_sort_settings": None, "installed_roms": {}},
+                loop=asyncio.get_event_loop(),
+                logger=logging.getLogger("test"),
+                save_state=save_state_mock,
+                emit=MagicMock(),
+                get_bios_files_index=lambda: {},
+            ),
         )
         # Should not raise, no state changes
         svc.detect_save_sort_change()
@@ -758,27 +765,33 @@ class TestResolveRetroArchCorename:
             return ("snes9x_libretro", "Snes9x - Current")
 
         svc = MigrationService(
-            state={"installed_roms": {}, "save_sort_settings": None},
-            loop=asyncio.get_event_loop(),
-            logger=logging.getLogger("test"),
-            save_state=MagicMock(),
-            emit=MagicMock(),
-            get_bios_files_index=lambda: {},
-            get_active_core=active_core,
-            # get_core_name intentionally omitted
+            migration_files=MigrationFileAdapter(),
+            config=MigrationServiceConfig(
+                state={"installed_roms": {}, "save_sort_settings": None},
+                loop=asyncio.get_event_loop(),
+                logger=logging.getLogger("test"),
+                save_state=MagicMock(),
+                emit=MagicMock(),
+                get_bios_files_index=lambda: {},
+                get_active_core=active_core,
+                # get_core_name intentionally omitted
+            ),
         )
         assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") == (None, None)
 
     def test_no_active_core_callback_returns_none(self, tmp_path):
         """Service constructed without ``get_active_core`` — method returns (None, None)."""
         svc = MigrationService(
-            state={"installed_roms": {}, "save_sort_settings": None},
-            loop=asyncio.get_event_loop(),
-            logger=logging.getLogger("test"),
-            save_state=MagicMock(),
-            emit=MagicMock(),
-            get_bios_files_index=lambda: {},
-            get_core_name=lambda core_so: "Snes9x",
+            migration_files=MigrationFileAdapter(),
+            config=MigrationServiceConfig(
+                state={"installed_roms": {}, "save_sort_settings": None},
+                loop=asyncio.get_event_loop(),
+                logger=logging.getLogger("test"),
+                save_state=MagicMock(),
+                emit=MagicMock(),
+                get_bios_files_index=lambda: {},
+                get_core_name=lambda core_so: "Snes9x",
+            ),
         )
         assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") == (None, None)
 
