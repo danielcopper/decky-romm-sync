@@ -77,22 +77,23 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
 - **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295)) — **complete**
   Pure logic extracted from non-saves services into `domain/`.
   Done: ~~#315~~ (firmware paths), ~~#316~~ (achievements), ~~#317~~ (path safety + mise lint bundle), ~~#318~~ (filename resolution), ~~#319~~ (sync_diff cluster).
-- **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2). Each epic body lists exact remaining work; native Sub-Issues panel is source of truth for open sub-issues.
-  - [#299](https://github.com/danielcopper/decky-romm-sync/issues/299) ArtworkService + SteamGridService — two sub-issues: #290 (artwork file I/O), #291 (steamgrid file I/O). Do as one chunk.
-  - [#297](https://github.com/danielcopper/decky-romm-sync/issues/297) DownloadService — one sub-issue: #243 (file I/O). Clock+Sleeper already wired; `_resolve_local_file_name` already in `domain/rom_files`.
-  - [#298](https://github.com/danielcopper/decky-romm-sync/issues/298) FirmwareService — two sub-issues: #288 (file I/O), #170 (mutation fix). Cache persister, Clock, CoreInfoProvider, firmware path helpers all wired in Wave 1/2.
-  - ~~#301~~ GameDetailService — **closed as superseded**. All scope (Clock, CoreInfoProvider) wired via Wave 1.
-  - [#302](https://github.com/danielcopper/decky-romm-sync/issues/302) MigrationService — decision first (#293), then act.
-  - [#300](https://github.com/danielcopper/decky-romm-sync/issues/300) LibraryService **last** — one sub-issue: #172 (ctor params). Service has zero remaining direct-I/O / time / random violations after Waves 1+2; what's left is structural.
-- **Wave 4 — Close-out**
-  - #274 main.py callable thinness audit (last, after services have settled)
-  - #277 final verification — tick all checklist items, close
+- **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2) — **complete**
+  Every backend service refactored: I/O behind Protocol-typed adapters, Clock/UuidGen/Sleeper injected, pure logic in `domain/`, ctors decomposed via frozen `*ServiceConfig` dataclasses where they exceeded S107.
+  - ~~#299~~ ArtworkService + SteamGridService — shipped as #321 (`CoverArtFileStore`) + #322 (`SgdbArtworkCache` + `SgdbApiError` + `SteamGridDirMissingError` + `write_shortcut_icon` on `SteamConfigAdapter`; `SteamGridConfig` decomposition + `PendingSyncReader` Protocol).
+  - ~~#297~~ DownloadService — shipped as #323 (`DownloadFileAdapter` for filesystem + `DownloadQueueAdapter` for fcntl-locked queue; ZIP-slip protection; ctor 13 → 5 via `DownloadServiceConfig`).
+  - ~~#298~~ FirmwareService — shipped as #324 (`FirmwareFileAdapter` with `checksum_md5` using `usedforsecurity=False`; closed #170 — `_enrich_firmware_file` returns new dict).
+  - ~~#301~~ GameDetailService — closed as superseded. All scope (Clock + CoreInfoProvider) wired in Wave 1.
+  - ~~#302~~ MigrationService — shipped as #325 (`MigrationFileAdapter` with cross-device `move` (`shutil.move`) vs same-fs `rename` (`os.replace`) distinction; ctor 13 → 2 via `MigrationServiceConfig`; closed discussion #293 with "extract" verdict).
+  - ~~#300~~ LibraryService — shipped as #326 (ctor 17 → 8 via `LibraryServiceConfig`; no I/O extraction — Waves 1+2 had already removed all violations).
+- **Wave 4 — Close-out** — **active**
+  - #274 main.py callable thinness audit. Each `@decky.callable` should be a one-line delegate to a service method; any logic in `main.py` is a smell.
+  - #277 final verification — tick all 11 compliance-checklist items in the umbrella body, then close.
 
 **Saves vertical** ([#254](https://github.com/danielcopper/decky-romm-sync/issues/254)) runs in parallel — independent of the waves above.
 
-**Why this order**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical means every later PR is "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrunk the scariest service before lifting it. LibraryService last because it has the largest blast radius.
+**Why the order chosen**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical meant every later PR was "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrunk the scariest service before lifting it. LibraryService last because it had the largest blast radius — by the time it was lifted, only ctor decomposition remained.
 
-When picking work: Waves 1 and 2 are finished (modulo deferred #259), so every per-service vertical's Protocol and domain dependencies are in place. Wave 3 (#297, #298, #299, #300, #302) is the next active wave.
+When picking work: Waves 1, 2, and 3 are complete (modulo deferred #259). Wave 4 is the close-out — start with #274, then tick the #277 checklist and close the umbrella. Wave 3 sister-PR patterns (Protocol + adapter + `FakeXxxAdapter` in conftest + `*ServiceConfig` decomposition) are the canonical reference for any future service-level work.
 
 **Sub-issue policy**: Epic bodies do **not** carry markdown sub-issue lists — open work is tracked via GitHub's native Sub-Issues panel on each epic. If a new sub-issue is needed, link it natively (don't add a body bullet).
 
