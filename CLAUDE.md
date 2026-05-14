@@ -89,7 +89,7 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
   - ~~#274~~ shipped as #328 + #329 + #330 + #331 (callable thinness audit)
   - ~~#277~~ closed: all 11 Cosmic Python compliance items ticked. Final prereqs in #333 (`RomFileAdapter` for `RomRemovalService` raw I/O, `FirmwareServiceConfig` ctor decomposition, `check_cosmic_call_bans.sh` false-positive fix).
 
-**Saves vertical** ([#254](https://github.com/danielcopper/decky-romm-sync/issues/254)) runs in parallel — independent of the waves above.
+**Saves vertical** ([~~#254~~](https://github.com/danielcopper/decky-romm-sync/issues/254)) — **complete**. Five sub-issues shipped after Wave 4: ~~#272~~ (helpers → domain, #336), ~~#242~~ (`SaveFileAdapter` for local I/O, #337), ~~#307~~ (peer-inject sub-services + collapse SyncEngine forwarder, #338), ~~#273~~ (typed `SaveSyncState` aggregate, #339), ~~#275~~ (`test_saves.py` split per-sub-service, #340). Saves package: zero raw I/O leaks, typed aggregate over the on-disk state, 6 focused test files mirroring the source layout.
 
 **Why the order chosen**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical meant every later PR was "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrunk the scariest service before lifting it. LibraryService last because it had the largest blast radius — by the time it was lifted, only ctor decomposition remained.
 
