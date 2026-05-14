@@ -4,6 +4,7 @@ import os
 from typing import TYPE_CHECKING
 
 from domain.emulator_tag import build_emulator_tag
+from domain.save_state import RomSaveState
 from services.saves._helpers import _local_save_target
 from services.saves._messages import SAVE_SYNC_DISABLED
 
@@ -61,12 +62,17 @@ class SlotsService:
 
         rom_id_str = str(rom_id)
         device_id = self._save_service._get_server_device_id()
-        rom_state = self._state_svc.data.get("saves", {}).get(rom_id_str, {})
-        active_slot = rom_state.get(
-            "active_slot",
-            self._state_svc.data.get("settings", {}).get("default_slot", "default"),
-        )
-        persisted_slots: dict[str, dict] = rom_state.get("slots", {})
+        rom_state = self._state_svc.state.saves.get(rom_id_str)
+        default_slot = self._state_svc.state.settings.default_slot or "default"
+        # ROM not tracked → fall back to the global default slot. ROM
+        # tracked with ``active_slot=None`` → preserve legacy mode (None
+        # means "no slots"; the persisted slots dict will contain ``""``).
+        if rom_state is None:
+            active_slot: str | None = default_slot
+            persisted_slots: dict[str, dict] = {}
+        else:
+            active_slot = rom_state.active_slot
+            persisted_slots = rom_state.slots
 
         # Fetch server slots
         server_slots_list: list[dict] = []
@@ -95,8 +101,8 @@ class SlotsService:
         self._merge_persisted_slots(persisted_slots, merged, active_slot)
 
         # Persist merged slots in state
-        game_entry = self._state_svc.data.setdefault("saves", {}).setdefault(rom_id_str, {})
-        game_entry["slots"] = merged
+        game_entry = self._state_svc.ensure_rom_state(rom_id_str)
+        game_entry.slots = merged
         self._state_svc.save_state()
 
         # Build response list
@@ -185,17 +191,13 @@ class SlotsService:
         resolved_slot: str | None = slot_str if slot_str else None
 
         rom_id_str = str(rom_id)
-        saves = self._state_svc.data.setdefault("saves", {})
-        if rom_id_str not in saves:
-            saves[rom_id_str] = {"files": {}, "active_slot": resolved_slot}
-        else:
-            saves[rom_id_str]["active_slot"] = resolved_slot
+        rom_state = self._state_svc.ensure_rom_state(rom_id_str)
+        rom_state.active_slot = resolved_slot
 
         # Ensure slot is in the persisted slots dict (use "" as key for legacy/None)
         slot_key = resolved_slot if resolved_slot is not None else ""
-        slots_dict: dict[str, dict] = saves[rom_id_str].setdefault("slots", {})
-        if slot_key not in slots_dict:
-            slots_dict[slot_key] = {"source": "local", "count": 0, "latest_updated_at": None}
+        if slot_key not in rom_state.slots:
+            rom_state.slots[slot_key] = {"source": "local", "count": 0, "latest_updated_at": None}
 
         self._state_svc.save_state()
         self._save_service._loop.create_task(self._save_service.check_save_status_background(rom_id))
@@ -216,15 +218,15 @@ class SlotsService:
         ``{"ready": False, "reason": str, "files": list[str]}``.
         """
         rom_id_str = str(rom_id)
-        save_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        files_state = save_state.get("files", {})
+        save_state = self._state_svc.state.saves.get(rom_id_str)
+        files_state = save_state.files if save_state else {}
 
         pending: list[str] = []
         local_files = self._save_service._find_save_files(rom_id)
         for lf in local_files:
             filename = lf["filename"]
-            file_state = files_state.get(filename, {})
-            last_sync_hash = file_state.get("last_sync_hash")
+            file_state = files_state.get(filename)
+            last_sync_hash = file_state.last_sync_hash if file_state else None
             if last_sync_hash:
                 current_hash = self._save_service._file_md5(lf["path"])
                 if current_hash != last_sync_hash:
@@ -323,8 +325,8 @@ class SlotsService:
             )
 
         # 8. Update last_sync_check_at
-        save_entry = self._state_svc.data["saves"].setdefault(rom_id_str, {})
-        save_entry["last_sync_check_at"] = self._clock.now().isoformat()
+        save_entry = self._state_svc.ensure_rom_state(rom_id_str)
+        save_entry.last_sync_check_at = self._clock.now().isoformat()
         self._state_svc.save_state()
 
         # 9. Return fresh status
@@ -378,9 +380,9 @@ class SlotsService:
         Returns {"configured": bool, "active_slot": str|None}
         """
         rom_id_str = str(int(rom_id))
-        game_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        configured = game_state.get("slot_confirmed", False)
-        active_slot = game_state.get("active_slot") if configured else None
+        game_state = self._state_svc.state.saves.get(rom_id_str)
+        configured = bool(game_state.slot_confirmed) if game_state else False
+        active_slot = game_state.active_slot if (game_state and configured) else None
         return {"configured": configured, "active_slot": active_slot}
 
     async def get_save_setup_info(self, rom_id: int) -> dict:
@@ -444,10 +446,10 @@ class SlotsService:
             )
 
         # State info
-        game_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        default_slot = self._state_svc.data.get("settings", {}).get("default_slot", "default")
-        slot_confirmed = game_state.get("slot_confirmed", False)
-        active_slot = game_state.get("active_slot") if slot_confirmed else None
+        game_state = self._state_svc.state.saves.get(rom_id_str)
+        default_slot = self._state_svc.state.settings.default_slot or "default"
+        slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
+        active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
 
         return {
             "has_local_saves": len(local_files) > 0,
@@ -479,11 +481,9 @@ class SlotsService:
             return {"success": False, "needs_conflict_resolution": False, "message": "Slot name cannot be empty"}
 
         # Update state
-        saves = self._state_svc.data.setdefault("saves", {})
-        if rom_id_str not in saves:
-            saves[rom_id_str] = {"files": {}}
-        saves[rom_id_str]["active_slot"] = chosen_slot
-        saves[rom_id_str]["slot_confirmed"] = True
+        rom_state = self._state_svc.ensure_rom_state(rom_id_str)
+        rom_state.active_slot = chosen_slot
+        rom_state.slot_confirmed = True
 
         # Migration: re-upload local files to new slot, delete old server saves
         if migrate_from_slot is not _NO_MIGRATION:
@@ -576,10 +576,10 @@ class SlotsService:
     # Slot deletion
     # ------------------------------------------------------------------
 
-    def _validate_slot_operation(self, rom_id: int, slot: str) -> dict | tuple[str, dict, dict[str, dict]]:
+    def _validate_slot_operation(self, rom_id: int, slot: str) -> dict | tuple[str, RomSaveState, dict[str, dict]]:
         """Shared validation for slot delete operations.
 
-        Returns an error dict on failure, or a (rom_id_str, save_state, slots_dict)
+        Returns an error dict on failure, or a (rom_id_str, rom_state, slots_dict)
         tuple on success.
         """
         if not self._save_service._is_save_sync_enabled():
@@ -587,8 +587,10 @@ class SlotsService:
         if not self._save_service._get_rom_save_info(rom_id):
             return {"success": False, "reason": "not_installed"}
         rom_id_str = str(rom_id)
-        save_state = self._state_svc.data.get("saves", {}).get(rom_id_str, {})
-        slots_dict: dict[str, dict] = save_state.get("slots", {})
+        save_state = self._state_svc.state.saves.get(rom_id_str)
+        if save_state is None:
+            return {"success": False, "reason": "not_found"}
+        slots_dict: dict[str, dict] = save_state.slots
         if slot not in slots_dict:
             return {"success": False, "reason": "not_found"}
         return rom_id_str, save_state, slots_dict
@@ -605,7 +607,7 @@ class SlotsService:
 
         slot_info = slots_dict[slot]
         source = slot_info.get("source", "server")
-        active_slot = save_state.get("active_slot")
+        active_slot = save_state.active_slot
         is_active = slot == (active_slot or "")
 
         # Server save count
@@ -624,12 +626,12 @@ class SlotsService:
                 self._save_service._log_debug(f"get_slot_delete_info: failed to list saves for slot '{slot}': {e}")
 
         # Local tracked files pointing to server saves in this slot
-        files_state = save_state.get("files", {})
+        files_state = save_state.files
         local_filenames: list[str] = []
         if server_save_ids:
             id_set = set(server_save_ids)
             for filename, fstate in files_state.items():
-                if fstate.get("tracked_save_id") in id_set:
+                if fstate.tracked_save_id in id_set:
                     local_filenames.append(filename)
 
         return {
@@ -680,7 +682,7 @@ class SlotsService:
             return result
         _rom_id_str, save_state, slots_dict = result
 
-        effective_active = save_state.get("active_slot") or ""
+        effective_active = save_state.active_slot or ""
         if slot == effective_active:
             return {
                 "success": False,
@@ -703,9 +705,9 @@ class SlotsService:
             deleted_ids = result["ids"]
 
         # Clean up tracked file entries pointing to deleted saves
-        files_state = save_state.get("files", {})
+        files_state = save_state.files
         if deleted_ids:
-            to_remove = [fn for fn, fs in files_state.items() if fs.get("tracked_save_id") in deleted_ids]
+            to_remove = [fn for fn, fs in files_state.items() if fs.tracked_save_id in deleted_ids]
             for fn in to_remove:
                 del files_state[fn]
                 cleaned_files += 1

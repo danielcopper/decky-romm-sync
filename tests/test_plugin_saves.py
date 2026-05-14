@@ -16,6 +16,7 @@ from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapt
 from adapters.romm.http import RommHttpAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.save_state import FileSyncState, PlaytimeEntry, RomSaveState
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService
@@ -129,7 +130,7 @@ def plugin(tmp_path):
     p._migration_service.is_retrodeck_migration_pending.return_value = False
 
     # Enable save sync for tests — matches pre-feature-flag behavior
-    p._save_sync_state["settings"]["save_sync_enabled"] = True
+    p._save_sync_state.settings.save_sync_enabled = True
     return p
 
 
@@ -194,7 +195,7 @@ class TestDeviceRegistration:
         assert result["success"] is True
         assert result["device_id"]
         assert result.get("server_device_id") is not None
-        assert plugin._save_sync_state["device_id"] == result["device_id"]
+        assert plugin._save_sync_state.device_id == result["device_id"]
 
         # Persisted to disk
         path = tmp_path / "save_sync_state.json"
@@ -205,9 +206,9 @@ class TestDeviceRegistration:
     @pytest.mark.asyncio
     async def test_already_registered_returns_cached(self, plugin):
         """If device_id and server_device_id already set, returns immediately."""
-        plugin._save_sync_state["device_id"] = "existing-uuid"
-        plugin._save_sync_state["device_name"] = "myhost"
-        plugin._save_sync_state["server_device_id"] = "server-uuid"
+        plugin._save_sync_state.device_id = "existing-uuid"
+        plugin._save_sync_state.device_name = "myhost"
+        plugin._save_sync_state.server_device_id = "server-uuid"
 
         result = await plugin.ensure_device_registered()
 
@@ -223,7 +224,7 @@ class TestDeviceRegistration:
             result = await plugin.ensure_device_registered()
 
         assert result["device_name"] == "steamdeck"
-        assert plugin._save_sync_state["device_name"] == "steamdeck"
+        assert plugin._save_sync_state.device_name == "steamdeck"
 
     @pytest.mark.asyncio
     async def test_generates_unique_ids(self, plugin):
@@ -232,8 +233,8 @@ class TestDeviceRegistration:
         id1 = result1["device_id"]
 
         # Reset state to force new registration
-        plugin._save_sync_state["device_id"] = None
-        plugin._save_sync_state["server_device_id"] = None
+        plugin._save_sync_state.device_id = None
+        plugin._save_sync_state.server_device_id = None
         result2 = await plugin.ensure_device_registered()
         id2 = result2["device_id"]
 
@@ -254,7 +255,7 @@ class TestListDevices:
         plugin._fake_api._registered_devices = [
             {"id": "device-1", "name": "steamdeck"},
         ]
-        plugin._save_sync_state["server_device_id"] = "device-1"
+        plugin._save_sync_state.server_device_id = "device-1"
 
         result = await plugin.list_devices()
 
@@ -265,7 +266,7 @@ class TestListDevices:
     @pytest.mark.asyncio
     async def test_list_devices_disabled_when_sync_off(self, plugin):
         """Returns disabled=True when save sync is disabled."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
 
         result = await plugin.list_devices()
 
@@ -284,7 +285,7 @@ class TestPreLaunchSync:
     @pytest.mark.asyncio
     async def test_skips_when_disabled(self, plugin):
         """Returns early when sync_before_launch is false."""
-        plugin._save_sync_state["settings"]["sync_before_launch"] = False
+        plugin._save_sync_state.settings.sync_before_launch = False
 
         result = await plugin.pre_launch_sync(42)
 
@@ -303,7 +304,7 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_skips_when_disabled(self, plugin):
         """Returns early when sync_after_exit is false."""
-        plugin._save_sync_state["settings"]["sync_after_exit"] = False
+        plugin._save_sync_state.settings.sync_after_exit = False
 
         result = await plugin.post_exit_sync(42)
 
@@ -507,23 +508,18 @@ class TestPlaytimeTracking:
         result = await plugin.record_session_start(42)
 
         assert result["success"] is True
-        entry = plugin._save_sync_state["playtime"]["42"]
-        assert entry["last_session_start"] is not None
+        entry = plugin._save_sync_state.playtime["42"]
+        assert entry.last_session_start is not None
         # Should be a valid ISO datetime
-        datetime.fromisoformat(entry["last_session_start"])
+        datetime.fromisoformat(entry.last_session_start)
 
     @pytest.mark.asyncio
     async def test_session_end_calculates_delta(self, plugin):
         """record_session_end computes correct duration."""
-        plugin._save_sync_state.setdefault("playtime", {})
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=600)
-        plugin._save_sync_state["playtime"]["42"] = {
-            "total_seconds": 0,
-            "session_count": 0,
-            "last_session_start": start_time.isoformat(),
-            "last_session_duration_sec": None,
-            "offline_deltas": [],
-        }
+        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
+            last_session_start=start_time.isoformat(),
+        )
 
         result = await plugin.record_session_end(42)
 
@@ -535,34 +531,25 @@ class TestPlaytimeTracking:
     async def test_delta_accumulated(self, plugin):
         """Playtime delta added to existing total."""
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=300)
-        plugin._save_sync_state["playtime"] = {
-            "42": {
-                "total_seconds": 1000,
-                "session_count": 5,
-                "last_session_start": start_time.isoformat(),
-                "last_session_duration_sec": None,
-                "offline_deltas": [],
-            }
-        }
+        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
+            total_seconds=1000,
+            session_count=5,
+            last_session_start=start_time.isoformat(),
+        )
 
         await plugin.record_session_end(42)
 
-        total = plugin._save_sync_state["playtime"]["42"]["total_seconds"]
+        total = plugin._save_sync_state.playtime["42"].total_seconds
         assert total >= 1290  # 1000 + ~300
 
     @pytest.mark.asyncio
     async def test_session_count_incremented(self, plugin):
         """Session count goes up on end."""
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=10)
-        plugin._save_sync_state["playtime"] = {
-            "42": {
-                "total_seconds": 0,
-                "session_count": 5,
-                "last_session_start": start_time.isoformat(),
-                "last_session_duration_sec": None,
-                "offline_deltas": [],
-            }
-        }
+        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
+            session_count=5,
+            last_session_start=start_time.isoformat(),
+        )
 
         result = await plugin.record_session_end(42)
 
@@ -579,32 +566,31 @@ class TestPlaytimeTracking:
     async def test_session_start_clears_on_end(self, plugin):
         """last_session_start is cleared after session end."""
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=10)
-        plugin._save_sync_state["playtime"] = {
-            "42": {
-                "total_seconds": 0,
-                "session_count": 0,
-                "last_session_start": start_time.isoformat(),
-                "last_session_duration_sec": None,
-                "offline_deltas": [],
-            }
-        }
+        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
+            last_session_start=start_time.isoformat(),
+        )
 
         await plugin.record_session_end(42)
 
-        assert plugin._save_sync_state["playtime"]["42"]["last_session_start"] is None
+        assert plugin._save_sync_state.playtime["42"].last_session_start is None
 
     @pytest.mark.asyncio
     async def test_duration_clamped_to_24h(self, plugin):
         """Duration clamped to max 24 hours."""
         start_time = plugin._playtime_service._clock.now() - timedelta(hours=48)
-        plugin._save_sync_state["playtime"] = {
-            "42": {
-                "total_seconds": 0,
-                "session_count": 0,
-                "last_session_start": start_time.isoformat(),
-                "last_session_duration_sec": None,
-                "offline_deltas": [],
-            }
+        plugin._save_sync_state.playtime = {
+            rid: PlaytimeEntry.from_dict(entry)
+            for rid, entry in (
+                {
+                    "42": {
+                        "total_seconds": 0,
+                        "session_count": 0,
+                        "last_session_start": start_time.isoformat(),
+                        "last_session_duration_sec": None,
+                        "offline_deltas": [],
+                    }
+                }
+            ).items()
         }
 
         result = await plugin.record_session_end(42)
@@ -623,9 +609,14 @@ class TestGetAllPlaytime:
     @pytest.mark.asyncio
     async def test_returns_all_playtime_entries(self, plugin):
         """Returns all playtime entries from state."""
-        plugin._save_sync_state["playtime"] = {
-            "42": {"total_seconds": 3000, "session_count": 5},
-            "99": {"total_seconds": 600, "session_count": 1},
+        plugin._save_sync_state.playtime = {
+            rid: PlaytimeEntry.from_dict(entry)
+            for rid, entry in (
+                {
+                    "42": {"total_seconds": 3000, "session_count": 5},
+                    "99": {"total_seconds": 600, "session_count": 1},
+                }
+            ).items()
         }
         result = await plugin.get_all_playtime()
         assert result["playtime"]["42"]["total_seconds"] == 3000
@@ -634,7 +625,7 @@ class TestGetAllPlaytime:
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_playtime(self, plugin):
         """Returns empty dict when no playtime data exists."""
-        plugin._save_sync_state["playtime"] = {}
+        plugin._save_sync_state.playtime = {}
         result = await plugin.get_all_playtime()
         assert result["playtime"] == {}
 
@@ -716,7 +707,7 @@ class TestSyncAllSaves:
     @pytest.mark.asyncio
     async def test_no_installed_roms(self, plugin):
         """Empty installed_roms completes gracefully."""
-        plugin._save_sync_state["device_id"] = "dev-1"
+        plugin._save_sync_state.device_id = "dev-1"
 
         result = await plugin.sync_all_saves()
 
@@ -736,7 +727,7 @@ class TestSyncRomSaves:
     @pytest.mark.asyncio
     async def test_rom_not_installed(self, plugin):
         """Non-installed ROM returns 0 synced."""
-        plugin._save_sync_state["device_id"] = "dev-1"
+        plugin._save_sync_state.device_id = "dev-1"
 
         result = await plugin.sync_rom_saves(999)
 
@@ -771,23 +762,23 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_default_disabled(self, plugin):
         """save_sync_enabled defaults to False in fresh state."""
-        plugin._save_sync_state.update(SaveService.make_default_state())  # Reset to defaults (no test fixture override)
-        settings = plugin._save_sync_state["settings"]
-        assert settings["save_sync_enabled"] is False
+        # Reset to defaults (no test fixture override).
+        plugin._save_sync_state.replace_with(SaveService.make_default_state())
+        assert plugin._save_sync_state.settings.save_sync_enabled is False
 
     @pytest.mark.asyncio
     async def test_ensure_device_disabled(self, plugin):
         """ensure_device_registered returns disabled marker when save sync off."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         result = await plugin.ensure_device_registered()
         assert result["success"] is False
         assert result.get("disabled") is True
-        assert plugin._save_sync_state["device_id"] is None
+        assert plugin._save_sync_state.device_id is None
 
     @pytest.mark.asyncio
     async def test_pre_launch_sync_disabled(self, plugin):
         """pre_launch_sync skips when save sync disabled."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         result = await plugin.pre_launch_sync(42)
         assert result["success"] is True
         assert result["synced"] == 0
@@ -796,7 +787,7 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_post_exit_sync_disabled(self, plugin):
         """post_exit_sync skips when save sync disabled."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         result = await plugin.post_exit_sync(42)
         assert result["success"] is True
         assert result["synced"] == 0
@@ -805,7 +796,7 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_sync_rom_saves_disabled(self, plugin):
         """sync_rom_saves returns error when save sync disabled."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         result = await plugin.sync_rom_saves(42)
         assert result["success"] is False
         assert "disabled" in result["message"].lower()
@@ -813,7 +804,7 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_sync_all_saves_disabled(self, plugin):
         """sync_all_saves returns error when save sync disabled."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         result = await plugin.sync_all_saves()
         assert result["success"] is False
         assert "disabled" in result["message"].lower()
@@ -821,17 +812,17 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_enable_via_settings_update(self, plugin):
         """save_sync_enabled can be toggled via update_save_sync_settings."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         result = await plugin.update_save_sync_settings({"save_sync_enabled": True})
         assert result["success"] is True
-        assert plugin._save_sync_state["settings"]["save_sync_enabled"] is True
+        assert plugin._save_sync_state.settings.save_sync_enabled is True
 
     @pytest.mark.asyncio
     async def test_disable_via_settings_update(self, plugin):
         """save_sync_enabled can be disabled via update_save_sync_settings."""
         result = await plugin.update_save_sync_settings({"save_sync_enabled": False})
         assert result["success"] is True
-        assert plugin._save_sync_state["settings"]["save_sync_enabled"] is False
+        assert plugin._save_sync_state.settings.save_sync_enabled is False
 
     @pytest.mark.asyncio
     async def test_get_settings_includes_flag(self, plugin):
@@ -842,9 +833,9 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_is_save_sync_enabled_helper(self, plugin):
         """_is_save_sync_enabled reflects the settings value."""
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = True
+        plugin._save_sync_state.settings.save_sync_enabled = True
         assert plugin._save_sync_service._is_save_sync_enabled() is True
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         assert plugin._save_sync_service._is_save_sync_enabled() is False
 
 
@@ -878,13 +869,15 @@ async def test_delete_local_saves_happy_path(plugin, tmp_path):
     rtc.write_bytes(b"\x00" * 16)
 
     # Set up sync state
-    plugin._save_sync_state["saves"]["100"] = {
-        "files": {
-            f"{rom_name}.srm": {"last_sync_hash": "abc123"},
-            f"{rom_name}.rtc": {"last_sync_hash": "def456"},
-        },
-        "system": system,
-    }
+    plugin._save_sync_state.saves["100"] = RomSaveState.from_dict(
+        {
+            "files": {
+                f"{rom_name}.srm": {"last_sync_hash": "abc123"},
+                f"{rom_name}.rtc": {"last_sync_hash": "def456"},
+            },
+            "system": system,
+        }
+    )
 
     result = await plugin.delete_local_saves(rom_id)
     assert result["success"] is True
@@ -892,9 +885,9 @@ async def test_delete_local_saves_happy_path(plugin, tmp_path):
     assert not srm.exists()
     assert not rtc.exists()
     # Entry survives — only files are cleared (#279).
-    assert "100" in plugin._save_sync_state["saves"]
-    assert plugin._save_sync_state["saves"]["100"]["files"] == {}
-    assert plugin._save_sync_state["saves"]["100"]["system"] == system
+    assert "100" in plugin._save_sync_state.saves
+    assert plugin._save_sync_state.saves["100"].files == {}
+    assert plugin._save_sync_state.saves["100"].system == system
 
 
 @pytest.mark.asyncio
@@ -917,31 +910,33 @@ async def test_delete_local_saves_preserves_slot_config(plugin, tmp_path):
     srm = saves_dir / f"{rom_name}.srm"
     srm.write_bytes(b"\x00" * 32)
 
-    plugin._save_sync_state["saves"]["101"] = {
-        "files": {f"{rom_name}.srm": {"last_sync_hash": "hash"}},
-        "active_slot": "desktop",
-        "slot_confirmed": True,
-        "emulator": "retroarch-snes9x",
-        "last_synced_core": "snes9x_libretro",
-        "own_upload_ids": ["save-9"],
-        "slots": {"default": {}, "desktop": {}},
-        "system": system,
-    }
+    plugin._save_sync_state.saves["101"] = RomSaveState.from_dict(
+        {
+            "files": {f"{rom_name}.srm": {"last_sync_hash": "hash"}},
+            "active_slot": "desktop",
+            "slot_confirmed": True,
+            "emulator": "retroarch-snes9x",
+            "last_synced_core": "snes9x_libretro",
+            "own_upload_ids": ["save-9"],
+            "slots": {"default": {}, "desktop": {}},
+            "system": system,
+        }
+    )
 
     result = await plugin.delete_local_saves(rom_id)
     assert result["success"] is True
     assert result["deleted_count"] == 1
     assert not srm.exists()
 
-    entry = plugin._save_sync_state["saves"]["101"]
-    assert entry["files"] == {}
-    assert entry["active_slot"] == "desktop"
-    assert entry["slot_confirmed"] is True
-    assert entry["emulator"] == "retroarch-snes9x"
-    assert entry["last_synced_core"] == "snes9x_libretro"
-    assert entry["own_upload_ids"] == ["save-9"]
-    assert entry["slots"] == {"default": {}, "desktop": {}}
-    assert entry["system"] == system
+    entry = plugin._save_sync_state.saves["101"]
+    assert entry.files == {}
+    assert entry.active_slot == "desktop"
+    assert entry.slot_confirmed is True
+    assert entry.emulator == "retroarch-snes9x"
+    assert entry.last_synced_core == "snes9x_libretro"
+    assert entry.own_upload_ids == ["save-9"]
+    assert entry.slots == {"default": {}, "desktop": {}}
+    assert entry.system == system
 
 
 @pytest.mark.asyncio
@@ -1006,8 +1001,8 @@ async def test_delete_platform_saves(plugin, tmp_path):
         "platform_slug": "gba",
     }
 
-    plugin._save_sync_state["saves"]["10"] = {"files": {"Game1.srm": {}}, "system": "snes"}
-    plugin._save_sync_state["saves"]["20"] = {"files": {"Game2.srm": {}}, "system": "snes"}
+    plugin._save_sync_state.saves["10"] = RomSaveState(files={"Game1.srm": FileSyncState()}, system="snes")
+    plugin._save_sync_state.saves["20"] = RomSaveState(files={"Game2.srm": FileSyncState()}, system="snes")
 
     result = await plugin.delete_platform_saves("snes")
     assert result["success"] is True
@@ -1015,12 +1010,12 @@ async def test_delete_platform_saves(plugin, tmp_path):
     assert not srm1.exists()
     assert not srm2.exists()
     # Entries survive — only files are cleared (#279).
-    assert "10" in plugin._save_sync_state["saves"]
-    assert plugin._save_sync_state["saves"]["10"]["files"] == {}
-    assert plugin._save_sync_state["saves"]["10"]["system"] == "snes"
-    assert "20" in plugin._save_sync_state["saves"]
-    assert plugin._save_sync_state["saves"]["20"]["files"] == {}
-    assert plugin._save_sync_state["saves"]["20"]["system"] == "snes"
+    assert "10" in plugin._save_sync_state.saves
+    assert plugin._save_sync_state.saves["10"].files == {}
+    assert plugin._save_sync_state.saves["10"].system == "snes"
+    assert "20" in plugin._save_sync_state.saves
+    assert plugin._save_sync_state.saves["20"].files == {}
+    assert plugin._save_sync_state.saves["20"].system == "snes"
 
 
 # ============================================================================
@@ -1034,11 +1029,13 @@ class TestSavesVersionHistoryCallables:
     @pytest.mark.asyncio
     async def test_saves_list_file_versions_happy_path(self, plugin, tmp_path):
         """saves_list_file_versions returns filtered older versions."""
-        plugin._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "files": {"pokemon.srm": {"tracked_save_id": 100}},
-        }
+        plugin._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "files": {"pokemon.srm": {"tracked_save_id": 100}},
+            }
+        )
         plugin._fake_api.saves[100] = {
             "id": 100,
             "rom_id": 42,
@@ -1078,11 +1075,13 @@ class TestSavesVersionHistoryCallables:
 
         local_hash = hashlib.md5(b"\x00" * 1024).hexdigest()
 
-        plugin._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": local_hash}},
-        }
+        plugin._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": local_hash}},
+            }
+        )
         plugin._fake_api.saves[100] = {
             "id": 100,
             "rom_id": 42,

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from models.metadata import AchievementSummary
 
 from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
+from domain.save_state import SaveSyncState
 from domain.save_status import compute_save_sync_display
 
 if TYPE_CHECKING:
@@ -34,7 +35,7 @@ class GameDetailService:
         *,
         state: dict,
         metadata_cache: dict,
-        save_sync_state: dict,
+        save_sync_state: SaveSyncState,
         logger: logging.Logger,
         clock: Clock,
         bios_checker: BiosChecker,
@@ -67,24 +68,20 @@ class GameDetailService:
 
     def _build_save_status(self, rom_id_str: str) -> dict | None:
         """Build cached save-sync status for a ROM, or None if no saves."""
-        raw_save = self._save_sync_state.get("saves", {}).get(rom_id_str)
-        if not raw_save:
+        rom_state = self._save_sync_state.saves.get(rom_id_str)
+        if rom_state is None:
             return None
-        raw_files = raw_save.get("files", {})
-        if isinstance(raw_files, dict):
-            files_list = [
-                {
-                    "filename": fn,
-                    "status": "synced" if fdata.get("last_sync_hash") else "unknown",
-                    "last_sync_at": fdata.get("last_sync_at"),
-                }
-                for fn, fdata in raw_files.items()
-            ]
-        else:
-            files_list = raw_files
+        files_list = [
+            {
+                "filename": fn,
+                "status": "synced" if fdata.last_sync_hash else "unknown",
+                "last_sync_at": fdata.last_sync_at or None,
+            }
+            for fn, fdata in rom_state.files.items()
+        ]
         return {
             "files": files_list,
-            "last_sync_check_at": raw_save.get("last_sync_check_at"),
+            "last_sync_check_at": rom_state.last_sync_check_at,
             "conflicts": [],  # cached only — full conflicts via get_save_status()
         }
 
@@ -152,7 +149,7 @@ class GameDetailService:
         installed = rom_id_str in self._state["installed_roms"]
 
         # Save sync
-        save_sync_enabled = self._save_sync_state.get("settings", {}).get("save_sync_enabled", False)
+        save_sync_enabled = self._save_sync_state.settings.save_sync_enabled
         save_status = self._build_save_status(rom_id_str)
         save_sync_display = None
         if save_status is not None:

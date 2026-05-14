@@ -19,6 +19,7 @@ from services.saves._helpers import _local_save_target
 if TYPE_CHECKING:
     import logging
 
+    from domain.save_state import FileSyncState
     from services.protocols import RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
@@ -51,7 +52,7 @@ class VersionsService:
     # Version History API
     # ------------------------------------------------------------------
 
-    def _find_file_state(self, rom_id_str: str, filename: str, server_saves: list[dict]) -> dict:  # noqa: ARG002 — server_saves kept for callable signature stability
+    def _find_file_state(self, rom_id_str: str, filename: str, server_saves: list[dict]) -> FileSyncState | None:  # noqa: ARG002 — server_saves kept for callable signature stability
         """Look up the per-file sync state for *filename* (canonical local name).
 
         State keys are always ``<rom_name>.<ext>`` — the same canonical
@@ -59,8 +60,7 @@ class VersionsService:
         RetroArch — so a single dict lookup is enough. The previous
         ``file_name_no_tags``-anchored slow path is gone.
         """
-        files_state = self._state_svc.data.get("saves", {}).get(rom_id_str, {}).get("files", {})
-        return files_state.get(filename, {})
+        return self._state_svc.get_file_state(rom_id_str, filename)
 
     async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
         """List server-side saves in the active slot, excluding the currently-tracked one.
@@ -93,11 +93,10 @@ class VersionsService:
             return []
 
         file_state = self._find_file_state(rom_id_str, filename, server_saves)
-        tracked_id = file_state.get("tracked_save_id")
+        tracked_id = file_state.tracked_save_id if file_state else None
 
-        rom_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        raw = rom_state.get("own_upload_ids")
-        own_upload_ids: list[int] | None = raw if isinstance(raw, list) else None
+        rom_state = self._state_svc.state.saves.get(rom_id_str)
+        own_upload_ids: list[int] | None = rom_state.own_upload_ids if rom_state else None
 
         versions = [
             {

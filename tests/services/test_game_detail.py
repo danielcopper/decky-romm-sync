@@ -14,6 +14,7 @@ from adapters.firmware_file import FirmwareFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.save_state import FileSyncState, RomSaveState
 from services.achievements import AchievementsService
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService
@@ -147,7 +148,7 @@ def plugin(tmp_path):
     # Store fake_api on plugin for test access
     p._fake_api = fake_api
 
-    p._save_sync_state["settings"]["save_sync_enabled"] = False
+    p._save_sync_state.settings.save_sync_enabled = False
     return p
 
 
@@ -231,16 +232,16 @@ class TestGetCachedGameDetailFound:
             "file_path": "/roms/snes/smw.sfc",
             "system": "snes",
         }
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = True
-        plugin._save_sync_state["saves"]["123"] = {
-            "files": {
-                "smw.srm": {
-                    "last_sync_at": "2025-01-01T00:00:00Z",
-                    "last_sync_hash": "abc123",
-                },
+        plugin._save_sync_state.settings.save_sync_enabled = True
+        plugin._save_sync_state.saves["123"] = RomSaveState(
+            files={
+                "smw.srm": FileSyncState(
+                    last_sync_at="2025-01-01T00:00:00Z",
+                    last_sync_hash="abc123",
+                ),
             },
-            "last_sync_check_at": "2025-01-01T00:00:00Z",
-        }
+            last_sync_check_at="2025-01-01T00:00:00Z",
+        )
         plugin._metadata_cache["123"] = {
             "summary": "Classic SNES platformer",
             "genres": ["Platformer"],
@@ -344,7 +345,7 @@ class TestGetCachedGameDetailPartialData:
             "platform_slug": "snes",
             "platform_name": "Super Nintendo",
         }
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = False
+        plugin._save_sync_state.settings.save_sync_enabled = False
         result = game_detail_service.get_cached_game_detail(50000)
         assert result["save_sync_enabled"] is False
 
@@ -652,11 +653,11 @@ class TestGetCachedGameDetailSaveStatusConflicts:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = True
-        plugin._save_sync_state["saves"]["42"] = {
-            "files": {"test.srm": {"last_sync_hash": "abc", "last_sync_at": "2026-01-01T00:00:00Z"}},
-            "last_sync_check_at": "2026-01-01T00:00:00Z",
-        }
+        plugin._save_sync_state.settings.save_sync_enabled = True
+        plugin._save_sync_state.saves["42"] = RomSaveState(
+            files={"test.srm": FileSyncState(last_sync_hash="abc", last_sync_at="2026-01-01T00:00:00Z")},
+            last_sync_check_at="2026-01-01T00:00:00Z",
+        )
         result = game_detail_service.get_cached_game_detail(99999)
         assert result["save_status"] is not None
         assert "conflicts" in result["save_status"]
@@ -764,11 +765,11 @@ class TestComputedFields:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._save_sync_state["settings"]["save_sync_enabled"] = True
-        plugin._save_sync_state["saves"]["42"] = {
-            "files": {"test.srm": {"last_sync_hash": "abc", "last_sync_at": "2026-01-01T00:00:00Z"}},
-            "last_sync_check_at": "2026-01-01T00:00:00Z",
-        }
+        plugin._save_sync_state.settings.save_sync_enabled = True
+        plugin._save_sync_state.saves["42"] = RomSaveState(
+            files={"test.srm": FileSyncState(last_sync_hash="abc", last_sync_at="2026-01-01T00:00:00Z")},
+            last_sync_check_at="2026-01-01T00:00:00Z",
+        )
         result = game_detail_service.get_cached_game_detail(99999)
         assert result["save_sync_display"] is not None
         assert result["save_sync_display"]["status"] == "synced"

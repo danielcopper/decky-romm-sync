@@ -6,6 +6,7 @@ import pytest
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.steam_config import SteamConfigAdapter
+from domain.save_state import SaveSyncState
 
 # conftest.py patches decky before this import
 from main import Plugin
@@ -79,7 +80,7 @@ def plugin(clock):
     bios_checker = MagicMock()
     bios_checker.check_platform_bios_cached.return_value = None
     bios_checker.check_platform_bios = AsyncMock(return_value={"needs_bios": False})
-    p._save_sync_state = {"settings": {}, "saves": {}}
+    p._save_sync_state = SaveSyncState()
     p._game_detail_service = GameDetailService(
         state=p._state,
         metadata_cache=p._metadata_cache,
@@ -898,8 +899,7 @@ class TestGetCachedGameDetailAchievements:
                 "cached_at": svc._clock.time(),
             },
         }
-        plugin._save_sync_state.clear()
-        plugin._save_sync_state.update({"settings": {}, "saves": {}})
+        plugin._save_sync_state.replace_with(SaveSyncState())
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -920,8 +920,7 @@ class TestGetCachedGameDetailAchievements:
             "name": "Test Game",
             "platform_slug": "",
         }
-        plugin._save_sync_state.clear()
-        plugin._save_sync_state.update({"settings": {}, "saves": {}})
+        plugin._save_sync_state.replace_with(SaveSyncState())
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -938,8 +937,7 @@ class TestGetCachedGameDetailAchievements:
             "name": "Test Game",
             "platform_slug": "",
         }
-        plugin._save_sync_state.clear()
-        plugin._save_sync_state.update({"settings": {}, "saves": {}})
+        plugin._save_sync_state.replace_with(SaveSyncState())
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -957,8 +955,7 @@ class TestGetCachedGameDetailAchievements:
             "name": "Test Game",
             "platform_slug": "",
         }
-        plugin._save_sync_state.clear()
-        plugin._save_sync_state.update({"settings": {}, "saves": {}})
+        plugin._save_sync_state.replace_with(SaveSyncState())
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -984,8 +981,7 @@ class TestGetCachedGameDetailAchievements:
                 "cached_at": svc._clock.time() - (2 * 3600),  # expired
             },
         }
-        plugin._save_sync_state.clear()
-        plugin._save_sync_state.update({"settings": {}, "saves": {}})
+        plugin._save_sync_state.replace_with(SaveSyncState())
 
         result = await plugin.get_cached_game_detail(100)
 

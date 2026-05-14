@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from models.saves import SaveConflict
 
 from domain.emulator_tag import build_emulator_tag
+from domain.save_state import FileSyncState, RomSaveState
 from domain.sync_action import (
     Conflict,
     Download,
@@ -45,7 +46,7 @@ class MatrixOutcome:
     local_hash: str | None
     local_mtime_iso: str | None
     local_size: int | None
-    file_state: dict
+    file_state: FileSyncState
     server_candidates: list[dict]
 
 
@@ -112,36 +113,35 @@ class SyncEngine:
         core_so: str | None = None,
     ) -> None:
         """Update per-file sync tracking after a successful sync operation."""
-        if rom_id_str not in self._state_svc.data["saves"]:
-            self._state_svc.data["saves"][rom_id_str] = {
-                "files": {},
-                "emulator": emulator_tag or "retroarch",
-                "system": system,
-                "last_synced_core": core_so,
-                "active_slot": self._state_svc.data.get("settings", {}).get("default_slot", "default"),
-                "own_upload_ids": [],
-            }
-        save_entry = self._state_svc.data["saves"][rom_id_str]
-        save_entry.setdefault("files", {})
+        saves = self._state_svc.state.saves
+        if rom_id_str not in saves:
+            settings_default_slot = self._state_svc.state.settings.default_slot or "default"
+            saves[rom_id_str] = RomSaveState(
+                emulator=emulator_tag or "retroarch",
+                system=system,
+                last_synced_core=core_so,
+                active_slot=settings_default_slot,
+            )
+        save_entry = saves[rom_id_str]
         if emulator_tag is not None:
-            save_entry["emulator"] = emulator_tag
+            save_entry.emulator = emulator_tag
         if core_so is not None:
-            save_entry["last_synced_core"] = core_so
+            save_entry.last_synced_core = core_so
 
         now = self._clock.now().isoformat()
         local_exists = self._save_file.is_file(local_path)
         local_hash = self._save_service._file_md5(local_path) if local_exists else ""
 
-        save_entry["files"][filename] = {
-            "last_sync_hash": local_hash,
-            "last_sync_at": now,
-            "last_sync_server_updated_at": server_response.get("updated_at", now),
-            "last_sync_server_save_id": server_response.get("id"),
-            "last_sync_server_size": server_response.get("file_size_bytes"),
-            "last_sync_local_mtime": self._save_file.get_mtime(local_path) if local_exists else None,
-            "last_sync_local_size": self._save_file.get_size(local_path) if local_exists else None,
-            "tracked_save_id": server_response.get("id"),
-        }
+        save_entry.files[filename] = FileSyncState(
+            last_sync_hash=local_hash,
+            last_sync_at=now,
+            last_sync_server_updated_at=server_response.get("updated_at", now) or now,
+            last_sync_server_save_id=server_response.get("id"),
+            last_sync_server_size=server_response.get("file_size_bytes"),
+            last_sync_local_mtime=self._save_file.get_mtime(local_path) if local_exists else None,
+            last_sync_local_size=self._save_file.get_size(local_path) if local_exists else None,
+            tracked_save_id=server_response.get("id"),
+        )
 
     # ------------------------------------------------------------------
     # Sync Helpers
@@ -195,8 +195,11 @@ class SyncEngine:
 
         # v4.7: pass device_id and slot
         device_id = self._save_service._get_server_device_id()
-        game_state = self._state_svc.data.get("saves", {}).get(rom_id_str, {})
-        slot = game_state.get("active_slot", "default") if device_id else None
+        game_state = self._state_svc.state.saves.get(rom_id_str)
+        if device_id:
+            slot = game_state.active_slot if game_state and game_state.active_slot is not None else "default"
+        else:
+            slot = None
 
         is_post = save_id is None
         result = self._retry.with_retry(
@@ -214,7 +217,8 @@ class SyncEngine:
 
         # Promote local slot to server after successful upload
         if slot:
-            slots_dict = self._state_svc.data.get("saves", {}).get(rom_id_str, {}).get("slots", {})
+            rom_state = self._state_svc.state.saves.get(rom_id_str)
+            slots_dict = rom_state.slots if rom_state else {}
             if slot in slots_dict and slots_dict[slot].get("source") == "local":
                 slots_dict[slot]["source"] = "server"
                 slots_dict[slot]["count"] = 1
@@ -241,12 +245,12 @@ class SyncEngine:
         """
         if new_id is None:
             return
-        rom_state = self._state_svc.data["saves"].setdefault(rom_id_str, {"own_upload_ids": []})
-        own_ids: list[int] = rom_state.get("own_upload_ids", [])
-        if new_id in own_ids:
+        rom_state = self._state_svc.ensure_rom_state(rom_id_str)
+        if rom_state.own_upload_ids is None:
+            rom_state.own_upload_ids = []
+        if new_id in rom_state.own_upload_ids:
             return
-        own_ids.append(new_id)
-        rom_state["own_upload_ids"] = own_ids
+        rom_state.own_upload_ids.append(new_id)
         self._state_svc.save_state()
 
     def _handle_unexpected_error(
@@ -428,11 +432,9 @@ class SyncEngine:
         baseline yet. Recording the baseline lets subsequent runs detect
         offline-edit drift. State mutation only, no I/O.
         """
-        saves = self._state_svc.data.setdefault("saves", {})
-        rom_entry = saves.setdefault(rom_id_str, {"files": {}})
-        files = rom_entry.setdefault("files", {})
-        file_state = files.setdefault(filename, {})
-        file_state["last_sync_hash"] = local_hash
+        rom_state = self._state_svc.ensure_rom_state(rom_id_str)
+        file_state = rom_state.files.setdefault(filename, FileSyncState())
+        file_state.last_sync_hash = local_hash
 
     def iter_matrix_outcomes(
         self,
@@ -452,8 +454,8 @@ class SyncEngine:
         rom_id_str = str(int(rom_id))
         rom_name = info["rom_name"]
 
-        save_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        files_state = save_state.get("files", {})
+        save_state = self._state_svc.state.saves.get(rom_id_str)
+        files_state: dict[str, FileSyncState] = save_state.files if save_state else {}
         device_id = self._save_service._get_server_device_id() or ""
 
         local_files = self._save_service._find_save_files(rom_id)
@@ -465,7 +467,7 @@ class SyncEngine:
             handled_filenames.add(filename)
             local_exists = self._save_file.is_file(local_path)
             local_hash = self._save_service._file_md5(local_path) if local_exists else None
-            file_state = files_state.get(filename, {})
+            file_state = files_state.get(filename, FileSyncState())
             local_mtime_iso = (
                 datetime.fromtimestamp(self._save_file.get_mtime(local_path), tz=UTC).isoformat()
                 if local_exists
@@ -475,7 +477,7 @@ class SyncEngine:
             action = compute_sync_action(
                 local_file=self._build_local_input(local_path, filename),
                 server_saves_in_slot=server_in_slot,
-                files_state=file_state,
+                files_state=file_state.to_dict(),
                 device_id=device_id,
                 local_hash=local_hash,
             )
@@ -501,11 +503,11 @@ class SyncEngine:
             server_only_groups.setdefault(target, []).append(ss)
 
         for target_filename, group in server_only_groups.items():
-            file_state = files_state.get(target_filename, {})
+            file_state = files_state.get(target_filename, FileSyncState())
             action = compute_sync_action(
                 local_file=None,
                 server_saves_in_slot=group,
-                files_state=file_state,
+                files_state=file_state.to_dict(),
                 device_id=device_id,
                 local_hash=None,
             )
@@ -548,8 +550,8 @@ class SyncEngine:
             return 0, [f"Failed to fetch saves: {_msg}"], []
         self._save_service._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
 
-        save_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        active_slot = save_state.get("active_slot")
+        save_state = self._state_svc.state.saves.get(rom_id_str)
+        active_slot = save_state.active_slot if save_state else None
         server_in_slot = self._filter_server_saves_to_slot(server_saves, active_slot)
 
         self._save_service._log_debug(
@@ -588,8 +590,8 @@ class SyncEngine:
                 synced += 1
 
         # Record when this sync check ran (regardless of whether files transferred)
-        save_entry = self._state_svc.data["saves"].setdefault(rom_id_str, {})
-        save_entry["last_sync_check_at"] = self._clock.now().isoformat()
+        save_entry = self._state_svc.ensure_rom_state(rom_id_str)
+        save_entry.last_sync_check_at = self._clock.now().isoformat()
 
         self._save_service._log_debug(
             f"[TIMING] _sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"

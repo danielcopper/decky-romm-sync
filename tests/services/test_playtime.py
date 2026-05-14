@@ -15,6 +15,7 @@ import pytest
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
 
+from domain.save_state import PlaytimeEntry, SaveSyncState
 from lib.errors import RommApiError
 from services.playtime import PlaytimeService
 
@@ -33,7 +34,7 @@ def _make_retry():
 def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
     """Create a PlaytimeService with sensible defaults."""
     fake = fake_api or FakeSaveApi()
-    state: dict[str, Any] = {"playtime": {}}
+    state = SaveSyncState()
     saved: list[bool] = []
     clk = clock or FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
 
@@ -62,8 +63,8 @@ class TestRecordSession:
         svc, _, state, saved = make_service()
         result = svc.record_session_start(42)
         assert result["success"] is True
-        assert "42" in state["playtime"]
-        assert state["playtime"]["42"]["last_session_start"] is not None
+        assert "42" in state.playtime
+        assert state.playtime["42"].last_session_start is not None
         assert len(saved) == 1
 
     @pytest.mark.asyncio
@@ -75,7 +76,7 @@ class TestRecordSession:
 
         # Backdate session start by 60 seconds (relative to the fake clock)
         start = svc._clock.now() - timedelta(seconds=60)
-        state["playtime"]["42"]["last_session_start"] = start.isoformat()
+        state.playtime["42"].last_session_start = start.isoformat()
 
         result = await svc.record_session_end(42)
         assert result["success"] is True
@@ -93,13 +94,7 @@ class TestRecordSession:
     async def test_end_with_unparseable_start(self):
         """Malformed last_session_start -> parse_iso returns None -> failure."""
         svc, _, state, _ = make_service()
-        state["playtime"]["42"] = {
-            "total_seconds": 0,
-            "session_count": 0,
-            "last_session_start": "not-a-date",
-            "last_session_duration_sec": None,
-            "offline_deltas": [],
-        }
+        state.playtime["42"] = PlaytimeEntry(last_session_start="not-a-date")
         result = await svc.record_session_end(42)
         assert result["success"] is False
         assert "Failed to calculate session duration" in result["message"]
@@ -111,13 +106,13 @@ class TestRecordSession:
         # Session 1
         svc.record_session_start(42)
         start = svc._clock.now() - timedelta(seconds=30)
-        state["playtime"]["42"]["last_session_start"] = start.isoformat()
+        state.playtime["42"].last_session_start = start.isoformat()
         await svc.record_session_end(42)
 
         # Session 2
         svc.record_session_start(42)
         start = svc._clock.now() - timedelta(seconds=45)
-        state["playtime"]["42"]["last_session_start"] = start.isoformat()
+        state.playtime["42"].last_session_start = start.isoformat()
         result2 = await svc.record_session_end(42)
 
         assert result2["session_count"] == 2
@@ -133,14 +128,12 @@ class TestSyncPlaytime:
     @pytest.mark.asyncio
     async def test_creates_note_on_first_sync(self):
         svc, fake, state, _ = make_service()
-        state["playtime"]["42"] = {
-            "total_seconds": 120,
-            "session_count": 1,
-            "last_session_start": None,
-            "last_session_duration_sec": 120,
-            "offline_deltas": [],
-        }
-        state["device_name"] = "deck"
+        state.playtime["42"] = PlaytimeEntry(
+            total_seconds=120,
+            session_count=1,
+            last_session_duration_sec=120,
+        )
+        state.device_name = "deck"
 
         svc._sync_playtime_to_romm(42, 120)
 
@@ -154,14 +147,12 @@ class TestSyncPlaytime:
     @pytest.mark.asyncio
     async def test_updates_existing_note(self):
         svc, fake, state, _ = make_service()
-        state["playtime"]["42"] = {
-            "total_seconds": 200,
-            "session_count": 2,
-            "last_session_start": None,
-            "last_session_duration_sec": 80,
-            "offline_deltas": [],
-        }
-        state["device_name"] = "deck"
+        state.playtime["42"] = PlaytimeEntry(
+            total_seconds=200,
+            session_count=2,
+            last_session_duration_sec=80,
+        )
+        state.device_name = "deck"
 
         # Pre-existing note on server
         fake.notes[42] = [
@@ -182,14 +173,12 @@ class TestSyncPlaytime:
     async def test_merge_takes_max(self):
         """new_total = max(local_total, server_seconds + session_duration)"""
         svc, fake, state, _ = make_service()
-        state["playtime"]["42"] = {
-            "total_seconds": 300,
-            "session_count": 3,
-            "last_session_start": None,
-            "last_session_duration_sec": 60,
-            "offline_deltas": [],
-        }
-        state["device_name"] = "deck"
+        state.playtime["42"] = PlaytimeEntry(
+            total_seconds=300,
+            session_count=3,
+            last_session_duration_sec=60,
+        )
+        state.device_name = "deck"
 
         fake.notes[42] = [
             {
@@ -204,8 +193,8 @@ class TestSyncPlaytime:
         svc._sync_playtime_to_romm(42, 60)
 
         # max(300, 200+60) = 300
-        entry = state["playtime"]["42"]
-        assert entry["total_seconds"] == 300
+        entry = state.playtime["42"]
+        assert entry.total_seconds == 300
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +206,7 @@ class TestGetPlaytime:
     @pytest.mark.asyncio
     async def test_get_server_playtime(self):
         svc, fake, state, _ = make_service()
-        state["playtime"]["42"] = {"total_seconds": 100, "session_count": 2}
+        state.playtime["42"] = PlaytimeEntry(total_seconds=100, session_count=2)
 
         fake.notes[42] = [
             {
@@ -237,7 +226,7 @@ class TestGetPlaytime:
     @pytest.mark.asyncio
     async def test_get_server_playtime_no_note(self):
         svc, _, state, _ = make_service()
-        state["playtime"]["42"] = {"total_seconds": 50, "session_count": 1}
+        state.playtime["42"] = PlaytimeEntry(total_seconds=50, session_count=1)
 
         result = await svc.get_server_playtime(42)
         assert result["local_seconds"] == 50
@@ -247,8 +236,8 @@ class TestGetPlaytime:
     @pytest.mark.asyncio
     async def test_get_all_playtime(self):
         svc, _, state, _ = make_service()
-        state["playtime"]["42"] = {"total_seconds": 100}
-        state["playtime"]["99"] = {"total_seconds": 200}
+        state.playtime["42"] = PlaytimeEntry(total_seconds=100)
+        state.playtime["99"] = PlaytimeEntry(total_seconds=200)
 
         result = svc.get_all_playtime()
         assert len(result["playtime"]) == 2
@@ -299,7 +288,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_api_error_on_server_playtime(self):
         svc, fake, state, _ = make_service()
-        state["playtime"]["42"] = {"total_seconds": 100, "session_count": 1}
+        state.playtime["42"] = PlaytimeEntry(total_seconds=100, session_count=1)
         fake.fail_on_next(RommApiError("Server down"))
 
         result = await svc.get_server_playtime(42)
@@ -310,14 +299,12 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_sync_playtime_error_logged_not_raised(self):
         svc, fake, state, _ = make_service()
-        state["playtime"]["42"] = {
-            "total_seconds": 100,
-            "session_count": 1,
-            "last_session_start": None,
-            "last_session_duration_sec": 60,
-            "offline_deltas": [],
-        }
-        state["device_name"] = "deck"
+        state.playtime["42"] = PlaytimeEntry(
+            total_seconds=100,
+            session_count=1,
+            last_session_duration_sec=60,
+        )
+        state.device_name = "deck"
         fake.fail_on_next(RommApiError("Oops"))
 
         # Should not raise
@@ -326,14 +313,12 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_corrupted_note_content(self):
         svc, fake, state, _ = make_service()
-        state["playtime"]["42"] = {
-            "total_seconds": 100,
-            "session_count": 1,
-            "last_session_start": None,
-            "last_session_duration_sec": 60,
-            "offline_deltas": [],
-        }
-        state["device_name"] = "deck"
+        state.playtime["42"] = PlaytimeEntry(
+            total_seconds=100,
+            session_count=1,
+            last_session_duration_sec=60,
+        )
+        state.device_name = "deck"
 
         fake.notes[42] = [
             {
@@ -358,7 +343,7 @@ class TestEdgeCases:
 
         # Backdate by 25 hours
         start = svc._clock.now() - timedelta(hours=25)
-        state["playtime"]["42"]["last_session_start"] = start.isoformat()
+        state.playtime["42"].last_session_start = start.isoformat()
 
         result = await svc.record_session_end(42)
         assert result["success"] is True

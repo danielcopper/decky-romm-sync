@@ -14,6 +14,7 @@ from adapters.download_file import DownloadFileAdapter
 from adapters.download_queue import DownloadQueueAdapter
 from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.save_state import SaveSyncState
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
@@ -53,7 +54,7 @@ def plugin():
             log_debug=p._log_debug,
         ),
     )
-    p._save_sync_state = {"saves": {}, "playtime": {}, "settings": {}}
+    p._save_sync_state = SaveSyncState()
     p._download_service = DownloadService(
         romm_api=p._romm_api,
         state=p._state,
@@ -1741,11 +1742,11 @@ class TestRemoveRomCleansSaveSyncState:
             "file_path": str(rom_file),
             "system": "n64",
         }
-        save_sync_state = {
-            "saves": {"42": {"last_sync": "2024-01-01"}, "99": {"last_sync": "2024-02-01"}},
-            "playtime": {"42": {"total_seconds": 3600}, "99": {"total_seconds": 7200}},
-            "settings": {"save_sync_enabled": False},
-        }
+        save_sync_state = SaveSyncState()
+        save_sync_state.saves["42"] = {"last_sync": "2024-01-01"}  # type: ignore[assignment]
+        save_sync_state.saves["99"] = {"last_sync": "2024-02-01"}  # type: ignore[assignment]
+        save_sync_state.playtime["42"] = {"total_seconds": 3600}  # type: ignore[assignment]
+        save_sync_state.playtime["99"] = {"total_seconds": 7200}  # type: ignore[assignment]
         plugin._rom_removal_service._save_sync_state = save_sync_state
         save_calls = []
         plugin._rom_removal_service._save_save_sync_state = lambda: save_calls.append(1)
@@ -1753,11 +1754,11 @@ class TestRemoveRomCleansSaveSyncState:
         result = await plugin.remove_rom(42)
         assert result["success"] is True
         # Save sync state for ROM 42 should be cleaned
-        assert "42" not in save_sync_state["saves"]
-        assert "42" not in save_sync_state["playtime"]
+        assert "42" not in save_sync_state.saves
+        assert "42" not in save_sync_state.playtime
         # Other ROM's state should be untouched
-        assert "99" in save_sync_state["saves"]
-        assert "99" in save_sync_state["playtime"]
+        assert "99" in save_sync_state.saves
+        assert "99" in save_sync_state.playtime
         # _save_save_sync_state should have been called
         assert len(save_calls) == 1
 
@@ -1782,11 +1783,11 @@ class TestRemoveRomCleansSaveSyncState:
             "1": {"rom_id": 1, "file_path": str(file_a), "system": "n64"},
             "2": {"rom_id": 2, "file_path": str(file_b), "system": "n64"},
         }
-        save_sync_state = {
-            "saves": {"1": {"last_sync": "2024-01-01"}, "2": {"last_sync": "2024-02-01"}},
-            "playtime": {"1": {"total_seconds": 100}, "2": {"total_seconds": 200}},
-            "settings": {"save_sync_enabled": False},
-        }
+        save_sync_state = SaveSyncState()
+        save_sync_state.saves["1"] = {"last_sync": "2024-01-01"}  # type: ignore[assignment]
+        save_sync_state.saves["2"] = {"last_sync": "2024-02-01"}  # type: ignore[assignment]
+        save_sync_state.playtime["1"] = {"total_seconds": 100}  # type: ignore[assignment]
+        save_sync_state.playtime["2"] = {"total_seconds": 200}  # type: ignore[assignment]
         plugin._rom_removal_service._save_sync_state = save_sync_state
         save_calls = []
         plugin._rom_removal_service._save_save_sync_state = lambda: save_calls.append(1)
@@ -1795,8 +1796,8 @@ class TestRemoveRomCleansSaveSyncState:
         assert result["success"] is True
         assert result["removed_count"] == 2
         # All save sync state should be cleaned
-        assert save_sync_state["saves"] == {}
-        assert save_sync_state["playtime"] == {}
+        assert save_sync_state.saves == {}
+        assert save_sync_state.playtime == {}
         # _save_save_sync_state should have been called
         assert len(save_calls) == 1
 

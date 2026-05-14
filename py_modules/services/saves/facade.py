@@ -12,6 +12,7 @@ from models.saves import SaveConflict
 from domain.emulator_tag import detect_core_change
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir, sanitize_save_filename
+from domain.save_state import FileSyncState, SaveSyncState
 from lib.errors import classify_error
 from lib.iso_time import parse_iso_to_epoch
 from services.protocols import (
@@ -49,8 +50,9 @@ class SaveService:
         Live reference to the main plugin state dict (``installed_roms``,
         ``shortcut_registry``).
     save_sync_state:
-        Live reference to the save-sync state dict. Caller should
-        pre-populate via :meth:`init_state` / :meth:`load_state`.
+        Live reference to the typed :class:`SaveSyncState` aggregate.
+        Caller should pre-populate via :meth:`load_state` after
+        construction; the aggregate ships with defaults out of the box.
     config:
         Construction-time wiring bundle (paths, callbacks, asyncio loop,
         logger, plugin metadata). See :class:`SaveServiceConfig` for the
@@ -66,7 +68,7 @@ class SaveService:
         retry: RetryStrategy,
         settings: dict,
         state: dict,
-        save_sync_state: dict,
+        save_sync_state: SaveSyncState,
         config: SaveServiceConfig,
     ) -> None:
         self._romm_api = romm_api
@@ -80,10 +82,8 @@ class SaveService:
             persister=config.save_sync_state_persister,
             logger=config.logger,
         )
-        # Alias the dict so the dozens of self._save_sync_state[...] call
-        # sites elsewhere in SaveService keep working unchanged. Both names
-        # reference the same underlying dict object.
-        self._save_sync_state = self._state_svc.data
+        # Convenience alias — both names reference the same aggregate.
+        self._save_sync_state = self._state_svc.state
         # Convenience aliases — the rest of the class body (and sub-services
         # via the ``_save_service`` back-ref) read these attributes directly.
         self._loop = config.loop
@@ -152,24 +152,21 @@ class SaveService:
 
     def _get_server_device_id(self) -> str | None:
         """Return the server device ID if registered, else None."""
-        return self._save_sync_state.get("server_device_id")
+        sid = self._save_sync_state.server_device_id
+        return str(sid) if sid is not None else None
 
     # ------------------------------------------------------------------
     # State Management
     # ------------------------------------------------------------------
 
     @staticmethod
-    def make_default_state() -> dict:
-        """Return a fresh default save-sync state dict."""
+    def make_default_state() -> SaveSyncState:
+        """Return a fresh default save-sync state aggregate."""
         return StateService.make_default_state()
 
     def init_state(self) -> None:
-        """Populate ``_save_sync_state`` with defaults (idempotent)."""
+        """No-op for the typed aggregate (defaults ship at construction)."""
         self._state_svc.init_state()
-
-    def _migrate_loaded_state(self) -> None:
-        """Apply schema migrations to data just read from disk."""
-        self._state_svc._migrate_loaded_state()
 
     def load_state(self) -> None:
         """Load save sync state from disk, merging with defaults."""
@@ -349,7 +346,7 @@ class SaveService:
 
     def _is_save_sync_enabled(self) -> bool:
         """Check if save sync feature is enabled."""
-        return self._save_sync_state.get("settings", {}).get("save_sync_enabled", False)
+        return self._save_sync_state.settings.save_sync_enabled
 
     # ------------------------------------------------------------------
     # Public async API (callable endpoints)
@@ -378,18 +375,19 @@ class SaveService:
                 self._logger.debug(f"ensure_device_registered: version probe failed (non-fatal): {e}")
 
         # Already registered
-        has_device_id = self._save_sync_state.get("device_id")
-        has_server_id = self._save_sync_state.get("server_device_id")
+        has_device_id = self._save_sync_state.device_id
+        has_server_id = self._save_sync_state.server_device_id
         if has_device_id and has_server_id:
+            server_id_str = str(has_server_id)
             with contextlib.suppress(Exception):
                 await self._loop.run_in_executor(
                     None,
-                    lambda: self._romm_api.update_device(has_server_id, client_version=self._plugin_version),
+                    lambda: self._romm_api.update_device(server_id_str, client_version=self._plugin_version),
                 )
             return {
                 "success": True,
-                "device_id": self._save_sync_state["device_id"],
-                "device_name": self._save_sync_state.get("device_name", ""),
+                "device_id": self._save_sync_state.device_id,
+                "device_name": self._save_sync_state.device_name or "",
                 "server_device_id": has_server_id,
             }
 
@@ -407,9 +405,9 @@ class SaveService:
             )
             server_device_id = result.get("id") or result.get("device_id")
             if server_device_id:
-                self._save_sync_state["device_id"] = str(server_device_id)
-                self._save_sync_state["device_name"] = hostname
-                self._save_sync_state["server_device_id"] = str(server_device_id)
+                self._save_sync_state.device_id = str(server_device_id)
+                self._save_sync_state.device_name = hostname
+                self._save_sync_state.server_device_id = str(server_device_id)
                 self.save_state()
                 self._logger.info(f"Device registered with server: {server_device_id} ({hostname})")
                 return {
@@ -473,12 +471,12 @@ class SaveService:
             return {"changed": False}
 
         rom_id_str = str(rom_id)
-        save_entry = self._save_sync_state.get("saves", {}).get(rom_id_str)
+        save_entry = self._save_sync_state.saves.get(rom_id_str)
         if not save_entry:
             return {"changed": False}  # Never synced
 
-        stored_core = save_entry.get("last_synced_core")
-        system = save_entry.get("system")
+        stored_core = save_entry.last_synced_core
+        system = save_entry.system
         if not stored_core or not system:
             return {"changed": False}
 
@@ -574,11 +572,10 @@ class SaveService:
                     "save_sort_changed": True,
                 }
 
-            settings = self._save_sync_state.get("settings", {})
-            if not settings.get("sync_before_launch", True):
+            if not self._save_sync_state.settings.sync_before_launch:
                 return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
 
-            if not self._save_sync_state.get("device_id"):
+            if not self._save_sync_state.device_id:
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
@@ -621,8 +618,7 @@ class SaveService:
                     "blocked_by_migration": True,
                 }
 
-            settings = self._save_sync_state.get("settings", {})
-            if not settings.get("sync_after_exit", True):
+            if not self._save_sync_state.settings.sync_after_exit:
                 self._logger.info("post_exit_sync skipped: sync_after_exit disabled")
                 return {"success": True, "message": "Post-exit sync disabled", "synced": 0}
 
@@ -635,7 +631,7 @@ class SaveService:
                 self._logger.info("post_exit_sync skipped: server offline")
                 return {"success": False, "message": "Server offline", "synced": 0, "offline": True}
 
-            if not self._save_sync_state.get("device_id"):
+            if not self._save_sync_state.device_id:
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
@@ -679,7 +675,7 @@ class SaveService:
             # sync before any detect has fired.
             await self._refresh_save_sort_state("sync_rom_saves")
 
-            if not self._save_sync_state.get("device_id"):
+            if not self._save_sync_state.device_id:
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
@@ -753,7 +749,7 @@ class SaveService:
         # sync before any detect has fired.
         await self._refresh_save_sort_state("sync_all_saves")
 
-        if not self._save_sync_state.get("device_id"):
+        if not self._save_sync_state.device_id:
             reg = await self.ensure_device_registered()
             if not reg.get("success"):
                 return {"success": False, "message": DEVICE_NOT_REGISTERED}
@@ -861,8 +857,8 @@ class SaveService:
                 _code, _msg = classify_error(e)
                 return {"success": False, "message": f"Failed to fetch saves: {_msg}"}
 
-            save_state = self._save_sync_state["saves"].get(rom_id_str, {})
-            active_slot = save_state.get("active_slot")
+            rom_state = self._save_sync_state.saves.get(rom_id_str)
+            active_slot = rom_state.active_slot if rom_state else None
             server_in_slot = SyncEngine._filter_server_saves_to_slot(server_saves, active_slot)
             if not server_in_slot:
                 return {"success": False, "message": "No server save in active slot"}
@@ -954,17 +950,15 @@ class SaveService:
             self._log_debug(
                 f"keep_local: hash matches server, adopting without upload (rom={rom_id} filename={filename})"
             )
-            saves = self._save_sync_state.setdefault("saves", {})
-            rom_entry = saves.setdefault(rom_id_str, {"files": {}})
-            files = rom_entry.setdefault("files", {})
-            file_state = files.setdefault(filename, {})
-            file_state["tracked_save_id"] = server.get("id")
-            file_state["last_sync_hash"] = local_hash
-            file_state["last_sync_at"] = self._clock.now().isoformat()
-            file_state["last_sync_server_updated_at"] = server.get("updated_at", "")
-            file_state["last_sync_server_size"] = server.get("file_size_bytes")
-            file_state["last_sync_local_mtime"] = self._save_file.get_mtime(local_path)
-            file_state["last_sync_local_size"] = self._save_file.get_size(local_path)
+            rom_state = self._state_svc.ensure_rom_state(rom_id_str)
+            file_state = rom_state.files.setdefault(filename, FileSyncState())
+            file_state.tracked_save_id = server.get("id")
+            file_state.last_sync_hash = local_hash
+            file_state.last_sync_at = self._clock.now().isoformat()
+            file_state.last_sync_server_updated_at = server.get("updated_at", "") or ""
+            file_state.last_sync_server_size = server.get("file_size_bytes")
+            file_state.last_sync_local_mtime = self._save_file.get_mtime(local_path)
+            file_state.last_sync_local_size = self._save_file.get_size(local_path)
             self.save_state()
             return
 
@@ -985,16 +979,8 @@ class SaveService:
         return await self._versions.rollback_to_version(rom_id, slot, save_id)
 
     def get_save_sync_settings(self) -> dict:
-        """Return current save sync settings."""
-        settings = self._save_sync_state.get("settings", {})
-        # Defensive defaults for keys added after initial release
-        settings.setdefault("default_slot", "default")
-        settings.setdefault("autocleanup_limit", 10)
-        if not self._save_sync_state.get("settings"):
-            settings.setdefault("save_sync_enabled", False)
-            settings.setdefault("sync_before_launch", True)
-            settings.setdefault("sync_after_exit", True)
-        return settings
+        """Return current save sync settings as the on-disk dict shape."""
+        return self._save_sync_state.settings.to_dict()
 
     @staticmethod
     def _sanitize_setting(key: str, value: object) -> tuple[object, bool]:
@@ -1024,7 +1010,7 @@ class SaveService:
             "autocleanup_limit",
         }
 
-        current = self._save_sync_state.setdefault("settings", {})
+        current = self._save_sync_state.settings
 
         for key, value in settings.items():
             if key not in allowed_keys:
@@ -1032,10 +1018,10 @@ class SaveService:
             value, skip = self._sanitize_setting(key, value)
             if skip:
                 continue
-            current[key] = value
+            setattr(current, key, value)
 
         self.save_state()
-        return {"success": True, "settings": current}
+        return {"success": True, "settings": current.to_dict()}
 
     def _delete_saves_for_roms(self, rom_ids: list[int]) -> tuple[int, list[str]]:
         """Delete local save files for the given ROM IDs and clear file tracking state.

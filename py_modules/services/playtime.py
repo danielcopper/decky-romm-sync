@@ -10,6 +10,7 @@ import contextlib
 import json
 from typing import TYPE_CHECKING
 
+from domain.save_state import PlaytimeEntry, SaveSyncState
 from lib.iso_time import parse_iso
 from services.protocols import Clock, RetryStrategy, RommApiProtocol, StatePersister
 
@@ -28,8 +29,8 @@ class PlaytimeService:
     retry:
         Retry strategy — provides ``with_retry`` and ``is_retryable``.
     save_sync_state:
-        Live reference to the save-sync state dict.  Playtime data lives
-        in ``save_sync_state["playtime"]``.
+        Live reference to the typed :class:`SaveSyncState` aggregate.
+        Playtime data lives in ``save_sync_state.playtime``.
     loop:
         The plugin's ``asyncio`` event loop (for ``run_in_executor``).
     logger:
@@ -45,7 +46,7 @@ class PlaytimeService:
         *,
         romm_api: RommApiProtocol,
         retry: RetryStrategy,
-        save_sync_state: dict,
+        save_sync_state: SaveSyncState,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         clock: Clock,
@@ -99,9 +100,9 @@ class PlaytimeService:
         # Store note_id in state for future updates
         if isinstance(result, dict) and result.get("id"):
             rom_id_str = str(int(rom_id))
-            entry = self._save_sync_state.get("playtime", {}).get(rom_id_str)
+            entry = self._save_sync_state.playtime.get(rom_id_str)
             if entry is not None:
-                entry["note_id"] = result["id"]
+                entry.note_id = result["id"]
                 self._save_state()
         return result
 
@@ -134,12 +135,12 @@ class PlaytimeService:
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
-        entry = self._save_sync_state.get("playtime", {}).get(rom_id_str)
+        entry = self._save_sync_state.playtime.get(rom_id_str)
         if not entry:
             return
 
-        local_total = entry.get("total_seconds", 0)
-        device_name = self._save_sync_state.get("device_name", "")
+        local_total = entry.total_seconds
+        device_name = self._save_sync_state.device_name or ""
 
         try:
             note = self._retry.with_retry(self._get_playtime_note, rom_id)
@@ -167,7 +168,7 @@ class PlaytimeService:
                 self._retry.with_retry(self._create_playtime_note, rom_id, playtime_data)
 
             # Sync local state to the merged total
-            entry["total_seconds"] = new_total
+            entry.total_seconds = new_total
             self._save_state()
 
         except Exception as e:
@@ -180,18 +181,9 @@ class PlaytimeService:
     def record_session_start(self, rom_id: int) -> dict:
         """Record the start of a play session for playtime tracking."""
         rom_id_str = str(int(rom_id))
-        playtime = self._save_sync_state.setdefault("playtime", {})
-        entry = playtime.setdefault(
-            rom_id_str,
-            {
-                "total_seconds": 0,
-                "session_count": 0,
-                "last_session_start": None,
-                "last_session_duration_sec": None,
-                "offline_deltas": [],
-            },
-        )
-        entry["last_session_start"] = self._clock.now().isoformat()
+        playtime = self._save_sync_state.playtime
+        entry = playtime.setdefault(rom_id_str, PlaytimeEntry())
+        entry.last_session_start = self._clock.now().isoformat()
         self._save_state()
         return {"success": True}
 
@@ -201,14 +193,13 @@ class PlaytimeService:
         Only handles playtime — save sync is handled separately.
         """
         rom_id_str = str(int(rom_id))
-        playtime = self._save_sync_state.get("playtime", {})
-        entry = playtime.get(rom_id_str)
+        entry = self._save_sync_state.playtime.get(rom_id_str)
 
-        if not entry or not entry.get("last_session_start"):
+        if not entry or not entry.last_session_start:
             return {"success": False, "message": "No active session"}
 
         try:
-            start = parse_iso(entry["last_session_start"])
+            start = parse_iso(entry.last_session_start)
             if start is None:
                 return {"success": False, "message": "Failed to calculate session duration"}
             now = self._clock.now()
@@ -217,10 +208,10 @@ class PlaytimeService:
             # Sanity check: clamp to 0-24h
             duration = max(0, min(duration, 86400))
 
-            entry["total_seconds"] = entry.get("total_seconds", 0) + int(duration)
-            entry["session_count"] = entry.get("session_count", 0) + 1
-            entry["last_session_duration_sec"] = int(duration)
-            entry["last_session_start"] = None
+            entry.total_seconds += int(duration)
+            entry.session_count += 1
+            entry.last_session_duration_sec = int(duration)
+            entry.last_session_start = None
 
             self._save_state()
 
@@ -231,8 +222,8 @@ class PlaytimeService:
             return {
                 "success": True,
                 "duration_sec": int(duration),
-                "total_seconds": entry["total_seconds"],
-                "session_count": entry["session_count"],
+                "total_seconds": entry.total_seconds,
+                "session_count": entry.session_count,
             }
         except (ValueError, TypeError):
             return {"success": False, "message": "Failed to calculate session duration"}
@@ -242,8 +233,8 @@ class PlaytimeService:
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
 
-        local_entry = self._save_sync_state.get("playtime", {}).get(rom_id_str, {})
-        local_seconds = local_entry.get("total_seconds", 0)
+        local_entry = self._save_sync_state.playtime.get(rom_id_str)
+        local_seconds = local_entry.total_seconds if local_entry else 0
 
         server_seconds = 0
         try:
@@ -263,9 +254,9 @@ class PlaytimeService:
             "local_seconds": local_seconds,
             "server_seconds": server_seconds,
             "total_seconds": max(local_seconds, server_seconds),
-            "session_count": local_entry.get("session_count", 0),
+            "session_count": local_entry.session_count if local_entry else 0,
         }
 
     def get_all_playtime(self) -> dict:
         """Return all local playtime entries keyed by rom_id string."""
-        return {"playtime": self._save_sync_state.get("playtime", {})}
+        return {"playtime": {rid: pe.to_dict() for rid, pe in self._save_sync_state.playtime.items()}}

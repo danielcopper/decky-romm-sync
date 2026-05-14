@@ -1,15 +1,24 @@
-"""In-memory save-sync state and on-disk migration logic.
+"""In-memory save-sync state and on-disk persistence orchestration.
 
-Anything that mutates ``save_sync_state`` in memory or migrates a
-freshly-loaded payload lives here. Raw I/O for ``save_sync_state.json``
-(atomic writes, locking, missing-file handling) belongs to the
-``SaveSyncStatePersister`` injected into ``StateService``; this service
-never opens the file directly.
+Owns the live :class:`SaveSyncState` aggregate. Anything that mutates
+the aggregate at service level (defaults seeding, file-tracking reset,
+orphan pruning) or coordinates persistence with the
+``SaveSyncStatePersister`` lives here. Schema migrations for newly
+loaded payloads live in :class:`SaveSyncState.from_dict` — this service
+never opens the JSON file directly.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from domain.save_state import (
+    FileSyncState,
+    PlaytimeEntry,
+    RomSaveState,
+    SaveSyncSettings,
+    SaveSyncState,
+)
 
 if TYPE_CHECKING:
     import logging
@@ -18,12 +27,12 @@ if TYPE_CHECKING:
 
 
 class StateService:
-    """Owns the in-memory save-sync state dict and its on-load migrations."""
+    """Owns the live ``SaveSyncState`` aggregate and its persistence."""
 
     def __init__(
         self,
         *,
-        save_sync_state: dict,
+        save_sync_state: SaveSyncState,
         state: dict,
         persister: SaveSyncStatePersister,
         logger: logging.Logger,
@@ -34,134 +43,100 @@ class StateService:
         self._logger = logger
 
     @property
-    def data(self) -> dict:
-        """Live reference to the in-memory state dict."""
+    def state(self) -> SaveSyncState:
+        """Live reference to the typed save-sync aggregate."""
         return self._save_sync_state
 
     @staticmethod
-    def make_default_state() -> dict:
-        """Return a fresh default save-sync state dict."""
-        return {
-            "version": 1,
-            "device_id": None,
-            "device_name": None,
-            "server_device_id": None,
-            "saves": {},
-            "playtime": {},
-            "settings": {
-                "save_sync_enabled": False,
-                "sync_before_launch": True,
-                "sync_after_exit": True,
-                "default_slot": "default",
-                "autocleanup_limit": 10,
-            },
-        }
+    def make_default_state() -> SaveSyncState:
+        """Return a fresh default save-sync state aggregate."""
+        return SaveSyncState()
 
     def init_state(self) -> None:
-        """Populate ``_save_sync_state`` with defaults (idempotent).
+        """No-op: the aggregate ships with defaults at construction.
 
-        Defaults only — schema migrations on loaded data live in
-        ``load_state``. Running them here would be a no-op because
-        ``init_state`` is called before any disk data is loaded.
+        Kept for backward compatibility with callers that historically
+        seeded a dict with default keys after construction. Schema
+        migrations on loaded data live in :meth:`load_state`.
         """
-        defaults = self.make_default_state()
-        for key, value in defaults.items():
-            self._save_sync_state.setdefault(key, value)
-        self._save_sync_state.setdefault("settings", {})
-        for key, value in defaults["settings"].items():
-            self._save_sync_state["settings"].setdefault(key, value)
-
-    def _migrate_loaded_state(self) -> None:
-        """Apply schema migrations to data just read from disk.
-
-        Migrations are idempotent. Called from ``load_state`` after the
-        disk content has been merged into ``_save_sync_state``; the next
-        ``save_state`` then persists the cleaned form.
-
-        Currently:
-        - Rename per-game ``active_core`` → ``last_synced_core``.
-        - Drop legacy per-file ``dismissed_newer_save_id`` (was used by
-          the removed newer-in-slot detection).
-        - Strip removed legacy settings keys (``conflict_mode``,
-          ``clock_skew_tolerance_sec``).
-        """
-        self._migrate_saves_entries()
-        self._strip_legacy_settings()
-
-    def _migrate_saves_entries(self) -> None:
-        """Rename ``active_core`` → ``last_synced_core`` and drop dead per-file flags."""
-        saves = self._save_sync_state.get("saves")
-        if not isinstance(saves, dict):
-            return
-        for entry in saves.values():
-            if not isinstance(entry, dict):
-                continue
-            if "active_core" in entry:
-                entry["last_synced_core"] = entry.pop("active_core")
-            files = entry.get("files")
-            if not isinstance(files, dict):
-                continue
-            for file_state in files.values():
-                if isinstance(file_state, dict):
-                    file_state.pop("dismissed_newer_save_id", None)
-
-    def _strip_legacy_settings(self) -> None:
-        """Strip removed settings keys from loaded state.
-
-        Old state files keep these forever otherwise (``load_state`` does
-        ``dict.update`` on settings, so orphan keys survive). Idempotent.
-        """
-        settings = self._save_sync_state.get("settings")
-        if isinstance(settings, dict):
-            settings.pop("conflict_mode", None)
-            settings.pop("clock_skew_tolerance_sec", None)
 
     def load_state(self) -> None:
-        """Load save sync state from disk, merging with defaults."""
+        """Load save-sync state from disk via the persister.
+
+        Mutates the live aggregate in place so callers holding a
+        reference (other services, sub-services, ``main.py``) keep
+        observing the latest state without rewiring.
+        """
         saved = self._persister.load()
         if saved is None:
             return
-        for key in ("saves", "playtime"):
-            if key in saved:
-                self._save_sync_state[key] = saved[key]
-        for key in ("version", "device_id", "device_name", "server_device_id"):
-            if key in saved:
-                self._save_sync_state[key] = saved[key]
-        if "settings" in saved:
-            self._save_sync_state["settings"].update(saved["settings"])
-        self._migrate_loaded_state()
+        loaded = SaveSyncState.from_dict(saved)
+        self._save_sync_state.replace_with(loaded)
 
     def save_state(self) -> None:
-        """Persist save sync state to disk via the injected persister."""
-        self._persister.save(self._save_sync_state)
+        """Persist the live aggregate to disk via the injected persister."""
+        self._persister.save(self._save_sync_state.to_dict())
+
+    # ------------------------------------------------------------------
+    # Typed accessors for the per-ROM substructure
+    # ------------------------------------------------------------------
+
+    def get_rom_state(self, rom_id_str: str) -> RomSaveState | None:
+        """Return the typed per-ROM state, or ``None`` if not tracked."""
+        return self._save_sync_state.saves.get(rom_id_str)
+
+    def ensure_rom_state(self, rom_id_str: str) -> RomSaveState:
+        """Return the per-ROM state, creating an empty one if missing."""
+        return self._save_sync_state.saves.setdefault(rom_id_str, RomSaveState())
+
+    def get_file_state(self, rom_id_str: str, filename: str) -> FileSyncState | None:
+        """Return the typed per-file tracking entry, or ``None`` if not tracked."""
+        rom = self._save_sync_state.saves.get(rom_id_str)
+        if rom is None:
+            return None
+        return rom.files.get(filename)
+
+    def get_settings(self) -> SaveSyncSettings:
+        """Return the live settings dataclass."""
+        return self._save_sync_state.settings
+
+    def get_playtime(self, rom_id_str: str) -> PlaytimeEntry | None:
+        """Return the typed playtime entry, or ``None`` if not tracked."""
+        return self._save_sync_state.playtime.get(rom_id_str)
+
+    # ------------------------------------------------------------------
+    # File tracking mutations
+    # ------------------------------------------------------------------
 
     def clear_files_state(self, rom_id_str: str) -> None:
         """Clear the per-file tracking dict for a ROM, preserving slot config.
 
-        Resets ``data["saves"][rom_id_str]["files"]`` to an empty dict while
-        leaving ``active_slot``, ``slot_confirmed``, ``emulator``,
-        ``last_synced_core``, ``own_upload_ids``, ``slots``, ``system``, and any
-        other slot/attribution metadata untouched. Creates the ROM entry as an
-        empty dict (with only ``files``) when none exists. Caller is
-        responsible for persisting via ``save_state()``.
+        Resets the ROM's ``files`` dict to empty while leaving slot
+        attribution and the rest of the entry untouched. Creates the
+        ROM entry when none exists. Caller is responsible for persisting
+        via :meth:`save_state`.
         """
-        saves = self._save_sync_state.setdefault("saves", {})
-        entry = saves.setdefault(rom_id_str, {})
-        entry["files"] = {}
+        rom = self.ensure_rom_state(rom_id_str)
+        rom.files = {}
 
     def prune_orphaned_state(self) -> None:
-        """Remove save sync state entries for rom_ids no longer in shortcut registry."""
+        """Remove save-sync state entries for rom_ids no longer in the shortcut registry."""
         registry = self._state.get("shortcut_registry", {})
         changed = False
 
-        for section in ("saves", "playtime"):
-            data = self._save_sync_state.get(section, {})
-            stale = [rid for rid in data if rid not in registry]
-            for rid in stale:
-                del data[rid]
-                self._logger.info(f"Pruned orphaned save sync state: {section}[{rid}]")
-            if stale:
-                changed = True
+        saves_stale = [rid for rid in self._save_sync_state.saves if rid not in registry]
+        for rid in saves_stale:
+            del self._save_sync_state.saves[rid]
+            self._logger.info(f"Pruned orphaned save sync state: saves[{rid}]")
+        if saves_stale:
+            changed = True
+
+        playtime_stale = [rid for rid in self._save_sync_state.playtime if rid not in registry]
+        for rid in playtime_stale:
+            del self._save_sync_state.playtime[rid]
+            self._logger.info(f"Pruned orphaned save sync state: playtime[{rid}]")
+        if playtime_stale:
+            changed = True
 
         if changed:
             self.save_state()

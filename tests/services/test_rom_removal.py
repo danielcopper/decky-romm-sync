@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 sys.path.insert(0, os.path.dirname(__file__))
 
 # conftest.py patches decky before this import
+from domain.save_state import SaveSyncState
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 
 # Synthetic roms-base path used by the fake fs throughout this module.
@@ -26,7 +27,7 @@ def state():
 
 @pytest.fixture
 def save_sync_state():
-    return {"saves": {}, "playtime": {}, "settings": {}}
+    return SaveSyncState()
 
 
 @pytest.fixture
@@ -164,11 +165,11 @@ class TestRemoveRom:
         rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
         rom_files.files[rom_path] = b"\x00" * 100
         state["installed_roms"]["42"] = {"rom_id": 42, "file_path": rom_path, "system": "n64"}
-        save_sync_state["saves"]["42"] = {"last_sync": "2024-01-01"}
-        save_sync_state["playtime"]["42"] = {"total_seconds": 3600}
+        save_sync_state.saves["42"] = {"last_sync": "2024-01-01"}
+        save_sync_state.playtime["42"] = {"total_seconds": 3600}
         # Add another ROM's state that should be preserved
-        save_sync_state["saves"]["99"] = {"last_sync": "2024-02-01"}
-        save_sync_state["playtime"]["99"] = {"total_seconds": 7200}
+        save_sync_state.saves["99"] = {"last_sync": "2024-02-01"}
+        save_sync_state.playtime["99"] = {"total_seconds": 7200}
 
         save_calls: list[int] = []
         service._save_save_sync_state = lambda: save_calls.append(1)
@@ -176,10 +177,10 @@ class TestRemoveRom:
         result = await service.remove_rom(42)
 
         assert result["success"] is True
-        assert "42" not in save_sync_state["saves"]
-        assert "42" not in save_sync_state["playtime"]
-        assert "99" in save_sync_state["saves"]
-        assert "99" in save_sync_state["playtime"]
+        assert "42" not in save_sync_state.saves
+        assert "42" not in save_sync_state.playtime
+        assert "99" in save_sync_state.saves
+        assert "99" in save_sync_state.playtime
         assert len(save_calls) == 1
 
     @pytest.mark.asyncio
@@ -304,16 +305,16 @@ class TestUninstallAllRoms:
             "1": {"rom_id": 1, "file_path": file_a, "system": "n64"},
             "2": {"rom_id": 2, "file_path": file_b, "system": "n64"},
         }
-        save_sync_state["saves"] = {"1": {"last_sync": "2024-01-01"}, "2": {"last_sync": "2024-02-01"}}
-        save_sync_state["playtime"] = {"1": {"total_seconds": 100}, "2": {"total_seconds": 200}}
+        save_sync_state.saves = {"1": {"last_sync": "2024-01-01"}, "2": {"last_sync": "2024-02-01"}}
+        save_sync_state.playtime = {"1": {"total_seconds": 100}, "2": {"total_seconds": 200}}
 
         save_calls: list[int] = []
         service._save_save_sync_state = lambda: save_calls.append(1)
 
         result = await service.uninstall_all_roms()
         assert result["success"] is True
-        assert save_sync_state["saves"] == {}
-        assert save_sync_state["playtime"] == {}
+        assert save_sync_state.saves == {}
+        assert save_sync_state.playtime == {}
         assert len(save_calls) == 1
 
     @pytest.mark.asyncio

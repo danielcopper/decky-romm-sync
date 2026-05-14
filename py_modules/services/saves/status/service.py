@@ -63,7 +63,7 @@ class StatusService:
             local_mtime=outcome.local_mtime_iso,
             local_size=outcome.local_size,
             server=chosen_server,
-            last_sync_at=outcome.file_state.get("last_sync_at"),
+            last_sync_at=outcome.file_state.last_sync_at or None,
             status=_status_from_action(action),
             server_device_id=server_device_id,
             uploaded_by_us=compute_uploaded_by_us(chosen_server, own_upload_ids),
@@ -135,13 +135,11 @@ class StatusService:
         info = self._save_service._get_rom_save_info(rom_id)
         server_device_id = self._save_service._get_server_device_id()
 
-        save_state = self._state_svc.data["saves"].get(rom_id_str, {})
-        active_slot = save_state.get("active_slot")
+        save_state = self._state_svc.state.saves.get(rom_id_str)
+        active_slot = save_state.active_slot if save_state else None
         server_in_slot = self._sync_engine._filter_server_saves_to_slot(server_saves, active_slot)
 
-        # own_upload_ids: None means missing key (legacy entry — unknown attribution).
-        raw_own_ids = save_state.get("own_upload_ids")
-        own_upload_ids: list[int] | None = raw_own_ids if isinstance(raw_own_ids, list) else None
+        own_upload_ids: list[int] | None = save_state.own_upload_ids if save_state else None
 
         file_statuses: list[dict] = []
         conflicts: list[SaveConflict | dict] = []
@@ -164,15 +162,16 @@ class StatusService:
                 if conflict_entry is not None:
                     conflicts.append(conflict_entry)
 
-        playtime = self._state_svc.data.get("playtime", {}).get(rom_id_str, {})
-        save_entry = self._state_svc.data.get("saves", {}).get(rom_id_str, {})
+        playtime_entry = self._state_svc.state.playtime.get(rom_id_str)
+        playtime = playtime_entry.to_dict() if playtime_entry is not None else {}
+        save_entry = self._state_svc.state.saves.get(rom_id_str)
 
         return {
             "rom_id": rom_id,
             "files": file_statuses,
             "playtime": playtime,
-            "device_id": self._state_svc.data.get("device_id", ""),
-            "last_sync_check_at": save_entry.get("last_sync_check_at"),
+            "device_id": self._state_svc.state.device_id or "",
+            "last_sync_check_at": save_entry.last_sync_check_at if save_entry else None,
             "conflicts": conflicts,
             "save_sort_changed": self._save_service._is_save_sort_changed(),
         }

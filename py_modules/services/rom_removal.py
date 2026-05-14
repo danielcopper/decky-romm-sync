@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.path_safety import is_safe_rom_path
+from domain.save_state import SaveSyncState
 
 if TYPE_CHECKING:
     import logging
@@ -26,7 +27,7 @@ class RomRemovalServiceConfig:
     """
 
     state: dict
-    save_sync_state: dict
+    save_sync_state: SaveSyncState
     logger: logging.Logger
     loop: asyncio.AbstractEventLoop
     save_state: StatePersister
@@ -80,9 +81,9 @@ class RomRemovalService:
         del self._state["installed_roms"][rom_id_str]
         # Clean save sync state for removed ROM
         save_changed = False
-        if self._save_sync_state.get("saves", {}).pop(rom_id_str, None) is not None:
+        if self._save_sync_state.saves.pop(rom_id_str, None) is not None:
             save_changed = True
-        if self._save_sync_state.get("playtime", {}).pop(rom_id_str, None) is not None:
+        if self._save_sync_state.playtime.pop(rom_id_str, None) is not None:
             save_changed = True
         if save_changed:
             self._save_save_sync_state()
@@ -125,9 +126,9 @@ class RomRemovalService:
         # Clean save sync state for all removed ROMs
         save_changed = False
         for rom_id_str in successfully_deleted:
-            if self._save_sync_state.get("saves", {}).pop(rom_id_str, None) is not None:
+            if self._save_sync_state.saves.pop(rom_id_str, None) is not None:
                 save_changed = True
-            if self._save_sync_state.get("playtime", {}).pop(rom_id_str, None) is not None:
+            if self._save_sync_state.playtime.pop(rom_id_str, None) is not None:
                 save_changed = True
         if save_changed:
             self._save_save_sync_state()

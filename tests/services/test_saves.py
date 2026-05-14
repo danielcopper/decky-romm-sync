@@ -16,6 +16,12 @@ from fakes.system_time import FakeClock
 
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.save_file import SaveFileAdapter
+from domain.save_state import (
+    FileSyncState,
+    PlaytimeEntry,
+    RomSaveState,
+    SaveSyncState,
+)
 from lib.errors import RommApiError
 from services.saves import SaveService, SaveServiceConfig
 
@@ -167,20 +173,20 @@ def _file_md5(path):
 class TestStateManagement:
     def test_make_default_state(self):
         state = SaveService.make_default_state()
-        assert state["device_id"] is None
-        assert state["saves"] == {}
-        assert state["settings"]["save_sync_enabled"] is False
+        assert state.device_id is None
+        assert state.saves == {}
+        assert state.settings.save_sync_enabled is False
 
     def test_init_state_populates_defaults(self, tmp_path):
-        svc, _ = make_service(tmp_path, save_sync_state={})
-        assert svc._save_sync_state["settings"]["save_sync_enabled"] is False
-        assert svc._save_sync_state["saves"] == {}
+        svc, _ = make_service(tmp_path, save_sync_state=SaveSyncState())
+        assert svc._save_sync_state.settings.save_sync_enabled is False
+        assert svc._save_sync_state.saves == {}
 
     def test_init_state_preserves_existing(self, tmp_path):
         state = SaveService.make_default_state()
-        state["device_id"] = "existing-id"
+        state.device_id = "existing-id"
         svc, _ = make_service(tmp_path, save_sync_state=state)
-        assert svc._save_sync_state["device_id"] == "existing-id"
+        assert svc._save_sync_state.device_id == "existing-id"
 
     def test_load_state_drops_legacy_dismissed_newer_save_id(self, tmp_path):
         """v0.15.0 user state with the obsolete dismissed_newer_save_id field
@@ -210,12 +216,12 @@ class TestStateManagement:
         svc, _ = make_service(tmp_path)  # calls init_state internally
         svc.load_state()
 
-        files = svc._save_sync_state["saves"]["42"]["files"]
-        assert "dismissed_newer_save_id" not in files["game.srm"]
-        assert "dismissed_newer_save_id" not in files["game.rtc"]
-        assert files["game.srm"]["tracked_save_id"] == 100
-        assert files["game.srm"]["last_sync_hash"] == "abc"
-        assert files["game.rtc"]["tracked_save_id"] == 101
+        files = svc._save_sync_state.saves["42"].files
+        # The legacy field is dropped on load (verified at the domain level
+        # via FileSyncState.from_dict — see tests/domain/test_save_state.py).
+        assert files["game.srm"].tracked_save_id == 100
+        assert files["game.srm"].last_sync_hash == "abc"
+        assert files["game.rtc"].tracked_save_id == 101
 
     def test_load_state_drops_legacy_dismissed_newer_save_id_persists_to_disk(self, tmp_path):
         """End-to-end: legacy field on disk → init_state → load_state →
@@ -258,9 +264,12 @@ class TestStateManagement:
         svc, _ = make_service(tmp_path)
         svc.load_state()
 
-        entry = svc._save_sync_state["saves"]["42"]
-        assert "active_core" not in entry
-        assert entry["last_synced_core"] == "mgba_libretro"
+        entry = svc._save_sync_state.saves["42"]
+        # Legacy ``active_core`` migration is verified at the domain level
+        # (tests/domain/test_save_state.py). Confirm the service-level
+        # round-trip wires it up to ``last_synced_core``.
+        assert entry.last_synced_core == "mgba_libretro"
+        assert "active_core" not in entry.to_dict()
 
     def test_load_state_skips_migration_for_malformed_entries(self, tmp_path):
         """Migration is defensive: non-dict values don't crash."""
@@ -279,87 +288,66 @@ class TestStateManagement:
         svc, _ = make_service(tmp_path)
         svc.load_state()  # should not raise
 
-        files = svc._save_sync_state["saves"]["42"]["files"]
-        assert "dismissed_newer_save_id" not in files["good.srm"]
+        files = svc._save_sync_state.saves["42"].files
+        # Malformed sub-entries default to empty FileSyncState — see the
+        # domain-level coverage in tests/domain/test_save_state.py.
+        assert files["good.srm"].tracked_save_id == 100
 
-    def test_migrate_loaded_state_strips_legacy_settings_keys(self, tmp_path):
+    def test_settings_legacy_keys_stripped_on_load(self, tmp_path):
         """Legacy ``conflict_mode`` and ``clock_skew_tolerance_sec`` settings
-        are dropped on state load. Other settings keys survive."""
-        svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"] = {
-            "conflict_mode": "ask_me",
-            "clock_skew_tolerance_sec": 60,
-            "save_sync_enabled": True,
+        are dropped when state loads from disk. Other keys survive."""
+        legacy = {
+            "settings": {
+                "conflict_mode": "ask_me",
+                "clock_skew_tolerance_sec": 60,
+                "save_sync_enabled": True,
+            },
         }
+        (tmp_path / "save_sync_state.json").write_text(json.dumps(legacy))
 
-        svc._migrate_loaded_state()
-
-        settings = svc._save_sync_state["settings"]
-        assert "conflict_mode" not in settings
-        assert "clock_skew_tolerance_sec" not in settings
-        assert settings["save_sync_enabled"] is True
-
-    def test_migrate_loaded_state_strip_legacy_settings_idempotent(self, tmp_path):
-        """Stripping legacy settings is a no-op when they aren't present."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"] = {"save_sync_enabled": True}
+        svc.load_state()
+        svc.save_state()
 
-        svc._migrate_loaded_state()  # should not raise
-
-        assert svc._save_sync_state["settings"] == {"save_sync_enabled": True}
-
-    def test_migrate_loaded_state_handles_missing_settings(self, tmp_path):
-        """Migration is defensive: missing ``settings`` key doesn't crash."""
-        svc, _ = make_service(tmp_path)
-        svc._save_sync_state.pop("settings", None)
-
-        svc._migrate_loaded_state()  # should not raise
-
-        assert "settings" not in svc._save_sync_state
-
-    def test_migrate_loaded_state_handles_non_dict_settings(self, tmp_path):
-        """Migration is defensive: non-dict ``settings`` is left untouched."""
-        svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"] = "broken"
-
-        svc._migrate_loaded_state()  # should not raise
-
-        assert svc._save_sync_state["settings"] == "broken"
+        on_disk = json.loads((tmp_path / "save_sync_state.json").read_text())
+        assert "conflict_mode" not in on_disk["settings"]
+        assert "clock_skew_tolerance_sec" not in on_disk["settings"]
+        assert on_disk["settings"]["save_sync_enabled"] is True
 
     def test_save_and_load_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["device_id"] = "test-device"
-        svc._save_sync_state["saves"]["42"] = {"files": {}}
+        svc._save_sync_state.device_id = "test-device"
+        svc._save_sync_state.saves["42"] = RomSaveState()
         svc.save_state()
 
         # Load into a fresh service
         svc2, _ = make_service(tmp_path)
         svc2.load_state()
-        assert svc2._save_sync_state["device_id"] == "test-device"
-        assert "42" in svc2._save_sync_state["saves"]
+        assert svc2._save_sync_state.device_id == "test-device"
+        assert "42" in svc2._save_sync_state.saves
 
     def test_load_state_missing_file(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc.load_state()  # should not raise
-        assert svc._save_sync_state["device_id"] is None
+        assert svc._save_sync_state.device_id is None
 
     def test_prune_orphaned_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["saves"]["99"] = {"files": {}}
-        svc._save_sync_state["playtime"]["99"] = {"total_seconds": 100}
+        svc._save_sync_state.saves["99"] = RomSaveState()
+        svc._save_sync_state.playtime["99"] = PlaytimeEntry.from_dict({"total_seconds": 100})
         svc._state["shortcut_registry"]["42"] = {}
 
         svc.prune_orphaned_state()
-        assert "99" not in svc._save_sync_state["saves"]
-        assert "99" not in svc._save_sync_state["playtime"]
+        assert "99" not in svc._save_sync_state.saves
+        assert "99" not in svc._save_sync_state.playtime
 
     def test_prune_keeps_registered(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["saves"]["42"] = {"files": {}}
+        svc._save_sync_state.saves["42"] = RomSaveState()
         svc._state["shortcut_registry"]["42"] = {}
 
         svc.prune_orphaned_state()
-        assert "42" in svc._save_sync_state["saves"]
+        assert "42" in svc._save_sync_state.saves
 
 
 # ---------------------------------------------------------------------------
@@ -371,22 +359,22 @@ class TestDeviceRegistration:
     @pytest.mark.asyncio
     async def test_registers_new_device(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result["device_id"]
         assert result["device_name"]
         # Persisted
-        assert svc._save_sync_state["device_id"] == result["device_id"]
+        assert svc._save_sync_state.device_id == result["device_id"]
 
     @pytest.mark.asyncio
     async def test_returns_existing_device(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "existing"
-        svc._save_sync_state["device_name"] = "deck"
-        svc._save_sync_state["server_device_id"] = "server-existing"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "existing"
+        svc._save_sync_state.device_name = "deck"
+        svc._save_sync_state.server_device_id = "server-existing"
 
         result = await svc.ensure_device_registered()
         assert result["device_id"] == "existing"
@@ -412,12 +400,12 @@ class TestDeviceRegistrationServer:
     async def test_registers_with_server(self, tmp_path):
         """Calls register_device and stores server_device_id."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result.get("server_device_id") is not None
-        assert svc._save_sync_state["server_device_id"] == result["server_device_id"]
+        assert svc._save_sync_state.server_device_id == result["server_device_id"]
         # Verify register_device was called
         reg_calls = [c for c in fake.call_log if c[0] == "register_device"]
         assert len(reg_calls) == 1
@@ -431,21 +419,21 @@ class TestDeviceRegistrationServer:
         fake = FakeSaveApi()
         fake.fail_on_next(Exception("server error"))
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         result = await svc.ensure_device_registered()
         assert result["success"] is False
         assert result.get("error") == "registration_failed"
-        assert svc._save_sync_state.get("server_device_id") is None
+        assert svc._save_sync_state.server_device_id is None
 
     @pytest.mark.asyncio
     async def test_returns_existing_with_server_device_id(self, tmp_path):
         """If already registered, returns existing IDs including server_device_id."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "existing-id"
-        svc._save_sync_state["device_name"] = "deck"
-        svc._save_sync_state["server_device_id"] = "server-id-123"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "existing-id"
+        svc._save_sync_state.device_name = "deck"
+        svc._save_sync_state.server_device_id = "server-id-123"
 
         result = await svc.ensure_device_registered()
         assert result["device_id"] == "existing-id"
@@ -455,16 +443,16 @@ class TestDeviceRegistrationServer:
     async def test_upgrades_local_uuid_to_server(self, tmp_path):
         """Local-only UUID gets upgraded to server registration."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         # Simulate existing local-only UUID (from failed registration)
-        svc._save_sync_state["device_id"] = "local-only-uuid"
-        svc._save_sync_state["device_name"] = "deck"
-        svc._save_sync_state["server_device_id"] = None
+        svc._save_sync_state.device_id = "local-only-uuid"
+        svc._save_sync_state.device_name = "deck"
+        svc._save_sync_state.server_device_id = None
 
         result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result.get("server_device_id") is not None
-        assert svc._save_sync_state["server_device_id"] is not None
+        assert svc._save_sync_state.server_device_id is not None
         # register_device was called
         reg_calls = [c for c in fake.call_log if c[0] == "register_device"]
         assert len(reg_calls) == 1
@@ -473,10 +461,10 @@ class TestDeviceRegistrationServer:
     async def test_ensure_device_registered_reconciles_client_version(self, tmp_path):
         """Already-registered path calls update_device with current plugin_version."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "existing-id"
-        svc._save_sync_state["device_name"] = "deck"
-        svc._save_sync_state["server_device_id"] = "server-abc"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "existing-id"
+        svc._save_sync_state.device_name = "deck"
+        svc._save_sync_state.server_device_id = "server-abc"
 
         result = await svc.ensure_device_registered()
 
@@ -491,10 +479,10 @@ class TestDeviceRegistrationServer:
         """PUT raises, ensure_device_registered still returns success."""
         fake = FakeSaveApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "existing-id"
-        svc._save_sync_state["device_name"] = "deck"
-        svc._save_sync_state["server_device_id"] = "server-abc"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "existing-id"
+        svc._save_sync_state.device_name = "deck"
+        svc._save_sync_state.server_device_id = "server-abc"
 
         # Make update_device fail silently
         fake.fail_on_next(Exception("network error"))
@@ -518,7 +506,7 @@ class TestDeviceRegistrationServer:
 
         fake = VersionedFakeApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         await svc.ensure_device_registered()
 
@@ -541,7 +529,7 @@ class TestDeviceRegistrationServer:
         fake = VersionedFakeApi()
         fake.set_version("4.8.1")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         await svc.ensure_device_registered()
 
@@ -554,7 +542,7 @@ class TestDeviceRegistrationServer:
         fake = FakeSaveApi()
         fake.heartbeat_raises = ConnectionError("offline")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         result = await svc.ensure_device_registered()
 
@@ -594,8 +582,8 @@ class TestListDevices:
     async def test_list_devices_marks_own_device(self, tmp_path):
         """own device_id present in state — is_current_device is True on matching entry."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = "device-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = "device-1"
 
         # Register two devices in fake
         fake._registered_devices = [
@@ -627,7 +615,7 @@ class TestListDevices:
         """Adapter raises — returns error response."""
         fake = FakeSaveApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         fake.fail_on_next(Exception("server unavailable"))
         result = await svc.list_devices()
@@ -638,8 +626,8 @@ class TestListDevices:
     async def test_list_devices_no_own_id_all_false(self, tmp_path):
         """No server_device_id in state — all is_current_device are False."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = None
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = None
 
         fake._registered_devices = [{"id": "device-1", "name": "steamdeck"}]
         result = await svc.list_devices()
@@ -651,8 +639,8 @@ class TestListDevices:
     async def test_list_devices_handles_null_id(self, tmp_path):
         """Device with id=None must not match own_id=None (avoid 'None'=='None' trap)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = None
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = None
 
         fake._registered_devices = [{"id": None, "name": "unknown"}]
         result = await svc.list_devices()
@@ -671,7 +659,7 @@ class TestListDevices:
 class TestSyncRomSaves:
     def test_local_only_uploads(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
@@ -683,7 +671,7 @@ class TestSyncRomSaves:
 
     def test_server_only_downloads(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         # Add server save but no local file
         ss = _server_save()
@@ -722,7 +710,7 @@ class TestSyncRomSaves:
     def test_sync_rom_saves_skips_server_only_downloads_during_pending_migration(self, tmp_path):
         """server_only matches must be skipped while migration is pending (#238)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         # Mark migration pending — detect has fired, user hasn't resolved yet.
         svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
@@ -745,7 +733,7 @@ class TestSyncRomSaves:
     def test_sync_rom_saves_uploads_local_only_during_pending_migration(self, tmp_path):
         """local_only matches must still upload during pending migration (#238)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
         svc._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
@@ -776,8 +764,8 @@ class TestSyncRomSaves:
             call_order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
@@ -805,8 +793,8 @@ class TestSyncRomSaves:
         was needed.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
         # Stub _sync_rom_saves to return 1 conflict, 0 synced, 0 errors
@@ -832,8 +820,8 @@ class TestSyncAllSaves:
     @pytest.mark.asyncio
     async def test_syncs_multiple_roms(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
@@ -855,8 +843,8 @@ class TestSyncAllSaves:
     @pytest.mark.asyncio
     async def test_partial_failure(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
@@ -894,8 +882,8 @@ class TestSyncAllSaves:
             call_order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
@@ -923,8 +911,8 @@ class TestSyncAllSaves:
         flag must stay reserved for actual errors.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
 
         # Stub internal sync to produce conflicts but no errors
@@ -949,8 +937,8 @@ class TestPreLaunchSync:
     @pytest.mark.asyncio
     async def test_downloads_server_saves(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
         ss = _server_save()
@@ -970,9 +958,9 @@ class TestPreLaunchSync:
     @pytest.mark.asyncio
     async def test_pre_launch_disabled_in_settings(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["settings"]["sync_before_launch"] = False
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.settings.sync_before_launch = False
+        svc._save_sync_state.device_id = "test-device"
 
         result = await svc.pre_launch_sync(42)
         assert result["synced"] == 0
@@ -987,8 +975,8 @@ class TestPreLaunchSync:
             order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
 
         # Track when _is_save_sort_changed is consulted.
         orig_gate = svc._is_save_sort_changed
@@ -1010,8 +998,8 @@ class TestRetroDeckMigrationBlocksSaveSync:
     @pytest.mark.asyncio
     async def test_pre_launch_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
         svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
         result = await svc.pre_launch_sync(42)
@@ -1023,8 +1011,8 @@ class TestRetroDeckMigrationBlocksSaveSync:
     @pytest.mark.asyncio
     async def test_post_exit_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
         svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
 
@@ -1044,8 +1032,8 @@ class TestRetroDeckMigrationBlocksSaveSync:
         from main import Plugin
 
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
         plugin = Plugin()
@@ -1072,8 +1060,8 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_uploads_changed_saves(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"new save data")
 
@@ -1091,9 +1079,9 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_post_exit_disabled_in_settings(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["settings"]["sync_after_exit"] = False
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.settings.sync_after_exit = False
+        svc._save_sync_state.device_id = "test-device"
 
         result = await svc.post_exit_sync(42)
         assert result["synced"] == 0
@@ -1101,14 +1089,14 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_auto_registers_device(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         # No device_id set
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
 
         result = await svc.post_exit_sync(42)
         assert result["success"] is True
-        assert svc._save_sync_state["device_id"] is not None
+        assert svc._save_sync_state.device_id is not None
 
     # ------------------------------------------------------------------
     # Regression tests for issue #238 — detect-first invariant.
@@ -1128,8 +1116,8 @@ class TestPostExitSync:
             call_order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
@@ -1157,8 +1145,8 @@ class TestPostExitSync:
             raise RuntimeError("cfg file unreadable")
 
         svc, _ = make_service(tmp_path, detect_sort_change=boom)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
@@ -1176,8 +1164,8 @@ class TestPostExitSync:
         """Default detect_sort_change=None: post_exit_sync still runs without error (#238)."""
         svc, _ = make_service(tmp_path)  # detect_sort_change not passed → None
         assert svc._detect_sort_change is None
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
@@ -1194,8 +1182,8 @@ class TestPostExitSync:
         signal that sync is blocked on manual resolution.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
         def stub_sync(rom_id):
@@ -1222,8 +1210,8 @@ class TestPostExitSyncConnectivity:
         fake = FakeSaveApi()
         fake.heartbeat_raises = ConnectionError("unreachable")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
 
         result = await svc.post_exit_sync(42)
 
@@ -1235,8 +1223,8 @@ class TestPostExitSyncConnectivity:
     async def test_proceeds_when_heartbeat_succeeds(self, tmp_path):
         """post_exit_sync proceeds normally when server is reachable."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "test-device"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
@@ -1251,14 +1239,14 @@ class TestPostExitSyncConnectivity:
         fake = FakeSaveApi()
         fake.heartbeat_raises = OSError("connection refused")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         # No device_id — would trigger registration if heartbeat passed
 
         result = await svc.post_exit_sync(42)
 
         assert result.get("offline") is True
         # Device should not have been registered
-        assert not svc._save_sync_state.get("device_id")
+        assert not svc._save_sync_state.device_id
 
 
 # ---------------------------------------------------------------------------
@@ -1305,8 +1293,8 @@ class TestSaveStatus:
         svc, fake = make_service(tmp_path)
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
-        svc._save_sync_state["server_device_id"] = "server-dev-1"
-        svc._save_sync_state["device_id"] = "server-dev-1"
+        svc._save_sync_state.server_device_id = "server-dev-1"
+        svc._save_sync_state.device_id = "server-dev-1"
 
         ss = _server_save()
         ss["device_syncs"] = [
@@ -1342,7 +1330,7 @@ class TestSaveStatus:
         # Server save in slot "default", but active_slot is "other"
         ss = _server_save(slot="default")
         fake.saves[100] = ss
-        svc._save_sync_state["saves"]["42"] = {"active_slot": "other", "files": {}}
+        svc._save_sync_state.saves["42"] = RomSaveState(active_slot="other")
 
         result = await svc.get_save_status(42)
         # Local file exists → should show as upload (local-only), not synced against wrong slot
@@ -1446,15 +1434,15 @@ class TestDeleteSaves:
         save_path = _create_save(tmp_path)
         assert save_path.exists()
 
-        svc._save_sync_state["saves"]["42"] = {"files": {"pokemon.srm": {}}}
+        svc._save_sync_state.saves["42"] = RomSaveState(files={"pokemon.srm": FileSyncState()})
 
         result = svc.delete_local_saves(42)
         assert result["success"] is True
         assert result["deleted_count"] == 1
         assert not save_path.exists()
         # Entry survives — only files are cleared.
-        assert "42" in svc._save_sync_state["saves"]
-        assert svc._save_sync_state["saves"]["42"]["files"] == {}
+        assert "42" in svc._save_sync_state.saves
+        assert svc._save_sync_state.saves["42"].files == {}
 
     @pytest.mark.asyncio
     async def test_delete_local_saves_preserves_slot_config(self, tmp_path):
@@ -1464,31 +1452,33 @@ class TestDeleteSaves:
         save_path = _create_save(tmp_path)
         assert save_path.exists()
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {"pokemon.srm": {"last_sync_hash": "abc"}},
-            "active_slot": "desktop",
-            "slot_confirmed": True,
-            "emulator": "retroarch-mgba",
-            "last_synced_core": "mgba_libretro",
-            "own_upload_ids": ["save-1", "save-2"],
-            "slots": {"default": {}, "desktop": {}},
-            "system": "gba",
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"last_sync_hash": "abc"}},
+                "active_slot": "desktop",
+                "slot_confirmed": True,
+                "emulator": "retroarch-mgba",
+                "last_synced_core": "mgba_libretro",
+                "own_upload_ids": ["save-1", "save-2"],
+                "slots": {"default": {}, "desktop": {}},
+                "system": "gba",
+            }
+        )
 
         result = svc.delete_local_saves(42)
         assert result["success"] is True
         assert result["deleted_count"] == 1
         assert not save_path.exists()
 
-        entry = svc._save_sync_state["saves"]["42"]
-        assert entry["files"] == {}
-        assert entry["active_slot"] == "desktop"
-        assert entry["slot_confirmed"] is True
-        assert entry["emulator"] == "retroarch-mgba"
-        assert entry["last_synced_core"] == "mgba_libretro"
-        assert entry["own_upload_ids"] == ["save-1", "save-2"]
-        assert entry["slots"] == {"default": {}, "desktop": {}}
-        assert entry["system"] == "gba"
+        entry = svc._save_sync_state.saves["42"]
+        assert entry.files == {}
+        assert entry.active_slot == "desktop"
+        assert entry.slot_confirmed is True
+        assert entry.emulator == "retroarch-mgba"
+        assert entry.last_synced_core == "mgba_libretro"
+        assert entry.own_upload_ids == ["save-1", "save-2"]
+        assert entry.slots == {"default": {}, "desktop": {}}
+        assert entry.system == "gba"
 
     @pytest.mark.asyncio
     async def test_delete_local_saves_no_prior_state_entry(self, tmp_path):
@@ -1497,15 +1487,15 @@ class TestDeleteSaves:
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
-        # No svc._save_sync_state["saves"]["42"] set up.
-        assert "42" not in svc._save_sync_state["saves"]
+        # No svc._save_sync_state.saves["42"] set up.
+        assert "42" not in svc._save_sync_state.saves
 
         result = svc.delete_local_saves(42)
         assert result["success"] is True
         assert result["deleted_count"] == 1
         assert not save_path.exists()
         # clear_files_state creates an empty entry with files={}.
-        assert svc._save_sync_state["saves"]["42"] == {"files": {}}
+        assert svc._save_sync_state.saves["42"].files == {}
 
     @pytest.mark.asyncio
     async def test_delete_no_saves(self, tmp_path):
@@ -1529,7 +1519,7 @@ class TestEmulatorTag:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
         )
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -1545,7 +1535,7 @@ class TestEmulatorTag:
     def test_upload_uses_fallback_when_no_core(self, tmp_path):
         """When core resolver returns None, upload falls back to 'retroarch'."""
         svc, fake = make_service(tmp_path)  # default: get_active_core returns (None, None)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -1579,36 +1569,40 @@ class TestEmulatorTag:
         _create_save(tmp_path, system="gba", rom_name="game1")
         _create_save(tmp_path, system="gba", rom_name="game2")
 
-        svc._save_sync_state["saves"]["1"] = {
-            "files": {"game1.srm": {}},
-            "active_slot": "desktop",
-            "slot_confirmed": True,
-            "emulator": "retroarch-mgba",
-            "system": "gba",
-        }
-        svc._save_sync_state["saves"]["2"] = {
-            "files": {"game2.srm": {}},
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "own_upload_ids": ["save-x"],
-            "system": "gba",
-        }
+        svc._save_sync_state.saves["1"] = RomSaveState.from_dict(
+            {
+                "files": {"game1.srm": {}},
+                "active_slot": "desktop",
+                "slot_confirmed": True,
+                "emulator": "retroarch-mgba",
+                "system": "gba",
+            }
+        )
+        svc._save_sync_state.saves["2"] = RomSaveState.from_dict(
+            {
+                "files": {"game2.srm": {}},
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "own_upload_ids": ["save-x"],
+                "system": "gba",
+            }
+        )
 
         result = svc.delete_platform_saves("gba")
         assert result["success"] is True
         assert result["deleted_count"] == 2
 
-        entry1 = svc._save_sync_state["saves"]["1"]
-        assert entry1["files"] == {}
-        assert entry1["active_slot"] == "desktop"
-        assert entry1["slot_confirmed"] is True
-        assert entry1["emulator"] == "retroarch-mgba"
+        entry1 = svc._save_sync_state.saves["1"]
+        assert entry1.files == {}
+        assert entry1.active_slot == "desktop"
+        assert entry1.slot_confirmed is True
+        assert entry1.emulator == "retroarch-mgba"
 
-        entry2 = svc._save_sync_state["saves"]["2"]
-        assert entry2["files"] == {}
-        assert entry2["active_slot"] == "default"
-        assert entry2["slot_confirmed"] is True
-        assert entry2["own_upload_ids"] == ["save-x"]
+        entry2 = svc._save_sync_state.saves["2"]
+        assert entry2.files == {}
+        assert entry2.active_slot == "default"
+        assert entry2.slot_confirmed is True
+        assert entry2.own_upload_ids == ["save-x"]
 
     @pytest.mark.asyncio
     async def test_delete_platform_saves_other_platform_untouched(self, tmp_path):
@@ -1618,20 +1612,22 @@ class TestEmulatorTag:
         _create_save(tmp_path, system="gba", rom_name="game1")
         snes_save = _create_save(tmp_path, system="snes", rom_name="game2")
 
-        svc._save_sync_state["saves"]["2"] = {
-            "files": {"game2.srm": {}},
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "system": "snes",
-        }
+        svc._save_sync_state.saves["2"] = RomSaveState.from_dict(
+            {
+                "files": {"game2.srm": {}},
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "system": "snes",
+            }
+        )
 
         svc.delete_platform_saves("gba")
         assert snes_save.exists()
         # Other-platform entry must be entirely untouched.
-        snes_entry = svc._save_sync_state["saves"]["2"]
-        assert snes_entry["files"] == {"game2.srm": {}}
-        assert snes_entry["active_slot"] == "default"
-        assert snes_entry["slot_confirmed"] is True
+        snes_entry = svc._save_sync_state.saves["2"]
+        assert "game2.srm" in snes_entry.files
+        assert snes_entry.active_slot == "default"
+        assert snes_entry.slot_confirmed is True
 
 
 # ---------------------------------------------------------------------------
@@ -2065,10 +2061,10 @@ class TestUpdateFileSyncState:
 
         svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_resp, str(save_file), "gba")
 
-        entry = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert entry["last_sync_hash"] == svc._file_md5(str(save_file))
-        assert entry["last_sync_at"] is not None
-        assert entry["last_sync_server_save_id"] == 200
+        entry = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert entry.last_sync_hash == svc._file_md5(str(save_file))
+        assert entry.last_sync_at is not None
+        assert entry.last_sync_server_save_id == 200
 
     def test_creates_entry_with_new_fields(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -2085,26 +2081,28 @@ class TestUpdateFileSyncState:
             core_so="mgba_libretro",
         )
 
-        game_state = svc._save_sync_state["saves"]["42"]
-        assert game_state["emulator"] == "retroarch-mgba"
-        assert game_state["last_synced_core"] == "mgba_libretro"
-        assert game_state["active_slot"] == "default"
+        game_state = svc._save_sync_state.saves["42"]
+        assert game_state.emulator == "retroarch-mgba"
+        assert game_state.last_synced_core == "mgba_libretro"
+        assert game_state.active_slot == "default"
 
-        file_state = game_state["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 200
-        assert file_state["last_sync_server_save_id"] == 200
+        file_state = game_state.files["pokemon.srm"]
+        assert file_state.tracked_save_id == 200
+        assert file_state.last_sync_server_save_id == 200
 
     def test_updates_emulator_on_existing_entry(self, tmp_path):
         svc, _ = make_service(tmp_path)
         save_file = _create_save(tmp_path)
         # Pre-populate with old emulator tag
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {},
-            "emulator": "retroarch",
-            "system": "gba",
-            "last_synced_core": None,
-            "active_slot": "default",
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {},
+                "emulator": "retroarch",
+                "system": "gba",
+                "last_synced_core": None,
+                "active_slot": "default",
+            }
+        )
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
         svc._sync_engine._update_file_sync_state(
@@ -2117,21 +2115,23 @@ class TestUpdateFileSyncState:
             core_so="mgba_libretro",
         )
 
-        game_state = svc._save_sync_state["saves"]["42"]
-        assert game_state["emulator"] == "retroarch-mgba"
-        assert game_state["last_synced_core"] == "mgba_libretro"
+        game_state = svc._save_sync_state.saves["42"]
+        assert game_state.emulator == "retroarch-mgba"
+        assert game_state.last_synced_core == "mgba_libretro"
 
     def test_core_so_none_does_not_overwrite(self, tmp_path):
         """core_so=None should not reset an already-set last_synced_core."""
         svc, _ = make_service(tmp_path)
         save_file = _create_save(tmp_path)
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {},
-            "emulator": "retroarch-mgba",
-            "system": "gba",
-            "last_synced_core": "mgba_libretro",
-            "active_slot": "default",
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {},
+                "emulator": "retroarch-mgba",
+                "system": "gba",
+                "last_synced_core": "mgba_libretro",
+                "active_slot": "default",
+            }
+        )
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
         svc._sync_engine._update_file_sync_state(
@@ -2144,8 +2144,8 @@ class TestUpdateFileSyncState:
         )
 
         # last_synced_core unchanged because core_so=None
-        game_state = svc._save_sync_state["saves"]["42"]
-        assert game_state["last_synced_core"] == "mgba_libretro"
+        game_state = svc._save_sync_state.saves["42"]
+        assert game_state.last_synced_core == "mgba_libretro"
 
     def test_writes_last_sync_local_mtime_as_float(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -2155,9 +2155,9 @@ class TestUpdateFileSyncState:
 
         svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert isinstance(file_state["last_sync_local_mtime"], float)
-        assert file_state["last_sync_local_mtime"] == pytest.approx(os.path.getmtime(local_path))
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert isinstance(file_state.last_sync_local_mtime, float)
+        assert file_state.last_sync_local_mtime == pytest.approx(os.path.getmtime(local_path))
 
     def test_writes_last_sync_local_size_as_int(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -2167,9 +2167,9 @@ class TestUpdateFileSyncState:
 
         svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert isinstance(file_state["last_sync_local_size"], int)
-        assert file_state["last_sync_local_size"] == 2048
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert isinstance(file_state.last_sync_local_size, int)
+        assert file_state.last_sync_local_size == 2048
 
     def test_does_not_write_old_local_mtime_at_last_sync_key(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -2179,8 +2179,10 @@ class TestUpdateFileSyncState:
 
         svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert "local_mtime_at_last_sync" not in file_state
+        # The legacy field name was never part of FileSyncState; ensure the
+        # serialised on-disk shape doesn't carry it either.
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert "local_mtime_at_last_sync" not in file_state.to_dict()
 
     def test_writes_none_for_missing_file(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -2189,9 +2191,9 @@ class TestUpdateFileSyncState:
 
         svc._sync_engine._update_file_sync_state("42", "missing.srm", server_response, local_path, "gba")
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["missing.srm"]
-        assert file_state["last_sync_local_mtime"] is None
-        assert file_state["last_sync_local_size"] is None
+        file_state = svc._save_sync_state.saves["42"].files["missing.srm"]
+        assert file_state.last_sync_local_mtime is None
+        assert file_state.last_sync_local_size is None
 
 
 # ---------------------------------------------------------------------------
@@ -2204,14 +2206,14 @@ class TestPruneOrphanedEdgeCase:
 
     def test_empty_state_no_crash(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["saves"] = {}
-        svc._save_sync_state["playtime"] = {}
+        svc._save_sync_state.saves = {}
+        svc._save_sync_state.playtime = {}
         svc._state["shortcut_registry"] = {}
 
         svc.prune_orphaned_state()  # should not raise
 
-        assert svc._save_sync_state["saves"] == {}
-        assert svc._save_sync_state["playtime"] == {}
+        assert svc._save_sync_state.saves == {}
+        assert svc._save_sync_state.playtime == {}
 
 
 # ---------------------------------------------------------------------------
@@ -2226,14 +2228,16 @@ class TestStateBackwardCompat:
         """Existing state files without server_device_id should load without errors."""
         svc, _ = make_service(tmp_path)
         # Simulate old state without server_device_id
-        svc._save_sync_state["device_id"] = "old-local-uuid"
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {"pokemon.srm": {"last_sync_hash": "abc123"}},
-            "emulator": "retroarch",
-            "system": "gba",
-        }
+        svc._save_sync_state.device_id = "old-local-uuid"
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"last_sync_hash": "abc123"}},
+                "emulator": "retroarch",
+                "system": "gba",
+            }
+        )
         # Remove the new field to simulate an old state file
-        del svc._save_sync_state["server_device_id"]
+        del svc._save_sync_state.server_device_id
         svc.save_state()
 
         # Reload into fresh service
@@ -2241,44 +2245,47 @@ class TestStateBackwardCompat:
         svc2.load_state()
 
         # New field should be None (from init_state default)
-        assert svc2._save_sync_state.get("server_device_id") is None
+        assert svc2._save_sync_state.server_device_id is None
         # Old data preserved
-        assert svc2._save_sync_state["device_id"] == "old-local-uuid"
-        assert "42" in svc2._save_sync_state["saves"]
+        assert svc2._save_sync_state.device_id == "old-local-uuid"
+        assert "42" in svc2._save_sync_state.saves
 
     def test_old_per_game_entry_missing_new_fields_works_via_get(self, tmp_path):
         """Per-game entries without last_synced_core/active_slot still work via .get()."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["device_id"] = "old-local-uuid"
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {"pokemon.srm": {"last_sync_hash": "abc123"}},
-            "emulator": "retroarch",
-            "system": "gba",
-        }
+        svc._save_sync_state.device_id = "old-local-uuid"
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"last_sync_hash": "abc123"}},
+                "emulator": "retroarch",
+                "system": "gba",
+            }
+        )
         svc.save_state()
 
         svc2, _ = make_service(tmp_path)
         svc2.load_state()
 
-        game_state = svc2._save_sync_state["saves"]["42"]
-        assert game_state.get("last_synced_core") is None
-        assert game_state.get("active_slot", "default") == "default"
+        game_state = svc2._save_sync_state.saves["42"]
+        assert game_state.last_synced_core is None
+        # Missing ``active_slot`` defaults to None on the typed aggregate;
+        # callers fall back to the global default_slot when they need a value.
+        assert game_state.active_slot is None
 
     def test_make_default_state_includes_server_device_id(self):
         """make_default_state() must include server_device_id field."""
         state = SaveService.make_default_state()
-        assert "server_device_id" in state
-        assert state["server_device_id"] is None
+        assert state.server_device_id is None
 
     def test_load_state_restores_server_device_id(self, tmp_path):
         """server_device_id saved to disk is restored on load_state."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["server_device_id"] = "romm-server-uuid"
+        svc._save_sync_state.server_device_id = "romm-server-uuid"
         svc.save_state()
 
         svc2, _ = make_service(tmp_path)
         svc2.load_state()
-        assert svc2._save_sync_state["server_device_id"] == "romm-server-uuid"
+        assert svc2._save_sync_state.server_device_id == "romm-server-uuid"
 
     def test_state_stores_emulator_tag_and_core(self, tmp_path):
         """After upload sync, state should contain emulator tag and core info."""
@@ -2286,20 +2293,20 @@ class TestStateBackwardCompat:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
         )
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
         svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
 
-        game_state = svc._save_sync_state["saves"]["42"]
-        assert game_state["emulator"] == "retroarch-mgba"
-        assert game_state["last_synced_core"] == "mgba_libretro"
-        assert game_state.get("active_slot") == "default"
+        game_state = svc._save_sync_state.saves["42"]
+        assert game_state.emulator == "retroarch-mgba"
+        assert game_state.last_synced_core == "mgba_libretro"
+        assert game_state.active_slot == "default"
 
         # Per-file should have tracked_save_id
-        file_state = game_state["files"]["pokemon.srm"]
-        assert file_state.get("tracked_save_id") is not None
+        file_state = game_state.files["pokemon.srm"]
+        assert file_state.tracked_save_id is not None
 
     def test_download_sets_tracked_save_id_in_file_state(self, tmp_path):
         """After download sync, per-file state should contain tracked_save_id."""
@@ -2310,9 +2317,9 @@ class TestStateBackwardCompat:
 
         svc._sync_engine._do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state.get("tracked_save_id") == 99
-        assert file_state.get("last_sync_server_save_id") == 99
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 99
+        assert file_state.last_sync_server_save_id == 99
 
 
 # ---------------------------------------------------------------------------
@@ -2324,9 +2331,9 @@ class TestV47SyncFlow:
     def test_list_saves_passes_device_id(self, tmp_path):
         """v4.7: list_saves receives server_device_id."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "local-id"
-        svc._save_sync_state["server_device_id"] = "server-dev-123"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "local-id"
+        svc._save_sync_state.server_device_id = "server-dev-123"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -2339,9 +2346,9 @@ class TestV47SyncFlow:
     def test_upload_passes_device_id_and_slot(self, tmp_path):
         """v4.7: upload_save receives device_id and slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "local-id"
-        svc._save_sync_state["server_device_id"] = "server-dev-123"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "local-id"
+        svc._save_sync_state.server_device_id = "server-dev-123"
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
@@ -2355,24 +2362,26 @@ class TestV47SyncFlow:
     def test_v47_skip_when_is_current(self, tmp_path):
         """v4.7: server says is_current=True, local unchanged → skip."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         content = b"same content"
         _create_save(tmp_path, content=content)
         local_hash = hashlib.md5(content).hexdigest()
 
         # Pre-populate sync state (simulating previous sync)
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "last_sync_hash": local_hash,
-                    "last_sync_server_updated_at": "2026-02-17T06:00:00Z",
-                    "last_sync_server_save_id": 100,
-                    "last_sync_server_size": len(content),
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": "2026-02-17T06:00:00Z",
+                        "last_sync_server_save_id": 100,
+                        "last_sync_server_size": len(content),
+                    }
                 }
             }
-        }
+        )
 
         # Set up server save with device_syncs showing is_current=True
         fake.saves[100] = {
@@ -2392,23 +2401,25 @@ class TestV47SyncFlow:
     def test_v47_download_when_not_current(self, tmp_path):
         """v4.7: server says is_current=False, local unchanged → download."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         content = b"old content"
         _create_save(tmp_path, content=content)
         local_hash = hashlib.md5(content).hexdigest()
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "last_sync_hash": local_hash,
-                    "last_sync_server_updated_at": "2026-02-17T06:00:00Z",
-                    "last_sync_server_save_id": 100,
-                    "last_sync_server_size": len(content),
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": "2026-02-17T06:00:00Z",
+                        "last_sync_server_save_id": 100,
+                        "last_sync_server_size": len(content),
+                    }
                 }
             }
-        }
+        )
 
         # Server has newer save, device is not current
         fake.saves[100] = {
@@ -2447,7 +2458,7 @@ class TestConfirmDownloadAfterSync:
     def test_do_upload_save_post_calls_confirm_download(self, tmp_path):
         """POST (no save_id) → confirm_download fires for the new save_id."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
@@ -2465,7 +2476,7 @@ class TestConfirmDownloadAfterSync:
     def test_do_upload_save_put_calls_confirm_download(self, tmp_path):
         """PUT (existing save_id) → confirm_download fires for that save_id."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
@@ -2499,7 +2510,7 @@ class TestConfirmDownloadAfterSync:
     def test_do_upload_save_swallows_confirm_download_error(self, tmp_path):
         """confirm_download failure must NOT bubble — upload is reported successful."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
@@ -2521,8 +2532,8 @@ class TestConfirmDownloadAfterSync:
         confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
         assert len(confirm_calls) == 1
         # File state still recorded the upload (not blocked by confirm failure)
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state.get("tracked_save_id") is not None
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id is not None
 
     def test_do_download_save_passes_device_id_and_optimistic(self, tmp_path):
         """download_save_content must pass device_id + optimistic=True so the
@@ -2530,7 +2541,7 @@ class TestConfirmDownloadAfterSync:
         follow-up confirm_download unnecessary for the download path.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         saves_dir = str(tmp_path / "saves" / "gba")
         os.makedirs(saves_dir, exist_ok=True)
         server_save = _server_save(save_id=99)
@@ -2549,15 +2560,15 @@ class TestSaveSyncSettingsSlotAndCleanup:
 
     def test_update_default_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         result = svc.update_save_sync_settings({"default_slot": "desktop"})
         assert result["success"] is True
         assert result["settings"]["default_slot"] == "desktop"
 
     def test_update_default_slot_empty_string_becomes_none(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["settings"]["default_slot"] = "default"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.settings.default_slot = "default"
         result = svc.update_save_sync_settings({"default_slot": ""})
         assert result["settings"]["default_slot"] is None
 
@@ -2594,14 +2605,14 @@ class TestSaveSyncSettingsSlotAndCleanup:
 
     def test_update_autocleanup_limit(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         result = svc.update_save_sync_settings({"autocleanup_limit": 5})
         assert result["success"] is True
         assert result["settings"]["autocleanup_limit"] == 5
 
     def test_update_autocleanup_limit_clamped(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         result = svc.update_save_sync_settings({"autocleanup_limit": 0})
         assert result["settings"]["autocleanup_limit"] == 1
 
@@ -2618,9 +2629,9 @@ class TestSaveSlots:
     @pytest.mark.asyncio
     async def test_get_save_slots(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "server-dev-1"
 
         fake.saves[1] = {
             "id": 1,
@@ -2646,9 +2657,9 @@ class TestSaveSlots:
     async def test_get_save_slots_latest_updated_at_from_server(self, tmp_path):
         """latest_updated_at is populated from nested latest.updated_at, not a flat key."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "server-dev-1"
 
         # Two saves in the default slot; the later one should win.
         fake.saves[1] = {
@@ -2672,7 +2683,7 @@ class TestSaveSlots:
         assert slot["latest_updated_at"] == "2026-04-17T20:00:00"
 
         # Also verify the value is persisted in state (not None)
-        persisted = svc._save_sync_state["saves"]["123"]["slots"]["default"]
+        persisted = svc._save_sync_state.saves["123"].slots["default"]
         assert persisted["latest_updated_at"] == "2026-04-17T20:00:00"
 
     @pytest.mark.asyncio
@@ -2683,20 +2694,18 @@ class TestSaveSlots:
 
     def test_set_active_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["saves"] = {
-            "123": {"system": "gba", "active_slot": "default", "files": {}},
-        }
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.saves["123"] = RomSaveState(system="gba", active_slot="default")
         result = svc._slots._set_active_slot(123, "desktop")
         assert result["success"] is True
-        assert svc._save_sync_state["saves"]["123"]["active_slot"] == "desktop"
+        assert svc._save_sync_state.saves["123"].active_slot == "desktop"
 
     def test_set_active_slot_creates_entry(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         result = svc._slots._set_active_slot(456, "my-slot")
         assert result["success"] is True
-        assert svc._save_sync_state["saves"]["456"]["active_slot"] == "my-slot"
+        assert svc._save_sync_state.saves["456"].active_slot == "my-slot"
 
     def test_set_active_slot_empty_sets_none(self, tmp_path):
         """Empty string sets active_slot to None (legacy mode)."""
@@ -2704,7 +2713,7 @@ class TestSaveSlots:
         result = svc._slots._set_active_slot(123, "")
         assert result["success"] is True
         assert result["active_slot"] is None
-        assert svc._save_sync_state["saves"]["123"]["active_slot"] is None
+        assert svc._save_sync_state.saves["123"].active_slot is None
 
     @pytest.mark.asyncio
     async def test_set_active_slot_triggers_background_check(self, tmp_path):
@@ -2739,29 +2748,33 @@ class TestSaveTrackingConfigured:
 
     def test_configured_after_setting_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["saves"]["42"] = {
-            "slot_confirmed": True,
-            "active_slot": "default",
-            "files": {},
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "slot_confirmed": True,
+                "active_slot": "default",
+                "files": {},
+            }
+        )
         result = svc.is_save_tracking_configured(42)
         assert result["configured"] is True
         assert result["active_slot"] == "default"
 
     def test_not_configured_when_slot_confirmed_false(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["saves"]["42"] = {
-            "slot_confirmed": False,
-            "active_slot": "default",
-            "files": {},
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "slot_confirmed": False,
+                "active_slot": "default",
+                "files": {},
+            }
+        )
         result = svc.is_save_tracking_configured(42)
         assert result["configured"] is False
         assert result["active_slot"] is None
 
     def test_handles_missing_saves_section(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["saves"] = {}
+        svc._save_sync_state.saves = {}
         result = svc.is_save_tracking_configured(999)
         assert result["configured"] is False
 
@@ -2776,8 +2789,8 @@ class TestGetSaveSetupInfo:
     async def test_scenario_a_no_local_server_has_saves(self, tmp_path):
         """Scenario A: No local save, server has saves."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         # Don't create local save
         fake.saves[1] = _server_save(save_id=1, slot=None)
@@ -2795,8 +2808,8 @@ class TestGetSaveSetupInfo:
     async def test_scenario_b_local_no_server(self, tmp_path):
         """Scenario B: Local save exists, no server saves."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -2811,8 +2824,8 @@ class TestGetSaveSetupInfo:
     async def test_scenario_c_local_and_server_different_slots(self, tmp_path):
         """Scenario C: Local save, server has saves in different slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot="desktop")
@@ -2827,8 +2840,8 @@ class TestGetSaveSetupInfo:
     async def test_scenario_e_local_and_server_same_default_slot(self, tmp_path):
         """Scenario E: Local save, server has saves in default slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot="default")
@@ -2843,13 +2856,15 @@ class TestGetSaveSetupInfo:
     async def test_already_confirmed(self, tmp_path):
         """When slot is already confirmed, report it."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["saves"]["42"] = {
-            "slot_confirmed": True,
-            "active_slot": "desktop",
-            "files": {},
-        }
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "slot_confirmed": True,
+                "active_slot": "desktop",
+                "files": {},
+            }
+        )
         _install_rom(svc, tmp_path)
 
         result = await svc.get_save_setup_info(42)
@@ -2860,8 +2875,8 @@ class TestGetSaveSetupInfo:
     async def test_multiple_server_slots(self, tmp_path):
         """Server saves across multiple slots are grouped correctly."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot="default")
         fake.saves[2] = _server_save(save_id=2, slot="desktop", filename="pokemon.srm")
@@ -2875,8 +2890,8 @@ class TestGetSaveSetupInfo:
     async def test_server_error_returns_empty_slots(self, tmp_path):
         """Server API failure still returns local info with empty server_slots."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         fake.fail_on_next(RommApiError(500, "Server error"))
@@ -2889,7 +2904,7 @@ class TestGetSaveSetupInfo:
     async def test_no_rom_installed(self, tmp_path):
         """No installed ROM means no local files."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         # Don't install any ROM
         result = await svc.get_save_setup_info(42)
         assert result["has_local_saves"] is False
@@ -2905,12 +2920,12 @@ class TestConfirmSlotChoice:
     @pytest.mark.asyncio
     async def test_confirm_sets_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         result = await svc.confirm_slot_choice(42, "default")
         assert result["success"] is True
-        state = svc._save_sync_state["saves"]["42"]
-        assert state["slot_confirmed"] is True
-        assert state["active_slot"] == "default"
+        state = svc._save_sync_state.saves["42"]
+        assert state.slot_confirmed is True
+        assert state.active_slot == "default"
 
     @pytest.mark.asyncio
     async def test_confirm_empty_slot_rejected(self, tmp_path):
@@ -2928,17 +2943,19 @@ class TestConfirmSlotChoice:
     @pytest.mark.asyncio
     async def test_confirm_preserves_existing_files_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {"pokemon.srm": {"last_sync_hash": "abc"}},
-            "active_slot": "old",
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"last_sync_hash": "abc"}},
+                "active_slot": "old",
+            }
+        )
         result = await svc.confirm_slot_choice(42, "new-slot")
         assert result["success"] is True
-        state = svc._save_sync_state["saves"]["42"]
-        assert state["active_slot"] == "new-slot"
-        assert state["slot_confirmed"] is True
+        state = svc._save_sync_state.saves["42"]
+        assert state.active_slot == "new-slot"
+        assert state.slot_confirmed is True
         # Existing files state preserved
-        assert state["files"]["pokemon.srm"]["last_sync_hash"] == "abc"
+        assert state.files["pokemon.srm"].last_sync_hash == "abc"
 
     @pytest.mark.asyncio
     async def test_confirm_persists_to_disk(self, tmp_path):
@@ -2962,9 +2979,9 @@ class TestConfirmSlotChoice:
         where the legacy ``None`` semantics still live.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         # Old save on server with slot=None (legacy)
@@ -2986,9 +3003,9 @@ class TestConfirmSlotChoice:
     async def test_confirm_migration_no_old_saves(self, tmp_path):
         """Migration with no matching old saves is a no-op."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         # Server save is in "default" slot, but we're migrating from "desktop"
@@ -3011,9 +3028,9 @@ class TestConfirmSlotChoice:
         semantics live on the slots service.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot=None)
@@ -3028,15 +3045,15 @@ class TestConfirmSlotChoice:
         assert result["success"] is True
         assert "migration failed" in result["message"].lower()
         # Slot is still confirmed despite migration failure
-        assert svc._save_sync_state["saves"]["42"]["slot_confirmed"] is True
+        assert svc._save_sync_state.saves["42"].slot_confirmed is True
 
     @pytest.mark.asyncio
     async def test_facade_translates_none_to_no_migration(self, tmp_path):
         """Facade: ``None`` for ``migrate_from_slot`` skips migration."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot=None)
@@ -3048,15 +3065,15 @@ class TestConfirmSlotChoice:
         assert len(upload_calls) == 0
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 0
-        assert svc._save_sync_state["saves"]["42"]["slot_confirmed"] is True
+        assert svc._save_sync_state.saves["42"].slot_confirmed is True
 
     @pytest.mark.asyncio
     async def test_facade_translates_no_migration_string_to_no_migration(self, tmp_path):
         """Facade: ``"__no_migration__"`` string (from frontend) skips migration."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot=None)
@@ -3068,7 +3085,7 @@ class TestConfirmSlotChoice:
         assert len(upload_calls) == 0
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 0
-        assert svc._save_sync_state["saves"]["42"]["slot_confirmed"] is True
+        assert svc._save_sync_state.saves["42"].slot_confirmed is True
 
     @pytest.mark.asyncio
     async def test_is_configured_after_confirm(self, tmp_path):
@@ -3092,8 +3109,8 @@ class TestTrackedSaveIdMatching:
     def test_timestamp_server_save_not_treated_as_separate_download(self, tmp_path):
         """Server save matched by tracked_save_id should not appear as server-only download."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
@@ -3108,22 +3125,24 @@ class TestTrackedSaveIdMatching:
             "download_path": "/saves/pokemon [2026-03-24_15-18-50].srm",
         }
 
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 42,
-                    "last_sync_hash": local_hash,
-                    "last_sync_at": "2026-03-20T10:00:00",
-                    "last_sync_server_updated_at": "2026-03-20T10:00:00",
-                    "last_sync_server_save_id": 42,
-                    "last_sync_server_size": 1024,
-                    "local_mtime_at_last_sync": "2026-03-20T10:00:00",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 42,
+                        "last_sync_hash": local_hash,
+                        "last_sync_at": "2026-03-20T10:00:00",
+                        "last_sync_server_updated_at": "2026-03-20T10:00:00",
+                        "last_sync_server_save_id": 42,
+                        "last_sync_server_size": 1024,
+                        "local_mtime_at_last_sync": "2026-03-20T10:00:00",
+                    },
                 },
-            },
-        }
+            }
+        )
 
         # Sync should NOT download the timestamp-named file as a new server-only save
         _synced, errors, _conflicts = svc._sync_engine._sync_rom_saves(42)
@@ -3136,8 +3155,8 @@ class TestTrackedSaveIdMatching:
     async def test_get_save_status_uses_tracked_save_id(self, tmp_path):
         """get_save_status should not show timestamp-named server save as separate file."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -3151,22 +3170,24 @@ class TestTrackedSaveIdMatching:
             "download_path": "/saves/pokemon [2026-03-24_15-18-50].srm",
         }
 
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 42,
-                    "last_sync_hash": hashlib.md5(b"\x00" * 1024).hexdigest(),
-                    "last_sync_at": "2026-03-20T10:00:00",
-                    "last_sync_server_updated_at": "2026-03-20T10:00:00",
-                    "last_sync_server_save_id": 42,
-                    "last_sync_server_size": 1024,
-                    "local_mtime_at_last_sync": "2026-03-20T10:00:00",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 42,
+                        "last_sync_hash": hashlib.md5(b"\x00" * 1024).hexdigest(),
+                        "last_sync_at": "2026-03-20T10:00:00",
+                        "last_sync_server_updated_at": "2026-03-20T10:00:00",
+                        "last_sync_server_save_id": 42,
+                        "last_sync_server_size": 1024,
+                        "local_mtime_at_last_sync": "2026-03-20T10:00:00",
+                    },
                 },
-            },
-        }
+            }
+        )
 
         result = await svc.get_save_status(42)
         filenames = [f["filename"] for f in result["files"]]
@@ -3179,8 +3200,8 @@ class TestTrackedSaveIdMatching:
     async def test_status_fallback_matches_newest_no_phantom_downloads(self, tmp_path):
         """Status with no tracked_save_id matches newest server save, no phantom downloads."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -3205,12 +3226,14 @@ class TestTrackedSaveIdMatching:
             "slot": "default",
         }
 
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "files": {},
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {},
+            }
+        )
 
         result = await svc.get_save_status(42)
         filenames = [f["filename"] for f in result["files"]]
@@ -3225,8 +3248,8 @@ class TestTrackedSaveIdMatching:
         """Case 2: no local file, server has multiple timestamped saves.
         Should download only the newest, saved as the correct local filename."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         # NO local save created — Case 2
 
@@ -3245,12 +3268,14 @@ class TestTrackedSaveIdMatching:
                 "download_path": f"/saves/pokemon [2026-03-24_{ts}].srm",
             }
 
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "files": {},
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {},
+            }
+        )
 
         synced, errors, _conflicts = svc._sync_engine._sync_rom_saves(42)
         assert len(errors) == 0
@@ -3270,8 +3295,8 @@ class TestTrackedSaveIdMatching:
     async def test_status_server_only_shows_local_filename(self, tmp_path):
         """Status display should show local filename for server-only saves, not timestamp."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         # NO local save
 
@@ -3288,12 +3313,14 @@ class TestTrackedSaveIdMatching:
             "download_path": "/saves/pokemon [2026-03-24_15-19-26].srm",
         }
 
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "files": {},
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {},
+            }
+        )
 
         result = await svc.get_save_status(42)
         filenames = [f["filename"] for f in result["files"]]
@@ -3307,8 +3334,8 @@ class TestOlderVersionSkipping:
     def test_different_slot_filtered_out(self, tmp_path):
         """Saves in a different slot should be filtered out entirely."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"local save")
 
@@ -3328,22 +3355,24 @@ class TestOlderVersionSkipping:
         )
 
         local_hash = _file_md5(tmp_path / "saves" / "gba" / "pokemon.srm")
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "slot_confirmed": True,
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 10,
-                    "last_sync_hash": local_hash,
-                    "last_sync_at": "2026-03-24T15:00:00",
-                    "last_sync_server_updated_at": "2026-03-24T15:00:00",
-                    "last_sync_server_save_id": 10,
-                    "last_sync_server_size": 1024,
-                    "local_mtime_at_last_sync": "2026-03-24T15:00:00",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 10,
+                        "last_sync_hash": local_hash,
+                        "last_sync_at": "2026-03-24T15:00:00",
+                        "last_sync_server_updated_at": "2026-03-24T15:00:00",
+                        "last_sync_server_save_id": 10,
+                        "last_sync_server_size": 1024,
+                        "local_mtime_at_last_sync": "2026-03-24T15:00:00",
+                    },
                 },
-            },
-        }
+            }
+        )
 
         _synced, _errors, _conflicts = svc._sync_engine._sync_rom_saves(42)
         # pokemon [old].srm in slot=portable is filtered out — no download
@@ -3364,14 +3393,13 @@ class TestCheckCoreChange:
         system="snes",
         last_synced_core: str | None = "snes9x_libretro",
         active_slot="default",
-    ):
+    ) -> RomSaveState:
         """Return a minimal save state entry for rom_id 42."""
-        return {
-            "system": system,
-            "last_synced_core": last_synced_core,
-            "active_slot": active_slot,
-            "files": {},
-        }
+        return RomSaveState(
+            system=system,
+            last_synced_core=last_synced_core,
+            active_slot=active_slot,
+        )
 
     def test_core_changed(self, tmp_path):
         """Returns changed=True with core names when active core differs from stored."""
@@ -3379,8 +3407,8 @@ class TestCheckCoreChange:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
         )
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core="snes9x_libretro",
         )
@@ -3399,8 +3427,8 @@ class TestCheckCoreChange:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
         )
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core="snes9x_libretro",
         )
@@ -3412,7 +3440,7 @@ class TestCheckCoreChange:
     def test_never_synced(self, tmp_path):
         """Returns changed=False when rom_id has no save entry (never synced)."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         # No entry for rom_id 42
 
         result = svc.check_core_change(42)
@@ -3425,8 +3453,8 @@ class TestCheckCoreChange:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
         )
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core=None,
         )
@@ -3441,8 +3469,8 @@ class TestCheckCoreChange:
             tmp_path,
             # default: get_active_core returns (None, None)
         )
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core="snes9x_libretro",
         )
@@ -3458,7 +3486,7 @@ class TestCheckCoreChange:
             get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
         )
         # save_sync_enabled defaults to False
-        svc._save_sync_state["saves"]["42"] = self._make_save_entry(
+        svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core="snes9x_libretro",
         )
@@ -3476,8 +3504,8 @@ class TestCheckCoreChange:
             return ("supafaust_libretro", "Supafaust")
 
         svc, _ = make_service(tmp_path, get_active_core=capture_core)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["saves"]["42"] = self._make_save_entry(system="snes")
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.saves["42"] = self._make_save_entry(system="snes")
         _install_rom(svc, tmp_path, rom_id=42, system="snes", file_name="mario.sfc")
 
         svc.check_core_change(42)
@@ -3498,8 +3526,8 @@ class TestGetSlotSaves:
     async def test_happy_path(self, tmp_path):
         """Returns mapped save dicts for the requested slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = "server-dev-1"
 
         fake.saves[1] = {
             "id": 1,
@@ -3537,8 +3565,8 @@ class TestGetSlotSaves:
     async def test_empty_slot(self, tmp_path):
         """Returns empty saves list when server has no saves for the slot."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = "server-dev-1"
         # No saves added to fake
 
         result = await svc.get_slot_saves(42, "desktop")
@@ -3551,8 +3579,8 @@ class TestGetSlotSaves:
     async def test_server_error(self, tmp_path):
         """Returns error response when list_saves raises an exception."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = "server-dev-1"
         fake.fail_on_next(RommApiError("connection timeout"))
 
         result = await svc.get_slot_saves(42, "default")
@@ -3584,34 +3612,34 @@ class TestGetSlotSaves:
 class TestSwitchSlot:
     """Tests for SaveService.switch_slot — guarded slot switch with immediate download."""
 
-    def _synced_state(self, local_hash: str, save_id: int = 100) -> dict:
-        """Return a save state dict where the file appears fully synced."""
-        return {
-            "files": {
-                "pokemon.srm": {
-                    "last_sync_hash": local_hash,
-                    "last_sync_at": "2026-01-01T00:00:00Z",
-                    "last_sync_server_updated_at": "2026-01-01T00:00:00Z",
-                    "last_sync_server_save_id": save_id,
-                    "last_sync_server_size": 1024,
-                    "tracked_save_id": save_id,
-                },
+    def _synced_state(self, local_hash: str, save_id: int = 100) -> RomSaveState:
+        """Return a save state where the file appears fully synced."""
+        return RomSaveState(
+            active_slot="default",
+            slot_confirmed=True,
+            files={
+                "pokemon.srm": FileSyncState(
+                    last_sync_hash=local_hash,
+                    last_sync_at="2026-01-01T00:00:00Z",
+                    last_sync_server_updated_at="2026-01-01T00:00:00Z",
+                    last_sync_server_save_id=save_id,
+                    last_sync_server_size=1024,
+                    tracked_save_id=save_id,
+                ),
             },
-            "active_slot": "default",
-            "slot_confirmed": True,
-        }
+        )
 
     @pytest.mark.asyncio
     async def test_happy_path(self, tmp_path):
         """Files fully synced + server has saves in new slot → downloads and returns success."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
 
         # Slot already synced — hash matches
-        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+        svc._save_sync_state.saves["42"] = self._synced_state(local_hash)
 
         # Server has a save in "desktop" slot
         fake.saves[200] = _server_save(save_id=200, slot="desktop")
@@ -3621,7 +3649,7 @@ class TestSwitchSlot:
         assert result["success"] is True
         assert "save_status" in result
         # active_slot was updated
-        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "desktop"
+        assert svc._save_sync_state.saves["42"].active_slot == "desktop"
         # The server save was downloaded
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) >= 1
@@ -3630,23 +3658,25 @@ class TestSwitchSlot:
     async def test_pending_uploads_blocked(self, tmp_path):
         """Local file changed since last sync → switch blocked with reason + file list."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"modified save data")
 
         # State records an *old* hash — hash mismatch simulates pending upload
         old_hash = hashlib.md5(b"original save data").hexdigest()
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "last_sync_hash": old_hash,
-                    "last_sync_at": "2026-01-01T00:00:00Z",
-                    "tracked_save_id": 100,
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "last_sync_hash": old_hash,
+                        "last_sync_at": "2026-01-01T00:00:00Z",
+                        "tracked_save_id": 100,
+                    },
                 },
-            },
-            "active_slot": "default",
-            "slot_confirmed": True,
-        }
+                "active_slot": "default",
+                "slot_confirmed": True,
+            }
+        )
 
         result = await svc.switch_slot(42, "desktop")
 
@@ -3665,16 +3695,18 @@ class TestSwitchSlot:
         After the switch to an empty slot the local file should be gone.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
         # State has the game entry but no last_sync_hash for the file
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {},  # no entry for pokemon.srm at all
-            "active_slot": "default",
-            "slot_confirmed": True,
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {},  # no entry for pokemon.srm at all
+                "active_slot": "default",
+                "slot_confirmed": True,
+            }
+        )
 
         # No server saves in "desktop" slot → switch succeeds and deletes local file
         result = await svc.switch_slot(42, "desktop")
@@ -3686,13 +3718,13 @@ class TestSwitchSlot:
     async def test_server_unreachable(self, tmp_path):
         """list_saves raises → switch blocked with reason=server_unreachable."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
 
         # Files synced so readiness check passes
-        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+        svc._save_sync_state.saves["42"] = self._synced_state(local_hash)
 
         fake.fail_on_next(RommApiError(503, "Service unavailable"))
 
@@ -3718,7 +3750,7 @@ class TestSwitchSlot:
     async def test_not_installed(self, tmp_path):
         """ROM not installed → returns not_installed error."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         # ROM 42 is NOT installed
 
         result = await svc.switch_slot(42, "desktop")
@@ -3730,13 +3762,13 @@ class TestSwitchSlot:
     async def test_empty_new_slot(self, tmp_path):
         """New slot has no saves on server → deletes local files and updates active_slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
 
         # Files synced so readiness check passes
-        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+        svc._save_sync_state.saves["42"] = self._synced_state(local_hash)
 
         # Server has no saves in "newslot" (all fake saves are in other slots)
         fake.saves[300] = _server_save(save_id=300, slot="other")
@@ -3744,36 +3776,36 @@ class TestSwitchSlot:
         result = await svc.switch_slot(42, "newslot")
 
         assert result["success"] is True
-        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "newslot"
+        assert svc._save_sync_state.saves["42"].active_slot == "newslot"
         # No downloads
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
         # Local file deleted (fresh start for empty slot)
         assert not save_path.exists()
         # File tracking state cleared
-        assert svc._save_sync_state["saves"]["42"]["files"] == {}
+        assert svc._save_sync_state.saves["42"].files == {}
 
     @pytest.mark.asyncio
     async def test_empty_slot_deletes_local_files(self, tmp_path):
         """New slot is empty → local save files deleted and file tracking cleared."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
 
         # Current slot is fully synced
-        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+        svc._save_sync_state.saves["42"] = self._synced_state(local_hash)
 
         # No server saves for "brand-new-slot"
         result = await svc.switch_slot(42, "brand-new-slot")
 
         assert result["success"] is True
-        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "brand-new-slot"
+        assert svc._save_sync_state.saves["42"].active_slot == "brand-new-slot"
         # Local save file removed
         assert not save_path.exists()
         # File tracking state cleared so next play starts fresh
-        assert svc._save_sync_state["saves"]["42"]["files"] == {}
+        assert svc._save_sync_state.saves["42"].files == {}
         # No downloads happened
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
@@ -3782,13 +3814,13 @@ class TestSwitchSlot:
     async def test_with_server_saves_downloads(self, tmp_path):
         """New slot has server saves → downloads them, replacing local file."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path, content=b"old local save")
         local_hash = _file_md5(str(save_path))
 
         # Current slot is fully synced
-        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
+        svc._save_sync_state.saves["42"] = self._synced_state(local_hash)
 
         # Target slot has a server save
         fake.saves[500] = _server_save(save_id=500, slot="target-slot")
@@ -3796,7 +3828,7 @@ class TestSwitchSlot:
         result = await svc.switch_slot(42, "target-slot")
 
         assert result["success"] is True
-        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "target-slot"
+        assert svc._save_sync_state.saves["42"].active_slot == "target-slot"
         # Server save was downloaded (replaces local)
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) >= 1
@@ -3805,34 +3837,36 @@ class TestSwitchSlot:
     async def test_no_local_files_is_ready(self, tmp_path):
         """ROM installed but no local save files → readiness check passes (nothing pending)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         # No save file created on disk
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {},
-            "active_slot": "default",
-            "slot_confirmed": True,
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {},
+                "active_slot": "default",
+                "slot_confirmed": True,
+            }
+        )
 
         fake.saves[100] = _server_save(save_id=100, slot="desktop")
 
         result = await svc.switch_slot(42, "desktop")
 
         assert result["success"] is True
-        assert svc._save_sync_state["saves"]["42"]["active_slot"] == "desktop"
+        assert svc._save_sync_state.saves["42"].active_slot == "desktop"
 
     @pytest.mark.asyncio
     async def test_switch_to_legacy_slot(self, tmp_path):
         """switch_slot("") sets active_slot=None, persists "" in slots dict, returns success."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
 
         # Start in a named slot, fully synced
-        svc._save_sync_state["saves"]["42"] = self._synced_state(local_hash)
-        svc._save_sync_state["saves"]["42"]["active_slot"] = "default"
+        svc._save_sync_state.saves["42"] = self._synced_state(local_hash)
+        svc._save_sync_state.saves["42"].active_slot = "default"
 
         # Server has a legacy save (slot=None)
         fake.saves[200] = _server_save(save_id=200, slot=None)
@@ -3842,24 +3876,26 @@ class TestSwitchSlot:
         assert result["success"] is True
         assert "save_status" in result
         # active_slot in state is None (legacy)
-        assert svc._save_sync_state["saves"]["42"]["active_slot"] is None
+        assert svc._save_sync_state.saves["42"].active_slot is None
         # Legacy slot "" appears in the slots dict
-        slots_dict = svc._save_sync_state["saves"]["42"].get("slots", {})
+        slots_dict = svc._save_sync_state.saves["42"].slots
         assert "" in slots_dict
 
     @pytest.mark.asyncio
     async def test_legacy_slot_persisted_in_get_save_slots(self, tmp_path):
         """get_save_slots includes the "" entry when active_slot is None and "" is in slots dict."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         # Set up state with legacy slot explicitly
-        svc._save_sync_state["saves"]["99"] = {
-            "active_slot": None,
-            "slot_confirmed": True,
-            "files": {},
-            "slots": {"": {"source": "local", "count": 0, "latest_updated_at": None}},
-        }
+        svc._save_sync_state.saves["99"] = RomSaveState.from_dict(
+            {
+                "active_slot": None,
+                "slot_confirmed": True,
+                "files": {},
+                "slots": {"": {"source": "local", "count": 0, "latest_updated_at": None}},
+            }
+        )
 
         # Server returns no slots
         result = await svc.get_save_slots(99)
@@ -3875,9 +3911,9 @@ class TestSwitchSlot:
     async def test_server_legacy_save_maps_to_empty_string_not_default(self, tmp_path):
         """Server saves with slot=None (legacy) must map to "" not "default" in get_save_slots."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
 
         # Server has a legacy save with slot=None
         fake.saves[1] = {
@@ -3907,13 +3943,15 @@ class TestListFileVersions:
 
     def _setup_state(self, svc, tracked_id: int | None) -> None:
         """Populate save state with a tracked save id for rom 42, pokemon.srm."""
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "files": {
-                "pokemon.srm": {"tracked_save_id": tracked_id},
-            },
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "files": {
+                    "pokemon.srm": {"tracked_save_id": tracked_id},
+                },
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_happy_path_excludes_tracked(self, tmp_path):
@@ -4077,14 +4115,16 @@ class TestListFileVersions:
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-05T10:00:00Z")
         fake.saves[30] = _server_save(save_id=30, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
 
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "own_upload_ids": [50],
-            "files": {
-                "pokemon.srm": {"tracked_save_id": 100},
-            },
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "own_upload_ids": [50],
+                "files": {
+                    "pokemon.srm": {"tracked_save_id": 100},
+                },
+            }
+        )
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
@@ -4101,14 +4141,16 @@ class TestListFileVersions:
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-05T10:00:00Z")
 
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            # own_upload_ids key intentionally absent — legacy state
-            "files": {
-                "pokemon.srm": {"tracked_save_id": 100},
-            },
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                # own_upload_ids key intentionally absent — legacy state
+                "files": {
+                    "pokemon.srm": {"tracked_save_id": 100},
+                },
+            }
+        )
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
@@ -4127,16 +4169,18 @@ class TestRollbackToVersion:
     def _setup_state(self, svc, tmp_path, tracked_id: int, last_sync_hash: str | None = None) -> None:
         _install_rom(svc, tmp_path)
         _enable_sync_with_device(svc)
-        svc._save_sync_state["saves"]["42"] = {
-            "system": "gba",
-            "active_slot": "default",
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": tracked_id,
-                    "last_sync_hash": last_sync_hash,
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": tracked_id,
+                        "last_sync_hash": last_sync_hash,
+                    },
                 },
-            },
-        }
+            }
+        )
 
     @staticmethod
     def _tracked_save(save_id: int, *, updated_at: str = "2026-03-10T10:00:00Z") -> dict:
@@ -4291,8 +4335,8 @@ class TestRollbackToVersion:
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)
         # State updated: tracked_save_id should now point to the rolled-back save
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 50
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
     async def test_no_local_file_pre_flight_downloads_then_switch_proceeds(self, tmp_path):
@@ -4374,7 +4418,7 @@ class TestRollbackToVersion:
         """Rollback marks our device as current on the target save via confirm_download."""
         svc, fake = make_service(tmp_path)
         # device_id must be set for confirm_download to fire
-        svc._save_sync_state["server_device_id"] = "device-1"
+        svc._save_sync_state.server_device_id = "device-1"
 
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
@@ -4404,14 +4448,14 @@ class TestRollbackToVersion:
         result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 50
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 50
         # Hash should match the (re-uploaded) local file content
         local_path = tmp_path / "saves" / "gba" / "pokemon.srm"
-        assert file_state["last_sync_hash"] == _file_md5(str(local_path))
+        assert file_state.last_sync_hash == _file_md5(str(local_path))
         # last_sync_server_updated_at reflects the post-PUT response (NOT the
         # pre-PUT target.updated_at), confirming the bump propagated locally.
-        assert file_state["last_sync_server_updated_at"] != "2026-02-01T10:00:00Z"
+        assert file_state.last_sync_server_updated_at != "2026-02-01T10:00:00Z"
 
     @pytest.mark.asyncio
     async def test_rollback_returns_put_failed_when_upload_raises(self, tmp_path):
@@ -4451,8 +4495,8 @@ class TestRollbackToVersion:
         assert any(c[1][0] == 50 for c in download_calls)
         # Local state still updated to point at target — save_state was called
         # so disk file and state file remain consistent.
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 50
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
     async def test_rollback_ignores_confirm_download_failure(self, tmp_path):
@@ -4466,7 +4510,7 @@ class TestRollbackToVersion:
         detect tracked_save_id==server.id and Skip.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["server_device_id"] = "device-1"
+        svc._save_sync_state.server_device_id = "device-1"
 
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
@@ -4491,8 +4535,8 @@ class TestRollbackToVersion:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert any(c[2].get("save_id") == 50 for c in upload_calls)
         # State updated
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 50
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
     async def test_rollback_to_already_tracked_save_is_idempotent(self, tmp_path):
@@ -4512,8 +4556,8 @@ class TestRollbackToVersion:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert any(c[2].get("save_id") == 50 for c in upload_calls)
         # tracked_save_id still 50
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 50
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 50
 
 
 # ---------------------------------------------------------------------------
@@ -4534,9 +4578,9 @@ class TestDeleteSlot:
         files_state=None,
     ):
         """Set up a ROM with slot state for deletion tests."""
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
-        svc._save_sync_state["device_id"] = "dev-1"
-        svc._save_sync_state["server_device_id"] = "server-dev-1"
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "server-dev-1"
         _install_rom(svc, tmp_path)
 
         slots = {
@@ -4545,12 +4589,14 @@ class TestDeleteSlot:
         if extra_slots:
             slots.update(extra_slots)
 
-        svc._save_sync_state["saves"]["42"] = {
-            "active_slot": active_slot,
-            "slot_confirmed": True,
-            "slots": slots,
-            "files": files_state or {},
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "active_slot": active_slot,
+                "slot_confirmed": True,
+                "slots": slots,
+                "files": files_state or {},
+            }
+        )
 
     @pytest.mark.asyncio
     async def test_get_slot_delete_info_server_slot(self, tmp_path):
@@ -4642,10 +4688,10 @@ class TestDeleteSlot:
         assert result["deleted_server_saves"] == 2
         assert result["cleaned_files"] == 2
         # Slot removed from state
-        assert "save1" not in svc._save_sync_state["saves"]["42"]["slots"]
+        assert "save1" not in svc._save_sync_state.saves["42"].slots
         # File entries cleaned
-        assert "pokemon.srm" not in svc._save_sync_state["saves"]["42"]["files"]
-        assert "zelda.srm" not in svc._save_sync_state["saves"]["42"]["files"]
+        assert "pokemon.srm" not in svc._save_sync_state.saves["42"].files
+        assert "zelda.srm" not in svc._save_sync_state.saves["42"].files
         # delete_server_saves called with correct IDs
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 1
@@ -4665,7 +4711,7 @@ class TestDeleteSlot:
 
         assert result["success"] is True
         assert result["deleted_server_saves"] == 0
-        assert "local1" not in svc._save_sync_state["saves"]["42"]["slots"]
+        assert "local1" not in svc._save_sync_state.saves["42"].slots
         # No server calls made
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 0
@@ -4681,7 +4727,7 @@ class TestDeleteSlot:
         assert result["success"] is False
         assert result["reason"] == "active_slot"
         # Slot still exists
-        assert "default" in svc._save_sync_state["saves"]["42"]["slots"]
+        assert "default" in svc._save_sync_state.saves["42"].slots
 
     @pytest.mark.asyncio
     async def test_delete_slot_server_error(self, tmp_path):
@@ -4706,7 +4752,7 @@ class TestDeleteSlot:
         assert result["success"] is False
         assert result["reason"] == "server_error"
         # Slot NOT removed from state (rollback on failure)
-        assert "save1" in svc._save_sync_state["saves"]["42"]["slots"]
+        assert "save1" in svc._save_sync_state.saves["42"].slots
 
         fake.delete_server_saves = original_delete
 
@@ -4730,17 +4776,17 @@ class TestDeleteSlot:
         result = await svc.delete_slot(42, "save1")
 
         assert result["success"] is True
-        files = svc._save_sync_state["saves"]["42"]["files"]
+        files = svc._save_sync_state.saves["42"].files
         assert "pokemon.srm" not in files
         assert "zelda.srm" not in files
         assert "unrelated.srm" in files
-        assert files["unrelated.srm"]["tracked_save_id"] == 99
+        assert files["unrelated.srm"].tracked_save_id == 99
 
     @pytest.mark.asyncio
     async def test_delete_slot_not_installed_rom(self, tmp_path):
         """ROM not installed returns failure."""
         svc, _fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         # Don't install any ROM
 
         result = await svc.delete_slot(42, "default")
@@ -4772,7 +4818,7 @@ class TestOwnUploadIds:
     async def test_post_upload_appends_own_upload_id(self, tmp_path):
         """After a POST upload (new save), the returned save_id is added to own_upload_ids."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -4785,8 +4831,8 @@ class TestOwnUploadIds:
         # The save_id passed to upload_save should be None (POST path)
         assert returned_id is None
 
-        rom_state = svc._save_sync_state["saves"]["42"]
-        own_ids = rom_state.get("own_upload_ids", [])
+        rom_state = svc._save_sync_state.saves["42"]
+        own_ids = rom_state.own_upload_ids or []
         assert len(own_ids) == 1
         # The id in the list must match what fake returned
         new_save_id = next(iter(fake.saves.values()))["id"]
@@ -4800,21 +4846,24 @@ class TestOwnUploadIds:
         save_file = _create_save(tmp_path)
 
         # Pre-populate own_upload_ids with the id that fake will return (1000)
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {},
-            "system": "gba",
-            "active_slot": "default",
-            "own_upload_ids": [1000],
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {},
+                "system": "gba",
+                "active_slot": "default",
+                "own_upload_ids": [1000],
+            }
+        )
         # Fake will return the same id=1000 because filename matches existing
         fake.saves[1000] = _server_save(save_id=1000, rom_id=42)
 
         # Call internal upload with no server_save (POST path)
         svc._sync_engine._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=None)
 
-        rom_state = svc._save_sync_state["saves"]["42"]
+        rom_state = svc._save_sync_state.saves["42"]
+        assert rom_state.own_upload_ids is not None
         # Should still have exactly one entry for that id
-        assert rom_state["own_upload_ids"].count(1000) == 1
+        assert rom_state.own_upload_ids.count(1000) == 1
 
     @pytest.mark.asyncio
     async def test_put_upload_does_not_touch_own_list(self, tmp_path):
@@ -4825,36 +4874,40 @@ class TestOwnUploadIds:
 
         # Pre-existing server save (id=100) — upload_save called with save_id=100 → PUT
         fake.saves[100] = _server_save(save_id=100, rom_id=42)
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "old"}},
-            "system": "gba",
-            "active_slot": "default",
-            "own_upload_ids": [99],  # pre-existing unrelated id
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "old"}},
+                "system": "gba",
+                "active_slot": "default",
+                "own_upload_ids": [99],  # pre-existing unrelated id
+            }
+        )
 
         server_save = fake.saves[100]
         svc._sync_engine._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=server_save)
 
-        rom_state = svc._save_sync_state["saves"]["42"]
+        rom_state = svc._save_sync_state.saves["42"]
         # own_upload_ids must not have changed (100 not added, 99 still there)
-        assert rom_state["own_upload_ids"] == [99]
+        assert rom_state.own_upload_ids == [99]
 
     @pytest.mark.asyncio
     async def test_get_save_status_legacy_rom_state_returns_none(self, tmp_path):
         """When rom state exists but own_upload_ids key is absent, uploaded_by_us is None."""
         svc, fake = make_service(tmp_path)
         _install_rom(svc, tmp_path)
-        svc._save_sync_state["settings"]["save_sync_enabled"] = True
+        svc._save_sync_state.settings.save_sync_enabled = True
 
         fake.saves[26] = _server_save(save_id=26, rom_id=42, filename="pokemon.srm")
 
         # Legacy state: own_upload_ids key is absent
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {},
-            "system": "gba",
-            "active_slot": None,
-            # no own_upload_ids key
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {},
+                "system": "gba",
+                "active_slot": None,
+                # no own_upload_ids key
+            }
+        )
 
         result = await svc.get_save_status(42)
 
@@ -4871,17 +4924,19 @@ class TestOwnUploadIds:
         local_hash = _file_md5(str(save_file))
 
         # own save is 26, tracked is 26 (clean state)
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 26,
-                    "last_sync_hash": local_hash,
-                }
-            },
-            "system": "gba",
-            "active_slot": "default",
-            "own_upload_ids": [26],
-        }
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 26,
+                        "last_sync_hash": local_hash,
+                    }
+                },
+                "system": "gba",
+                "active_slot": "default",
+                "own_upload_ids": [26],
+            }
+        )
         fake.saves[26] = _server_save(save_id=26, rom_id=42, slot="default")
         # Foreign older version to roll back to
         fake.saves[27] = _server_save(save_id=27, rom_id=42, slot="default", updated_at="2026-01-01T00:00:00Z")
@@ -4890,8 +4945,8 @@ class TestOwnUploadIds:
 
         assert result["status"] == "ok"
         # own_upload_ids must be unchanged — 27 was not POSTed by us
-        rom_state = svc._save_sync_state["saves"]["42"]
-        assert rom_state["own_upload_ids"] == [26]
+        rom_state = svc._save_sync_state.saves["42"]
+        assert rom_state.own_upload_ids == [26]
 
 
 # ---------------------------------------------------------------------------
@@ -4907,9 +4962,9 @@ class TestOwnUploadIds:
 
 def _enable_sync_with_device(svc, device_id: str = "device-1") -> None:
     """Flip on save sync and bind a server device id (matches FakeSaveApi)."""
-    svc._save_sync_state["settings"]["save_sync_enabled"] = True
-    svc._save_sync_state["device_id"] = device_id
-    svc._save_sync_state["server_device_id"] = device_id
+    svc._save_sync_state.settings.save_sync_enabled = True
+    svc._save_sync_state.device_id = device_id
+    svc._save_sync_state.server_device_id = device_id
 
 
 def _server_save_with_syncs(
@@ -4955,15 +5010,17 @@ class TestSyncRomSavesDispatch:
         )
         fake.saves[100] = ss
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": local_hash,
-                    "last_sync_server_updated_at": ss["updated_at"],
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": ss["updated_at"],
+                    }
                 }
             }
-        }
+        )
 
         synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
@@ -4990,9 +5047,9 @@ class TestSyncRomSavesDispatch:
         # POST → save_id is None
         assert upload_calls[0][2]["save_id"] is None
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] is not None
-        assert file_state["last_sync_hash"]
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id is not None
+        assert file_state.last_sync_hash
 
     def test_sync_rom_saves_download_when_server_changed(self, tmp_path):
         """is_current=false + local hash matches last_sync_hash → Download."""
@@ -5007,15 +5064,17 @@ class TestSyncRomSavesDispatch:
         )
         fake.saves[100] = ss
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": local_hash,
-                    "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
                 }
             }
-        }
+        )
 
         synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
@@ -5027,9 +5086,9 @@ class TestSyncRomSavesDispatch:
         assert len(download_calls) == 1
         assert download_calls[0][1][0] == 100
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 100
-        assert file_state["last_sync_hash"]  # updated to downloaded content's hash
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 100
+        assert file_state.last_sync_hash  # updated to downloaded content's hash
 
     def test_sync_rom_saves_conflict_when_both_changed(self, tmp_path):
         """is_current=false + local hash diverges → Conflict, no I/O."""
@@ -5044,15 +5103,17 @@ class TestSyncRomSavesDispatch:
         )
         fake.saves[100] = ss
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "deadbeef" * 4,  # baseline differs from current local
-                    "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "deadbeef" * 4,  # baseline differs from current local
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
                 }
             }
-        }
+        )
 
         synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
@@ -5106,15 +5167,17 @@ class TestSyncRomSavesDispatch:
         )
         fake.saves[100] = ss
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "0" * 32,  # baseline differs from current local
-                    "last_sync_server_updated_at": ss["updated_at"],
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,  # baseline differs from current local
+                        "last_sync_server_updated_at": ss["updated_at"],
+                    }
                 }
             }
-        }
+        )
 
         synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
@@ -5126,8 +5189,8 @@ class TestSyncRomSavesDispatch:
         # PUT — save_id is the existing server save id
         assert upload_calls[0][2]["save_id"] == 100
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["last_sync_hash"] == local_hash
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.last_sync_hash == local_hash
 
     def test_sync_rom_saves_skip_with_adopt_baseline_writes_hash(self, tmp_path):
         """is_current=true + local present + no baseline → Skip + adopt_baseline:
@@ -5144,7 +5207,7 @@ class TestSyncRomSavesDispatch:
         fake.saves[100] = ss
 
         # No file_state at all — no baseline yet.
-        svc._save_sync_state["saves"]["42"] = {"files": {}}
+        svc._save_sync_state.saves["42"] = RomSaveState()
 
         synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
@@ -5154,8 +5217,8 @@ class TestSyncRomSavesDispatch:
         # No I/O initiated.
         assert not any(c[0] in ("upload_save", "download_save_content", "download_save") for c in fake.call_log)
         # Baseline now persisted.
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["last_sync_hash"] == local_hash
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.last_sync_hash == local_hash
 
     def test_sync_rom_saves_recovery_download_when_no_local(self, tmp_path):
         """is_current=true on the picked save but local file is gone → Download
@@ -5170,15 +5233,17 @@ class TestSyncRomSavesDispatch:
         )
         fake.saves[100] = ss
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "abc",
-                    "last_sync_server_updated_at": ss["updated_at"],
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "abc",
+                        "last_sync_server_updated_at": ss["updated_at"],
+                    }
                 }
             }
-        }
+        )
 
         synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
@@ -5207,15 +5272,17 @@ class TestSyncRomSavesDispatch:
 
         # Build a state where compute_sync_action emits Upload(target_save_id=100)
         # via the is_current=true + diverged hash branch.
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "0" * 32,
-                    "last_sync_server_updated_at": ss["updated_at"],
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": ss["updated_at"],
+                    }
                 }
             }
-        }
+        )
 
         synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
 
@@ -5236,12 +5303,12 @@ class TestSyncRomSavesDispatch:
         _install_rom(svc, tmp_path)
         # Pure no-op: no local, no server saves.
 
-        before = svc._save_sync_state["saves"].get("42", {}).get("last_sync_check_at")
-        assert before is None
+        before_entry = svc._save_sync_state.saves.get("42")
+        assert before_entry is None or before_entry.last_sync_check_at is None
 
         svc._sync_engine._sync_rom_saves(42)
 
-        after = svc._save_sync_state["saves"]["42"]["last_sync_check_at"]
+        after = svc._save_sync_state.saves["42"].last_sync_check_at
         assert after is not None and isinstance(after, str)
 
 
@@ -5264,15 +5331,17 @@ class TestGetSaveStatusComputeAction:
         )
         fake.saves[100] = ss
 
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "0" * 32,
-                    "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
                 }
             }
-        }
+        )
 
         result = svc._status._get_save_status_io(42, [ss])
 
@@ -5297,21 +5366,23 @@ class TestGetSaveStatusComputeAction:
         ss_skip = _server_save_with_syncs(
             device_syncs=[{"device_id": "device-1", "is_current": True}],
         )
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": local_hash,
-                    "last_sync_server_updated_at": ss_skip["updated_at"],
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": ss_skip["updated_at"],
+                    }
                 }
             }
-        }
+        )
         result_skip = svc._status._get_save_status_io(42, [ss_skip])
         assert result_skip["files"][0]["status"] == "synced"
 
         # ---------- Upload ----------
         # Reset state for next case: no server saves
-        svc._save_sync_state["saves"]["42"] = {"files": {}}
+        svc._save_sync_state.saves["42"] = RomSaveState()
         result_upload = svc._status._get_save_status_io(42, [])
         assert result_upload["files"][0]["status"] == "upload"
 
@@ -5321,28 +5392,32 @@ class TestGetSaveStatusComputeAction:
             device_syncs=[{"device_id": "device-1", "is_current": False}],
         )
         fake.saves[100] = ss_dl
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": local_hash,
-                    "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
                 }
             }
-        }
+        )
         result_dl = svc._status._get_save_status_io(42, [ss_dl])
         assert result_dl["files"][0]["status"] == "download"
 
         # ---------- Conflict ----------
-        svc._save_sync_state["saves"]["42"] = {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_hash": "0" * 32,
-                    "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
                 }
             }
-        }
+        )
         result_conflict = svc._status._get_save_status_io(42, [ss_dl])
         assert result_conflict["files"][0]["status"] == "conflict"
 
@@ -5368,7 +5443,7 @@ class TestGetSaveStatusComputeAction:
         fake.saves[200] = ss_old
         fake.saves[201] = ss_new
 
-        svc._save_sync_state["saves"]["42"] = {"files": {}}
+        svc._save_sync_state.saves["42"] = RomSaveState()
 
         result = svc._status._get_save_status_io(42, [ss_old, ss_new])
 
@@ -5384,7 +5459,7 @@ class TestGetSaveStatusComputeAction:
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
 
-        svc._save_sync_state["saves"]["42"] = {"files": {}}
+        svc._save_sync_state.saves["42"] = RomSaveState()
 
         result = svc._status._get_save_status_io(42, [])
 
@@ -5421,9 +5496,9 @@ class TestResolveSyncConflict:
         assert result["action"] == "keep_local"
         assert not any(c[0] == "upload_save" for c in fake.call_log)
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 100
-        assert file_state["last_sync_hash"] == local_hash
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 100
+        assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
     async def test_resolve_keep_local_hash_mismatch_uploads_put(self, tmp_path):
@@ -5451,8 +5526,8 @@ class TestResolveSyncConflict:
         # PUT — save_id was passed
         assert upload_calls[0][2]["save_id"] == 100
 
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["last_sync_hash"] == local_hash
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
     async def test_resolve_use_server_downloads_and_persists(self, tmp_path):
@@ -5476,9 +5551,9 @@ class TestResolveSyncConflict:
         assert result["success"] is True
         # Local file overwritten with server content
         assert save_path.read_bytes() == b"server-truth"
-        file_state = svc._save_sync_state["saves"]["42"]["files"]["pokemon.srm"]
-        assert file_state["tracked_save_id"] == 100
-        assert file_state["last_sync_hash"] == _file_md5(str(save_path))
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.tracked_save_id == 100
+        assert file_state.last_sync_hash == _file_md5(str(save_path))
 
     @pytest.mark.asyncio
     async def test_resolve_invalid_action_returns_error(self, tmp_path):
@@ -5510,12 +5585,10 @@ class TestResolveSyncConflict:
         _create_save(tmp_path, content=b"x")
 
         # Pre-populate state to assert it stays untouched.
-        original_state = {
-            "files": {
-                "pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "abc"},
-            }
-        }
-        svc._save_sync_state["saves"]["42"] = original_state
+        original_state = RomSaveState(
+            files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash="abc")},
+        )
+        svc._save_sync_state.saves["42"] = original_state
 
         fake.fail_on_next(RommApiError("network"))
 
@@ -5524,7 +5597,7 @@ class TestResolveSyncConflict:
         assert result["success"] is False
         assert "Failed to fetch saves" in result["message"]
         # State left as-is — no mutation
-        assert svc._save_sync_state["saves"]["42"] == original_state
+        assert svc._save_sync_state.saves["42"] == original_state
 
     @pytest.mark.asyncio
     async def test_resolve_no_server_saves_in_slot(self, tmp_path):

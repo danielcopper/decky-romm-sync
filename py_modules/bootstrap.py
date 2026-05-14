@@ -33,6 +33,7 @@ from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
+from domain.save_state import SaveSyncState
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.connection import ConnectionService, ConnectionServiceConfig
@@ -104,12 +105,12 @@ class AdapterBundle:
 
 @dataclass(frozen=True)
 class StateBundle:
-    """Live mutable state dicts shared across services."""
+    """Live mutable state stores shared across services."""
 
     state: dict
     settings: dict
     metadata_cache: dict
-    save_sync_state: dict
+    save_sync_state: SaveSyncState
 
 
 @dataclass(frozen=True)
