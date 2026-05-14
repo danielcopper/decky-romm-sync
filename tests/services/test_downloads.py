@@ -12,6 +12,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.download_file import DownloadFileAdapter
 from adapters.download_queue import DownloadQueueAdapter
+from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
@@ -79,6 +80,7 @@ def plugin():
             loop=asyncio.get_event_loop(),
             save_state=MagicMock(),
             save_save_sync_state=MagicMock(),
+            rom_files=RomFileAdapter(),
             get_roms_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
             download_queue_cleanup=p._download_service,
         ),

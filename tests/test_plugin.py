@@ -813,6 +813,7 @@ class TestMainStartupOrdering:
             "firmware_files": MagicMock(),
             "download_queue": MagicMock(),
             "migration_files": MagicMock(),
+            "rom_files": MagicMock(),
             "path_probe": MagicMock(),
             "retrodeck_paths": MagicMock(),
             "retroarch_config": MagicMock(),

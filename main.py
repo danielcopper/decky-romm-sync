@@ -134,6 +134,7 @@ class Plugin:
                     download_queue=adapters["download_queue"],
                     firmware_files=adapters["firmware_files"],
                     migration_files=adapters["migration_files"],
+                    rom_files=adapters["rom_files"],
                     gamelist_editor=adapters["gamelist_editor"],
                     path_probe=adapters["path_probe"],
                 ),

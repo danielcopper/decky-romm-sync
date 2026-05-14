@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -13,7 +11,7 @@ from domain.path_safety import is_safe_rom_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import DownloadQueueCleanup, RomsPathProvider, StatePersister
+    from services.protocols import DownloadQueueCleanup, RomFileAdapter, RomsPathProvider, StatePersister
 
 
 @dataclass(frozen=True)
@@ -21,9 +19,10 @@ class RomRemovalServiceConfig:
     """Frozen wiring bundle handed to ``RomRemovalService.__init__``.
 
     Holds the live state dicts, runtime infrastructure, persistence
-    callbacks, optional roms-path provider, and the optional
-    ``DownloadQueueCleanup`` eviction seam. Decomposes the ctor so a
-    new dependency does not push past the S107 parameter-count limit.
+    callbacks, the Protocol-typed filesystem adapter, optional
+    roms-path provider, and the optional ``DownloadQueueCleanup``
+    eviction seam. Decomposes the ctor so a new dependency does not
+    push past the S107 parameter-count limit.
     """
 
     state: dict
@@ -32,6 +31,7 @@ class RomRemovalServiceConfig:
     loop: asyncio.AbstractEventLoop
     save_state: StatePersister
     save_save_sync_state: StatePersister
+    rom_files: RomFileAdapter
     get_roms_path: RomsPathProvider | None = None
     download_queue_cleanup: DownloadQueueCleanup | None = None
 
@@ -50,6 +50,7 @@ class RomRemovalService:
         self._loop = config.loop
         self._save_state = config.save_state
         self._save_save_sync_state = config.save_save_sync_state
+        self._rom_files = config.rom_files
         self._get_roms_path = config.get_roms_path
         self._download_queue_cleanup = config.download_queue_cleanup
 
@@ -58,19 +59,19 @@ class RomRemovalService:
         rom_dir = installed.get("rom_dir", "")
         file_path = installed.get("file_path", "")
 
-        if rom_dir and os.path.isdir(rom_dir):
+        if rom_dir and self._rom_files.is_dir(rom_dir):
             if not is_safe_rom_path(rom_dir, self._get_roms_path() if self._get_roms_path else ""):
                 self._logger.error(f"Refusing to delete path outside roms directory: {rom_dir}")
                 return
-            shutil.rmtree(rom_dir)
+            self._rom_files.remove_tree(rom_dir)
         elif file_path:
             if not is_safe_rom_path(file_path, self._get_roms_path() if self._get_roms_path else ""):
                 self._logger.error(f"Refusing to delete path outside roms directory: {file_path}")
                 return
-            if os.path.isdir(file_path):
-                shutil.rmtree(file_path)
-            elif os.path.exists(file_path):
-                os.remove(file_path)
+            if self._rom_files.is_dir(file_path):
+                self._rom_files.remove_tree(file_path)
+            elif self._rom_files.exists(file_path):
+                self._rom_files.remove_file(file_path)
 
     def _remove_rom_io(self, rom_id_str: str, installed: dict) -> None:
         """Sync helper for remove_rom — file deletion + state update in executor."""

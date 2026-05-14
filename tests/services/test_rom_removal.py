@@ -4,16 +4,19 @@ import asyncio
 import logging
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeDownloadQueueCleanup
+from conftest import FakeDownloadQueueCleanup, FakeRomFileAdapter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 sys.path.insert(0, os.path.dirname(__file__))
 
 # conftest.py patches decky before this import
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
+
+# Synthetic roms-base path used by the fake fs throughout this module.
+_ROMS_BASE = "/retrodeck/roms"
 
 
 @pytest.fixture
@@ -37,7 +40,12 @@ def queue_cleanup() -> FakeDownloadQueueCleanup:
 
 
 @pytest.fixture
-def service(state, save_sync_state, logger, queue_cleanup):
+def rom_files() -> FakeRomFileAdapter:
+    return FakeRomFileAdapter()
+
+
+@pytest.fixture
+def service(state, save_sync_state, logger, queue_cleanup, rom_files):
     return RomRemovalService(
         config=RomRemovalServiceConfig(
             state=state,
@@ -46,7 +54,8 @@ def service(state, save_sync_state, logger, queue_cleanup):
             loop=asyncio.new_event_loop(),
             save_state=MagicMock(),
             save_save_sync_state=MagicMock(),
-            get_roms_path=lambda: os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
+            rom_files=rom_files,
+            get_roms_path=lambda: _ROMS_BASE,
             download_queue_cleanup=queue_cleanup,
         ),
     )
@@ -59,52 +68,48 @@ async def _sync_loop(service):
 
 
 class TestDeleteRomFiles:
-    def test_deletes_single_file(self, service, tmp_path):
+    def test_deletes_single_file(self, service, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
 
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom = tmp_path / "retrodeck" / "roms" / "n64" / "game.z64"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
+        service._delete_rom_files({"file_path": rom_path})
 
-        service._delete_rom_files({"file_path": str(rom)})
-        assert not rom.exists()
+        assert rom_path not in rom_files.files
+        assert rom_files.remove_file_calls == [rom_path]
 
-    def test_deletes_rom_dir(self, service, tmp_path):
+    def test_deletes_rom_dir(self, service, rom_files):
+        rom_dir = f"{_ROMS_BASE}/psx/FF7"
+        rom_files.files[f"{rom_dir}/disc1.cue"] = b"cue"
+        rom_files.files[f"{rom_dir}/disc1.bin"] = b"\x00" * 100
 
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom_dir = tmp_path / "retrodeck" / "roms" / "psx" / "FF7"
-        rom_dir.mkdir(parents=True)
-        (rom_dir / "disc1.cue").write_text("cue")
-        (rom_dir / "disc1.bin").write_bytes(b"\x00" * 100)
+        service._delete_rom_files({"file_path": f"{rom_dir}/FF7.m3u", "rom_dir": rom_dir})
 
-        service._delete_rom_files({"file_path": str(rom_dir / "FF7.m3u"), "rom_dir": str(rom_dir)})
-        assert not rom_dir.exists()
+        assert f"{rom_dir}/disc1.cue" not in rom_files.files
+        assert f"{rom_dir}/disc1.bin" not in rom_files.files
+        assert rom_files.remove_tree_calls == [rom_dir]
 
-    def test_refuses_file_outside_roms_dir(self, service, tmp_path):
+    def test_refuses_file_outside_roms_dir(self, service, rom_files):
+        evil = "/evil/important.txt"
+        rom_files.files[evil] = b"do not delete"
 
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        evil = tmp_path / "evil" / "important.txt"
-        evil.parent.mkdir(parents=True)
-        evil.write_text("do not delete")
+        service._delete_rom_files({"file_path": evil})
 
-        service._delete_rom_files({"file_path": str(evil)})
-        assert evil.exists()
+        assert evil in rom_files.files
+        assert rom_files.remove_file_calls == []
+        assert rom_files.remove_tree_calls == []
 
-    def test_refuses_rom_dir_outside_roms_dir(self, service, tmp_path):
+    def test_refuses_rom_dir_outside_roms_dir(self, service, rom_files):
+        evil_dir = "/evil"
+        rom_files.files[f"{evil_dir}/file.txt"] = b"important"
 
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        evil_dir = tmp_path / "evil"
-        evil_dir.mkdir(parents=True)
-        (evil_dir / "file.txt").write_text("important")
+        service._delete_rom_files({"rom_dir": evil_dir, "file_path": ""})
 
-        service._delete_rom_files({"rom_dir": str(evil_dir), "file_path": ""})
-        assert evil_dir.exists()
+        assert f"{evil_dir}/file.txt" in rom_files.files
+        assert rom_files.remove_tree_calls == []
 
-    def test_missing_file_no_crash(self, service, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        # File doesn't exist — should not raise
-        service._delete_rom_files({"file_path": str(tmp_path / "retrodeck" / "roms" / "n64" / "gone.z64")})
+    def test_missing_file_no_crash(self, service):
+        # File doesn't exist — should not raise and should not call any I/O
+        service._delete_rom_files({"file_path": f"{_ROMS_BASE}/n64/gone.z64"})
 
     def test_empty_paths_no_crash(self, service):
         # No file_path, no rom_dir
@@ -113,18 +118,15 @@ class TestDeleteRomFiles:
 
 class TestRemoveRom:
     @pytest.mark.asyncio
-    async def test_removes_file_and_clears_state(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom = tmp_path / "retrodeck" / "roms" / "n64" / "zelda.z64"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
-
-        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": str(rom), "system": "n64"}
+    async def test_removes_file_and_clears_state(self, service, state, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": rom_path, "system": "n64"}
 
         result = await service.remove_rom(42)
+
         assert result["success"] is True
-        assert not rom.exists()
+        assert rom_path not in rom_files.files
         assert "42" not in state["installed_roms"]
 
     @pytest.mark.asyncio
@@ -134,42 +136,34 @@ class TestRemoveRom:
         assert "not installed" in result["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_accepts_string_rom_id(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom = tmp_path / "retrodeck" / "roms" / "n64" / "game.z64"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
-
-        state["installed_roms"]["7"] = {"rom_id": 7, "file_path": str(rom), "system": "n64"}
+    async def test_accepts_string_rom_id(self, service, state, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        state["installed_roms"]["7"] = {"rom_id": 7, "file_path": rom_path, "system": "n64"}
 
         result = await service.remove_rom("7")
+
         assert result["success"] is True
         assert "7" not in state["installed_roms"]
 
     @pytest.mark.asyncio
-    async def test_file_already_gone_cleans_state(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
+    async def test_file_already_gone_cleans_state(self, service, state):
         state["installed_roms"]["42"] = {
             "rom_id": 42,
-            "file_path": str(tmp_path / "retrodeck" / "roms" / "n64" / "gone.z64"),
+            "file_path": f"{_ROMS_BASE}/n64/gone.z64",
             "system": "n64",
         }
 
         result = await service.remove_rom(42)
+
         assert result["success"] is True
         assert "42" not in state["installed_roms"]
 
     @pytest.mark.asyncio
-    async def test_cleans_save_sync_state(self, service, state, save_sync_state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom = tmp_path / "retrodeck" / "roms" / "n64" / "zelda.z64"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
-
-        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": str(rom), "system": "n64"}
+    async def test_cleans_save_sync_state(self, service, state, save_sync_state, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": rom_path, "system": "n64"}
         save_sync_state["saves"]["42"] = {"last_sync": "2024-01-01"}
         save_sync_state["playtime"]["42"] = {"total_seconds": 3600}
         # Add another ROM's state that should be preserved
@@ -180,6 +174,7 @@ class TestRemoveRom:
         service._save_save_sync_state = lambda: save_calls.append(1)
 
         result = await service.remove_rom(42)
+
         assert result["success"] is True
         assert "42" not in save_sync_state["saves"]
         assert "42" not in save_sync_state["playtime"]
@@ -188,15 +183,11 @@ class TestRemoveRom:
         assert len(save_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_no_save_sync_call_if_no_matching_state(self, service, state, save_sync_state, tmp_path):
+    async def test_no_save_sync_call_if_no_matching_state(self, service, state, save_sync_state, rom_files):
         _ = save_sync_state  # fixture ensures shared dict is initialized
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom = tmp_path / "retrodeck" / "roms" / "n64" / "zelda.z64"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
-
-        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": str(rom), "system": "n64"}
+        rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": rom_path, "system": "n64"}
         # No matching save/playtime state for ROM 42
 
         save_calls: list[int] = []
@@ -206,93 +197,87 @@ class TestRemoveRom:
         assert len(save_calls) == 0  # not called if nothing changed
 
     @pytest.mark.asyncio
-    async def test_removes_rom_dir(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom_dir = tmp_path / "retrodeck" / "roms" / "psx" / "FF7"
-        rom_dir.mkdir(parents=True)
-        (rom_dir / "FF7.m3u").write_text("disc1.cue")
-        (rom_dir / "disc1.cue").write_text("cue")
-        (rom_dir / "disc1.bin").write_bytes(b"\x00" * 100)
+    async def test_removes_rom_dir(self, service, state, rom_files):
+        rom_dir = f"{_ROMS_BASE}/psx/FF7"
+        rom_files.files[f"{rom_dir}/FF7.m3u"] = b"disc1.cue"
+        rom_files.files[f"{rom_dir}/disc1.cue"] = b"cue"
+        rom_files.files[f"{rom_dir}/disc1.bin"] = b"\x00" * 100
+        # Mark the parent system dir as existing so we can assert it's
+        # preserved.
+        rom_files.dirs.add(f"{_ROMS_BASE}/psx")
 
         state["installed_roms"]["42"] = {
             "rom_id": 42,
-            "file_path": str(rom_dir / "FF7.m3u"),
-            "rom_dir": str(rom_dir),
+            "file_path": f"{rom_dir}/FF7.m3u",
+            "rom_dir": rom_dir,
             "system": "psx",
         }
 
         result = await service.remove_rom(42)
+
         assert result["success"] is True
-        assert not rom_dir.exists()
-        # Parent system dir should still exist
-        assert (tmp_path / "retrodeck" / "roms" / "psx").exists()
+        # rom_dir gone
+        assert all(not p.startswith(rom_dir + "/") for p in rom_files.files)
+        # Parent system dir still tracked
+        assert f"{_ROMS_BASE}/psx" in rom_files.dirs
 
     @pytest.mark.asyncio
-    async def test_path_traversal_rejected(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        evil = tmp_path / "etc" / "passwd"
-        evil.parent.mkdir(parents=True)
-        evil.write_text("root:x:0:0")
-
-        state["installed_roms"]["99"] = {"rom_id": 99, "file_path": str(evil), "system": "n64"}
+    async def test_path_traversal_rejected(self, service, state, rom_files):
+        evil = "/etc/passwd"
+        rom_files.files[evil] = b"root:x:0:0"
+        state["installed_roms"]["99"] = {"rom_id": 99, "file_path": evil, "system": "n64"}
 
         await service.remove_rom(99)
-        assert evil.exists()
+
+        assert evil in rom_files.files
         assert "99" not in state["installed_roms"]
 
     @pytest.mark.asyncio
-    async def test_removes_nested_single_file_entry(self, service, state, tmp_path):
+    async def test_removes_nested_single_file_entry(self, service, state, rom_files):
         """Nested-single-file entries (#226) store the resolved filename in file_path with no rom_dir."""
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom = tmp_path / "retrodeck" / "roms" / "dc" / "Resident Evil.chd"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
+        rom_path = f"{_ROMS_BASE}/dc/Resident Evil.chd"
+        rom_files.files[rom_path] = b"\x00" * 100
+        rom_files.dirs.add(f"{_ROMS_BASE}/dc")
 
         state["installed_roms"]["42"] = {
             "rom_id": 42,
             "file_name": "Resident Evil.chd",
-            "file_path": str(rom),
+            "file_path": rom_path,
             "system": "dc",
         }
 
         result = await service.remove_rom(42)
+
         assert result["success"] is True
-        assert not rom.exists()
-        # Parent system dir should still exist
-        assert (tmp_path / "retrodeck" / "roms" / "dc").exists()
+        assert rom_path not in rom_files.files
+        # Parent system dir still tracked
+        assert f"{_ROMS_BASE}/dc" in rom_files.dirs
         assert "42" not in state["installed_roms"]
 
 
 class TestUninstallAllRoms:
     @pytest.mark.asyncio
-    async def test_removes_all_installed(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
-        roms_dir.mkdir(parents=True)
-        file_a = roms_dir / "game_a.z64"
-        file_b = roms_dir / "game_b.z64"
-        file_a.write_bytes(b"\x00" * 100)
-        file_b.write_bytes(b"\x00" * 100)
+    async def test_removes_all_installed(self, service, state, rom_files):
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        rom_files.files[file_a] = b"\x00" * 100
+        rom_files.files[file_b] = b"\x00" * 100
 
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(file_a), "system": "n64"},
-            "2": {"rom_id": 2, "file_path": str(file_b), "system": "n64"},
+            "1": {"rom_id": 1, "file_path": file_a, "system": "n64"},
+            "2": {"rom_id": 2, "file_path": file_b, "system": "n64"},
         }
 
         result = await service.uninstall_all_roms()
+
         assert result["success"] is True
         assert result["removed_count"] == 2
-        assert not file_a.exists()
-        assert not file_b.exists()
+        assert file_a not in rom_files.files
+        assert file_b not in rom_files.files
         assert state["installed_roms"] == {}
 
     @pytest.mark.asyncio
-    async def test_clears_state_even_if_files_missing(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
+    async def test_clears_state_even_if_files_missing(self, service, state):
         state["installed_roms"] = {
             "1": {"rom_id": 1, "file_path": "/nonexistent.z64", "system": "n64"},
         }
@@ -302,28 +287,22 @@ class TestUninstallAllRoms:
         assert state["installed_roms"] == {}
 
     @pytest.mark.asyncio
-    async def test_handles_empty_state(self, service, state, tmp_path):
+    async def test_handles_empty_state(self, service, state):
         _ = state  # fixture ensures shared dict is initialized
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
         result = await service.uninstall_all_roms()
         assert result["success"] is True
         assert result["removed_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_cleans_save_sync_state(self, service, state, save_sync_state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
-        roms_dir.mkdir(parents=True)
-        file_a = roms_dir / "game_a.z64"
-        file_b = roms_dir / "game_b.z64"
-        file_a.write_bytes(b"\x00" * 100)
-        file_b.write_bytes(b"\x00" * 100)
+    async def test_cleans_save_sync_state(self, service, state, save_sync_state, rom_files):
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        rom_files.files[file_a] = b"\x00" * 100
+        rom_files.files[file_b] = b"\x00" * 100
 
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(file_a), "system": "n64"},
-            "2": {"rom_id": 2, "file_path": str(file_b), "system": "n64"},
+            "1": {"rom_id": 1, "file_path": file_a, "system": "n64"},
+            "2": {"rom_id": 2, "file_path": file_b, "system": "n64"},
         }
         save_sync_state["saves"] = {"1": {"last_sync": "2024-01-01"}, "2": {"last_sync": "2024-02-01"}}
         save_sync_state["playtime"] = {"1": {"total_seconds": 100}, "2": {"total_seconds": 200}}
@@ -338,18 +317,15 @@ class TestUninstallAllRoms:
         assert len(save_calls) == 1
 
     @pytest.mark.asyncio
-    async def test_deletes_rom_directories(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom_dir = tmp_path / "retrodeck" / "roms" / "psx" / "FF7"
-        rom_dir.mkdir(parents=True)
-        (rom_dir / "disc1.bin").write_bytes(b"\x00" * 100)
+    async def test_deletes_rom_directories(self, service, state, rom_files):
+        rom_dir = f"{_ROMS_BASE}/psx/FF7"
+        rom_files.files[f"{rom_dir}/disc1.bin"] = b"\x00" * 100
 
         state["installed_roms"] = {
             "1": {
                 "rom_id": 1,
-                "file_path": str(rom_dir / "FF7.m3u"),
-                "rom_dir": str(rom_dir),
+                "file_path": f"{rom_dir}/FF7.m3u",
+                "rom_dir": rom_dir,
                 "system": "psx",
             },
         }
@@ -357,50 +333,40 @@ class TestUninstallAllRoms:
         result = await service.uninstall_all_roms()
         assert result["success"] is True
         assert result["removed_count"] == 1
-        assert not rom_dir.exists()
+        assert all(not p.startswith(rom_dir + "/") for p in rom_files.files)
 
     @pytest.mark.asyncio
-    async def test_outside_roms_dir_skipped_state_still_cleared(self, service, state, save_sync_state, tmp_path):
+    async def test_outside_roms_dir_skipped_state_still_cleared(self, service, state, save_sync_state, rom_files):
         _ = save_sync_state  # fixture ensures shared dict is initialized
+        good_file = f"{_ROMS_BASE}/n64/game_a.z64"
+        rom_files.files[good_file] = b"\x00" * 100
 
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
-        roms_dir.mkdir(parents=True)
-        good_file = roms_dir / "game_a.z64"
-        good_file.write_bytes(b"\x00" * 100)
-
-        bad_file = tmp_path / "outside" / "game_b.z64"
-        bad_file.parent.mkdir(parents=True)
-        bad_file.write_bytes(b"\x00" * 100)
+        bad_file = "/outside/game_b.z64"
+        rom_files.files[bad_file] = b"\x00" * 100
 
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(good_file), "system": "n64"},
-            "2": {"rom_id": 2, "file_path": str(bad_file), "system": "snes"},
+            "1": {"rom_id": 1, "file_path": good_file, "system": "n64"},
+            "2": {"rom_id": 2, "file_path": bad_file, "system": "snes"},
         }
 
         result = await service.uninstall_all_roms()
         assert result["success"] is True
-        assert not good_file.exists()
-        assert bad_file.exists()  # not deleted (outside roms dir)
+        assert good_file not in rom_files.files
+        assert bad_file in rom_files.files  # not deleted (outside roms dir)
         # State is cleared for successfully deleted ROMs
         assert state["installed_roms"] == {}
 
     @pytest.mark.asyncio
-    async def test_message_includes_error_count(self, service, state, tmp_path):
-
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
-        roms_dir.mkdir(parents=True)
-        rom = roms_dir / "game.z64"
-        rom.write_bytes(b"\x00" * 100)
+    async def test_message_includes_error_count(self, service, state, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        rom_files.remove_file_failures.add(rom_path)
 
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(rom), "system": "n64"},
+            "1": {"rom_id": 1, "file_path": rom_path, "system": "n64"},
         }
 
-        # Make deletion fail
-        with patch("shutil.rmtree", side_effect=OSError("perm")), patch("os.remove", side_effect=OSError("perm")):
-            result = await service.uninstall_all_roms()
+        result = await service.uninstall_all_roms()
 
         assert result["success"] is True
         assert "errors" in result["message"]
@@ -410,13 +376,10 @@ class TestDownloadQueueCleanup:
     """Eviction of the download queue on successful ROM removal."""
 
     @pytest.mark.asyncio
-    async def test_remove_rom_evicts_queue_on_success(self, service, state, queue_cleanup, tmp_path):
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        rom = tmp_path / "retrodeck" / "roms" / "n64" / "zelda.z64"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
-
-        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": str(rom), "system": "n64"}
+    async def test_remove_rom_evicts_queue_on_success(self, service, state, queue_cleanup, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        state["installed_roms"]["42"] = {"rom_id": 42, "file_path": rom_path, "system": "n64"}
 
         result = await service.remove_rom(42)
         assert result["success"] is True
@@ -430,15 +393,12 @@ class TestDownloadQueueCleanup:
         assert queue_cleanup.evicted == []
 
     @pytest.mark.asyncio
-    async def test_uninstall_all_roms_clears_queue(self, service, state, queue_cleanup, tmp_path):
-        service._get_roms_path = lambda: str(tmp_path / "retrodeck" / "roms")
-        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
-        roms_dir.mkdir(parents=True)
-        rom = roms_dir / "game.z64"
-        rom.write_bytes(b"\x00" * 100)
+    async def test_uninstall_all_roms_clears_queue(self, service, state, queue_cleanup, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
 
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(rom), "system": "n64"},
+            "1": {"rom_id": 1, "file_path": rom_path, "system": "n64"},
         }
 
         result = await service.uninstall_all_roms()
@@ -446,8 +406,13 @@ class TestDownloadQueueCleanup:
         assert queue_cleanup.cleared == 1
 
     @pytest.mark.asyncio
-    async def test_no_cleanup_dependency_is_safe(self, state, save_sync_state, logger, tmp_path):
+    async def test_no_cleanup_dependency_is_safe(self, state, save_sync_state, logger):
         """Without a ``DownloadQueueCleanup`` wired, eviction is skipped."""
+        rom_files = FakeRomFileAdapter()
+        rom_path = f"{_ROMS_BASE}/n64/g.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        state["installed_roms"]["7"] = {"rom_id": 7, "file_path": rom_path, "system": "n64"}
+
         svc = RomRemovalService(
             config=RomRemovalServiceConfig(
                 state=state,
@@ -456,14 +421,11 @@ class TestDownloadQueueCleanup:
                 loop=asyncio.get_event_loop(),
                 save_state=MagicMock(),
                 save_save_sync_state=MagicMock(),
-                get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
+                rom_files=rom_files,
+                get_roms_path=lambda: _ROMS_BASE,
                 download_queue_cleanup=None,
             ),
         )
-        rom = tmp_path / "retrodeck" / "roms" / "n64" / "g.z64"
-        rom.parent.mkdir(parents=True)
-        rom.write_bytes(b"\x00" * 100)
-        state["installed_roms"]["7"] = {"rom_id": 7, "file_path": str(rom), "system": "n64"}
 
         result = await svc.remove_rom(7)
         assert result["success"] is True
