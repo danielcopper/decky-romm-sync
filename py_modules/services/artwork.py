@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.artwork_paths import final_filename, staging_filename
@@ -13,7 +14,22 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-    from services.protocols import CoverArtFileStore, RommApiProtocol, SteamConfigAdapter
+    from services.protocols import CoverArtFileStore, PendingSyncReader, RommApiProtocol, SteamConfigAdapter
+
+
+@dataclass(frozen=True)
+class ArtworkServiceConfig:
+    """Frozen wiring bundle handed to ``ArtworkService.__init__``.
+
+    Holds the asyncio loop, logger, and the read seam ArtworkService
+    uses to consult the in-flight sync's pending cover paths. Protocol-
+    typed adapters and the live state dict remain explicit ctor params
+    because they have different lifecycles from this immutable bundle.
+    """
+
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    get_pending_sync: PendingSyncReader
 
 
 class ArtworkService:
@@ -26,15 +42,15 @@ class ArtworkService:
         steam_config: SteamConfigAdapter,
         cover_art_file_store: CoverArtFileStore,
         state: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
+        config: ArtworkServiceConfig,
     ) -> None:
         self._romm_api = romm_api
         self._steam_config = steam_config
         self._cover_art_file_store = cover_art_file_store
         self._state = state
-        self._loop = loop
-        self._logger = logger
+        self._loop = config.loop
+        self._logger = config.logger
+        self._get_pending_sync = config.get_pending_sync
 
     # ── Existing cover path check ──────────────────────────────────────────
 
@@ -158,13 +174,14 @@ class ArtworkService:
 
     # ── Artwork base64 query ───────────────────────────────────────────────
 
-    async def get_artwork_base64(self, rom_id: int, pending_sync: dict) -> dict:
+    async def get_artwork_base64(self, rom_id: int) -> dict:
         """Return base64-encoded cover artwork for a single ROM."""
         grid = self._steam_config.grid_dir()
         if not grid:
             return {"base64": None}
 
         # Check pending sync data first (staging path)
+        pending_sync = self._get_pending_sync()
         pending = pending_sync.get(rom_id, {})
         cover_path = pending.get("cover_path", "")
 

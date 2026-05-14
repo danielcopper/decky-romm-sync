@@ -31,7 +31,7 @@ from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from services.achievements import AchievementsService
-from services.artwork import ArtworkService
+from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService
 from services.game_detail import GameDetailService
@@ -318,8 +318,15 @@ def wire_services(cfg: WiringConfig) -> dict:
         steam_config=cfg.adapters.steam_config,
         cover_art_file_store=cfg.adapters.cover_art_file_store,
         state=cfg.stores.state,
-        loop=cfg.runtime.loop,
-        logger=cfg.runtime.logger,
+        config=ArtworkServiceConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            # ``sync_service`` is constructed after ArtworkService; the
+            # lambda binds at call time, so the deferred lookup is safe
+            # as long as ``get_artwork_base64`` is only invoked after
+            # wire_services returns.
+            get_pending_sync=lambda: sync_service.pending_sync,
+        ),
     )
 
     shortcut_removal_service = ShortcutRemovalService(

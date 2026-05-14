@@ -11,7 +11,7 @@ import decky
 import pytest
 from conftest import FakeCoverArtFileStore
 
-from services.artwork import ArtworkService
+from services.artwork import ArtworkService, ArtworkServiceConfig
 
 
 @pytest.fixture
@@ -39,7 +39,13 @@ def romm_api():
 
 
 @pytest.fixture
-def artwork_service(state, steam_config, file_store, romm_api):
+def pending_sync_data() -> dict:
+    """Mutable pending-sync dict; tests mutate this to stage pending entries."""
+    return {}
+
+
+@pytest.fixture
+def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data):
     # _loop is replaced by the autouse fixture below for async tests; for
     # sync tests it is never touched, so a MagicMock is fine here.
     return ArtworkService(
@@ -47,8 +53,11 @@ def artwork_service(state, steam_config, file_store, romm_api):
         steam_config=steam_config,
         cover_art_file_store=file_store,
         state=state,
-        loop=MagicMock(),
-        logger=decky.logger,
+        config=ArtworkServiceConfig(
+            loop=MagicMock(),
+            logger=decky.logger,
+            get_pending_sync=lambda: pending_sync_data,
+        ),
     )
 
 
@@ -311,14 +320,16 @@ class TestGetArtworkBase64:
     """Tests for get_artwork_base64()."""
 
     @pytest.mark.asyncio
-    async def test_returns_base64_from_pending(self, artwork_service, steam_config, file_store, tmp_path):
+    async def test_returns_base64_from_pending(
+        self, artwork_service, steam_config, file_store, pending_sync_data, tmp_path
+    ):
         steam_config.grid_dir.return_value = str(tmp_path)
 
         cover = os.path.join(str(tmp_path), "romm_42_cover.png")
         file_store.files[cover] = b"fake png data"
 
-        pending_sync = {42: {"cover_path": cover}}
-        result = await artwork_service.get_artwork_base64(42, pending_sync)
+        pending_sync_data[42] = {"cover_path": cover}
+        result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is not None
         assert base64.b64decode(result["base64"]) == b"fake png data"
 
@@ -330,7 +341,7 @@ class TestGetArtworkBase64:
         file_store.files[cover] = b"registry png"
         state["shortcut_registry"]["42"] = {"cover_path": cover}
 
-        result = await artwork_service.get_artwork_base64(42, {})
+        result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is not None
 
     @pytest.mark.asyncio
@@ -340,19 +351,19 @@ class TestGetArtworkBase64:
         staging = os.path.join(str(tmp_path), "romm_42_cover.png")
         file_store.files[staging] = b"staging png"
 
-        result = await artwork_service.get_artwork_base64(42, {})
+        result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is not None
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_grid(self, artwork_service, steam_config):
         steam_config.grid_dir.return_value = None
-        result = await artwork_service.get_artwork_base64(42, {})
+        result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is None
 
     @pytest.mark.asyncio
     async def test_returns_none_when_file_missing(self, artwork_service, steam_config, tmp_path):
         steam_config.grid_dir.return_value = str(tmp_path)
-        result = await artwork_service.get_artwork_base64(42, {})
+        result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is None
 
     @pytest.mark.asyncio
@@ -368,7 +379,7 @@ class TestGetArtworkBase64:
         file_store.read_bytes = boom  # type: ignore[method-assign]
 
         with caplog.at_level(logging.WARNING):
-            result = await artwork_service.get_artwork_base64(42, {})
+            result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is None
         assert any("Failed to read artwork" in r.message for r in caplog.records)
 

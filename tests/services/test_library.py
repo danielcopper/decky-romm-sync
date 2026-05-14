@@ -13,7 +13,7 @@ from domain.sync_state import SyncState
 
 # conftest.py patches decky before this import
 from main import Plugin
-from services.artwork import ArtworkService
+from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService
 from services.shortcut_removal import ShortcutRemovalService
@@ -49,8 +49,11 @@ def plugin():
         steam_config=steam_config,
         cover_art_file_store=CoverArtFileStoreAdapter(),
         state=p._state,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
+        config=ArtworkServiceConfig(
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            get_pending_sync=dict,
+        ),
     )
     p._artwork_service = artwork_service
 

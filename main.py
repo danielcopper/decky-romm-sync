@@ -607,7 +607,7 @@ class Plugin:
         return await self._shortcut_removal_service.report_removal_results(removed_rom_ids)
 
     async def get_artwork_base64(self, rom_id):
-        return await self._artwork_service.get_artwork_base64(int(rom_id), self._sync_service.pending_sync)
+        return await self._artwork_service.get_artwork_base64(int(rom_id))
 
     @migration_blocked
     async def clear_sync_cache(self):

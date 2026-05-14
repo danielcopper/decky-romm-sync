@@ -225,15 +225,18 @@ class TestRemovalCleansUpArtwork:
         steam_config.grid_dir = lambda: str(grid_dir)
 
         from adapters.cover_art_file_store import CoverArtFileStoreAdapter
-        from services.artwork import ArtworkService
+        from services.artwork import ArtworkService, ArtworkServiceConfig
 
         artwork_svc = ArtworkService(
             romm_api=MagicMock(),
             steam_config=steam_config,
             cover_art_file_store=CoverArtFileStoreAdapter(),
             state=state,
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
+            config=ArtworkServiceConfig(
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                get_pending_sync=dict,
+            ),
         )
 
         svc = ShortcutRemovalService(
@@ -262,15 +265,18 @@ class TestRemovalCleansUpArtwork:
         steam_config.grid_dir = lambda: str(grid_dir)
 
         from adapters.cover_art_file_store import CoverArtFileStoreAdapter
-        from services.artwork import ArtworkService
+        from services.artwork import ArtworkService, ArtworkServiceConfig
 
         artwork_svc = ArtworkService(
             romm_api=MagicMock(),
             steam_config=steam_config,
             cover_art_file_store=CoverArtFileStoreAdapter(),
             state=state,
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
+            config=ArtworkServiceConfig(
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                get_pending_sync=dict,
+            ),
         )
 
         svc = ShortcutRemovalService(
