@@ -1,0 +1,249 @@
+"""Tests for StatusService — save-status DTO building and read-only status checks."""
+
+import pytest
+
+from domain.save_state import RomSaveState
+from tests.services.saves._helpers import (
+    _create_save,
+    _enable_sync_with_device,
+    _file_md5,
+    _install_rom,
+    _server_save,
+    _server_save_with_syncs,
+    make_service,
+)
+
+
+class TestSaveStatus:
+    @pytest.mark.asyncio
+    async def test_get_save_status(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        ss = _server_save()
+        fake.saves[100] = ss
+
+        result = await svc.get_save_status(42)
+        assert result["rom_id"] == 42
+        assert len(result["files"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_get_save_status_no_saves(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+
+        result = await svc.get_save_status(42)
+        assert result["rom_id"] == 42
+        assert result["files"] == []
+
+    @pytest.mark.asyncio
+    async def test_get_save_status_includes_empty_conflicts_when_no_conflict(self, tmp_path):
+        """get_save_status response includes conflicts key (empty when no conflicts)."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+
+        result = await svc.get_save_status(42)
+        assert "conflicts" in result
+        assert result["conflicts"] == []
+
+    @pytest.mark.asyncio
+    async def test_get_save_status_includes_device_syncs(self, tmp_path):
+        """get_save_status includes device_syncs and is_current per file."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        svc._save_sync_state.server_device_id = "server-dev-1"
+        svc._save_sync_state.device_id = "server-dev-1"
+
+        ss = _server_save()
+        ss["device_syncs"] = [
+            {
+                "device_id": "server-dev-1",
+                "device_name": "my-deck",
+                "is_current": True,
+                "last_synced_at": "2026-03-24T10:00:00",
+            },
+            {
+                "device_id": "server-dev-2",
+                "device_name": "desktop",
+                "is_current": False,
+                "last_synced_at": "2026-03-24T08:00:00",
+            },
+        ]
+        fake.saves[100] = ss
+
+        result = await svc.get_save_status(42)
+        file_status = result["files"][0]
+        assert "device_syncs" in file_status
+        assert len(file_status["device_syncs"]) == 2
+        assert file_status["device_syncs"][0]["device_name"] == "my-deck"
+        assert file_status["is_current"] is True
+
+    @pytest.mark.asyncio
+    async def test_save_status_filters_by_active_slot(self, tmp_path):
+        """Saves from a different slot should not appear in status."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        # Server save in slot "default", but active_slot is "other"
+        ss = _server_save(slot="default")
+        fake.saves[100] = ss
+        svc._save_sync_state.saves["42"] = RomSaveState(active_slot="other")
+
+        result = await svc.get_save_status(42)
+        # Local file exists → should show as upload (local-only), not synced against wrong slot
+        assert len(result["files"]) == 1
+        assert result["files"][0]["status"] == "upload"
+        assert result["files"][0]["server_save_id"] is None
+
+
+class TestGetSaveStatusComputeAction:
+    def test_get_save_status_returns_sync_conflict_shape(self, tmp_path):
+        """When compute_sync_action emits Conflict, get_save_status surfaces it."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"diverged local")
+        _ = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        fake.saves[100] = ss
+
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
+                }
+            }
+        )
+
+        result = svc._status._get_save_status_io(42, [ss])
+
+        assert len(result["conflicts"]) == 1
+        c = result["conflicts"][0]
+        assert isinstance(c, dict)
+        assert c["type"] == "sync_conflict"
+        assert c["rom_id"] == 42
+        assert c["filename"] == "pokemon.srm"
+        assert c["server_save_id"] == 100
+        assert "created_at" in c
+
+    def test_get_save_status_status_field_mapping(self, tmp_path):
+        """Skip→synced, Upload→upload, Download→download, Conflict→conflict."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+
+        # ---------- Skip ----------
+        save_path = _create_save(tmp_path, content=b"matches baseline")
+        local_hash = _file_md5(str(save_path))
+        ss_skip = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": ss_skip["updated_at"],
+                    }
+                }
+            }
+        )
+        result_skip = svc._status._get_save_status_io(42, [ss_skip])
+        assert result_skip["files"][0]["status"] == "synced"
+
+        # ---------- Upload ----------
+        # Reset state for next case: no server saves
+        svc._save_sync_state.saves["42"] = RomSaveState()
+        result_upload = svc._status._get_save_status_io(42, [])
+        assert result_upload["files"][0]["status"] == "upload"
+
+        # ---------- Download ----------
+        # Server moved past us, local matches baseline → Download
+        ss_dl = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        fake.saves[100] = ss_dl
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
+                }
+            }
+        )
+        result_dl = svc._status._get_save_status_io(42, [ss_dl])
+        assert result_dl["files"][0]["status"] == "download"
+
+        # ---------- Conflict ----------
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
+                }
+            }
+        )
+        result_conflict = svc._status._get_save_status_io(42, [ss_dl])
+        assert result_conflict["files"][0]["status"] == "conflict"
+
+    def test_get_save_status_server_only_collapses_to_one_entry(self, tmp_path):
+        """Multiple server saves in the active slot but no local file →
+        exactly one entry returned (the newest server save), not one per
+        server save. Older versions are reachable via list_file_versions."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # No local file.
+
+        ss_old = _server_save_with_syncs(
+            save_id=200,
+            updated_at="2026-03-24T10:00:00",
+            device_syncs=[{"device_id": "device-other", "is_current": True}],
+        )
+        ss_new = _server_save_with_syncs(
+            save_id=201,
+            updated_at="2026-03-24T15:00:00",
+            device_syncs=[{"device_id": "device-other", "is_current": True}],
+        )
+        fake.saves[200] = ss_old
+        fake.saves[201] = ss_new
+
+        svc._save_sync_state.saves["42"] = RomSaveState()
+
+        result = svc._status._get_save_status_io(42, [ss_old, ss_new])
+
+        assert len(result["files"]) == 1
+        entry = result["files"][0]
+        assert entry["server_save_id"] == 201  # newest
+        assert entry["status"] == "download"
+        assert entry["local_path"] is None
+
+    def test_get_save_status_empty_slot_returns_no_entries(self, tmp_path):
+        """No local file and no server saves → files list is empty."""
+        svc, _fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+
+        svc._save_sync_state.saves["42"] = RomSaveState()
+
+        result = svc._status._get_save_status_io(42, [])
+
+        assert result["files"] == []
+        assert result["conflicts"] == []
