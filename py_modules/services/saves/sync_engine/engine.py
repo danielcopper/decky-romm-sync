@@ -175,6 +175,36 @@ class SyncEngine:
         self._update_file_sync_state(rom_id_str, filename, server_save, local_path, system)
         self._save_service._log_debug(f"Downloaded save: {filename} for rom {rom_id_str}")
 
+    def _resolve_upload_slot(self, rom_id_str: str, device_id: str | None) -> str | None:
+        """The slot field to send with an upload; ``None`` when device sync is off."""
+        if not device_id:
+            return None
+        game_state = self._state_svc.state.saves.get(rom_id_str)
+        if game_state and game_state.active_slot is not None:
+            return game_state.active_slot
+        return "default"
+
+    def _promote_local_slot_to_server(self, rom_id_str: str, slot: str) -> None:
+        """Mark *slot* as having a server copy after a successful upload of a local-only slot."""
+        rom_state = self._state_svc.state.saves.get(rom_id_str)
+        if not rom_state:
+            return
+        slot_entry = rom_state.slots.get(slot)
+        if slot_entry and slot_entry.get("source") == "local":
+            slot_entry["source"] = "server"
+            slot_entry["count"] = 1
+
+    def _confirm_upload_sync(self, upload_id: int | None, device_id: str | None) -> None:
+        """Ack the uploaded save on the server's DeviceSaveSync row (non-fatal)."""
+        # RomM's upload endpoint updates updated_at but NOT last_synced_at,
+        # so is_current would be False on the next list_saves without this.
+        if not device_id or not upload_id:
+            return
+        try:
+            self._romm_api.confirm_download(upload_id, device_id)
+        except Exception:
+            self._save_service._log_debug(f"confirm_download after upload failed for save {upload_id} (non-fatal)")
+
     def _do_upload_save(
         self,
         rom_id: int,
@@ -195,11 +225,7 @@ class SyncEngine:
 
         # v4.7: pass device_id and slot
         device_id = self._save_service._get_server_device_id()
-        game_state = self._state_svc.state.saves.get(rom_id_str)
-        if device_id:
-            slot = game_state.active_slot if game_state and game_state.active_slot is not None else "default"
-        else:
-            slot = None
+        slot = self._resolve_upload_slot(rom_id_str, device_id)
 
         is_post = save_id is None
         result = self._retry.with_retry(
@@ -215,23 +241,10 @@ class SyncEngine:
         if is_post:
             self._record_own_upload(rom_id_str, result.get("id"))
 
-        # Promote local slot to server after successful upload
         if slot:
-            rom_state = self._state_svc.state.saves.get(rom_id_str)
-            slots_dict = rom_state.slots if rom_state else {}
-            if slot in slots_dict and slots_dict[slot].get("source") == "local":
-                slots_dict[slot]["source"] = "server"
-                slots_dict[slot]["count"] = 1
+            self._promote_local_slot_to_server(rom_id_str, slot)
 
-        # Mark device as synced with the uploaded save version.
-        # RomM's upload endpoint updates updated_at but NOT last_synced_at in
-        # DeviceSaveSync, so is_current would be False on the next list_saves.
-        upload_id = result.get("id")
-        if device_id and upload_id:
-            try:
-                self._romm_api.confirm_download(upload_id, device_id)
-            except Exception:
-                self._save_service._log_debug(f"confirm_download after upload failed for save {upload_id} (non-fatal)")
+        self._confirm_upload_sync(result.get("id"), device_id)
 
         self._save_service._log_debug(f"Uploaded save: {filename} for rom {rom_id_str} (emulator={emulator})")
         return result
