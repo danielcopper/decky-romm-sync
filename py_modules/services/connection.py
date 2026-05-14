@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.version import meets_min_version
+from lib.errors import error_response
 
 if TYPE_CHECKING:
     from services.protocols import RommApiProtocol
@@ -59,8 +60,6 @@ class ConnectionService:
         On success or version failure, ``romm_version`` carries the
         detected server version when the heartbeat exposed one.
         """
-        from lib.errors import error_response
-
         if not self._settings.get("romm_url"):
             return {"success": False, "message": "No server URL configured", "error_code": "config_error"}
 
