@@ -6,7 +6,6 @@ deletion, and per-core filtering for RetroArch emulators.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from dataclasses import asdict
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
         Clock,
         CoreInfoProvider,
         FirmwareCachePersister,
+        FirmwareFileAdapter,
         RommApiProtocol,
         StatePersister,
     )
@@ -46,6 +46,7 @@ class FirmwareService:
         clock: Clock,
         save_state: StatePersister,
         firmware_cache_persister: FirmwareCachePersister,
+        firmware_files: FirmwareFileAdapter,
         get_bios_path: BiosPathProvider,
         core_info: CoreInfoProvider,
     ) -> None:
@@ -57,6 +58,7 @@ class FirmwareService:
         self._clock = clock
         self._save_state = save_state
         self._firmware_cache_persister = firmware_cache_persister
+        self._firmware_files = firmware_files
         self._get_bios_path = get_bios_path
         self._core_info = core_info
         self._bios_registry: dict = {}
@@ -80,10 +82,10 @@ class FirmwareService:
         # then defaults/ subdirectory (dev deploys via mise run deploy)
         root_path = os.path.join(self._plugin_dir, "bios_registry.json")
         defaults_path = os.path.join(self._plugin_dir, "defaults", "bios_registry.json")
-        registry_path = root_path if os.path.exists(root_path) else defaults_path
+        registry_path = root_path if self._firmware_files.exists(root_path) else defaults_path
         try:
-            with open(registry_path) as f:
-                self._bios_registry = json.load(f)
+            data = self._firmware_files.read_bytes(registry_path)
+            self._bios_registry = json.loads(data)
             # Build flat reverse index: {filename: {entry_data + "platform": slug}}
             for platform, files in self._bios_registry.get("platforms", {}).items():
                 for filename, entry in files.items():
@@ -103,21 +105,24 @@ class FirmwareService:
                 is_required = entry["cores"][core_so]["required"]
             else:
                 is_required = entry.get("required", True)
-            file_dict["required"] = is_required
-            file_dict["description"] = entry.get("description", file_dict.get("file_name", ""))
-            file_dict["classification"] = "required" if is_required else "optional"
+            required = is_required
+            description = entry.get("description", file_dict.get("file_name", ""))
+            classification = "required" if is_required else "optional"
         else:
             # Unknown file: not in registry, don't count as required
-            file_dict["required"] = False
-            file_dict["description"] = file_dict.get("file_name", "")
-            file_dict["classification"] = "unknown"
+            required = False
+            description = file_dict.get("file_name", "")
+            classification = "unknown"
         file_md5 = file_dict.get("md5", "")
         registry_md5 = entry.get("md5", "") if entry else ""
-        if file_md5 and registry_md5:
-            file_dict["hash_valid"] = file_md5.lower() == registry_md5.lower()
-        else:
-            file_dict["hash_valid"] = None
-        return file_dict
+        hash_valid = file_md5.lower() == registry_md5.lower() if file_md5 and registry_md5 else None
+        return {
+            **file_dict,
+            "required": required,
+            "description": description,
+            "classification": classification,
+            "hash_valid": hash_valid,
+        }
 
     def _firmware_dest_path(self, firmware):
         """Determine local destination path for a firmware file.
@@ -209,7 +214,7 @@ class FirmwareService:
         items = [
             {
                 "file_name": fw.get("file_name", ""),
-                "downloaded": os.path.exists(self._firmware_dest_path(fw)),
+                "downloaded": self._firmware_files.exists(self._firmware_dest_path(fw)),
                 "dest": self._firmware_dest_path(fw),
             }
             for fw in self._firmware_cache
@@ -256,7 +261,7 @@ class FirmwareService:
                     "file_name": fw.get("file_name", ""),
                     "size": fw.get("file_size_bytes", 0),
                     "md5": fw.get("md5_hash", ""),
-                    "downloaded": os.path.exists(dest),
+                    "downloaded": self._firmware_files.exists(dest),
                 }
             )
         return platforms_map
@@ -277,7 +282,7 @@ class FirmwareService:
                         "file_name": file_name,
                         "size": 0,
                         "md5": reg_entry.get("md5", ""),
-                        "downloaded": os.path.exists(dest),
+                        "downloaded": self._firmware_files.exists(dest),
                     }
                 )
         return platforms_map
@@ -295,8 +300,7 @@ class FirmwareService:
             plat["active_core"] = core_so
             plat["active_core_label"] = core_label
             plat["available_cores"] = self._core_info.get_available_cores(slug)
-            for f in plat["files"]:
-                self._enrich_firmware_file(f, core_so=core_so)
+            plat["files"] = [self._enrich_firmware_file(f, core_so=core_so) for f in plat["files"]]
             plat["has_games"] = slug in installed_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
 
@@ -322,33 +326,17 @@ class FirmwareService:
     def _download_firmware_post_io(self, fw, firmware_id, dest, tmp_path):
         """Sync helper for download_firmware — rename, hash verification, state save in executor."""
         file_name = fw.get("file_name", "")
-        os.replace(tmp_path, dest)
+        self._firmware_files.rename(tmp_path, dest)
 
-        # Verify MD5 if available
-        md5_match = None
+        # Compute local MD5 once (used for both server-hash and registry-hash checks)
         expected_md5 = fw.get("md5_hash", "")
-        local_md5 = None
-        if expected_md5:
-            h = hashlib.md5()
-            with open(dest, "rb") as f:
-                for chunk in iter(lambda: f.read(8192), b""):
-                    h.update(chunk)
-            local_md5 = h.hexdigest()
-            md5_match = local_md5 == expected_md5
-
-        # Check against registry hash
-        registry_hash_valid = None
         reg_entry = self._bios_files_index.get(file_name)
-        if reg_entry:
-            reg_md5 = reg_entry.get("md5", "")
-            if reg_md5:
-                if local_md5 is None:
-                    h = hashlib.md5()
-                    with open(dest, "rb") as f:
-                        for chunk in iter(lambda: f.read(8192), b""):
-                            h.update(chunk)
-                    local_md5 = h.hexdigest()
-                registry_hash_valid = local_md5.lower() == reg_md5.lower()
+        reg_md5 = reg_entry.get("md5", "") if reg_entry else ""
+
+        local_md5 = self._firmware_files.checksum_md5(dest) if (expected_md5 or reg_md5) else None
+
+        md5_match = local_md5 == expected_md5 if expected_md5 and local_md5 is not None else None
+        registry_hash_valid = local_md5.lower() == reg_md5.lower() if reg_md5 and local_md5 is not None else None
 
         # Track in state for migration support
         self._state["downloaded_bios"][file_name] = {
@@ -375,11 +363,10 @@ class FirmwareService:
         tmp_path = dest + ".tmp"
 
         try:
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            await self._loop.run_in_executor(None, self._firmware_files.make_dirs, os.path.dirname(dest))
             await self._loop.run_in_executor(None, self._romm_api.download_firmware, firmware_id, file_name, tmp_path)
         except Exception as e:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            await self._loop.run_in_executor(None, self._firmware_files.remove, tmp_path)
             self._logger.error(f"Failed to download firmware {file_name}: {e}")
             return error_response(e)
 
@@ -413,7 +400,7 @@ class FirmwareService:
         errors = []
         for fw in platform_firmware:
             dest = self._firmware_dest_path(fw)
-            if os.path.exists(dest):
+            if self._firmware_files.exists(dest):
                 continue
             result = await self.download_firmware(fw["id"])
             if result.get("success"):
@@ -441,7 +428,7 @@ class FirmwareService:
         errors = []
         for fw in platform_firmware:
             dest = self._firmware_dest_path(fw)
-            if os.path.exists(dest):
+            if self._firmware_files.exists(dest):
                 continue
             result = await self.download_firmware(fw["id"])
             if result.get("success"):
@@ -492,7 +479,7 @@ class FirmwareService:
             items = [
                 {
                     "file_name": fw.get("file_name", ""),
-                    "downloaded": os.path.exists(self._firmware_dest_path(fw)),
+                    "downloaded": self._firmware_files.exists(self._firmware_dest_path(fw)),
                     "dest": self._firmware_dest_path(fw),
                 }
                 for fw in firmware_list
@@ -506,7 +493,9 @@ class FirmwareService:
             registry_items = [
                 {
                     "file_name": file_name,
-                    "downloaded": os.path.exists(os.path.join(bios_base, reg_entry.get("firmware_path", file_name))),
+                    "downloaded": self._firmware_files.exists(
+                        os.path.join(bios_base, reg_entry.get("firmware_path", file_name))
+                    ),
                     "dest": os.path.join(bios_base, reg_entry.get("firmware_path", file_name)),
                 }
                 for file_name, reg_entry in registry_platform.items()
@@ -545,12 +534,14 @@ class FirmwareService:
             if not f.downloaded:
                 continue
             try:
-                os.remove(f.local_path)
-                deleted += 1
-                # Remove from state tracking
-                self._state["downloaded_bios"].pop(f.file_name, None)
-            except Exception as e:
+                self._firmware_files.remove(f.local_path)
+            except OSError as e:
+                self._logger.warning(f"Failed to remove BIOS file {f.file_name}: {e}")
                 errors.append(f"{f.file_name}: {e}")
+                continue
+            deleted += 1
+            # Remove from state tracking
+            self._state["downloaded_bios"].pop(f.file_name, None)
 
         if deleted:
             self._save_state()

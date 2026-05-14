@@ -19,6 +19,8 @@ from conftest import (
     FakeDownloadFileAdapter,
     FakeDownloadQueueAdapter,
     FakeFirmwareCachePersister,
+    FakeFirmwareFileAdapter,
+    FakeMigrationFileAdapter,
     FakeSgdbArtworkCache,
 )
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -157,6 +159,8 @@ class TestWireServices:
             "sgdb_artwork_cache": FakeSgdbArtworkCache(),
             "download_files": FakeDownloadFileAdapter(),
             "download_queue": FakeDownloadQueueAdapter(),
+            "firmware_files": FakeFirmwareFileAdapter(),
+            "migration_files": FakeMigrationFileAdapter(),
             "state": state,
             "settings": settings,
             "metadata_cache": {},
@@ -197,6 +201,8 @@ class TestWireServices:
                 sgdb_artwork_cache=deps["sgdb_artwork_cache"],
                 download_files=deps["download_files"],
                 download_queue=deps["download_queue"],
+                firmware_files=deps["firmware_files"],
+                migration_files=deps["migration_files"],
             ),
             stores=StateBundle(
                 state=deps["state"],
