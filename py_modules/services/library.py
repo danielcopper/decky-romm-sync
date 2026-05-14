@@ -10,6 +10,7 @@ Shortcut removal is delegated to ShortcutRemovalService.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.shortcut_data import build_registry_entry, build_shortcuts_data
@@ -43,6 +44,30 @@ if TYPE_CHECKING:
 _SYNC_CANCELLED = "Sync cancelled"
 
 
+@dataclass(frozen=True)
+class LibraryServiceConfig:
+    """Frozen wiring bundle handed to ``LibraryService.__init__``.
+
+    Holds the immutable runtime infrastructure, time/sleep/uuid seams,
+    plugin-dir reference, event emitter, and persistence callbacks
+    LibraryService needs at construction time. Protocol-typed adapters
+    and the live state/settings dicts remain explicit ctor parameters
+    because they have different lifecycles from this immutable wiring
+    bundle.
+    """
+
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    plugin_dir: str
+    emit: EventEmitter
+    clock: Clock
+    uuid_gen: UuidGen
+    sleeper: Sleeper
+    save_state: StatePersister
+    save_settings_to_disk: SettingsPersister
+    log_debug: DebugLogger
+
+
 class LibraryService:
     """Sync engine: fetch ROMs, prepare shortcuts, manage registry."""
 
@@ -54,16 +79,7 @@ class LibraryService:
         state: dict,
         settings: dict,
         metadata_cache: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        plugin_dir: str,
-        emit: EventEmitter,
-        clock: Clock,
-        uuid_gen: UuidGen,
-        sleeper: Sleeper,
-        save_state: StatePersister,
-        save_settings_to_disk: SettingsPersister,
-        log_debug: DebugLogger,
+        config: LibraryServiceConfig,
         metadata_service: MetadataExtractor | None = None,
         artwork: ArtworkManager | None = None,
     ) -> None:
@@ -72,16 +88,16 @@ class LibraryService:
         self._state = state
         self._settings = settings
         self._metadata_cache = metadata_cache
-        self._loop = loop
-        self._logger = logger
-        self._plugin_dir = plugin_dir
-        self._emit = emit
-        self._clock = clock
-        self._uuid_gen = uuid_gen
-        self._sleeper = sleeper
-        self._save_state = save_state
-        self._save_settings_to_disk = save_settings_to_disk
-        self._log_debug = log_debug
+        self._loop = config.loop
+        self._logger = config.logger
+        self._plugin_dir = config.plugin_dir
+        self._emit = config.emit
+        self._clock = config.clock
+        self._uuid_gen = config.uuid_gen
+        self._sleeper = config.sleeper
+        self._save_state = config.save_state
+        self._save_settings_to_disk = config.save_settings_to_disk
+        self._log_debug = config.log_debug
         self._metadata_service = metadata_service
         self._artwork = artwork
 

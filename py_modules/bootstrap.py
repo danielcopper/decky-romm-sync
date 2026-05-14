@@ -33,7 +33,7 @@ from services.artwork import ArtworkService
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService
 from services.game_detail import GameDetailService
-from services.library import LibraryService
+from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService
 from services.migration import MigrationService
 from services.playtime import PlaytimeService
@@ -326,16 +326,18 @@ def wire_services(cfg: WiringConfig) -> dict:
         state=cfg.stores.state,
         settings=cfg.stores.settings,
         metadata_cache=cfg.stores.metadata_cache,
-        loop=cfg.runtime.loop,
-        logger=cfg.runtime.logger,
-        plugin_dir=cfg.runtime.plugin_dir,
-        emit=cfg.runtime.emit,
-        clock=cfg.runtime.clock,
-        uuid_gen=cfg.runtime.uuid_gen,
-        sleeper=cfg.runtime.sleeper,
-        save_state=cfg.callbacks.save_state,
-        save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
-        log_debug=cfg.callbacks.log_debug,
+        config=LibraryServiceConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            plugin_dir=cfg.runtime.plugin_dir,
+            emit=cfg.runtime.emit,
+            clock=cfg.runtime.clock,
+            uuid_gen=cfg.runtime.uuid_gen,
+            sleeper=cfg.runtime.sleeper,
+            save_state=cfg.callbacks.save_state,
+            save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
+            log_debug=cfg.callbacks.log_debug,
+        ),
         metadata_service=metadata_service,
         artwork=artwork_service,
     )

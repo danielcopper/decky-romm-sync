@@ -14,7 +14,7 @@ from domain.sync_state import SyncState
 # conftest.py patches decky before this import
 from main import Plugin
 from services.artwork import ArtworkService
-from services.library import LibraryService
+from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService
 from services.shortcut_removal import ShortcutRemovalService
 
@@ -60,16 +60,18 @@ def plugin():
         state=p._state,
         settings=p.settings,
         metadata_cache=p._metadata_cache,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        plugin_dir=decky.DECKY_PLUGIN_DIR,
-        emit=decky.emit,
-        clock=FakeClock(),
-        uuid_gen=FakeUuidGen(),
-        sleeper=FakeSleeper(),
-        save_state=p._save_state,
-        save_settings_to_disk=p._save_settings_to_disk,
-        log_debug=p._log_debug,
+        config=LibraryServiceConfig(
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            plugin_dir=decky.DECKY_PLUGIN_DIR,
+            emit=decky.emit,
+            clock=FakeClock(),
+            uuid_gen=FakeUuidGen(),
+            sleeper=FakeSleeper(),
+            save_state=p._save_state,
+            save_settings_to_disk=p._save_settings_to_disk,
+            log_debug=p._log_debug,
+        ),
         metadata_service=metadata_service,
         artwork=artwork_service,
     )

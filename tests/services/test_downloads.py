@@ -14,7 +14,7 @@ from adapters.download_file import DownloadFileAdapter
 from adapters.download_queue import DownloadQueueAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.downloads import DownloadService, DownloadServiceConfig
-from services.library import LibraryService
+from services.library import LibraryService, LibraryServiceConfig
 from services.rom_removal import RomRemovalService
 
 
@@ -39,16 +39,18 @@ def plugin():
         state=p._state,
         settings=p.settings,
         metadata_cache=p._metadata_cache,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        plugin_dir=decky.DECKY_PLUGIN_DIR,
-        emit=decky.emit,
-        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-        uuid_gen=FakeUuidGen(),
-        sleeper=FakeSleeper(),
-        save_state=p._save_state,
-        save_settings_to_disk=p._save_settings_to_disk,
-        log_debug=p._log_debug,
+        config=LibraryServiceConfig(
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            plugin_dir=decky.DECKY_PLUGIN_DIR,
+            emit=decky.emit,
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+            uuid_gen=FakeUuidGen(),
+            sleeper=FakeSleeper(),
+            save_state=p._save_state,
+            save_settings_to_disk=p._save_settings_to_disk,
+            log_debug=p._log_debug,
+        ),
     )
     p._save_sync_state = {"saves": {}, "playtime": {}, "settings": {}}
     p._download_service = DownloadService(

@@ -12,7 +12,7 @@ from lib.errors import SgdbApiError, SteamGridDirMissingError
 
 # conftest.py patches decky before this import
 from main import Plugin
-from services.library import LibraryService
+from services.library import LibraryService, LibraryServiceConfig
 from services.steamgrid import SteamGridConfig, SteamGridService
 
 
@@ -42,16 +42,18 @@ def plugin(sgdb_artwork_cache):
         state=p._state,
         settings=p.settings,
         metadata_cache=p._metadata_cache,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        plugin_dir=decky.DECKY_PLUGIN_DIR,
-        emit=decky.emit,
-        clock=FakeClock(),
-        uuid_gen=FakeUuidGen(),
-        sleeper=FakeSleeper(),
-        save_state=p._save_state,
-        save_settings_to_disk=p._save_settings_to_disk,
-        log_debug=p._log_debug,
+        config=LibraryServiceConfig(
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            plugin_dir=decky.DECKY_PLUGIN_DIR,
+            emit=decky.emit,
+            clock=FakeClock(),
+            uuid_gen=FakeUuidGen(),
+            sleeper=FakeSleeper(),
+            save_state=p._save_state,
+            save_settings_to_disk=p._save_settings_to_disk,
+            log_debug=p._log_debug,
+        ),
     )
 
     sgdb_api = MagicMock()
