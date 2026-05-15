@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 
 _SYNC_CANCELLED = "Sync cancelled"
+_PREVIEW_MAX_AGE_SECONDS = 1800  # 30 minutes — preview snapshots stale beyond this
 
 
 @dataclass(frozen=True)
@@ -313,6 +314,7 @@ class LibraryService:
             preview_id = self._uuid_gen.uuid4()
             self._pending_delta = {
                 "preview_id": preview_id,
+                "created_at": self._clock.time(),
                 "new": new,
                 "changed": changed,
                 "unchanged_ids": unchanged_ids,
@@ -366,6 +368,14 @@ class LibraryService:
     async def sync_apply_delta(self, preview_id):
         if not self._pending_delta or self._pending_delta["preview_id"] != preview_id:
             return {"success": False, "message": "Preview expired, please re-sync", "error_code": "stale_preview"}
+        age = self._clock.time() - self._pending_delta.get("created_at", 0)
+        if age > _PREVIEW_MAX_AGE_SECONDS:
+            self._pending_delta = None
+            return {
+                "success": False,
+                "message": "Preview is older than 30 minutes, please re-run sync",
+                "error_code": "stale_preview",
+            }
         delta = self._pending_delta
         self._pending_delta = None
         self._sync_state = SyncState.RUNNING

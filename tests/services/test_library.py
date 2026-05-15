@@ -792,6 +792,7 @@ class TestSyncPreview:
         result = await plugin.sync_preview()
         assert plugin._sync_service._pending_delta is not None
         assert plugin._sync_service._pending_delta["preview_id"] == result["preview_id"]
+        assert plugin._sync_service._pending_delta["created_at"] == plugin._sync_service._clock.time()
         assert len(plugin._sync_service._pending_delta["new"]) == 1
         assert plugin._sync_service._pending_delta["platforms_count"] == 1
         assert plugin._sync_service._pending_delta["total_roms"] == 1
@@ -833,6 +834,7 @@ class TestSyncApplyDelta:
         """Helper to populate _pending_delta with valid data."""
         plugin._sync_service._pending_delta = {
             "preview_id": preview_id,
+            "created_at": plugin._sync_service._clock.time(),
             "new": [
                 {
                     "rom_id": 3,
@@ -878,6 +880,50 @@ class TestSyncApplyDelta:
         result = await plugin.sync_apply_delta("any-id")
         assert result["success"] is False
         assert result["error_code"] == "stale_preview"
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_preview_older_than_max_age(self, plugin):
+        """Preview snapshots older than 30 minutes are stale.
+
+        Regression for #345: sync_apply_delta previously only validated
+        preview_id, so a user could leave the preview open for hours and
+        apply a stale RomM snapshot — silent data corruption.
+        """
+        self._setup_pending_delta(plugin, "preview-abc")
+        # Advance the clock past the 30-minute max age.
+        plugin._sync_service._clock.advance(1801)
+
+        result = await plugin.sync_apply_delta("preview-abc")
+
+        assert result["success"] is False
+        assert result["error_code"] == "stale_preview"
+        assert "30 minutes" in result["message"]
+        # Stale delta is cleared so a repeat apply can't pick it up.
+        assert plugin._sync_service._pending_delta is None
+
+    @pytest.mark.asyncio
+    async def test_accepts_when_preview_just_under_max_age(self, plugin, tmp_path):
+        """Snapshots within the TTL window apply normally."""
+        from unittest.mock import AsyncMock
+
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
+        }
+        plugin._save_state = lambda: None
+
+        self._setup_pending_delta(plugin, "preview-xyz")
+        plugin._sync_service._emit_progress = AsyncMock()
+        # Just under the 30-minute window.
+        plugin._sync_service._clock.advance(1799)
+
+        result = await plugin.sync_apply_delta("preview-xyz")
+
+        assert result["success"] is True
 
     @pytest.mark.asyncio
     async def test_emits_sync_apply_with_delta(self, plugin, tmp_path):
@@ -972,6 +1018,7 @@ class TestSyncApplyDelta:
         # Include both rom 1 and 5 as unchanged
         plugin._sync_service._pending_delta = {
             "preview_id": "test-preview-123",
+            "created_at": plugin._sync_service._clock.time(),
             "new": [],
             "changed": [],
             "unchanged_ids": [1, 5],
