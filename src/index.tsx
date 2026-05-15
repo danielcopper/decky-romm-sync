@@ -11,7 +11,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { LibraryPage } from "./components/LibraryPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
-import { initSyncManager } from "./utils/syncManager";
+import { initSyncManager, initUnitSyncManager } from "./utils/syncManager";
 import { setSyncProgress } from "./utils/syncProgress";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
@@ -25,7 +25,8 @@ import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import { findOutermostScrollParent, findScrollParent } from "./utils/scrollHelpers";
-import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus } from "./types";
+import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus, SyncPlanData, SyncStaleData, SyncCollectionsData } from "./types";
+import { removeShortcut } from "./utils/steamShortcuts";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads";
 
@@ -300,6 +301,44 @@ export default definePlugin(() => {
   >("sync_complete", onSyncComplete);
 
   const syncApplyListener = initSyncManager();
+  const syncApplyUnitListener = initUnitSyncManager();
+
+  // Per-unit pipeline: planning + stale + collections events.
+  // ``sync_plan`` arrives once per run with the full work queue (info only
+  // for now — future PR adds a per-platform progress view).
+  const syncPlanListener = addEventListener<[SyncPlanData]>("sync_plan", (data: SyncPlanData) => {
+    logInfo(`sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total`);
+  });
+
+  // ``sync_stale`` arrives after every unit finishes — apply removals
+  // through the same Steam APIs the monolithic path uses, then let the
+  // backend reconcile ownership via the finalise step's registry write.
+  const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", async (data: SyncStaleData) => {
+    if (!Array.isArray(data.remove_rom_ids) || data.remove_rom_ids.length === 0) return;
+    try {
+      const { getExistingRomMShortcuts } = await import("./utils/steamShortcuts");
+      const existing = await getExistingRomMShortcuts();
+      for (const romId of data.remove_rom_ids) {
+        const appId = existing.get(romId);
+        if (appId) removeShortcut(appId);
+      }
+      logInfo(`sync_stale: removed ${data.remove_rom_ids.length} stale shortcuts`);
+    } catch (e) {
+      logError(`sync_stale handler failed: ${e}`);
+    }
+  });
+
+  // ``sync_collections`` arrives at the end of the per-unit run with the
+  // full platform / RomM-collection app-id maps. The monolithic path
+  // routes these through ``sync_complete``; the per-unit path emits them
+  // separately so the frontend can apply collection updates before the
+  // terminal "done" toast.
+  const syncCollectionsListener = addEventListener<[SyncCollectionsData]>(
+    "sync_collections",
+    (data: SyncCollectionsData) => {
+      logInfo(`sync_collections received: ${Object.keys(data.platform_app_ids ?? {}).length} platforms`);
+    },
+  );
 
   // Backend emits sync_progress events throughout _do_sync — update the module-level store
   const syncProgressListener = addEventListener<[SyncProgress]>(
@@ -394,6 +433,10 @@ export default definePlugin(() => {
       unregisterMetadataPatches();
       removeEventListener("sync_complete", syncCompleteListener);
       removeEventListener("sync_apply", syncApplyListener);
+      removeEventListener("sync_apply_unit", syncApplyUnitListener);
+      removeEventListener("sync_plan", syncPlanListener);
+      removeEventListener("sync_stale", syncStaleListener);
+      removeEventListener("sync_collections", syncCollectionsListener);
       removeEventListener("sync_progress", syncProgressListener);
       removeEventListener("download_progress", downloadProgressListener);
       removeEventListener("download_complete", downloadCompleteListener);

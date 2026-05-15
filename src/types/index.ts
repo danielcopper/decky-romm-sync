@@ -167,6 +167,38 @@ export interface SyncApplyData {
   total_steps?: number;
 }
 
+export interface SyncPlanUnit {
+  type: "platform" | "collection";
+  id: number | string;
+  name: string;
+  slug: string;
+  rom_count: number;
+}
+
+export interface SyncPlanData {
+  units: SyncPlanUnit[];
+  total_units: number;
+  total_roms: number;
+}
+
+export interface SyncApplyUnitData {
+  unit_type: "platform" | "collection";
+  unit_id: number | string;
+  unit_name: string;
+  unit_index: number;
+  total_units: number;
+  shortcuts: SyncAddItem[];
+}
+
+export interface SyncStaleData {
+  remove_rom_ids: number[];
+}
+
+export interface SyncCollectionsData {
+  platform_app_ids: Record<string, number[]>;
+  romm_collection_app_ids: Record<string, number[]>;
+}
+
 export interface FirmwareFile {
   id: number;
   file_name: string;

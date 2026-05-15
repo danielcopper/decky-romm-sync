@@ -18,6 +18,7 @@ import {
   getSyncStats,
   getSettings,
   fixRetroarchInputDriver,
+  startSync,
   syncPreview,
   syncApplyDelta,
   syncCancelPreview,
@@ -221,28 +222,26 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setSyncProgress({ running: true, phase: "fetching", message: "Fetching library..." });
     startPolling(true);
     try {
+      // Skip Preview takes the per-unit pipeline (start_sync) — incremental
+      // shortcut delivery, per-unit crash safety, no upfront full library
+      // fetch. The legacy preview/apply path remains for users who want to
+      // review changes before they apply.
+      if (skipPreview) {
+        const startResult = await startSync();
+        if (startResult.success) {
+          startPolling();
+        } else {
+          stopPolling();
+          setStatus(startResult.message);
+          setSyncing(false);
+          setLoading(false);
+        }
+        return;
+      }
       const result = await syncPreview();
       stopPolling();
       if (result.success) {
-        const hasChanges = result.summary.new_count + result.summary.changed_count + result.summary.remove_count > 0 || !!result.summary.collection_diff?.has_changes || !!result.summary.platform_collection_diff?.has_changes;
-        if (skipPreview && hasChanges) {
-          // Auto-apply: skip preview UI
-          setSyncProgress({ running: true, phase: "applying", message: "Applying changes..." });
-          const applyResult = await syncApplyDelta(result.preview_id);
-          if (applyResult.success) {
-            startPolling();
-          } else {
-            setStatus(applyResult.message);
-            setSyncing(false);
-            setLoading(false);
-          }
-        } else if (skipPreview) {
-          // Nothing to sync — show brief status
-          await syncCancelPreview();
-          setStatus("Everything is up to date");
-          setSyncing(false);
-          setLoading(false);
-        } else {
+        {
           setPreview(result);
           setSyncing(false);
           setLoading(false);
