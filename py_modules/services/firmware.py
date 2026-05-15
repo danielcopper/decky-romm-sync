@@ -49,7 +49,7 @@ class FirmwareServiceConfig:
     logger: logging.Logger
     plugin_dir: str
     clock: Clock
-    save_state: StatePersister
+    state_persister: StatePersister
     firmware_cache_persister: FirmwareCachePersister
     firmware_files: FirmwareFileAdapter
     retrodeck_paths: RetroDeckPaths
@@ -70,7 +70,7 @@ class FirmwareService:
         self._logger = config.logger
         self._plugin_dir = config.plugin_dir
         self._clock = config.clock
-        self._save_state = config.save_state
+        self._state_persister = config.state_persister
         self._firmware_cache_persister = config.firmware_cache_persister
         self._firmware_files = config.firmware_files
         self._retrodeck_paths = config.retrodeck_paths
@@ -363,7 +363,7 @@ class FirmwareService:
             "platform_slug": firmware_paths.parse_firmware_slug(fw.get("file_path", "")),
             "downloaded_at": self._clock.now().isoformat(),
         }
-        self._save_state()
+        self._state_persister.save_state()
 
         return md5_match, registry_hash_valid
 
@@ -562,7 +562,7 @@ class FirmwareService:
             self._state["downloaded_bios"].pop(f.file_name, None)
 
         if deleted:
-            self._save_state()
+            self._state_persister.save_state()
 
         return deleted, errors
 

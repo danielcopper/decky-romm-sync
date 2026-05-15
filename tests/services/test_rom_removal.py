@@ -53,8 +53,8 @@ def service(state, save_sync_state, logger, queue_cleanup, rom_files):
             save_sync_state=save_sync_state,
             logger=logger,
             loop=asyncio.new_event_loop(),
-            save_state=MagicMock(),
-            save_save_sync_state=MagicMock(),
+            state_persister=MagicMock(),
+            save_sync_state_writer=MagicMock(),
             rom_files=rom_files,
             retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
             download_queue_cleanup=queue_cleanup,
@@ -172,7 +172,12 @@ class TestRemoveRom:
         save_sync_state.playtime["99"] = {"total_seconds": 7200}
 
         save_calls: list[int] = []
-        service._save_save_sync_state = lambda: save_calls.append(1)
+
+        class _Recorder:
+            def save_state(self) -> None:
+                save_calls.append(1)
+
+        service._save_sync_state_writer = _Recorder()
 
         result = await service.remove_rom(42)
 
@@ -192,7 +197,12 @@ class TestRemoveRom:
         # No matching save/playtime state for ROM 42
 
         save_calls: list[int] = []
-        service._save_save_sync_state = lambda: save_calls.append(1)
+
+        class _Recorder:
+            def save_state(self) -> None:
+                save_calls.append(1)
+
+        service._save_sync_state_writer = _Recorder()
 
         await service.remove_rom(42)
         assert len(save_calls) == 0  # not called if nothing changed
@@ -309,7 +319,12 @@ class TestUninstallAllRoms:
         save_sync_state.playtime = {"1": {"total_seconds": 100}, "2": {"total_seconds": 200}}
 
         save_calls: list[int] = []
-        service._save_save_sync_state = lambda: save_calls.append(1)
+
+        class _Recorder:
+            def save_state(self) -> None:
+                save_calls.append(1)
+
+        service._save_sync_state_writer = _Recorder()
 
         result = await service.uninstall_all_roms()
         assert result["success"] is True
@@ -420,8 +435,8 @@ class TestDownloadQueueCleanup:
                 save_sync_state=save_sync_state,
                 logger=logger,
                 loop=asyncio.get_event_loop(),
-                save_state=MagicMock(),
-                save_save_sync_state=MagicMock(),
+                state_persister=MagicMock(),
+                save_sync_state_writer=MagicMock(),
                 rom_files=rom_files,
                 retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
                 download_queue_cleanup=None,

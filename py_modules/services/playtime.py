@@ -36,7 +36,7 @@ class PlaytimeServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
-    save_state: StatePersister
+    state_persister: StatePersister
     log_debug: DebugLogger
 
 
@@ -52,7 +52,7 @@ class PlaytimeService:
         self._loop = config.loop
         self._logger = config.logger
         self._clock = config.clock
-        self._save_state = config.save_state
+        self._state_persister = config.state_persister
         self._log_debug = config.log_debug
 
     # ------------------------------------------------------------------
@@ -91,7 +91,7 @@ class PlaytimeService:
             entry = self._save_sync_state.playtime.get(rom_id_str)
             if entry is not None:
                 entry.note_id = result["id"]
-                self._save_state()
+                self._state_persister.save_state()
         return result
 
     def _update_playtime_note(self, rom_id: int, note_id: int, playtime_data: dict) -> dict:
@@ -157,7 +157,7 @@ class PlaytimeService:
 
             # Sync local state to the merged total
             entry.total_seconds = new_total
-            self._save_state()
+            self._state_persister.save_state()
 
         except Exception as e:
             self._log_debug(f"Failed to sync playtime to RomM for rom {rom_id}: {e}")
@@ -172,7 +172,7 @@ class PlaytimeService:
         playtime = self._save_sync_state.playtime
         entry = playtime.setdefault(rom_id_str, PlaytimeEntry())
         entry.last_session_start = self._clock.now().isoformat()
-        self._save_state()
+        self._state_persister.save_state()
         return {"success": True}
 
     async def record_session_end(self, rom_id: int) -> dict:
@@ -201,7 +201,7 @@ class PlaytimeService:
             entry.last_session_duration_sec = int(duration)
             entry.last_session_start = None
 
-            self._save_state()
+            self._state_persister.save_state()
 
             # Best-effort sync playtime to RomM server notes
             with contextlib.suppress(Exception):

@@ -30,8 +30,8 @@ class RomRemovalServiceConfig:
     save_sync_state: SaveSyncState
     logger: logging.Logger
     loop: asyncio.AbstractEventLoop
-    save_state: StatePersister
-    save_save_sync_state: StatePersister
+    state_persister: StatePersister
+    save_sync_state_writer: StatePersister
     rom_files: RomFileAdapter
     retrodeck_paths: RetroDeckPaths | None = None
     download_queue_cleanup: DownloadQueueCleanup | None = None
@@ -49,8 +49,8 @@ class RomRemovalService:
         self._save_sync_state = config.save_sync_state
         self._logger = config.logger
         self._loop = config.loop
-        self._save_state = config.save_state
-        self._save_save_sync_state = config.save_save_sync_state
+        self._state_persister = config.state_persister
+        self._save_sync_state_writer = config.save_sync_state_writer
         self._rom_files = config.rom_files
         self._retrodeck_paths = config.retrodeck_paths
         self._download_queue_cleanup = config.download_queue_cleanup
@@ -87,8 +87,8 @@ class RomRemovalService:
         if self._save_sync_state.playtime.pop(rom_id_str, None) is not None:
             save_changed = True
         if save_changed:
-            self._save_save_sync_state()
-        self._save_state()
+            self._save_sync_state_writer.save_state()
+        self._state_persister.save_state()
 
     async def remove_rom(self, rom_id: int | str) -> dict:
         """Remove a single installed ROM: delete files and clean state."""
@@ -132,8 +132,8 @@ class RomRemovalService:
             if self._save_sync_state.playtime.pop(rom_id_str, None) is not None:
                 save_changed = True
         if save_changed:
-            self._save_save_sync_state()
-        self._save_state()
+            self._save_sync_state_writer.save_state()
+        self._state_persister.save_state()
         return count, errors
 
     async def uninstall_all_roms(self) -> dict:

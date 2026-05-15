@@ -3,10 +3,15 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from conftest import FakeSettingsPersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
-from adapters.persistence import PersistenceAdapter
+from adapters.persistence import (
+    MetadataCachePersisterAdapter,
+    PersistenceAdapter,
+    StatePersisterAdapter,
+)
 from adapters.steam_config import SteamConfigAdapter
 from domain.sync_diff import classify_roms
 from domain.sync_state import SyncState
@@ -29,9 +34,13 @@ def plugin(tmp_path):
 
     import decky
 
-    # _persistence is no longer a lazy property; tests that touch persistence
-    # via _save_metadata_cache / _save_state need it wired up explicitly.
+    # _persistence is wired so disk-touching tests round-trip through the real
+    # adapter. The Protocol-typed persisters are bound to the same instance and
+    # the live state/settings/metadata_cache dicts so service writes land on disk.
     p._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+    p._state_persister = StatePersisterAdapter(p._persistence, p._state)
+    p._settings_persister = FakeSettingsPersister()
+    p._metadata_cache_persister = MetadataCachePersisterAdapter(p._persistence, p._metadata_cache)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
@@ -43,7 +52,7 @@ def plugin(tmp_path):
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             clock=FakeClock(),
-            save_metadata_cache=p._save_metadata_cache,
+            metadata_cache_persister=p._metadata_cache_persister,
             log_debug=p._log_debug,
         ),
     )
@@ -76,8 +85,8 @@ def plugin(tmp_path):
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=p._state_persister,
+            settings_persister=p._settings_persister,
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,
@@ -92,7 +101,7 @@ def plugin(tmp_path):
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             emit=decky.emit,
-            save_state=p._save_state,
+            state_persister=p._state_persister,
             artwork_remover=artwork_service,
         ),
     )
@@ -921,8 +930,6 @@ class TestSyncApplyDelta:
         plugin._state["shortcut_registry"] = {
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
-        plugin._save_state = lambda: None
-
         self._setup_pending_delta(plugin, "preview-xyz")
         plugin._sync_service._emit_progress = AsyncMock()
         # Just under the 30-minute window.
@@ -946,8 +953,6 @@ class TestSyncApplyDelta:
         plugin._state["shortcut_registry"] = {
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
-        plugin._save_state = lambda: None
-
         self._setup_pending_delta(plugin)
         plugin._sync_service._emit_progress = AsyncMock()
 
@@ -975,8 +980,6 @@ class TestSyncApplyDelta:
         plugin._state["shortcut_registry"] = {
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
-        plugin._save_state = lambda: None
-
         self._setup_pending_delta(plugin)
         plugin._sync_service._emit_progress = AsyncMock()
 
@@ -998,8 +1001,6 @@ class TestSyncApplyDelta:
         plugin._state["shortcut_registry"] = {
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
-        plugin._save_state = lambda: None
-
         self._setup_pending_delta(plugin)
         plugin._sync_service._emit_progress = AsyncMock()
 
@@ -1020,8 +1021,6 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
             "5": {"app_id": 1005, "name": "Game E", "platform_name": "SNES"},
         }
-        plugin._save_state = lambda: None
-
         # Include both rom 1 and 5 as unchanged
         plugin._sync_service._pending_delta = {
             "preview_id": "test-preview-123",
@@ -1951,8 +1950,6 @@ class TestSafetyTimeoutGenerationGuard:
         plugin.loop = loop
         svc._loop = loop
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin._save_state = lambda: None
-
         release = asyncio.Event()
         svc._sleeper = self._gated_sleeper(release)
         svc._sync_state = SyncState.RUNNING
@@ -2357,13 +2354,13 @@ class TestSaveCollectionSync:
         assert plugin._sync_service._settings["enabled_collections"]["7"] is True
 
     def test_calls_save_settings(self, plugin):
-        """save_settings_to_disk is called after updating the setting."""
-        save_called = []
-        plugin._sync_service._save_settings_to_disk = lambda: save_called.append(True)
+        """settings_persister is triggered after updating the setting."""
+        recorder = FakeSettingsPersister()
+        plugin._sync_service._settings_persister = recorder
 
         plugin._sync_service.save_collection_sync("1", True)
 
-        assert save_called
+        assert recorder.save_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2490,17 +2487,17 @@ class TestSetAllCollectionsSync:
 
     @pytest.mark.asyncio
     async def test_calls_save_settings(self, plugin):
-        """save_settings_to_disk is called after updating collections."""
+        """settings_persister is triggered after updating collections."""
         user = [{"id": 1, "name": "RPGs", "is_favorite": False}]
         franchise = []
         plugin._sync_service._loop = _make_loop_with_executor(user, franchise)
 
-        save_called = []
-        plugin._sync_service._save_settings_to_disk = lambda: save_called.append(True)
+        recorder = FakeSettingsPersister()
+        plugin._sync_service._settings_persister = recorder
 
         await plugin._sync_service.set_all_collections_sync(True)
 
-        assert save_called
+        assert recorder.save_count == 1
 
     @pytest.mark.asyncio
     async def test_enabled_param_coerced_to_bool(self, plugin):

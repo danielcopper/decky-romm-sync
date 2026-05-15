@@ -57,7 +57,7 @@ class DownloadServiceConfig:
     emit: EventEmitter
     clock: Clock
     sleeper: Sleeper
-    save_state: StatePersister
+    state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths | None = None
     is_retrodeck_migration_pending: Callable[[], bool] | None = None
 
@@ -77,7 +77,7 @@ class DownloadService:
         self._emit = config.emit
         self._clock = config.clock
         self._sleeper = config.sleeper
-        self._save_state = config.save_state
+        self._state_persister = config.state_persister
         self._retrodeck_paths = config.retrodeck_paths
         self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
 
@@ -286,7 +286,7 @@ class DownloadService:
             "rom_dir": extract_dir,
         }
         self._state["installed_roms"][str(rom_id)] = installed_entry
-        self._save_state()
+        self._state_persister.save_state()
         return launch_file
 
     def _post_download_single_io(self, rom_id, rom_detail, target_path, file_name, system):
@@ -303,7 +303,7 @@ class DownloadService:
             "installed_at": self._clock.now().isoformat(),
         }
         self._state["installed_roms"][str(rom_id)] = installed_entry
-        self._save_state()
+        self._state_persister.save_state()
         return target_path
 
     def _make_progress_callback(self, rom_id, rom_name, platform_name, file_name):

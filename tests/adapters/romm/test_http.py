@@ -57,8 +57,8 @@ def plugin():
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=MagicMock(),
+            settings_persister=MagicMock(),
             log_debug=p._log_debug,
         ),
     )

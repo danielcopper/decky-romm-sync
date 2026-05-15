@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import Clock, DebugLogger, RommApiProtocol, StatePersister
+    from services.protocols import Clock, DebugLogger, MetadataCachePersister, RommApiProtocol
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class MetadataServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
-    save_metadata_cache: StatePersister
+    metadata_cache_persister: MetadataCachePersister
     log_debug: DebugLogger
 
 
@@ -50,7 +50,7 @@ class MetadataService:
         self._loop = config.loop
         self._logger = config.logger
         self._clock = config.clock
-        self._save_metadata_cache = config.save_metadata_cache
+        self._metadata_cache_persister = config.metadata_cache_persister
         self._log_debug = config.log_debug
 
         self._metadata_dirty_count = 0
@@ -86,13 +86,13 @@ class MetadataService:
         """Track metadata cache changes and flush to disk periodically."""
         self._metadata_dirty_count += 1
         if self._metadata_dirty_count >= self._METADATA_FLUSH_INTERVAL:
-            self._save_metadata_cache()
+            self._metadata_cache_persister.save_metadata()
             self._metadata_dirty_count = 0
 
     def flush_metadata_if_dirty(self):
         """Flush metadata cache to disk if any pending writes."""
         if self._metadata_dirty_count > 0:
-            self._save_metadata_cache()
+            self._metadata_cache_persister.save_metadata()
             self._metadata_dirty_count = 0
 
     def get_rom_metadata(self, rom_id):

@@ -4,11 +4,18 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakePathProbe, FakeRetroDeckPaths, FakeSgdbArtworkCache
+from conftest import (
+    FakeMetadataCachePersister,
+    FakePathProbe,
+    FakeRetroDeckPaths,
+    FakeSettingsPersister,
+    FakeSgdbArtworkCache,
+    FakeStatePersister,
+)
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger
-from adapters.persistence import PersistenceAdapter
+from adapters.persistence import PersistenceAdapter, SettingsPersisterAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -43,6 +50,10 @@ def plugin():
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
+    p._state_persister = FakeStatePersister()
+    p._settings_persister = FakeSettingsPersister()
+    p._metadata_cache_persister = FakeMetadataCachePersister()
+
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
             romm_api=p._romm_api,
@@ -57,8 +68,8 @@ def plugin():
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=p._state_persister,
+            settings_persister=p._settings_persister,
             log_debug=p._log_debug,
         ),
     )
@@ -73,8 +84,8 @@ def plugin():
             settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            save_state=MagicMock(),
-            save_settings_to_disk=MagicMock(),
+            state_persister=FakeStatePersister(),
+            settings_persister=FakeSettingsPersister(),
             get_pending_sync=lambda: p._sync_service._pending_sync,
             log_debug=p._log_debug,
         ),
@@ -85,7 +96,7 @@ def plugin():
             settings=p.settings,
             state=p._state,
             logger=decky.logger,
-            save_settings_to_disk=p._save_settings_to_disk,
+            settings_persister=p._settings_persister,
             steam_config=steam_config,
         ),
     )
@@ -104,7 +115,7 @@ def plugin():
         config=StartupHealingServiceConfig(
             state=p._state,
             logger=decky.logger,
-            save_state=p._save_state,
+            state_persister=p._state_persister,
             retrodeck_paths=p._retrodeck_paths,
             path_probe=FakePathProbe(),
         ),
@@ -129,25 +140,32 @@ class TestPersistenceAttributeIsLoud:
         with pytest.raises(AttributeError, match="_persistence"):
             _ = bare._persistence
 
-    def test_save_state_without_main_raises(self):
-        """Calling _save_state before _main() sets _persistence raises."""
+    def test_state_persister_missing_on_bare_plugin(self):
+        """``_state_persister`` is bound only by ``_main()``; bare access raises."""
         from main import Plugin
 
         bare = Plugin()
-        bare._state = {}
 
-        with pytest.raises(AttributeError, match="_persistence"):
-            bare._save_state()
+        with pytest.raises(AttributeError, match="_state_persister"):
+            _ = bare._state_persister
 
-    def test_save_settings_without_main_raises(self):
-        """Calling _save_settings_to_disk before _main() raises."""
+    def test_settings_persister_missing_on_bare_plugin(self):
+        """``_settings_persister`` is bound only by ``_main()``; bare access raises."""
         from main import Plugin
 
         bare = Plugin()
-        bare.settings = {}
 
-        with pytest.raises(AttributeError, match="_persistence"):
-            bare._save_settings_to_disk()
+        with pytest.raises(AttributeError, match="_settings_persister"):
+            _ = bare._settings_persister
+
+    def test_metadata_cache_persister_missing_on_bare_plugin(self):
+        """``_metadata_cache_persister`` is bound only by ``_main()``; bare access raises."""
+        from main import Plugin
+
+        bare = Plugin()
+
+        with pytest.raises(AttributeError, match="_metadata_cache_persister"):
+            _ = bare._metadata_cache_persister
 
 
 class TestSettings:
@@ -472,7 +490,7 @@ class TestSettingsFilePermissions:
 
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
         plugin.settings = {"romm_url": "http://example.com"}
-        plugin._save_settings_to_disk()
+        SettingsPersisterAdapter(plugin._persistence, plugin.settings).save_settings()
         settings_path = tmp_path / "settings.json"
         mode = os.stat(settings_path).st_mode & 0o777
         assert mode == 0o600
@@ -501,7 +519,7 @@ class TestAtomicSettingsWrite:
         plugin._persistence = PersistenceAdapter(str(tmp_path), decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger)
 
         plugin.settings = {"romm_url": "http://example.com", "romm_user": "user"}
-        plugin._save_settings_to_disk()
+        SettingsPersisterAdapter(plugin._persistence, plugin.settings).save_settings()
 
         settings_path = tmp_path / "settings.json"
         with open(settings_path) as f:
@@ -515,7 +533,7 @@ class TestAtomicSettingsWrite:
         plugin._persistence = PersistenceAdapter(str(tmp_path), decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger)
 
         plugin.settings = {"romm_url": "http://example.com"}
-        plugin._save_settings_to_disk()
+        SettingsPersisterAdapter(plugin._persistence, plugin.settings).save_settings()
 
         tmp_file = tmp_path / "settings.json.tmp"
         assert not tmp_file.exists()
@@ -529,12 +547,13 @@ class TestAtomicSettingsWrite:
 
         # Write initial settings
         plugin.settings = {"romm_url": "http://original.com"}
-        plugin._save_settings_to_disk()
+        persister = SettingsPersisterAdapter(plugin._persistence, plugin.settings)
+        persister.save_settings()
 
         # Now simulate a crash during json.dump
-        plugin.settings = {"romm_url": "http://corrupted.com"}
+        plugin.settings["romm_url"] = "http://corrupted.com"
         with patch("json.dump", side_effect=OSError("disk full")), pytest.raises(OSError):
-            plugin._save_settings_to_disk()
+            persister.save_settings()
 
         # Original file should still be intact
         settings_path = tmp_path / "settings.json"
@@ -845,7 +864,20 @@ class TestMainStartupOrdering:
             "persistence": plugin._persistence,
             "firmware_cache_persister": MagicMock(),
             "save_sync_state_persister": MagicMock(),
+            "state_persister": MagicMock(),
+            "settings_persister": MagicMock(),
+            "metadata_cache_persister": MagicMock(),
             "settings": {},
+            "state": {
+                "shortcut_registry": {},
+                "installed_roms": {},
+                "last_sync": None,
+                "sync_stats": {"platforms": 0, "roms": 0},
+                "downloaded_bios": {},
+                "retrodeck_home_path": "",
+                "save_sort_settings": None,
+            },
+            "metadata_cache": {},
             "http_adapter": MagicMock(),
             "romm_api": MagicMock(),
             "steam_config": MagicMock(),

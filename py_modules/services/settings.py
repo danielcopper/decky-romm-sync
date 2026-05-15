@@ -39,7 +39,7 @@ class SettingsServiceConfig:
     settings: dict
     state: dict
     logger: logging.Logger
-    save_settings_to_disk: SettingsPersister
+    settings_persister: SettingsPersister
     steam_config: SteamConfigAdapter
 
 
@@ -52,7 +52,7 @@ class SettingsService:
         self._settings = config.settings
         self._state = config.state
         self._logger = config.logger
-        self._save_settings_to_disk = config.save_settings_to_disk
+        self._settings_persister = config.settings_persister
         self._steam_config = config.steam_config
 
     # ── Server credentials / connection settings ─────────────────────────
@@ -78,7 +78,7 @@ class SettingsService:
                 self._settings["romm_pass"] = romm_pass
             if allow_insecure_ssl is not None:
                 self._settings["romm_allow_insecure_ssl"] = bool(allow_insecure_ssl)
-            self._save_settings_to_disk()
+            self._settings_persister.save_settings()
             return {"success": True, "message": "Settings saved"}
         except Exception as e:
             self._logger.error(f"Failed to save settings: {e}")
@@ -111,7 +111,7 @@ class SettingsService:
         if level not in _VALID_LOG_LEVELS:
             return {"success": False, "message": "Invalid log level"}
         self._settings["log_level"] = level
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}
 
     def frontend_log(self, level: str, message: str) -> None:
@@ -138,7 +138,7 @@ class SettingsService:
         if mode not in _VALID_STEAM_INPUT_MODES:
             return {"success": False, "message": f"Invalid mode: {mode}"}
         self._settings["steam_input_mode"] = mode
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}
 
     def apply_steam_input_setting(self) -> dict:
@@ -182,7 +182,7 @@ class SettingsService:
             return {"success": False, "message": "custom_names must be a list of strings"}
         self._settings["whitelist_disabled_defaults"] = disabled_defaults
         self._settings["whitelist_custom_names"] = custom_names
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}
 
     # ── Collection grouping ─────────────────────────────────────────────
@@ -190,5 +190,5 @@ class SettingsService:
     def save_collection_platform_groups(self, enabled: bool) -> dict:
         """Persist the collection platform-group toggle."""
         self._settings["collection_create_platform_groups"] = bool(enabled)
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}

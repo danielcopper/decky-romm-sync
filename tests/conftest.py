@@ -73,6 +73,51 @@ def _make_testable_plugin():
     return instance
 
 
+class FakeStatePersister:
+    """In-memory ``StatePersister`` for tests.
+
+    Counts how many times ``save_state()`` was invoked. Tests use
+    ``save_count`` to assert the persister was triggered without
+    standing up a real on-disk write.
+    """
+
+    def __init__(self) -> None:
+        self.save_count = 0
+
+    def save_state(self) -> None:
+        self.save_count += 1
+
+
+class FakeSettingsPersister:
+    """In-memory ``SettingsPersister`` for tests.
+
+    Counts how many times ``save_settings()`` was invoked. Tests use
+    ``save_count`` to assert the persister was triggered without
+    standing up a real on-disk write.
+    """
+
+    def __init__(self) -> None:
+        self.save_count = 0
+
+    def save_settings(self) -> None:
+        self.save_count += 1
+
+
+class FakeMetadataCachePersister:
+    """In-memory ``MetadataCachePersister`` for tests.
+
+    Counts how many times ``save_metadata()`` was invoked. Tests use
+    ``save_count`` to assert the persister was triggered without
+    standing up a real on-disk write.
+    """
+
+    def __init__(self) -> None:
+        self.save_count = 0
+
+    def save_metadata(self) -> None:
+        self.save_count += 1
+
+
 class FakeSaveSyncStatePersister:
     """In-memory ``SaveSyncStatePersister`` for tests.
 

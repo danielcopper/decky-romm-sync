@@ -4,7 +4,14 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeMigrationFileAdapter, FakeRetroDeckPaths
+from conftest import (
+    FakeCoreInfoProvider,
+    FakeFirmwareCachePersister,
+    FakeMigrationFileAdapter,
+    FakeRetroDeckPaths,
+    FakeSettingsPersister,
+    FakeStatePersister,
+)
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.firmware_file import FirmwareFileAdapter
@@ -41,6 +48,8 @@ def plugin(tmp_path):
     p._steam_config = steam_config
 
     p._romm_api = MagicMock()
+    p._state_persister = FakeStatePersister()
+    p._settings_persister = FakeSettingsPersister()
     p._firmware_service = FirmwareService(
         config=FirmwareServiceConfig(
             romm_api=p._romm_api,
@@ -49,7 +58,7 @@ def plugin(tmp_path):
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            save_state=MagicMock(),
+            state_persister=FakeStatePersister(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             firmware_files=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
@@ -72,8 +81,8 @@ def plugin(tmp_path):
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=p._state_persister,
+            settings_persister=p._settings_persister,
             log_debug=p._log_debug,
         ),
     )
@@ -84,7 +93,7 @@ def plugin(tmp_path):
             state=p._state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            save_state=p._save_state,
+            state_persister=p._state_persister,
             emit=decky.emit,
             get_bios_files_index=lambda: p._firmware_service.bios_files_index,
             retrodeck_paths=FakeRetroDeckPaths(),
@@ -864,7 +873,7 @@ class TestMigrationFailureInjection:
             },
             "loop": asyncio.get_event_loop(),
             "logger": MagicMock(),
-            "save_state": MagicMock(),
+            "state_persister": FakeStatePersister(),
             "emit": MagicMock(),
             "get_bios_files_index": lambda: {},
             "retrodeck_paths": FakeRetroDeckPaths(),

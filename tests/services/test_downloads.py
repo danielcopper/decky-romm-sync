@@ -49,8 +49,8 @@ def plugin():
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=MagicMock(),
+            settings_persister=MagicMock(),
             log_debug=p._log_debug,
         ),
     )
@@ -68,7 +68,7 @@ def plugin():
             emit=decky.emit,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             sleeper=FakeSleeper(),
-            save_state=MagicMock(),
+            state_persister=MagicMock(),
             retrodeck_paths=FakeRetroDeckPaths(
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
@@ -81,8 +81,8 @@ def plugin():
             save_sync_state=p._save_sync_state,
             logger=decky.logger,
             loop=asyncio.get_event_loop(),
-            save_state=MagicMock(),
-            save_save_sync_state=MagicMock(),
+            state_persister=MagicMock(),
+            save_sync_state_writer=MagicMock(),
             rom_files=RomFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
@@ -1893,7 +1893,12 @@ class TestRemoveRomCleansSaveSyncState:
         save_sync_state.playtime["99"] = {"total_seconds": 7200}  # type: ignore[assignment]
         plugin._rom_removal_service._save_sync_state = save_sync_state
         save_calls = []
-        plugin._rom_removal_service._save_save_sync_state = lambda: save_calls.append(1)
+
+        class _Recorder:
+            def save_state(self) -> None:
+                save_calls.append(1)
+
+        plugin._rom_removal_service._save_sync_state_writer = _Recorder()
 
         result = await plugin.remove_rom(42)
         assert result["success"] is True
@@ -1903,7 +1908,7 @@ class TestRemoveRomCleansSaveSyncState:
         # Other ROM's state should be untouched
         assert "99" in save_sync_state.saves
         assert "99" in save_sync_state.playtime
-        # _save_save_sync_state should have been called
+        # _save_sync_state_writer.save_state should have been called
         assert len(save_calls) == 1
 
     @pytest.mark.asyncio
@@ -1938,7 +1943,12 @@ class TestRemoveRomCleansSaveSyncState:
         save_sync_state.playtime["2"] = {"total_seconds": 200}  # type: ignore[assignment]
         plugin._rom_removal_service._save_sync_state = save_sync_state
         save_calls = []
-        plugin._rom_removal_service._save_save_sync_state = lambda: save_calls.append(1)
+
+        class _Recorder:
+            def save_state(self) -> None:
+                save_calls.append(1)
+
+        plugin._rom_removal_service._save_sync_state_writer = _Recorder()
 
         result = await plugin.uninstall_all_roms()
         assert result["success"] is True
@@ -1946,7 +1956,7 @@ class TestRemoveRomCleansSaveSyncState:
         # All save sync state should be cleaned
         assert save_sync_state.saves == {}
         assert save_sync_state.playtime == {}
-        # _save_save_sync_state should have been called
+        # _save_sync_state_writer.save_state should have been called
         assert len(save_calls) == 1
 
 

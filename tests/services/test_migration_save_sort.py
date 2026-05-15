@@ -55,7 +55,7 @@ def _make_service(
             state=state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
-            save_state=save_state_mock,
+            state_persister=save_state_mock,
             emit=MagicMock(),
             get_bios_files_index=lambda: {},
             retrodeck_paths=FakeRetroDeckPaths(
@@ -84,7 +84,7 @@ class TestDetectSaveSortChange:
         assert svc._state["save_sort_settings"] == {"sort_by_content": True, "sort_by_core": False}
         assert "save_sort_settings_previous" not in svc._state
         mock_loop.create_task.assert_not_called()
-        save_state_mock.assert_called_once()
+        save_state_mock.save_state.assert_called_once()
 
     def test_no_change_no_event(self, tmp_path):
         """Stored settings equal current — no event, no state mutation."""
@@ -99,7 +99,7 @@ class TestDetectSaveSortChange:
         svc.detect_save_sort_change()
 
         mock_loop.create_task.assert_not_called()
-        save_state_mock.assert_not_called()
+        save_state_mock.save_state.assert_not_called()
         assert "save_sort_settings_previous" not in svc._state
 
     def test_change_emits_event(self, tmp_path):
@@ -138,7 +138,7 @@ class TestDetectSaveSortChange:
         assert svc._state["save_sort_settings"] == {"sort_by_content": False, "sort_by_core": True}
         assert svc._state["save_sort_settings_previous"] == old
         assert len(scheduled) == 1
-        save_state_mock.assert_called_once()
+        save_state_mock.save_state.assert_called_once()
 
     def test_no_callback_noop(self, tmp_path):
         """No get_retroarch_save_sorting callback — method is a no-op."""
@@ -149,14 +149,14 @@ class TestDetectSaveSortChange:
                 state={"save_sort_settings": None, "installed_roms": {}},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
-                save_state=save_state_mock,
+                state_persister=save_state_mock,
                 emit=MagicMock(),
                 get_bios_files_index=lambda: {},
             ),
         )
         # Should not raise, no state changes
         svc.detect_save_sort_change()
-        save_state_mock.assert_not_called()
+        save_state_mock.save_state.assert_not_called()
 
 
 class TestCollectSaveSortingItems:
@@ -762,7 +762,7 @@ class TestResolveRetroArchCorename:
                 state={"installed_roms": {}, "save_sort_settings": None},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
-                save_state=MagicMock(),
+                state_persister=MagicMock(),
                 emit=MagicMock(),
                 get_bios_files_index=lambda: {},
                 get_active_core=active_core,
@@ -779,7 +779,7 @@ class TestResolveRetroArchCorename:
                 state={"installed_roms": {}, "save_sort_settings": None},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
-                save_state=MagicMock(),
+                state_persister=MagicMock(),
                 emit=MagicMock(),
                 get_bios_files_index=lambda: {},
                 get_core_name=lambda core_so: "Snes9x",

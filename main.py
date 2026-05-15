@@ -51,15 +51,6 @@ class Plugin:
 
     # -- persistence delegates -------------------------------------------------
 
-    def _save_state(self):
-        self._persistence.save_state(self._state)
-
-    def _save_settings_to_disk(self):
-        self._persistence.save_settings(self.settings)
-
-    def _save_metadata_cache(self):
-        self._persistence.save_metadata_cache(self._metadata_cache)
-
     def _load_metadata_cache(self):
         self._metadata_cache = self._persistence.load_metadata_cache()
 
@@ -78,6 +69,11 @@ class Plugin:
         )
         self._persistence = adapters["persistence"]
         self.settings = adapters["settings"]
+        self._state = adapters["state"]
+        self._metadata_cache = adapters["metadata_cache"]
+        self._state_persister = adapters["state_persister"]
+        self._settings_persister = adapters["settings_persister"]
+        self._metadata_cache_persister = adapters["metadata_cache_persister"]
         self._http_adapter = adapters["http_adapter"]
         self._romm_api = adapters["romm_api"]
         self._steam_config = adapters["steam_config"]
@@ -86,23 +82,6 @@ class Plugin:
         self._retroarch_config: RetroArchConfigAdapter = adapters["retroarch_config"]
         self._retroarch_core_info: RetroArchCoreInfoAdapter = adapters["retroarch_core_info"]
         self._debug_logger = adapters["debug_logger"]
-
-        # ── 3. Load state ───────────────────────────────────────────────────
-        self._state = {
-            "shortcut_registry": {},
-            "installed_roms": {},
-            "last_sync": None,
-            "sync_stats": {"platforms": 0, "roms": 0},
-            "downloaded_bios": {},
-            "retrodeck_home_path": "",
-            "save_sort_settings": None,
-        }
-        self._metadata_cache = {}
-        from domain.state_migrations import migrate_state
-
-        self._state = self._persistence.load_state(self._state)
-        self._state = migrate_state(self._state)
-        self._metadata_cache = self._persistence.load_metadata_cache()
 
         # ── 4. Wire services ────────────────────────────────────────────────
         from services.saves import SaveService
@@ -146,9 +125,9 @@ class Plugin:
                     retrodeck_paths=self._retrodeck_paths,
                     get_retroarch_save_sorting=self._retroarch_config.get_retroarch_save_sorting,
                     get_core_name=self._retroarch_core_info.get_corename,
-                    save_state=self._save_state,
-                    save_settings_to_disk=self._save_settings_to_disk,
-                    save_metadata_cache=self._save_metadata_cache,
+                    state_persister=self._state_persister,
+                    settings_persister=self._settings_persister,
+                    metadata_cache_persister=self._metadata_cache_persister,
                     firmware_cache_persister=adapters["firmware_cache_persister"],
                     core_info_provider=adapters["core_resolver"],
                     save_sync_state_persister=adapters["save_sync_state_persister"],

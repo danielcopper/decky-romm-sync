@@ -46,7 +46,7 @@ class MigrationServiceConfig:
     state: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
-    save_state: StatePersister
+    state_persister: StatePersister
     emit: EventEmitter
     get_bios_files_index: Callable[[], dict]
     retrodeck_paths: RetroDeckPaths | None = None
@@ -63,7 +63,7 @@ class MigrationService:
         self._state = config.state
         self._loop = config.loop
         self._logger = config.logger
-        self._save_state = config.save_state
+        self._state_persister = config.state_persister
         self._emit = config.emit
         self._get_bios_files_index = config.get_bios_files_index
         self._retrodeck_paths = config.retrodeck_paths
@@ -89,7 +89,7 @@ class MigrationService:
         if not stored_home:
             # First run — just store the current path, no migration needed
             self._state["retrodeck_home_path"] = current_home
-            self._save_state()
+            self._state_persister.save_state()
             return
 
         # Auto-clear: user reverted RetroDECK to the previous home before migrating.
@@ -98,7 +98,7 @@ class MigrationService:
             previous = self._state.get("retrodeck_home_path_previous", "")
             self._state.pop("retrodeck_home_path_previous", None)
             self._state["retrodeck_home_path"] = current_home
-            self._save_state()
+            self._state_persister.save_state()
             self._logger.info(f"RetroDECK home reverted to previous path; clearing migration marker: {current_home}")
             # Notify the frontend so any pending migration UI can dismiss itself.
             # ``cleared: True`` lets the listener distinguish from the path-change emit.
@@ -119,7 +119,7 @@ class MigrationService:
         # Path changed — store both old and new, emit event
         self._state["retrodeck_home_path_previous"] = old_home
         self._state["retrodeck_home_path"] = current_home
-        self._save_state()
+        self._state_persister.save_state()
         self._logger.warning(f"RetroDECK home path changed: {old_home} -> {current_home}")
         self._loop.create_task(
             self._emit(
@@ -138,7 +138,7 @@ class MigrationService:
     def dismiss_retrodeck_migration(self) -> dict:
         """Dismiss the RetroDECK path migration warning without migrating files."""
         self._state.pop("retrodeck_home_path_previous", None)
-        self._save_state()
+        self._state_persister.save_state()
         return {"success": True}
 
     def _collect_rom_items(self, old_home, new_home):
@@ -386,7 +386,7 @@ class MigrationService:
         # Clear previous path marker after migration
         if not errors:
             self._state.pop("retrodeck_home_path_previous", None)
-        self._save_state()
+        self._state_persister.save_state()
 
         return self._build_migration_result(counts, errors)
 
@@ -456,13 +456,13 @@ class MigrationService:
         stored = self._state.get("save_sort_settings")
         if stored is None:
             self._state["save_sort_settings"] = current
-            self._save_state()
+            self._state_persister.save_state()
             return
         if stored == current:
             return
         self._state["save_sort_settings_previous"] = stored
         self._state["save_sort_settings"] = current
-        self._save_state()
+        self._state_persister.save_state()
         self._logger.warning(f"RetroArch save sorting changed: {stored} -> {current}")
         # Fire-and-forget: thread-safe schedule of the emit coroutine on
         # the plugin event loop. We deliberately do not await or .result()
@@ -590,7 +590,7 @@ class MigrationService:
     def dismiss_save_sort_migration(self) -> dict:
         """Dismiss the save sort migration warning without migrating files."""
         self._state.pop("save_sort_settings_previous", None)
-        self._save_state()
+        self._state_persister.save_state()
         return {"success": True}
 
     async def get_save_sort_migration_status(self) -> dict:
@@ -675,7 +675,7 @@ class MigrationService:
         items = self._collect_save_sorting_items(old_settings, new_settings)
         if not items:
             self._state.pop("save_sort_settings_previous", None)
-            self._save_state()
+            self._state_persister.save_state()
             return {"success": True, "message": "No save files to migrate", "saves_moved": 0}
         counts: dict[str, int] = {"rom": 0, "bios": 0, "save": 0}
         errors: list[str] = []
@@ -686,7 +686,7 @@ class MigrationService:
                 self._migrate_single_item(label, old_path, new_path, updater, "save", None, counts, errors)
         if not errors:
             self._state.pop("save_sort_settings_previous", None)
-            self._save_state()
+            self._state_persister.save_state()
         return self._build_migration_result(counts, errors)
 
     async def migrate_save_sort_files(self, conflict_strategy: str | None = None) -> dict:

@@ -58,8 +58,8 @@ class SteamGridServiceConfig:
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
-    save_state: StatePersister
-    save_settings_to_disk: SettingsPersister
+    state_persister: StatePersister
+    settings_persister: SettingsPersister
     get_pending_sync: PendingSyncReader
     log_debug: DebugLogger
 
@@ -76,8 +76,8 @@ class SteamGridService:
         self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
-        self._save_state = config.save_state
-        self._save_settings_to_disk = config.save_settings_to_disk
+        self._state_persister = config.state_persister
+        self._settings_persister = config.settings_persister
         self._get_pending_sync = config.get_pending_sync
         self._log_debug = config.log_debug
 
@@ -150,7 +150,7 @@ class SteamGridService:
             sgdb_id = await self._loop.run_in_executor(None, self._get_sgdb_game_id, igdb_id)
             if sgdb_id and rom_id_str in self._state["shortcut_registry"]:
                 self._state["shortcut_registry"][rom_id_str]["sgdb_id"] = sgdb_id
-                self._save_state()
+                self._state_persister.save_state()
 
         return sgdb_id
 
@@ -169,7 +169,7 @@ class SteamGridService:
                     self._state["shortcut_registry"][rom_id_str]["sgdb_id"] = sgdb_id
                 if igdb_id:
                     self._state["shortcut_registry"][rom_id_str]["igdb_id"] = igdb_id
-                self._save_state()
+                self._state_persister.save_state()
         except Exception as e:
             self._logger.warning(f"SGDB artwork: failed to fetch IDs from RomM for rom_id={rom_id}: {e}")
         return sgdb_id, igdb_id
@@ -237,7 +237,7 @@ class SteamGridService:
     def save_sgdb_api_key(self, api_key):
         if api_key and api_key != "••••":
             self._settings["steamgriddb_api_key"] = api_key
-            self._save_settings_to_disk()
+            self._settings_persister.save_settings()
         return {"success": True, "message": "SteamGridDB API key saved"}
 
     # -- cache pruning -----------------------------------------------------

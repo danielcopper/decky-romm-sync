@@ -67,8 +67,8 @@ def plugin(tmp_path):
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=MagicMock(),
+            settings_persister=MagicMock(),
             log_debug=p._log_debug,
         ),
     )
@@ -116,7 +116,7 @@ def plugin(tmp_path):
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            save_state=p._save_sync_service.save_state,
+            state_persister=p._save_sync_service,
             log_debug=p._log_debug,
         ),
     )
@@ -140,7 +140,7 @@ def plugin(tmp_path):
             logger=logging.getLogger("test"),
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            save_state=MagicMock(),
+            state_persister=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             firmware_files=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),

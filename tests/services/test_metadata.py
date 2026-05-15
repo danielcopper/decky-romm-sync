@@ -5,10 +5,11 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import FakeMetadataCachePersister, FakeSettingsPersister, FakeStatePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger
-from adapters.persistence import PersistenceAdapter
+from adapters.persistence import MetadataCachePersisterAdapter, PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -32,6 +33,10 @@ def plugin():
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
+    p._state_persister = FakeStatePersister()
+    p._settings_persister = FakeSettingsPersister()
+    p._metadata_cache_persister = FakeMetadataCachePersister()
+
     metadata_service = MetadataService(
         config=MetadataServiceConfig(
             romm_api=p._romm_api,
@@ -40,7 +45,7 @@ def plugin():
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             clock=FakeClock(),
-            save_metadata_cache=p._save_metadata_cache,
+            metadata_cache_persister=p._metadata_cache_persister,
             log_debug=p._log_debug,
         ),
     )
@@ -60,8 +65,8 @@ def plugin():
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=p._state_persister,
+            settings_persister=p._settings_persister,
             log_debug=p._log_debug,
             metadata_service=metadata_service,
         ),
@@ -402,7 +407,7 @@ class TestSyncMetadataCapture:
         for rom in roms:
             rom_id_str = str(rom["id"])
             plugin._metadata_cache[rom_id_str] = plugin._metadata_service.extract_metadata(rom)
-        plugin._save_metadata_cache()
+        MetadataCachePersisterAdapter(plugin._persistence, plugin._metadata_cache).save_metadata()
 
         # Verify in-memory cache
         assert plugin._metadata_cache["1"]["summary"] == "Game one description"
@@ -454,7 +459,7 @@ class TestSyncMetadataCapture:
         ]
         for rom in new_roms:
             plugin._metadata_cache[str(rom["id"])] = plugin._metadata_service.extract_metadata(rom)
-        plugin._save_metadata_cache()
+        MetadataCachePersisterAdapter(plugin._persistence, plugin._metadata_cache).save_metadata()
 
         # Both old and new entries must be present
         assert "99" in plugin._metadata_cache
@@ -587,10 +592,10 @@ class TestFlushMetadataIfDirty:
 
     def test_noop_when_clean(self, plugin):
         plugin._metadata_service._metadata_dirty_count = 0
-        # Ensure _save_metadata_cache is NOT called (we'd get an error if it tried to write)
-        plugin._metadata_service._save_metadata_cache = MagicMock()
+        # Ensure the persister is NOT triggered (we'd get an error if it tried to write)
+        plugin._metadata_service._metadata_cache_persister = MagicMock()
         plugin._metadata_service.flush_metadata_if_dirty()
-        plugin._metadata_service._save_metadata_cache.assert_not_called()
+        plugin._metadata_service._metadata_cache_persister.save_metadata.assert_not_called()
 
 
 class TestGetAppIdRomIdMap:

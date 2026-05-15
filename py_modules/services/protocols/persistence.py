@@ -1,10 +1,12 @@
 """On-disk persistence Protocols for plugin state files.
 
 Services delegate disk round-trips for plugin state, settings, save-sync
-state, and the firmware listing cache to these Protocols so atomic
-writes, locking, and corrupt-file recovery stay in adapters. Services
-see only the dict payload (or zero-arg "flush" callable) they care
-about; schema migrations on loaded data are a service concern.
+state, the metadata cache, and the firmware listing cache to these
+Protocols so atomic writes, locking, and corrupt-file recovery stay in
+adapters. Each Protocol carries a domain-specific method name
+(``save_state`` / ``save_settings`` / ``save_metadata`` / ``save``)
+rather than a generic ``__call__`` so the type checker rejects
+mis-wires between the three plugin-level persisters.
 """
 
 from __future__ import annotations
@@ -13,15 +15,21 @@ from typing import Protocol
 
 
 class StatePersister(Protocol):
-    """Persist plugin state to disk (zero-argument callable)."""
+    """Persist the live plugin state dict (``state.json``)."""
 
-    def __call__(self) -> None: ...
+    def save_state(self) -> None: ...
 
 
 class SettingsPersister(Protocol):
-    """Persist settings to disk (zero-argument callable)."""
+    """Persist the live settings dict (``settings.json``)."""
 
-    def __call__(self) -> None: ...
+    def save_settings(self) -> None: ...
+
+
+class MetadataCachePersister(Protocol):
+    """Persist the live metadata cache dict (``metadata_cache.json``)."""
+
+    def save_metadata(self) -> None: ...
 
 
 class SaveSyncStatePersister(Protocol):

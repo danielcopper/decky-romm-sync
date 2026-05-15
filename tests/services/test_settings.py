@@ -21,7 +21,7 @@ def state() -> dict:
 
 
 @pytest.fixture
-def save_settings_to_disk() -> MagicMock:
+def settings_persister() -> MagicMock:
     return MagicMock()
 
 
@@ -42,13 +42,13 @@ def logger() -> logging.Logger:
 
 
 @pytest.fixture
-def service(settings, state, logger, save_settings_to_disk, steam_config) -> SettingsService:
+def service(settings, state, logger, settings_persister, steam_config) -> SettingsService:
     return SettingsService(
         config=SettingsServiceConfig(
             settings=settings,
             state=state,
             logger=logger,
-            save_settings_to_disk=save_settings_to_disk,
+            settings_persister=settings_persister,
             steam_config=steam_config,
         ),
     )
@@ -58,20 +58,20 @@ def service(settings, state, logger, save_settings_to_disk, steam_config) -> Set
 
 
 class TestSaveSettings:
-    def test_persists_credentials(self, service, settings, save_settings_to_disk):
+    def test_persists_credentials(self, service, settings, settings_persister):
         result = service.save_settings("http://romm.local", "alice", "secret")
         assert result == {"success": True, "message": "Settings saved"}
         assert settings["romm_url"] == "http://romm.local"
         assert settings["romm_user"] == "alice"
         assert settings["romm_pass"] == "secret"
-        save_settings_to_disk.assert_called_once_with()
+        settings_persister.save_settings.assert_called_once_with()
 
-    def test_masked_password_preserves_existing(self, service, settings, save_settings_to_disk):
+    def test_masked_password_preserves_existing(self, service, settings, settings_persister):
         settings["romm_pass"] = "original"
         result = service.save_settings("http://romm.local", "alice", "••••")
         assert result["success"] is True
         assert settings["romm_pass"] == "original"
-        save_settings_to_disk.assert_called_once_with()
+        settings_persister.save_settings.assert_called_once_with()
 
     def test_empty_password_preserves_existing(self, service, settings):
         settings["romm_pass"] = "original"
@@ -92,8 +92,8 @@ class TestSaveSettings:
         service.save_settings("http://romm.local", "alice", "secret", False)
         assert settings["romm_allow_insecure_ssl"] is False
 
-    def test_persistence_failure_returns_error(self, service, save_settings_to_disk):
-        save_settings_to_disk.side_effect = OSError("disk full")
+    def test_persistence_failure_returns_error(self, service, settings_persister):
+        settings_persister.save_settings.side_effect = OSError("disk full")
         result = service.save_settings("http://romm.local", "alice", "secret")
         assert result["success"] is False
         assert "disk full" in result["message"]
@@ -191,18 +191,18 @@ class TestGetSettings:
 
 class TestSaveLogLevel:
     @pytest.mark.parametrize("level", ["debug", "info", "warn", "error"])
-    def test_valid_levels(self, service, settings, save_settings_to_disk, level):
+    def test_valid_levels(self, service, settings, settings_persister, level):
         result = service.save_log_level(level)
         assert result == {"success": True}
         assert settings["log_level"] == level
-        save_settings_to_disk.assert_called_once_with()
+        settings_persister.save_settings.assert_called_once_with()
 
-    def test_invalid_level(self, service, settings, save_settings_to_disk):
+    def test_invalid_level(self, service, settings, settings_persister):
         result = service.save_log_level("verbose")
         assert result["success"] is False
         assert "Invalid log level" in result["message"]
         assert "log_level" not in settings
-        save_settings_to_disk.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
 
     def test_empty_string_rejected(self, service, settings):
         result = service.save_log_level("")
@@ -276,18 +276,18 @@ class TestFrontendLog:
 
 class TestSaveSteamInputSetting:
     @pytest.mark.parametrize("mode", ["default", "force_on", "force_off"])
-    def test_valid_modes(self, service, settings, save_settings_to_disk, mode):
+    def test_valid_modes(self, service, settings, settings_persister, mode):
         result = service.save_steam_input_setting(mode)
         assert result == {"success": True}
         assert settings["steam_input_mode"] == mode
-        save_settings_to_disk.assert_called_once_with()
+        settings_persister.save_settings.assert_called_once_with()
 
-    def test_invalid_mode(self, service, settings, save_settings_to_disk):
+    def test_invalid_mode(self, service, settings, settings_persister):
         result = service.save_steam_input_setting("turbo")
         assert result["success"] is False
         assert "turbo" in result["message"]
         assert "steam_input_mode" not in settings
-        save_settings_to_disk.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
 
     def test_empty_string_rejected(self, service, settings):
         result = service.save_steam_input_setting("")
@@ -365,36 +365,36 @@ class TestGetWhitelistSettings:
 
 
 class TestUpdateWhitelistSettings:
-    def test_happy_path(self, service, settings, save_settings_to_disk):
+    def test_happy_path(self, service, settings, settings_persister):
         result = service.update_whitelist_settings(["chrome"], ["My App"])
         assert result == {"success": True}
         assert settings["whitelist_disabled_defaults"] == ["chrome"]
         assert settings["whitelist_custom_names"] == ["My App"]
-        save_settings_to_disk.assert_called_once_with()
+        settings_persister.save_settings.assert_called_once_with()
 
-    def test_disabled_defaults_not_list_rejected(self, service, save_settings_to_disk):
+    def test_disabled_defaults_not_list_rejected(self, service, settings_persister):
         result = service.update_whitelist_settings("not-a-list", [])
         assert result["success"] is False
         assert "disabled_defaults" in result["message"]
-        save_settings_to_disk.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
 
-    def test_custom_names_not_list_rejected(self, service, save_settings_to_disk):
+    def test_custom_names_not_list_rejected(self, service, settings_persister):
         result = service.update_whitelist_settings([], "not-a-list")
         assert result["success"] is False
         assert "custom_names" in result["message"]
-        save_settings_to_disk.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
 
-    def test_disabled_defaults_with_non_string_rejected(self, service, save_settings_to_disk):
+    def test_disabled_defaults_with_non_string_rejected(self, service, settings_persister):
         result = service.update_whitelist_settings([1, 2], [])
         assert result["success"] is False
         assert "disabled_defaults" in result["message"]
-        save_settings_to_disk.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
 
-    def test_custom_names_with_non_string_rejected(self, service, save_settings_to_disk):
+    def test_custom_names_with_non_string_rejected(self, service, settings_persister):
         result = service.update_whitelist_settings([], ["ok", 42])
         assert result["success"] is False
         assert "custom_names" in result["message"]
-        save_settings_to_disk.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
 
     def test_empty_lists_accepted(self, service, settings):
         result = service.update_whitelist_settings([], [])
@@ -407,18 +407,18 @@ class TestUpdateWhitelistSettings:
 
 
 class TestSaveCollectionPlatformGroups:
-    def test_enables(self, service, settings, save_settings_to_disk):
+    def test_enables(self, service, settings, settings_persister):
         result = service.save_collection_platform_groups(True)
         assert result == {"success": True}
         assert settings["collection_create_platform_groups"] is True
-        save_settings_to_disk.assert_called_once_with()
+        settings_persister.save_settings.assert_called_once_with()
 
-    def test_disables(self, service, settings, save_settings_to_disk):
+    def test_disables(self, service, settings, settings_persister):
         settings["collection_create_platform_groups"] = True
         result = service.save_collection_platform_groups(False)
         assert result == {"success": True}
         assert settings["collection_create_platform_groups"] is False
-        save_settings_to_disk.assert_called_once_with()
+        settings_persister.save_settings.assert_called_once_with()
 
     def test_coerces_truthy(self, service, settings):
         service.save_collection_platform_groups(1)  # type: ignore[arg-type]

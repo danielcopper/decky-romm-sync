@@ -4,7 +4,7 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeSgdbArtworkCache
+from conftest import FakeSettingsPersister, FakeSgdbArtworkCache, FakeStatePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger
@@ -38,6 +38,8 @@ def plugin(sgdb_artwork_cache):
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
+    p._state_persister = FakeStatePersister()
+    p._settings_persister = FakeSettingsPersister()
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
             romm_api=p._romm_api,
@@ -52,8 +54,8 @@ def plugin(sgdb_artwork_cache):
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            save_state=p._save_state,
-            save_settings_to_disk=p._save_settings_to_disk,
+            state_persister=p._state_persister,
+            settings_persister=p._settings_persister,
             log_debug=p._log_debug,
         ),
     )
@@ -70,8 +72,8 @@ def plugin(sgdb_artwork_cache):
             settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            save_state=MagicMock(),
-            save_settings_to_disk=MagicMock(),
+            state_persister=FakeStatePersister(),
+            settings_persister=FakeSettingsPersister(),
             get_pending_sync=lambda: p._sync_service._pending_sync,
             log_debug=p._log_debug,
         ),
@@ -743,8 +745,8 @@ class TestDebugLoggerProtocolSeam:
                 clock=FakeClock(),
                 uuid_gen=FakeUuidGen(),
                 sleeper=FakeSleeper(),
-                save_state=MM(),
-                save_settings_to_disk=MM(),
+                state_persister=FakeStatePersister(),
+                settings_persister=FakeSettingsPersister(),
                 log_debug=capture,
             ),
         )
@@ -759,8 +761,8 @@ class TestDebugLoggerProtocolSeam:
                 settings=p.settings,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
-                save_state=MM(),
-                save_settings_to_disk=MM(),
+                state_persister=FakeStatePersister(),
+                settings_persister=FakeSettingsPersister(),
                 get_pending_sync=lambda: p._sync_service._pending_sync,
                 log_debug=capture,
             ),

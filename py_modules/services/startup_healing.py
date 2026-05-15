@@ -33,7 +33,7 @@ class StartupHealingServiceConfig:
 
     state: dict
     logger: logging.Logger
-    save_state: StatePersister
+    state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths
     path_probe: PathExistsProbe
 
@@ -44,7 +44,7 @@ class StartupHealingService:
     def __init__(self, *, config: StartupHealingServiceConfig) -> None:
         self._state = config.state
         self._logger = config.logger
-        self._save_state = config.save_state
+        self._state_persister = config.state_persister
         self._retrodeck_paths = config.retrodeck_paths
         self._path_probe = config.path_probe
 
@@ -81,7 +81,7 @@ class StartupHealingService:
         for rom_id in pruned:
             del self._state["installed_roms"][rom_id]
         if pruned:
-            self._save_state()
+            self._state_persister.save_state()
 
     def prune_stale_registry(self) -> None:
         """Remove shortcut_registry entries with missing or invalid ``app_id``.
@@ -100,4 +100,4 @@ class StartupHealingService:
         for rom_id in pruned:
             del self._state["shortcut_registry"][rom_id]
         if pruned:
-            self._save_state()
+            self._state_persister.save_state()

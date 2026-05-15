@@ -268,6 +268,58 @@ class PersistenceAdapter:
         return loaded
 
 
+class StatePersisterAdapter:
+    """Adapter view exposing the ``StatePersister`` Protocol.
+
+    Binds a :class:`PersistenceAdapter` and the live ``state`` dict so
+    services receive a zero-arg ``save_state()`` seam without any
+    knowledge of the underlying file or dict payload. Lives in the
+    adapters layer so services depend only on the Protocol, never on
+    this class.
+    """
+
+    def __init__(self, persistence: PersistenceAdapter, state: dict) -> None:
+        self._persistence = persistence
+        self._state = state
+
+    def save_state(self) -> None:
+        self._persistence.save_state(self._state)
+
+
+class SettingsPersisterAdapter:
+    """Adapter view exposing the ``SettingsPersister`` Protocol.
+
+    Binds a :class:`PersistenceAdapter` and the live ``settings`` dict
+    so services receive a zero-arg ``save_settings()`` seam. Lives in
+    the adapters layer so services depend only on the Protocol, never
+    on this class.
+    """
+
+    def __init__(self, persistence: PersistenceAdapter, settings: dict) -> None:
+        self._persistence = persistence
+        self._settings = settings
+
+    def save_settings(self) -> None:
+        self._persistence.save_settings(self._settings)
+
+
+class MetadataCachePersisterAdapter:
+    """Adapter view exposing the ``MetadataCachePersister`` Protocol.
+
+    Binds a :class:`PersistenceAdapter` and the live ``metadata_cache``
+    dict so services receive a zero-arg ``save_metadata()`` seam. Lives
+    in the adapters layer so services depend only on the Protocol,
+    never on this class.
+    """
+
+    def __init__(self, persistence: PersistenceAdapter, metadata_cache: dict) -> None:
+        self._persistence = persistence
+        self._metadata_cache = metadata_cache
+
+    def save_metadata(self) -> None:
+        self._persistence.save_metadata_cache(self._metadata_cache)
+
+
 class SaveSyncStatePersisterAdapter:
     """Adapter view exposing the ``SaveSyncStatePersister`` Protocol.
 

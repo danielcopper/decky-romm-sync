@@ -33,7 +33,7 @@ class ShortcutRemovalServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     emit: EventEmitter
-    save_state: StatePersister
+    state_persister: StatePersister
     artwork_remover: ArtworkRemover
 
 
@@ -47,7 +47,7 @@ class ShortcutRemovalService:
         self._loop = config.loop
         self._logger = config.logger
         self._emit = config.emit
-        self._save_state = config.save_state
+        self._state_persister = config.state_persister
         self._artwork_remover = config.artwork_remover
 
     # ── Registry helpers ───────────────────────────────────────────────────
@@ -137,7 +137,7 @@ class ShortcutRemovalService:
             "platforms": len(platforms),
             "roms": len(registry),
         }
-        self._save_state()
+        self._state_persister.save_state()
 
     async def report_removal_results(self, removed_rom_ids: list) -> dict:
         """Called by frontend after removing shortcuts via SteamClient."""

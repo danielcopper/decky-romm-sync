@@ -60,6 +60,7 @@ from services.protocols.paths import (
 )
 from services.protocols.persistence import (
     FirmwareCachePersister,
+    MetadataCachePersister,
     SaveSyncStatePersister,
     SettingsPersister,
     StatePersister,
@@ -84,6 +85,7 @@ __all__ = [
     "FirmwareCachePersister",
     "FirmwareFileAdapter",
     "GamelistXmlEditorProtocol",
+    "MetadataCachePersister",
     "MetadataExtractor",
     "MigrationFileAdapter",
     "PathExistsProbe",

@@ -16,6 +16,16 @@ from lib.errors import RommApiError
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
 
 
+class _RecordingStatePersister:
+    """Test double for ``StatePersister`` that records each call in a list."""
+
+    def __init__(self, saved: list[bool]) -> None:
+        self._saved = saved
+
+    def save_state(self) -> None:
+        self._saved.append(True)
+
+
 def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
     """Create a PlaytimeService with sensible defaults."""
     fake = fake_api or FakeSaveApi()
@@ -30,7 +40,7 @@ def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         clock=clk,
-        save_state=lambda: saved.append(True),
+        state_persister=_RecordingStatePersister(saved),
         log_debug=lambda _msg: None,
     )
     defaults.update(overrides)

@@ -68,8 +68,8 @@ class LibraryServiceConfig:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
-    save_state: StatePersister
-    save_settings_to_disk: SettingsPersister
+    state_persister: StatePersister
+    settings_persister: SettingsPersister
     log_debug: DebugLogger
     metadata_service: MetadataExtractor | None = None
     artwork: ArtworkManager | None = None
@@ -91,8 +91,8 @@ class LibraryService:
         self._clock = config.clock
         self._uuid_gen = config.uuid_gen
         self._sleeper = config.sleeper
-        self._save_state = config.save_state
-        self._save_settings_to_disk = config.save_settings_to_disk
+        self._state_persister = config.state_persister
+        self._settings_persister = config.settings_persister
         self._log_debug = config.log_debug
         self._metadata_service = config.metadata_service
         self._artwork = config.artwork
@@ -168,7 +168,7 @@ class LibraryService:
     def save_platform_sync(self, platform_id, enabled):
         pid = str(platform_id)
         self._settings["enabled_platforms"][pid] = bool(enabled)
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}
 
     async def get_collections(self):
@@ -217,7 +217,7 @@ class LibraryService:
 
     def save_collection_sync(self, collection_id, enabled):
         self._settings.setdefault("enabled_collections", {})[str(collection_id)] = bool(enabled)
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}
 
     async def set_all_collections_sync(self, enabled, category=None):
@@ -247,7 +247,7 @@ class LibraryService:
         for cid, cat in all_collections:
             if category is None or cat == category:
                 ec[cid] = enabled
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}
 
     async def set_all_platforms_sync(self, enabled):
@@ -263,7 +263,7 @@ class LibraryService:
         for p in platforms:
             ep[str(p["id"])] = enabled
         self._settings["enabled_platforms"] = ep
-        self._save_settings_to_disk()
+        self._settings_persister.save_settings()
         return {"success": True}
 
     # ── Sync control ─────────────────────────────────────────
@@ -427,7 +427,7 @@ class LibraryService:
             "platforms": delta["platforms_count"],
             "roms": delta["total_roms"],
         }
-        self._save_state()
+        self._state_persister.save_state()
 
         # Figure out which step the frontend starts at
         next_step = current_step + 1
@@ -872,7 +872,7 @@ class LibraryService:
                 "platforms": len(platforms),
                 "roms": len(all_roms),
             }
-            self._save_state()
+            self._state_persister.save_state()
 
             # Store pending data for report_sync_results to reference
             self._pending_sync = {sd["rom_id"]: sd for sd in shortcuts_data}
@@ -1002,7 +1002,7 @@ class LibraryService:
         self._state["last_sync"] = self._clock.now().isoformat()
         self._state["last_synced_collections"] = list(pending_collection_memberships.keys())
         self._state["last_synced_platforms"] = list(platform_app_ids.keys())
-        self._save_state()
+        self._state_persister.save_state()
 
         return platform_app_ids, romm_collection_app_ids
 
@@ -1089,7 +1089,7 @@ class LibraryService:
     def clear_sync_cache(self):
         """Clear last_sync timestamp to force a full re-fetch on next sync."""
         self._state["last_sync"] = None
-        self._save_state()
+        self._state_persister.save_state()
         self._logger.info("Sync cache cleared — next sync will do a full fetch")
         return {"success": True, "message": "Next sync will do a full fetch"}
 

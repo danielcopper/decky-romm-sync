@@ -36,7 +36,7 @@ def svc(state, steam_config, artwork_remover_mock):
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             emit=decky.emit,
-            save_state=MagicMock(),
+            state_persister=MagicMock(),
             artwork_remover=artwork_remover_mock,
         ),
     )
@@ -249,7 +249,7 @@ class TestRemovalCleansUpArtwork:
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 emit=decky.emit,
-                save_state=MagicMock(),
+                state_persister=MagicMock(),
                 artwork_remover=artwork_svc,
             ),
         )
@@ -291,7 +291,7 @@ class TestRemovalCleansUpArtwork:
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 emit=decky.emit,
-                save_state=MagicMock(),
+                state_persister=MagicMock(),
                 artwork_remover=artwork_svc,
             ),
         )
