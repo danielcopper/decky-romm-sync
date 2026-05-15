@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,29 +18,37 @@ if TYPE_CHECKING:
     )
 
 
+@dataclass(frozen=True)
+class ShortcutRemovalServiceConfig:
+    """Frozen wiring bundle handed to ``ShortcutRemovalService.__init__``.
+
+    Holds the Protocol-typed adapters, the live state dict, runtime
+    infrastructure, event emitter, and persistence callbacks
+    ShortcutRemovalService needs at construction time.
+    """
+
+    romm_api: RommApiProtocol
+    steam_config: SteamConfigAdapter
+    state: dict
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    emit: EventEmitter
+    save_state: StatePersister
+    artwork_remover: ArtworkRemover
+
+
 class ShortcutRemovalService:
     """Handles shortcut removal: identifies app_ids/rom_ids and cleans up state."""
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        steam_config: SteamConfigAdapter,
-        state: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        emit: EventEmitter,
-        save_state: StatePersister,
-        artwork_remover: ArtworkRemover,
-    ) -> None:
-        self._romm_api = romm_api
-        self._steam_config = steam_config
-        self._state = state
-        self._loop = loop
-        self._logger = logger
-        self._emit = emit
-        self._save_state = save_state
-        self._artwork_remover = artwork_remover
+    def __init__(self, *, config: ShortcutRemovalServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._steam_config = config.steam_config
+        self._state = config.state
+        self._loop = config.loop
+        self._logger = config.logger
+        self._emit = config.emit
+        self._save_state = config.save_state
+        self._artwork_remover = config.artwork_remover
 
     # ── Registry helpers ───────────────────────────────────────────────────
 

@@ -43,31 +43,25 @@ if TYPE_CHECKING:
 class SteamGridConfig:
     """Frozen wiring bundle handed to ``SteamGridService.__init__``.
 
-    Holds the runtime infrastructure and external callbacks SteamGridService
-    needs at construction time. Live mutable state references (``state``,
-    ``settings``) and abstract Protocol-typed adapters remain explicit ctor
-    parameters because they have different lifecycles from this immutable
-    wiring bundle.
+    Holds the Protocol-typed adapters (``sgdb_api``, ``romm_api``,
+    ``steam_config``, ``sgdb_artwork_cache``), the live state and
+    settings dicts, runtime infrastructure, persistence callbacks, the
+    pending-sync read seam, and the debug-logger seam SteamGridService
+    needs at construction time.
 
-    Parameters
-    ----------
-    loop:
-        The plugin's ``asyncio`` event loop (for ``run_in_executor``).
-    logger:
-        Standard-library logger (replaces ``decky.logger``).
-    save_state:
-        Persists the main plugin state dict to disk.
-    save_settings_to_disk:
-        Persists the live settings dict to disk after API-key updates.
-    get_pending_sync:
-        Read seam returning the current LibraryService pending-sync map.
-        Used to resolve SGDB IDs for ROMs mid-sync that are not yet in
-        the registry.
-    log_debug:
-        ``DebugLogger`` Protocol seam — routes through the user's QAM
-        log-level filter.
+    Note
+    ----
+    The dataclass is named ``SteamGridConfig`` rather than
+    ``SteamGridServiceConfig`` for transitional reasons; renaming is
+    tracked separately and does not affect the Always-Config shape.
     """
 
+    sgdb_api: SteamGridDbApi
+    romm_api: RommApiProtocol
+    steam_config: SteamConfigAdapter
+    sgdb_artwork_cache: SgdbArtworkCache
+    state: dict
+    settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     save_state: StatePersister
@@ -79,23 +73,13 @@ class SteamGridConfig:
 class SteamGridService:
     """SteamGridDB orchestration: API key flow, artwork fetch/cache, icon save."""
 
-    def __init__(
-        self,
-        *,
-        sgdb_api: SteamGridDbApi,
-        romm_api: RommApiProtocol,
-        steam_config: SteamConfigAdapter,
-        sgdb_artwork_cache: SgdbArtworkCache,
-        state: dict,
-        settings: dict,
-        config: SteamGridConfig,
-    ) -> None:
-        self._sgdb_api = sgdb_api
-        self._romm_api = romm_api
-        self._steam_config = steam_config
-        self._sgdb_artwork_cache = sgdb_artwork_cache
-        self._state = state
-        self._settings = settings
+    def __init__(self, *, config: SteamGridConfig) -> None:
+        self._sgdb_api = config.sgdb_api
+        self._romm_api = config.romm_api
+        self._steam_config = config.steam_config
+        self._sgdb_artwork_cache = config.sgdb_artwork_cache
+        self._state = config.state
+        self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
         self._save_state = config.save_state

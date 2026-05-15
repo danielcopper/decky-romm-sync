@@ -42,13 +42,15 @@ _TMP_EXT = ".tmp"
 class DownloadServiceConfig:
     """Frozen wiring bundle handed to ``DownloadService.__init__``.
 
-    Holds the runtime infrastructure, time/sleep seams, path providers,
-    and migration-aware callbacks DownloadService needs at construction
-    time. Protocol-typed adapters and the live state dict remain
-    explicit ctor parameters because they have different lifecycles
-    from this immutable wiring bundle.
+    Holds the Protocol-typed adapters, the live state dict, runtime
+    infrastructure, time/sleep seams, path providers, and migration-
+    aware callbacks DownloadService needs at construction time.
     """
 
+    romm_api: RommApiProtocol
+    state: dict
+    download_files: DownloadFileAdapter
+    download_queue: DownloadQueueAdapter
     resolve_system: SystemResolver
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -65,19 +67,11 @@ class DownloadServiceConfig:
 class DownloadService:
     """ROM download engine: downloads and queue management."""
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        state: dict,
-        download_files: DownloadFileAdapter,
-        download_queue: DownloadQueueAdapter,
-        config: DownloadServiceConfig,
-    ):
-        self._romm_api = romm_api
-        self._state = state
-        self._download_files = download_files
-        self._download_queue_io = download_queue
+    def __init__(self, *, config: DownloadServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._state = config.state
+        self._download_files = config.download_files
+        self._download_queue_io = config.download_queue
         self._resolve_system = config.resolve_system
         self._loop = config.loop
         self._logger = config.logger

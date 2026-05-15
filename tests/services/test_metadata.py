@@ -14,7 +14,7 @@ from adapters.steam_config import SteamConfigAdapter
 # conftest.py patches decky before this import
 from main import Plugin
 from services.library import LibraryService, LibraryServiceConfig
-from services.metadata import MetadataService
+from services.metadata import MetadataService, MetadataServiceConfig
 
 
 @pytest.fixture
@@ -33,24 +33,26 @@ def plugin():
     p._steam_config = steam_config
 
     metadata_service = MetadataService(
-        romm_api=p._romm_api,
-        state=p._state,
-        metadata_cache=p._metadata_cache,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        clock=FakeClock(),
-        save_metadata_cache=p._save_metadata_cache,
-        log_debug=p._log_debug,
+        config=MetadataServiceConfig(
+            romm_api=p._romm_api,
+            state=p._state,
+            metadata_cache=p._metadata_cache,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            clock=FakeClock(),
+            save_metadata_cache=p._save_metadata_cache,
+            log_debug=p._log_debug,
+        ),
     )
     p._metadata_service = metadata_service
 
     p._sync_service = LibraryService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        settings=p.settings,
-        metadata_cache=p._metadata_cache,
         config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -61,8 +63,8 @@ def plugin():
             save_state=p._save_state,
             save_settings_to_disk=p._save_settings_to_disk,
             log_debug=p._log_debug,
+            metadata_service=metadata_service,
         ),
-        metadata_service=metadata_service,
     )
     return p
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.save_state import PlaytimeEntry, SaveSyncState
@@ -19,51 +20,40 @@ if TYPE_CHECKING:
     import logging
 
 
-class PlaytimeService:
-    """Playtime tracking: record sessions and sync to RomM notes.
+@dataclass(frozen=True)
+class PlaytimeServiceConfig:
+    """Frozen wiring bundle handed to ``PlaytimeService.__init__``.
 
-    Parameters
-    ----------
-    romm_api:
-        Protocol adapter for RomM HTTP operations.
-    retry:
-        Retry strategy — provides ``with_retry`` and ``is_retryable``.
-    save_sync_state:
-        Live reference to the typed :class:`SaveSyncState` aggregate.
-        Playtime data lives in ``save_sync_state.playtime``.
-    loop:
-        The plugin's ``asyncio`` event loop (for ``run_in_executor``).
-    logger:
-        Standard-library logger.
-    save_state:
-        Callable to persist the save_sync_state dict to disk.
-    log_debug:
-        ``DebugLogger`` Protocol seam — routes through the user's QAM
-        log-level filter.
+    Holds the Protocol-typed RomM adapter and retry strategy, the typed
+    save-sync aggregate, runtime infrastructure, clock/debug-logger
+    seams, and the persistence callback PlaytimeService needs at
+    construction time.
     """
+
+    romm_api: RommApiProtocol
+    retry: RetryStrategy
+    save_sync_state: SaveSyncState
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    clock: Clock
+    save_state: StatePersister
+    log_debug: DebugLogger
+
+
+class PlaytimeService:
+    """Playtime tracking: record sessions and sync to RomM notes."""
 
     PLAYTIME_NOTE_TITLE = "romm-sync:playtime"
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        retry: RetryStrategy,
-        save_sync_state: SaveSyncState,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        clock: Clock,
-        save_state: StatePersister,
-        log_debug: DebugLogger,
-    ) -> None:
-        self._romm_api = romm_api
-        self._retry = retry
-        self._save_sync_state = save_sync_state
-        self._loop = loop
-        self._logger = logger
-        self._clock = clock
-        self._save_state = save_state
-        self._log_debug = log_debug
+    def __init__(self, *, config: PlaytimeServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._retry = config.retry
+        self._save_sync_state = config.save_sync_state
+        self._loop = config.loop
+        self._logger = config.logger
+        self._clock = config.clock
+        self._save_state = config.save_state
+        self._log_debug = config.log_debug
 
     # ------------------------------------------------------------------
     # Playtime Notes API Helpers

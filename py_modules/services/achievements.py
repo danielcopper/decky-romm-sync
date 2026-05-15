@@ -6,6 +6,7 @@ user progress tracking, and post-session refresh.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.achievements import extract_achievements_from_rom, extract_game_progress
@@ -17,6 +18,23 @@ if TYPE_CHECKING:
     from services.protocols import Clock, DebugLogger, RommApiProtocol
 
 
+@dataclass(frozen=True)
+class AchievementsServiceConfig:
+    """Frozen wiring bundle handed to ``AchievementsService.__init__``.
+
+    Holds the Protocol-typed RomM adapter, the live state dict, runtime
+    infrastructure, and the clock/debug-logger seams AchievementsService
+    needs at construction time.
+    """
+
+    romm_api: RommApiProtocol
+    state: dict
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    clock: Clock
+    log_debug: DebugLogger
+
+
 class AchievementsService:
     """RetroAchievements data fetching via RomM server."""
 
@@ -24,22 +42,13 @@ class AchievementsService:
     PROGRESS_CACHE_TTL = 3600  # 1h for user progress
     RA_USERNAME_CACHE_TTL = 3600  # 1h for RA username detection
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        state: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        clock: Clock,
-        log_debug: DebugLogger,
-    ) -> None:
-        self._romm_api = romm_api
-        self._state = state
-        self._loop = loop
-        self._logger = logger
-        self._clock = clock
-        self._log_debug = log_debug
+    def __init__(self, *, config: AchievementsServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._state = config.state
+        self._loop = config.loop
+        self._logger = config.logger
+        self._clock = config.clock
+        self._log_debug = config.log_debug
 
         self._achievements_cache: dict = {}
 

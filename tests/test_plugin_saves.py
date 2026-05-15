@@ -19,7 +19,7 @@ from adapters.steam_config import SteamConfigAdapter
 from domain.save_state import FileSyncState, PlaytimeEntry, RomSaveState
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
-from services.playtime import PlaytimeService
+from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.saves import SaveService, SaveServiceConfig
 
 
@@ -49,12 +49,12 @@ def plugin(tmp_path):
     p._steam_config = steam_config
 
     p._sync_service = LibraryService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        settings=p.settings,
-        metadata_cache=p._metadata_cache,
         config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -77,12 +77,12 @@ def plugin(tmp_path):
     saves_path = str(tmp_path / "retrodeck" / "saves")
 
     p._save_sync_service = SaveService(
-        romm_api=fake_api,
-        retry=_make_retry(),
-        settings={"log_level": "debug"},
-        state=p._state,
-        save_sync_state=p._save_sync_state,
         config=SaveServiceConfig(
+            romm_api=fake_api,
+            retry=_make_retry(),
+            settings={"log_level": "debug"},
+            state=p._state,
+            save_sync_state=p._save_sync_state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
@@ -104,14 +104,16 @@ def plugin(tmp_path):
     p._save_sync_service.init_state()
 
     p._playtime_service = PlaytimeService(
-        romm_api=fake_api,
-        retry=_make_retry(),
-        save_sync_state=p._save_sync_state,
-        loop=asyncio.get_event_loop(),
-        logger=logging.getLogger("test"),
-        clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-        save_state=p._save_sync_service.save_state,
-        log_debug=p._log_debug,
+        config=PlaytimeServiceConfig(
+            romm_api=fake_api,
+            retry=_make_retry(),
+            save_sync_state=p._save_sync_state,
+            loop=asyncio.get_event_loop(),
+            logger=logging.getLogger("test"),
+            clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
+            save_state=p._save_sync_service.save_state,
+            log_debug=p._log_debug,
+        ),
     )
 
     # Store fake_api on plugin for test access
@@ -433,8 +435,8 @@ class TestPostExitSync:
         # (NEW: sort_by_content=False, sort_by_core=False) — the mismatch
         # with state is what detect will discover.
         real_migration = MigrationService(
-            migration_files=MigrationFileAdapter(),
             config=MigrationServiceConfig(
+                migration_files=MigrationFileAdapter(),
                 state=plugin._state,
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),

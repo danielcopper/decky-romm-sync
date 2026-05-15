@@ -15,8 +15,8 @@ from domain.sync_state import SyncState
 from main import Plugin
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
-from services.metadata import MetadataService
-from services.shortcut_removal import ShortcutRemovalService
+from services.metadata import MetadataService, MetadataServiceConfig
+from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 
 
 @pytest.fixture
@@ -36,23 +36,25 @@ def plugin(tmp_path):
     p._steam_config = steam_config
 
     metadata_service = MetadataService(
-        romm_api=p._romm_api,
-        state=p._state,
-        metadata_cache=p._metadata_cache,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        clock=FakeClock(),
-        save_metadata_cache=p._save_metadata_cache,
-        log_debug=p._log_debug,
+        config=MetadataServiceConfig(
+            romm_api=p._romm_api,
+            state=p._state,
+            metadata_cache=p._metadata_cache,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            clock=FakeClock(),
+            save_metadata_cache=p._save_metadata_cache,
+            log_debug=p._log_debug,
+        ),
     )
     p._metadata_service = metadata_service
 
     artwork_service = ArtworkService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        cover_art_file_store=CoverArtFileStoreAdapter(),
-        state=p._state,
         config=ArtworkServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            cover_art_file_store=CoverArtFileStoreAdapter(),
+            state=p._state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             get_pending_sync=dict,
@@ -61,12 +63,12 @@ def plugin(tmp_path):
     p._artwork_service = artwork_service
 
     p._sync_service = LibraryService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        settings=p.settings,
-        metadata_cache=p._metadata_cache,
         config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -77,20 +79,22 @@ def plugin(tmp_path):
             save_state=p._save_state,
             save_settings_to_disk=p._save_settings_to_disk,
             log_debug=p._log_debug,
+            metadata_service=metadata_service,
+            artwork=artwork_service,
         ),
-        metadata_service=metadata_service,
-        artwork=artwork_service,
     )
 
     p._shortcut_removal_service = ShortcutRemovalService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        emit=decky.emit,
-        save_state=p._save_state,
-        artwork_remover=artwork_service,
+        config=ShortcutRemovalServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            emit=decky.emit,
+            save_state=p._save_state,
+            artwork_remover=artwork_service,
+        ),
     )
     # Default migration service mock — no migration pending. Tests that need
     # to exercise the @migration_blocked gate override this.

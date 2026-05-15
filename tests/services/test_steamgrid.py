@@ -39,12 +39,12 @@ def plugin(sgdb_artwork_cache):
     p._steam_config = steam_config
 
     p._sync_service = LibraryService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        settings=p.settings,
-        metadata_cache=p._metadata_cache,
         config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -61,13 +61,13 @@ def plugin(sgdb_artwork_cache):
     sgdb_api = MagicMock()
 
     p._sgdb_service = SteamGridService(
-        sgdb_api=sgdb_api,
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        sgdb_artwork_cache=sgdb_artwork_cache,
-        state=p._state,
-        settings=p.settings,
         config=SteamGridConfig(
+            sgdb_api=sgdb_api,
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            sgdb_artwork_cache=sgdb_artwork_cache,
+            state=p._state,
+            settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             save_state=MagicMock(),
@@ -730,12 +730,12 @@ class TestDebugLoggerProtocolSeam:
         p._steam_config = steam_config
 
         p._sync_service = LibraryService(
-            romm_api=p._romm_api,
-            steam_config=steam_config,
-            state=p._state,
-            settings=p.settings,
-            metadata_cache=p._metadata_cache,
             config=LibraryServiceConfig(
+                romm_api=p._romm_api,
+                steam_config=steam_config,
+                state=p._state,
+                settings=p.settings,
+                metadata_cache=p._metadata_cache,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -750,13 +750,13 @@ class TestDebugLoggerProtocolSeam:
         )
 
         p._sgdb_service = SteamGridService(
-            sgdb_api=MM(),
-            romm_api=p._romm_api,
-            steam_config=steam_config,
-            sgdb_artwork_cache=sgdb_artwork_cache,
-            state=p._state,
-            settings=p.settings,
             config=SteamGridConfig(
+                sgdb_api=MM(),
+                romm_api=p._romm_api,
+                steam_config=steam_config,
+                sgdb_artwork_cache=sgdb_artwork_cache,
+                state=p._state,
+                settings=p.settings,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 save_state=MM(),

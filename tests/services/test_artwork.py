@@ -49,11 +49,11 @@ def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data
     # _loop is replaced by the autouse fixture below for async tests; for
     # sync tests it is never touched, so a MagicMock is fine here.
     return ArtworkService(
-        romm_api=romm_api,
-        steam_config=steam_config,
-        cover_art_file_store=file_store,
-        state=state,
         config=ArtworkServiceConfig(
+            romm_api=romm_api,
+            steam_config=steam_config,
+            cover_art_file_store=file_store,
+            state=state,
             loop=MagicMock(),
             logger=decky.logger,
             get_pending_sync=lambda: pending_sync_data,

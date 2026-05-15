@@ -26,27 +26,6 @@ def _make_save_sync_state_persister(tmp_path) -> SaveSyncStatePersisterAdapter:
     )
 
 
-_CONFIG_FIELDS = frozenset(
-    {
-        "runtime_dir",
-        "save_sync_state_persister",
-        "save_file",
-        "loop",
-        "logger",
-        "clock",
-        "get_saves_path",
-        "get_roms_path",
-        "get_active_core",
-        "get_core_name",
-        "plugin_version",
-        "emit",
-        "detect_sort_change",
-        "is_retrodeck_migration_pending",
-        "log_debug",
-    }
-)
-
-
 def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["SaveService", "FakeSaveApi"]:
     """Create a SaveService with sensible defaults for testing."""
     save_file = SaveFileAdapter()
@@ -57,6 +36,11 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
     if fake.save_file is None:
         fake.save_file = save_file
     config_kwargs: dict[str, Any] = dict(
+        romm_api=fake,
+        retry=_make_retry(),
+        settings={"log_level": "debug"},
+        state={"shortcut_registry": {}, "installed_roms": {}},
+        save_sync_state=SaveService.make_default_state(),
         runtime_dir=str(tmp_path),
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
         save_file=save_file,
@@ -70,19 +54,8 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         plugin_version="0.14.0",
         emit=emit,
     )
-    ctor_kwargs: dict[str, Any] = dict(
-        romm_api=fake,
-        retry=_make_retry(),
-        settings={"log_level": "debug"},
-        state={"shortcut_registry": {}, "installed_roms": {}},
-        save_sync_state=SaveService.make_default_state(),
-    )
-    for key, value in overrides.items():
-        if key in _CONFIG_FIELDS:
-            config_kwargs[key] = value
-        else:
-            ctor_kwargs[key] = value
-    svc = SaveService(**ctor_kwargs, config=SaveServiceConfig(**config_kwargs))
+    config_kwargs.update(overrides)
+    svc = SaveService(config=SaveServiceConfig(**config_kwargs))
     svc.init_state()
     return svc, fake
 

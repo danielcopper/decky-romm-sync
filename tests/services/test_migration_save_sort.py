@@ -49,8 +49,8 @@ def _make_service(
     save_state_mock = MagicMock()
 
     svc = MigrationService(
-        migration_files=MigrationFileAdapter(),
         config=MigrationServiceConfig(
+            migration_files=MigrationFileAdapter(),
             state=state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
@@ -141,8 +141,8 @@ class TestDetectSaveSortChange:
         """No get_retroarch_save_sorting callback — method is a no-op."""
         save_state_mock = MagicMock()
         svc = MigrationService(
-            migration_files=MigrationFileAdapter(),
             config=MigrationServiceConfig(
+                migration_files=MigrationFileAdapter(),
                 state={"save_sort_settings": None, "installed_roms": {}},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
@@ -765,8 +765,8 @@ class TestResolveRetroArchCorename:
             return ("snes9x_libretro", "Snes9x - Current")
 
         svc = MigrationService(
-            migration_files=MigrationFileAdapter(),
             config=MigrationServiceConfig(
+                migration_files=MigrationFileAdapter(),
                 state={"installed_roms": {}, "save_sort_settings": None},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
@@ -782,8 +782,8 @@ class TestResolveRetroArchCorename:
     def test_no_active_core_callback_returns_none(self, tmp_path):
         """Service constructed without ``get_active_core`` — method returns (None, None)."""
         svc = MigrationService(
-            migration_files=MigrationFileAdapter(),
             config=MigrationServiceConfig(
+                migration_files=MigrationFileAdapter(),
                 state={"installed_roms": {}, "save_sort_settings": None},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),

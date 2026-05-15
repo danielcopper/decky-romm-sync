@@ -44,12 +44,12 @@ def plugin():
     p._steam_config = steam_config
 
     p._sync_service = LibraryService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        settings=p.settings,
-        metadata_cache=p._metadata_cache,
         config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,

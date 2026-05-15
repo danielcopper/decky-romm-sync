@@ -13,7 +13,7 @@ from fakes.system_time import FakeClock
 
 from domain.save_state import PlaytimeEntry, SaveSyncState
 from lib.errors import RommApiError
-from services.playtime import PlaytimeService
+from services.playtime import PlaytimeService, PlaytimeServiceConfig
 
 
 def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
@@ -34,7 +34,7 @@ def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
         log_debug=lambda _msg: None,
     )
     defaults.update(overrides)
-    svc = PlaytimeService(**defaults)
+    svc = PlaytimeService(config=PlaytimeServiceConfig(**defaults))
     return svc, fake, state, saved
 
 

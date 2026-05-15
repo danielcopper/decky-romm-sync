@@ -39,13 +39,13 @@ if TYPE_CHECKING:
 class MigrationServiceConfig:
     """Frozen wiring bundle handed to ``MigrationService.__init__``.
 
-    Holds the live state dict, runtime infrastructure, persistence
-    callback, event emitter, and the provider callables MigrationService
-    needs at construction time. Protocol-typed adapters remain explicit
-    ctor parameters because they have different lifecycles from this
-    immutable wiring bundle.
+    Holds the Protocol-typed migration-file adapter, the live state
+    dict, runtime infrastructure, persistence callback, event emitter,
+    and the provider callables MigrationService needs at construction
+    time.
     """
 
+    migration_files: MigrationFileAdapter
     state: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -64,13 +64,8 @@ class MigrationServiceConfig:
 class MigrationService:
     """Handles RetroDECK path change detection and file migration."""
 
-    def __init__(
-        self,
-        *,
-        migration_files: MigrationFileAdapter,
-        config: MigrationServiceConfig,
-    ) -> None:
-        self._migration_files = migration_files
+    def __init__(self, *, config: MigrationServiceConfig) -> None:
+        self._migration_files = config.migration_files
         self._state = config.state
         self._loop = config.loop
         self._logger = config.logger

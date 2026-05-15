@@ -21,12 +21,15 @@ if TYPE_CHECKING:
 class ArtworkServiceConfig:
     """Frozen wiring bundle handed to ``ArtworkService.__init__``.
 
-    Holds the asyncio loop, logger, and the read seam ArtworkService
-    uses to consult the in-flight sync's pending cover paths. Protocol-
-    typed adapters and the live state dict remain explicit ctor params
-    because they have different lifecycles from this immutable bundle.
+    Holds the Protocol-typed adapters, the live state dict, runtime
+    infrastructure, and the read seam ArtworkService uses to consult
+    the in-flight sync's pending cover paths.
     """
 
+    romm_api: RommApiProtocol
+    steam_config: SteamConfigAdapter
+    cover_art_file_store: CoverArtFileStore
+    state: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     get_pending_sync: PendingSyncReader
@@ -35,19 +38,11 @@ class ArtworkServiceConfig:
 class ArtworkService:
     """Manages artwork downloading, staging, finalisation, and cleanup."""
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        steam_config: SteamConfigAdapter,
-        cover_art_file_store: CoverArtFileStore,
-        state: dict,
-        config: ArtworkServiceConfig,
-    ) -> None:
-        self._romm_api = romm_api
-        self._steam_config = steam_config
-        self._cover_art_file_store = cover_art_file_store
-        self._state = state
+    def __init__(self, *, config: ArtworkServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._steam_config = config.steam_config
+        self._cover_art_file_store = config.cover_art_file_store
+        self._state = config.state
         self._loop = config.loop
         self._logger = config.logger
         self._get_pending_sync = config.get_pending_sync

@@ -10,8 +10,8 @@ from domain.save_state import SaveSyncState
 
 # conftest.py patches decky before this import
 from main import Plugin
-from services.achievements import AchievementsService
-from services.game_detail import GameDetailService
+from services.achievements import AchievementsService, AchievementsServiceConfig
+from services.game_detail import GameDetailService, GameDetailServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 
 
@@ -51,12 +51,12 @@ def plugin(clock):
     p._steam_config = steam_config
 
     p._sync_service = LibraryService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        settings=p.settings,
-        metadata_cache=p._metadata_cache,
         config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -70,25 +70,29 @@ def plugin(clock):
         ),
     )
     p._achievements_service = AchievementsService(
-        romm_api=p._romm_api,
-        state=p._state,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        clock=clock,
-        log_debug=p._log_debug,
+        config=AchievementsServiceConfig(
+            romm_api=p._romm_api,
+            state=p._state,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            clock=clock,
+            log_debug=p._log_debug,
+        ),
     )
     bios_checker = MagicMock()
     bios_checker.check_platform_bios_cached.return_value = None
     bios_checker.check_platform_bios = AsyncMock(return_value={"needs_bios": False})
     p._save_sync_state = SaveSyncState()
     p._game_detail_service = GameDetailService(
-        state=p._state,
-        metadata_cache=p._metadata_cache,
-        save_sync_state=p._save_sync_state,
-        logger=decky.logger,
-        clock=clock,
-        bios_checker=bios_checker,
-        achievements=p._achievements_service,
+        config=GameDetailServiceConfig(
+            state=p._state,
+            metadata_cache=p._metadata_cache,
+            save_sync_state=p._save_sync_state,
+            logger=decky.logger,
+            clock=clock,
+            bios_checker=bios_checker,
+            achievements=p._achievements_service,
+        ),
     )
     return p
 

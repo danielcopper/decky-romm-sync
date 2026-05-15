@@ -1,19 +1,16 @@
 """Construction-time wiring bundle for ``SaveService``.
 
-Holds the environment-bound dependencies SaveService needs at
-construction time — runtime paths, callbacks into other services,
-the asyncio loop, the logger, plugin metadata. Live mutable state
-references (``settings``, ``state``, ``save_sync_state``) and abstract
-protocol deps (``romm_api``, ``retry``) are intentionally NOT bundled
-here — they remain explicit ``SaveService`` ctor parameters because
-they have different lifecycles and ownership semantics from this
-immutable wiring bundle.
+Holds every dependency SaveService needs at construction time —
+Protocol-typed adapters, runtime infrastructure, live mutable state
+references, plugin metadata, and callbacks into other services.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from domain.save_state import SaveSyncState
 
 if TYPE_CHECKING:
     import asyncio
@@ -26,6 +23,8 @@ if TYPE_CHECKING:
         CoreResolverFn,
         DebugLogger,
         EventEmitter,
+        RetryStrategy,
+        RommApiProtocol,
         RomsPathProvider,
         SaveFileAdapter,
         SavesPathProvider,
@@ -39,6 +38,20 @@ class SaveServiceConfig:
 
     Parameters
     ----------
+    romm_api:
+        Protocol adapter for all RomM save/notes HTTP operations.
+    retry:
+        Retry strategy — provides ``with_retry`` and ``is_retryable``.
+    settings:
+        Live reference to the main plugin settings dict.
+    state:
+        Live reference to the main plugin state dict (``installed_roms``,
+        ``shortcut_registry``).
+    save_sync_state:
+        Live reference to the typed :class:`SaveSyncState` aggregate.
+        Caller should pre-populate via :meth:`SaveService.load_state`
+        after construction; the aggregate ships with defaults out of
+        the box.
     runtime_dir:
         Absolute path to the plugin runtime directory. Consumed by
         SaveService for ad-hoc runtime files; ``save_sync_state.json``
@@ -106,6 +119,11 @@ class SaveServiceConfig:
         ``_save_service._log_debug`` back-ref.
     """
 
+    romm_api: RommApiProtocol
+    retry: RetryStrategy
+    settings: dict
+    state: dict
+    save_sync_state: SaveSyncState
     runtime_dir: str
     save_sync_state_persister: SaveSyncStatePersister
     save_file: SaveFileAdapter

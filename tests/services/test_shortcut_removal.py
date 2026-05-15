@@ -8,7 +8,7 @@ import decky
 import pytest
 
 from adapters.steam_config import SteamConfigAdapter
-from services.shortcut_removal import ShortcutRemovalService
+from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 
 
 @pytest.fixture
@@ -29,14 +29,16 @@ def artwork_remover_mock():
 @pytest.fixture
 def svc(state, steam_config, artwork_remover_mock):
     service = ShortcutRemovalService(
-        romm_api=MagicMock(),
-        steam_config=steam_config,
-        state=state,
-        loop=asyncio.get_event_loop(),
-        logger=decky.logger,
-        emit=decky.emit,
-        save_state=MagicMock(),
-        artwork_remover=artwork_remover_mock,
+        config=ShortcutRemovalServiceConfig(
+            romm_api=MagicMock(),
+            steam_config=steam_config,
+            state=state,
+            loop=asyncio.get_event_loop(),
+            logger=decky.logger,
+            emit=decky.emit,
+            save_state=MagicMock(),
+            artwork_remover=artwork_remover_mock,
+        ),
     )
     return service
 
@@ -228,11 +230,11 @@ class TestRemovalCleansUpArtwork:
         from services.artwork import ArtworkService, ArtworkServiceConfig
 
         artwork_svc = ArtworkService(
-            romm_api=MagicMock(),
-            steam_config=steam_config,
-            cover_art_file_store=CoverArtFileStoreAdapter(),
-            state=state,
             config=ArtworkServiceConfig(
+                romm_api=MagicMock(),
+                steam_config=steam_config,
+                cover_art_file_store=CoverArtFileStoreAdapter(),
+                state=state,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 get_pending_sync=dict,
@@ -240,14 +242,16 @@ class TestRemovalCleansUpArtwork:
         )
 
         svc = ShortcutRemovalService(
-            romm_api=MagicMock(),
-            steam_config=steam_config,
-            state=state,
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            emit=decky.emit,
-            save_state=MagicMock(),
-            artwork_remover=artwork_svc,
+            config=ShortcutRemovalServiceConfig(
+                romm_api=MagicMock(),
+                steam_config=steam_config,
+                state=state,
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                emit=decky.emit,
+                save_state=MagicMock(),
+                artwork_remover=artwork_svc,
+            ),
         )
         svc._loop = asyncio.get_event_loop()
 
@@ -268,11 +272,11 @@ class TestRemovalCleansUpArtwork:
         from services.artwork import ArtworkService, ArtworkServiceConfig
 
         artwork_svc = ArtworkService(
-            romm_api=MagicMock(),
-            steam_config=steam_config,
-            cover_art_file_store=CoverArtFileStoreAdapter(),
-            state=state,
             config=ArtworkServiceConfig(
+                romm_api=MagicMock(),
+                steam_config=steam_config,
+                cover_art_file_store=CoverArtFileStoreAdapter(),
+                state=state,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 get_pending_sync=dict,
@@ -280,14 +284,16 @@ class TestRemovalCleansUpArtwork:
         )
 
         svc = ShortcutRemovalService(
-            romm_api=MagicMock(),
-            steam_config=steam_config,
-            state=state,
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            emit=decky.emit,
-            save_state=MagicMock(),
-            artwork_remover=artwork_svc,
+            config=ShortcutRemovalServiceConfig(
+                romm_api=MagicMock(),
+                steam_config=steam_config,
+                state=state,
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                emit=decky.emit,
+                save_state=MagicMock(),
+                artwork_remover=artwork_svc,
+            ),
         )
         svc._loop = asyncio.get_event_loop()
 

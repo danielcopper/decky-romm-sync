@@ -14,10 +14,6 @@ from domain.save_path import resolve_save_dir, sanitize_save_filename
 from domain.save_state import FileSyncState, SaveSyncState
 from lib.errors import classify_error
 from lib.iso_time import parse_iso_to_epoch
-from services.protocols import (
-    RetryStrategy,
-    RommApiProtocol,
-)
 from services.saves._config import SaveServiceConfig
 from services.saves._helpers import _local_save_target
 from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
@@ -39,43 +35,24 @@ class SaveService:
 
     Parameters
     ----------
-    romm_api:
-        Protocol adapter for all RomM save/notes HTTP operations.
-    retry:
-        Retry strategy — provides ``with_retry`` and ``is_retryable``.
-    settings:
-        Live reference to the main plugin settings dict.
-    state:
-        Live reference to the main plugin state dict (``installed_roms``,
-        ``shortcut_registry``).
-    save_sync_state:
-        Live reference to the typed :class:`SaveSyncState` aggregate.
-        Caller should pre-populate via :meth:`load_state` after
-        construction; the aggregate ships with defaults out of the box.
     config:
-        Construction-time wiring bundle (paths, callbacks, asyncio loop,
-        logger, plugin metadata). See :class:`SaveServiceConfig` for the
+        Construction-time wiring bundle holding every dependency
+        SaveService consumes: the Protocol-typed RomM adapter, retry
+        strategy, live settings/state dicts, the typed save-sync
+        aggregate, runtime infrastructure, persistence callbacks, and
+        cross-service callbacks. See :class:`SaveServiceConfig` for the
         per-field rationale.
     """
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        retry: RetryStrategy,
-        settings: dict,
-        state: dict,
-        save_sync_state: SaveSyncState,
-        config: SaveServiceConfig,
-    ) -> None:
-        self._romm_api = romm_api
-        self._retry = retry
-        self._settings = settings
-        self._state = state
+    def __init__(self, *, config: SaveServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._retry = config.retry
+        self._settings = config.settings
+        self._state = config.state
         self._config = config
         self._state_svc = StateService(
-            save_sync_state=save_sync_state,
-            state=state,
+            save_sync_state=config.save_sync_state,
+            state=config.state,
             persister=config.save_sync_state_persister,
             logger=config.logger,
         )

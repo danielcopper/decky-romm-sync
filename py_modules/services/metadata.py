@@ -7,7 +7,7 @@ the list API and served from cache on demand (no detail API calls).
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from models.metadata import RomMetadata
@@ -21,29 +21,37 @@ if TYPE_CHECKING:
     from services.protocols import Clock, DebugLogger, RommApiProtocol, StatePersister
 
 
+@dataclass(frozen=True)
+class MetadataServiceConfig:
+    """Frozen wiring bundle handed to ``MetadataService.__init__``.
+
+    Holds the Protocol-typed RomM adapter, the live state and metadata
+    cache dicts, runtime infrastructure, persistence callback, and the
+    clock/debug-logger seams MetadataService needs at construction time.
+    """
+
+    romm_api: RommApiProtocol
+    state: dict
+    metadata_cache: dict
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    clock: Clock
+    save_metadata_cache: StatePersister
+    log_debug: DebugLogger
+
+
 class MetadataService:
     """ROM metadata cache: extract, store, flush, and fetch on demand."""
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        state: dict,
-        metadata_cache: dict,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        clock: Clock,
-        save_metadata_cache: StatePersister,
-        log_debug: DebugLogger,
-    ) -> None:
-        self._romm_api = romm_api
-        self._state = state
-        self._metadata_cache = metadata_cache
-        self._loop = loop
-        self._logger = logger
-        self._clock = clock
-        self._save_metadata_cache = save_metadata_cache
-        self._log_debug = log_debug
+    def __init__(self, *, config: MetadataServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._state = config.state
+        self._metadata_cache = config.metadata_cache
+        self._loop = config.loop
+        self._logger = config.logger
+        self._clock = config.clock
+        self._save_metadata_cache = config.save_metadata_cache
+        self._log_debug = config.log_debug
 
         self._metadata_dirty_count = 0
         self._METADATA_FLUSH_INTERVAL = 50

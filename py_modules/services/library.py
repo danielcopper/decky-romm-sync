@@ -49,14 +49,18 @@ _PREVIEW_MAX_AGE_SECONDS = 1800  # 30 minutes — preview snapshots stale beyond
 class LibraryServiceConfig:
     """Frozen wiring bundle handed to ``LibraryService.__init__``.
 
-    Holds the immutable runtime infrastructure, time/sleep/uuid seams,
-    plugin-dir reference, event emitter, and persistence callbacks
-    LibraryService needs at construction time. Protocol-typed adapters
-    and the live state/settings dicts remain explicit ctor parameters
-    because they have different lifecycles from this immutable wiring
-    bundle.
+    Holds the Protocol-typed adapters, the live state/settings/metadata
+    cache dicts, runtime infrastructure, time/sleep/uuid seams, plugin-
+    dir reference, event emitter, persistence callbacks, debug-logger
+    seam, and the optional metadata/artwork peer services LibraryService
+    needs at construction time.
     """
 
+    romm_api: RommApiProtocol
+    steam_config: SteamConfigAdapter
+    state: dict
+    settings: dict
+    metadata_cache: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
@@ -67,28 +71,19 @@ class LibraryServiceConfig:
     save_state: StatePersister
     save_settings_to_disk: SettingsPersister
     log_debug: DebugLogger
+    metadata_service: MetadataExtractor | None = None
+    artwork: ArtworkManager | None = None
 
 
 class LibraryService:
     """Sync engine: fetch ROMs, prepare shortcuts, manage registry."""
 
-    def __init__(
-        self,
-        *,
-        romm_api: RommApiProtocol,
-        steam_config: SteamConfigAdapter,
-        state: dict,
-        settings: dict,
-        metadata_cache: dict,
-        config: LibraryServiceConfig,
-        metadata_service: MetadataExtractor | None = None,
-        artwork: ArtworkManager | None = None,
-    ) -> None:
-        self._romm_api = romm_api
-        self._steam_config = steam_config
-        self._state = state
-        self._settings = settings
-        self._metadata_cache = metadata_cache
+    def __init__(self, *, config: LibraryServiceConfig) -> None:
+        self._romm_api = config.romm_api
+        self._steam_config = config.steam_config
+        self._state = config.state
+        self._settings = config.settings
+        self._metadata_cache = config.metadata_cache
         self._loop = config.loop
         self._logger = config.logger
         self._plugin_dir = config.plugin_dir
@@ -99,8 +94,8 @@ class LibraryService:
         self._save_state = config.save_state
         self._save_settings_to_disk = config.save_settings_to_disk
         self._log_debug = config.log_debug
-        self._metadata_service = metadata_service
-        self._artwork = artwork
+        self._metadata_service = config.metadata_service
+        self._artwork = config.artwork
 
         # Sync-specific state (owned by this service)
         self._sync_state = SyncState.IDLE

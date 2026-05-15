@@ -59,12 +59,12 @@ def plugin(tmp_path):
     p._firmware_service.load_bios_registry()
 
     p._sync_service = LibraryService(
-        romm_api=p._romm_api,
-        steam_config=steam_config,
-        state=p._state,
-        settings=p.settings,
-        metadata_cache=p._metadata_cache,
         config=LibraryServiceConfig(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -79,8 +79,8 @@ def plugin(tmp_path):
     )
 
     p._migration_service = MigrationService(
-        migration_files=MigrationFileAdapter(),
         config=MigrationServiceConfig(
+            migration_files=MigrationFileAdapter(),
             state=p._state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
@@ -880,8 +880,7 @@ class TestMigrationFailureInjection:
         }
         defaults.update(overrides)
         return MigrationService(
-            migration_files=fake_files,
-            config=MigrationServiceConfig(**defaults),
+            config=MigrationServiceConfig(migration_files=fake_files, **defaults),
         )
 
     def test_move_failure_records_error_and_continues(self):

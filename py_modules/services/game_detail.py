@@ -8,7 +8,7 @@ independent of other service modules.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from models.metadata import AchievementSummary
@@ -27,27 +27,36 @@ BIOS_TTL_SEC = 3600  # 1 hour
 ACHIEVEMENT_TTL_SEC = 3600  # 1 hour
 
 
+@dataclass(frozen=True)
+class GameDetailServiceConfig:
+    """Frozen wiring bundle handed to ``GameDetailService.__init__``.
+
+    Holds the live state and metadata cache dicts, the typed save-sync
+    aggregate, runtime infrastructure, clock seam, and the Protocol-
+    typed reader adapters (``BiosChecker``, ``AchievementsReader``)
+    GameDetailService consults to assemble the game-detail payload.
+    """
+
+    state: dict
+    metadata_cache: dict
+    save_sync_state: SaveSyncState
+    logger: logging.Logger
+    clock: Clock
+    bios_checker: BiosChecker
+    achievements: AchievementsReader
+
+
 class GameDetailService:
     """Aggregates game detail page data from multiple state sources."""
 
-    def __init__(
-        self,
-        *,
-        state: dict,
-        metadata_cache: dict,
-        save_sync_state: SaveSyncState,
-        logger: logging.Logger,
-        clock: Clock,
-        bios_checker: BiosChecker,
-        achievements: AchievementsReader,
-    ) -> None:
-        self._state = state
-        self._metadata_cache = metadata_cache
-        self._save_sync_state = save_sync_state
-        self._logger = logger
-        self._clock = clock
-        self._bios_checker = bios_checker
-        self._achievements = achievements
+    def __init__(self, *, config: GameDetailServiceConfig) -> None:
+        self._state = config.state
+        self._metadata_cache = config.metadata_cache
+        self._save_sync_state = config.save_sync_state
+        self._logger = config.logger
+        self._clock = config.clock
+        self._bios_checker = config.bios_checker
+        self._achievements = config.achievements
 
     def _resolve_rom_by_app_id(self, app_id: int) -> tuple[int | None, dict | None]:
         """Reverse lookup: find rom_id by app_id in shortcut_registry."""
