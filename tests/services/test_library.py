@@ -13,6 +13,7 @@ from adapters.persistence import (
     StatePersisterAdapter,
 )
 from adapters.steam_config import SteamConfigAdapter
+from domain.preview_delta import PreviewDelta
 from domain.sync_diff import classify_roms
 from domain.sync_state import SyncState
 
@@ -807,11 +808,11 @@ class TestSyncPreview:
 
         result = await plugin.sync_preview()
         assert plugin._sync_service._pending_delta is not None
-        assert plugin._sync_service._pending_delta["preview_id"] == result["preview_id"]
-        assert plugin._sync_service._pending_delta["created_at"] == plugin._sync_service._clock.time()
-        assert len(plugin._sync_service._pending_delta["new"]) == 1
-        assert plugin._sync_service._pending_delta["platforms_count"] == 1
-        assert plugin._sync_service._pending_delta["total_roms"] == 1
+        assert plugin._sync_service._pending_delta.preview_id == result["preview_id"]
+        assert plugin._sync_service._pending_delta.created_at == plugin._sync_service._clock.time()
+        assert len(plugin._sync_service._pending_delta.new) == 1
+        assert plugin._sync_service._pending_delta.platforms_count == 1
+        assert plugin._sync_service._pending_delta.total_roms == 1
 
     @pytest.mark.asyncio
     async def test_returns_error_when_sync_running(self, plugin):
@@ -848,10 +849,10 @@ class TestSyncApplyDelta:
 
     def _setup_pending_delta(self, plugin, preview_id="test-preview-123"):
         """Helper to populate _pending_delta with valid data."""
-        plugin._sync_service._pending_delta = {
-            "preview_id": preview_id,
-            "created_at": plugin._sync_service._clock.time(),
-            "new": [
+        plugin._sync_service._pending_delta = PreviewDelta(
+            preview_id=preview_id,
+            created_at=plugin._sync_service._clock.time(),
+            new=[
                 {
                     "rom_id": 3,
                     "name": "Game C",
@@ -861,7 +862,7 @@ class TestSyncApplyDelta:
                     "cover_path": "",
                 },
             ],
-            "changed": [
+            changed=[
                 {
                     "rom_id": 2,
                     "name": "New B",
@@ -872,16 +873,19 @@ class TestSyncApplyDelta:
                     "cover_path": "",
                 },
             ],
-            "unchanged_ids": [1],
-            "remove_rom_ids": [99],
-            "all_shortcuts": {
+            unchanged_ids=[1],
+            remove_rom_ids=[99],
+            all_shortcuts={
                 1: {"rom_id": 1, "name": "Game A", "platform_name": "N64"},
                 2: {"rom_id": 2, "name": "New B", "platform_name": "N64"},
                 3: {"rom_id": 3, "name": "Game C", "platform_name": "N64"},
             },
-            "platforms_count": 1,
-            "total_roms": 3,
-        }
+            delta_roms=[],
+            platforms_count=1,
+            total_roms=3,
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
 
     @pytest.mark.asyncio
     async def test_rejects_wrong_preview_id(self, plugin):
@@ -1022,20 +1026,23 @@ class TestSyncApplyDelta:
             "5": {"app_id": 1005, "name": "Game E", "platform_name": "SNES"},
         }
         # Include both rom 1 and 5 as unchanged
-        plugin._sync_service._pending_delta = {
-            "preview_id": "test-preview-123",
-            "created_at": plugin._sync_service._clock.time(),
-            "new": [],
-            "changed": [],
-            "unchanged_ids": [1, 5],
-            "remove_rom_ids": [],
-            "all_shortcuts": {
+        plugin._sync_service._pending_delta = PreviewDelta(
+            preview_id="test-preview-123",
+            created_at=plugin._sync_service._clock.time(),
+            new=[],
+            changed=[],
+            unchanged_ids=[1, 5],
+            remove_rom_ids=[],
+            all_shortcuts={
                 1: {"rom_id": 1, "name": "Game A", "platform_name": "N64"},
                 5: {"rom_id": 5, "name": "Game E", "platform_name": "SNES"},
             },
-            "platforms_count": 2,
-            "total_roms": 2,
-        }
+            delta_roms=[],
+            platforms_count=2,
+            total_roms=2,
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
         plugin._sync_service._emit_progress = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
@@ -1053,16 +1060,20 @@ class TestSyncCancelPreview:
 
     @pytest.mark.asyncio
     async def test_clears_pending_delta(self, plugin):
-        plugin._sync_service._pending_delta = {
-            "preview_id": "some-id",
-            "new": [],
-            "changed": [],
-            "unchanged_ids": [],
-            "remove_rom_ids": [],
-            "all_shortcuts": {},
-            "platforms_count": 0,
-            "total_roms": 0,
-        }
+        plugin._sync_service._pending_delta = PreviewDelta(
+            preview_id="some-id",
+            created_at=plugin._sync_service._clock.time(),
+            new=[],
+            changed=[],
+            unchanged_ids=[],
+            remove_rom_ids=[],
+            all_shortcuts={},
+            delta_roms=[],
+            platforms_count=0,
+            total_roms=0,
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
         result = await plugin.sync_cancel_preview()
         assert plugin._sync_service._pending_delta is None
         assert result["success"] is True

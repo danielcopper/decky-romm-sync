@@ -13,6 +13,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import build_registry_entry, build_shortcuts_data
 from domain.sync_diff import (
     classify_roms,
@@ -114,7 +115,7 @@ class LibraryService:
             "message": "",
         }
         self._pending_sync: dict = {}
-        self._pending_delta: dict | None = None
+        self._pending_delta: PreviewDelta | None = None
         self._pending_collection_memberships: dict = {}
         self._pending_platform_rom_ids: set[int] | None = None
 
@@ -315,20 +316,20 @@ class LibraryService:
             delta_roms = [roms_by_id[rid] for rid in delta_rom_ids if rid in roms_by_id]
 
             preview_id = self._uuid_gen.uuid4()
-            self._pending_delta = {
-                "preview_id": preview_id,
-                "created_at": self._clock.time(),
-                "new": new,
-                "changed": changed,
-                "unchanged_ids": unchanged_ids,
-                "remove_rom_ids": stale,
-                "all_shortcuts": {sd["rom_id"]: sd for sd in shortcuts_data},
-                "delta_roms": delta_roms,
-                "platforms_count": len(platforms),
-                "total_roms": len(all_roms),
-                "collection_memberships": collection_memberships,
-                "platform_rom_ids": platform_rom_ids,
-            }
+            self._pending_delta = PreviewDelta(
+                preview_id=preview_id,
+                created_at=self._clock.time(),
+                new=new,
+                changed=changed,
+                unchanged_ids=unchanged_ids,
+                remove_rom_ids=stale,
+                all_shortcuts={sd["rom_id"]: sd for sd in shortcuts_data},
+                delta_roms=delta_roms,
+                platforms_count=len(platforms),
+                total_roms=len(all_roms),
+                collection_memberships=collection_memberships,
+                platform_rom_ids=platform_rom_ids,
+            )
 
             await self._emit_progress("done", message="Preview ready", running=False)
 
@@ -369,9 +370,9 @@ class LibraryService:
             self._sync_state = SyncState.IDLE
 
     async def sync_apply_delta(self, preview_id):
-        if not self._pending_delta or self._pending_delta["preview_id"] != preview_id:
+        if not self._pending_delta or self._pending_delta.preview_id != preview_id:
             return {"success": False, "message": "Preview expired, please re-sync", "error_code": "stale_preview"}
-        age = self._clock.time() - self._pending_delta.get("created_at", 0)
+        age = self._clock.time() - self._pending_delta.created_at
         if age > _PREVIEW_MAX_AGE_SECONDS:
             self._pending_delta = None
             return {
@@ -386,10 +387,10 @@ class LibraryService:
         self._sync_last_heartbeat = self._clock.monotonic()
 
         # Calculate apply step plan
-        delta_roms = delta.get("delta_roms", [])
+        delta_roms = delta.delta_roms
         has_artwork = len(delta_roms) > 0
-        has_shortcuts = len(delta["new"]) + len(delta["changed"]) > 0
-        has_removals = len(delta["remove_rom_ids"]) > 0
+        has_shortcuts = len(delta.new) + len(delta.changed) > 0
+        has_removals = len(delta.remove_rom_ids) > 0
 
         apply_steps = []
         if has_artwork:
@@ -414,25 +415,25 @@ class LibraryService:
             cover_paths = await self._download_artwork(
                 delta_roms, progress_step=current_step, progress_total_steps=total_steps
             )
-            for sd in delta["new"] + delta["changed"]:
+            for sd in delta.new + delta.changed:
                 sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
 
         # Populate _pending_sync for report_sync_results and get_artwork_base64
-        self._pending_sync = delta["all_shortcuts"]
-        self._pending_collection_memberships = delta.get("collection_memberships", {})
-        self._pending_platform_rom_ids = delta.get("platform_rom_ids", set())
+        self._pending_sync = delta.all_shortcuts
+        self._pending_collection_memberships = delta.collection_memberships
+        self._pending_platform_rom_ids = delta.platform_rom_ids
 
         # Update sync_stats
         self._state["sync_stats"] = {
-            "platforms": delta["platforms_count"],
-            "roms": delta["total_roms"],
+            "platforms": delta.platforms_count,
+            "roms": delta.total_roms,
         }
         self._state_persister.save_state()
 
         # Figure out which step the frontend starts at
         next_step = current_step + 1
 
-        total_changes = len(delta["new"]) + len(delta["changed"])
+        total_changes = len(delta.new) + len(delta.changed)
         await self._emit_progress(
             "applying",
             total=total_changes,
@@ -445,17 +446,17 @@ class LibraryService:
         await self._emit(
             "sync_apply",
             {
-                "shortcuts": delta["new"],
-                "changed_shortcuts": delta["changed"],
-                "remove_rom_ids": delta["remove_rom_ids"],
+                "shortcuts": delta.new,
+                "changed_shortcuts": delta.changed,
+                "remove_rom_ids": delta.remove_rom_ids,
                 "next_step": next_step,
                 "total_steps": total_steps,
             },
         )
 
         self._logger.info(
-            f"Delta sync emitted: {len(delta['new'])} new, {len(delta['changed'])} changed, "
-            f"{len(delta['remove_rom_ids'])} removed"
+            f"Delta sync emitted: {len(delta.new)} new, {len(delta.changed)} changed, "
+            f"{len(delta.remove_rom_ids)} removed"
         )
 
         # Heartbeat safety timeout
