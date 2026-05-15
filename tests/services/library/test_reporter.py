@@ -355,3 +355,91 @@ class TestReportSyncResultsCancelled:
         complete_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert len(complete_calls) == 1
         assert complete_calls[0][0][1]["cancelled"] is True
+
+
+class TestFinalizePerUnitRun:
+    """SyncReporter.finalize_per_unit_run — emits sync_collections + sync_complete after the per-unit loop."""
+
+    @pytest.mark.asyncio
+    async def test_builds_platform_collections_from_registry(self, plugin, tmp_path):
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+            "2": {"app_id": 1002, "name": "B", "platform_name": "SNES", "platform_slug": "snes"},
+        }
+        plugin.settings["collection_create_platform_groups"] = True
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids={1, 2},
+            total_games=2,
+        )
+
+        collections_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_collections"]
+        assert len(collections_events) == 1
+        payload = collections_events[0][0][1]
+        assert set(payload["platform_app_ids"].keys()) == {"N64", "SNES"}
+
+    @pytest.mark.asyncio
+    async def test_emits_sync_complete_terminal(self, plugin, tmp_path):
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+
+        plugin._state["shortcut_registry"] = {}
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids=set(),
+            total_games=0,
+        )
+
+        complete_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
+        assert len(complete_events) == 1
+        assert "cancelled" not in complete_events[0][0][1]
+
+    @pytest.mark.asyncio
+    async def test_sets_state_to_idle_at_end(self, plugin, tmp_path):
+        import decky
+
+        from domain.sync_state import SyncState
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "sync-xyz"
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids=set(),
+            total_games=0,
+        )
+
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+        assert plugin._sync_service._current_sync_id is None
+
+    @pytest.mark.asyncio
+    async def test_persists_last_sync_metadata(self, plugin, tmp_path):
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+        }
+        plugin.settings["collection_create_platform_groups"] = True
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={"Faves": [1]},
+            pending_platform_rom_ids={1},
+            total_games=1,
+        )
+
+        assert plugin._state["last_sync"] is not None
+        assert plugin._state["last_synced_platforms"] == ["N64"]
+        assert plugin._state["last_synced_collections"] == ["Faves"]

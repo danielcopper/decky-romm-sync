@@ -805,3 +805,484 @@ class TestSyncPreviewErrorHandling:
         with pytest.raises(asyncio.CancelledError):
             await plugin._sync_service.sync_preview()
         assert plugin._sync_service._sync_state == SyncState.IDLE
+
+
+# ──────────────────────────────────────────────────────────────
+# Per-unit pipeline tests
+# ──────────────────────────────────────────────────────────────
+
+
+class TestBuildWorkQueue:
+    """Phase 0 of the per-unit pipeline: enumerate platforms + collections without fetching ROMs."""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_nothing_enabled(self, plugin):
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {}
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(return_value=[])
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+        assert units == []
+
+    @pytest.mark.asyncio
+    async def test_includes_enabled_platforms(self, plugin):
+        from unittest.mock import AsyncMock, MagicMock
+
+        plugin.settings["enabled_platforms"] = {"1": True, "2": False, "3": True}
+        plugin.settings["enabled_collections"] = {}
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(
+            return_value=[
+                {"id": 1, "name": "N64", "slug": "n64", "rom_count": 12},
+                {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 99},
+                {"id": 3, "name": "GBA", "slug": "gba", "rom_count": 5},
+            ]
+        )
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+        assert [u.name for u in units] == ["N64", "GBA"]
+        assert all(u.type == "platform" for u in units)
+        assert units[0].rom_count == 12
+
+    @pytest.mark.asyncio
+    async def test_includes_enabled_collections_after_platforms(self, plugin):
+        from unittest.mock import AsyncMock, MagicMock
+
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin.settings["enabled_collections"] = {"7": True, "9": True}
+
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(
+            side_effect=[
+                # list_platforms
+                [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}],
+                # list_collections
+                [{"id": 7, "name": "Favorites", "rom_count": 3, "is_favorite": True}],
+                # list_virtual_collections("franchise")
+                [{"id": 9, "name": "Metroid", "rom_count": 8, "is_virtual": True}],
+            ]
+        )
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+        assert [(u.type, u.name) for u in units] == [
+            ("platform", "N64"),
+            ("collection", "Favorites"),
+            ("collection", "Metroid"),
+        ]
+        assert units[2].is_virtual is True
+
+
+class TestFetchPlatformUnit:
+    """Per-unit platform ROM fetch with incremental-skip path."""
+
+    @pytest.mark.asyncio
+    async def test_full_fetch_when_no_registry(self, plugin):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(
+            return_value={"items": [{"id": 10, "name": "A"}, {"id": 11, "name": "B"}]}
+        )
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
+
+        roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+        assert skipped is False
+        assert [r["id"] for r in roms] == [10, 11]
+        assert roms[0]["platform_name"] == "N64"
+
+    @pytest.mark.asyncio
+    async def test_skips_when_registry_matches_count(self, plugin):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
+            "11": {"name": "B", "fs_name": "b.z64", "platform_name": "N64", "platform_slug": "n64"},
+        }
+        mock_loop = MagicMock()
+        # list_roms_updated_after returns zero updates
+        mock_loop.run_in_executor = AsyncMock(return_value={"total": 0, "items": []})
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+
+        roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+        assert skipped is True
+        assert {r["id"] for r in roms} == {10, 11}
+
+    @pytest.mark.asyncio
+    async def test_full_fetch_when_count_mismatch(self, plugin):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "A", "platform_name": "N64"},
+        }
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(
+            side_effect=[
+                # incremental check — zero updates BUT registry count doesn't match
+                {"total": 0, "items": []},
+                # list_roms paginated full fetch
+                {"items": [{"id": 10, "name": "A"}, {"id": 11, "name": "B"}, {"id": 12, "name": "C"}]},
+            ]
+        )
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+
+        roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+        assert skipped is False
+        assert len(roms) == 3
+
+
+class TestFetchCollectionUnit:
+    """Per-unit collection ROM fetch with cross-unit deduplication."""
+
+    @pytest.mark.asyncio
+    async def test_returns_new_roms_and_member_ids(self, plugin):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=3, is_virtual=False)
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(
+            return_value={
+                "items": [
+                    {"id": 1, "platform_name": "N64"},
+                    {"id": 2, "platform_name": "SNES"},
+                    {"id": 3, "platform_name": "GBA"},
+                ]
+            }
+        )
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+
+        synced: set[int] = set()
+        new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+        assert [r["id"] for r in new_roms] == [1, 2, 3]
+        assert ids == [1, 2, 3]
+        assert synced == {1, 2, 3}
+
+    @pytest.mark.asyncio
+    async def test_dedups_against_already_synced(self, plugin):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="collection", id="9", name="Metroid", slug="", rom_count=2, is_virtual=True)
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(
+            return_value={"items": [{"id": 1, "platform_name": "N64"}, {"id": 2, "platform_name": "SNES"}]}
+        )
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._fetcher._loop = mock_loop
+
+        # rom_id=1 was already fetched via a platform unit
+        synced: set[int] = {1}
+        new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+        assert [r["id"] for r in new_roms] == [2]
+        # All collection rom_ids reported back even if not in new_roms
+        assert ids == [1, 2]
+
+
+class TestDoSyncPerUnit:
+    """End-to-end orchestration of the per-unit pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_empty_queue_terminates_cleanly(self, plugin):
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=[])
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+        # Sync plan was emitted with empty units
+        plan_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_plan"]
+        assert len(plan_events) == 1
+        assert plan_events[0][0][1]["total_units"] == 0
+
+    @pytest.mark.asyncio
+    async def test_emits_sync_plan_with_queue(self, plugin):
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [
+            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2),
+        ]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(return_value=([], True))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        # Pre-set the unit-done so _wait_for_unit_complete returns immediately
+        async def fake_wait(_unit, event):
+            event.set()
+            return {}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        plan_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_plan"]
+        assert len(plan_events) == 1
+        payload = plan_events[0][0][1]
+        assert payload["total_units"] == 1
+        assert payload["units"][0]["name"] == "N64"
+
+    @pytest.mark.asyncio
+    async def test_processes_each_unit_in_order(self, plugin):
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [
+            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1),
+            WorkUnit(type="platform", id=2, name="GBA", slug="gba", rom_count=1),
+        ]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+
+        # Each platform unit returns its own ROM list
+        async def fake_fetch(unit):
+            return [{"id": int(unit.id) * 10, "name": unit.name, "platform_name": unit.name}], True
+
+        plugin._sync_service._fetcher.fetch_platform_unit = fake_fetch
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_unit, event):
+            event.set()
+            return {str(_unit.id * 10): 9000 + int(_unit.id)}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 2
+        assert unit_events[0]["unit_name"] == "N64"
+        assert unit_events[1]["unit_name"] == "GBA"
+        assert unit_events[0]["unit_index"] == 0
+        assert unit_events[1]["unit_index"] == 1
+
+    @pytest.mark.asyncio
+    async def test_skips_artwork_when_incremental_skipped(self, plugin):
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 10, "name": "A", "platform_name": "N64"}], True)
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+        # skipped=True from fetcher → no artwork download
+        plugin._sync_service._orchestrator._download_artwork.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_downloads_artwork_when_not_skipped(self, plugin):
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 10, "name": "A", "platform_name": "N64"}], False)
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={10: "/grid/a.png"})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+        plugin._sync_service._orchestrator._download_artwork.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancel_between_units_stops_processing(self, plugin):
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [
+            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1),
+            WorkUnit(type="platform", id=2, name="GBA", slug="gba", rom_count=1),
+        ]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 10, "name": "A", "platform_name": "N64"}], True)
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            # Flip to CANCELLING after first unit completes
+            plugin._sync_service._sync_state = SyncState.CANCELLING
+            return {}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1  # second unit was skipped
+        complete_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
+        assert len(complete_events) == 1
+        assert complete_events[0].get("cancelled") is True
+
+
+class TestWaitForUnitComplete:
+    """Heartbeat-based per-unit timeout."""
+
+    @pytest.mark.asyncio
+    async def test_returns_results_when_event_set(self, plugin):
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        event = asyncio.Event()
+        event.set()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic()
+        plugin._sync_service._box.last_unit_results = {"10": 9000}
+
+        results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
+        assert results == {"10": 9000}
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_cancel(self, plugin):
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        event = asyncio.Event()
+        plugin._sync_service._sync_state = SyncState.CANCELLING
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic()
+
+        results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
+        assert results is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_heartbeat_timeout(self, plugin):
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        event = asyncio.Event()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        # Heartbeat is way too old — should timeout immediately on first loop check
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic() - 999.0
+
+        results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
+        assert results is None
+
+
+class TestReportUnitResults:
+    """Per-unit registry update + state checkpoint."""
+
+    @pytest.mark.asyncio
+    async def test_updates_registry_for_unit_roms(self, plugin):
+        plugin._sync_service._pending_sync = {
+            10: {"rom_id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
+            11: {"rom_id": 11, "name": "B", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
+        }
+
+        result = await plugin.report_unit_results({"10": 9001, "11": 9002})
+
+        assert result["success"] is True
+        assert result["count"] == 2
+        registry = plugin._state["shortcut_registry"]
+        assert "10" in registry
+        assert registry["10"]["app_id"] == 9001
+        assert "11" in registry
+        assert registry["11"]["app_id"] == 9002
+
+    @pytest.mark.asyncio
+    async def test_signals_unit_complete_event(self, plugin):
+        plugin._sync_service._pending_sync = {}
+        event = asyncio.Event()
+        plugin._sync_service._box.unit_complete_event = event
+        assert not event.is_set()
+
+        await plugin.report_unit_results({})
+
+        assert event.is_set()
+        assert plugin._sync_service._box.last_unit_results == {}
+
+    @pytest.mark.asyncio
+    async def test_persists_state_after_unit(self, plugin):
+        # Wrap the state persister to count calls
+        save_count = [0]
+        orig_save_state = plugin._state_persister.save_state
+
+        def counting_save():
+            save_count[0] += 1
+            orig_save_state()
+
+        plugin._state_persister.save_state = counting_save
+        plugin._sync_service._reporter._state_persister.save_state = counting_save
+        plugin._sync_service._pending_sync = {
+            10: {"rom_id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
+        }
+
+        await plugin.report_unit_results({"10": 9001})
+
+        assert save_count[0] == 1, "report_unit_results must checkpoint state to disk"
