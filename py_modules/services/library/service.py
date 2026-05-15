@@ -263,78 +263,18 @@ class LibraryService:
     def _metadata_cache(self) -> dict:
         return self._config.metadata_cache
 
-    # The following setters propagate test-fixture dependency rebinding
-    # (``svc._settings_persister = recorder``) through to every
-    # sub-service that captured the original at construction time.
-
-    @property
-    def _settings_persister(self):
-        return self._fetcher._settings_persister
-
-    @_settings_persister.setter
-    def _settings_persister(self, value) -> None:
-        self._fetcher._settings_persister = value
-
-    @property
-    def _state_persister(self):
-        return self._orchestrator._state_persister
-
-    @_state_persister.setter
-    def _state_persister(self, value) -> None:
-        self._orchestrator._state_persister = value
-        self._reporter._state_persister = value
+    # Getters mirror the pre-decomposition attribute shape for external
+    # readers (tests, bootstrap-style callbacks). Only attributes still
+    # poked at by tests at the façade level are surfaced; sub-services
+    # read these directly via their own ctor-bound references.
 
     @property
     def _romm_api(self):
         return self._fetcher._romm_api
 
-    @_romm_api.setter
-    def _romm_api(self, value) -> None:
-        self._fetcher._romm_api = value
-
-    @property
-    def _emit(self):
-        return self._orchestrator._emit
-
-    @_emit.setter
-    def _emit(self, value) -> None:
-        self._orchestrator._emit = value
-        self._reporter._emit = value
-
     @property
     def _clock(self):
         return self._orchestrator._clock
-
-    @_clock.setter
-    def _clock(self, value) -> None:
-        self._orchestrator._clock = value
-        self._reporter._clock = value
-
-    @property
-    def _metadata_service(self):
-        return self._fetcher._metadata_service
-
-    @_metadata_service.setter
-    def _metadata_service(self, value) -> None:
-        self._fetcher._metadata_service = value
-        self._orchestrator._metadata_service = value
-
-    @property
-    def _artwork(self):
-        return self._orchestrator._artwork
-
-    @_artwork.setter
-    def _artwork(self, value) -> None:
-        self._orchestrator._artwork = value
-        self._reporter._artwork = value
-
-    @property
-    def _steam_config(self):
-        return self._reporter._steam_config
-
-    @_steam_config.setter
-    def _steam_config(self, value) -> None:
-        self._reporter._steam_config = value
 
     @property
     def _sleeper(self):
@@ -345,12 +285,12 @@ class LibraryService:
         self._orchestrator._sleeper = value
 
     @property
-    def _uuid_gen(self):
-        return self._orchestrator._uuid_gen
+    def _settings_persister(self):
+        return self._fetcher._settings_persister
 
-    @_uuid_gen.setter
-    def _uuid_gen(self, value) -> None:
-        self._orchestrator._uuid_gen = value
+    @_settings_persister.setter
+    def _settings_persister(self, value) -> None:
+        self._fetcher._settings_persister = value
 
     # ── Public callable surface ──────────────────────────────────
 
