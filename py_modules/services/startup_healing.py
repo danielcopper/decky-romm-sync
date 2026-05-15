@@ -10,13 +10,14 @@ mounting don't get wiped on the next reload.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.installed_roms import is_pending_migration_path
 
 if TYPE_CHECKING:
+    import logging
+
     from services.protocols import PathExistsProbe, RetroDeckHomeProvider, StatePersister
 
 

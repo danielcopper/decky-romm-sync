@@ -13,12 +13,13 @@ cross-service BIOS recheck are this service's concern.
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import asyncio
+    import logging
+
     from services.protocols import (
         CoreInfoProvider,
         GamelistXmlEditorProtocol,

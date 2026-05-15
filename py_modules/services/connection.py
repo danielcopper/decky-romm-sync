@@ -10,9 +10,7 @@ this service remains a pure orchestration layer.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -20,6 +18,9 @@ from domain.version import meets_min_version
 from lib.errors import error_response
 
 if TYPE_CHECKING:
+    import asyncio
+    import logging
+
     from services.protocols import RommApiProtocol
 
 
