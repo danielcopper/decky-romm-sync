@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from domain.shortcut_data import build_shortcuts_data
 from domain.sync_state import SyncState
+from domain.work_unit import WorkUnit
 from lib.errors import classify_error
 from services.library._state import LibrarySyncStateBox
 
@@ -442,6 +443,227 @@ class LibraryFetcher:
             )
 
         return collection_only_roms, collection_memberships
+
+    # ── Per-unit work queue ──────────────────────────────────────
+
+    async def build_work_queue(self) -> list[WorkUnit]:
+        """Phase 0 of the per-unit pipeline: enumerate enabled platforms + collections.
+
+        Returns an ordered list of :class:`WorkUnit` entries (platforms
+        first, then user collections, then franchise collections) with
+        ROM counts pulled from the listing endpoints. No ROMs are
+        fetched here — the queue is a dispatch plan, not a payload.
+        """
+        units: list[WorkUnit] = []
+
+        platforms = await self._fetch_enabled_platforms()
+        for platform in platforms:
+            units.append(
+                WorkUnit(
+                    type="platform",
+                    id=int(platform["id"]),
+                    name=platform.get("name", platform.get("display_name", "Unknown")),
+                    slug=platform.get("slug", ""),
+                    rom_count=int(platform.get("rom_count", 0)),
+                )
+            )
+
+        enabled_collections = self._settings.get("enabled_collections", {})
+        enabled_ids = {k for k, v in enabled_collections.items() if v}
+        if not enabled_ids:
+            return units
+
+        try:
+            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
+        except Exception as e:
+            self._logger.warning(f"Failed to fetch user collections for work queue: {e}")
+            user_collections = []
+        try:
+            franchise_collections = await self._loop.run_in_executor(
+                None, self._romm_api.list_virtual_collections, "franchise"
+            )
+        except Exception as e:
+            self._logger.warning(f"Failed to fetch franchise collections for work queue: {e}")
+            franchise_collections = []
+
+        for c in user_collections:
+            cid = str(c.get("id", ""))
+            if cid not in enabled_ids:
+                continue
+            units.append(
+                WorkUnit(
+                    type="collection",
+                    id=cid,
+                    name=c.get("name", cid),
+                    slug=c.get("slug", ""),
+                    rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
+                    is_virtual=bool(c.get("is_virtual", False)),
+                )
+            )
+        for c in franchise_collections:
+            cid = str(c.get("id", ""))
+            if cid not in enabled_ids:
+                continue
+            units.append(
+                WorkUnit(
+                    type="collection",
+                    id=cid,
+                    name=c.get("name", cid),
+                    slug=c.get("slug", ""),
+                    rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
+                    is_virtual=bool(c.get("is_virtual", True)),
+                )
+            )
+
+        return units
+
+    async def fetch_platform_unit(self, unit: WorkUnit) -> tuple[list[dict], bool]:
+        """Fetch ROMs for a single platform unit.
+
+        Tries the incremental-skip path first: if the platform's
+        ``rom_count`` matches the registry's count for that platform
+        and no rows have ``updated_after`` last_sync, the registry is
+        used to reconstruct the ROM list (avoids re-paginating).
+
+        Returns ``(unit_roms, skipped)`` where ``skipped`` is True when
+        the incremental check succeeded — callers can use this to skip
+        the artwork-download step entirely if the registry already
+        carries the cover_path.
+        """
+        if unit.type != "platform":
+            raise ValueError(f"fetch_platform_unit called with non-platform unit type={unit.type}")
+
+        platform_id = int(unit.id)
+        platform_name = unit.name
+        platform_slug = unit.slug
+
+        registry = self._state.get("shortcut_registry", {})
+        last_sync = self._state.get("last_sync")
+        registry_count = sum(1 for e in registry.values() if e.get("platform_name") == platform_name)
+
+        if last_sync and registry_count > 0:
+            try:
+                delta_resp = await self._loop.run_in_executor(
+                    None,
+                    self._romm_api.list_roms_updated_after,
+                    platform_id,
+                    last_sync,
+                    1,
+                    0,
+                )
+                server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
+                if server_total == 0 and unit.rom_count == registry_count:
+                    self._logger.info(f"Per-unit skip: {platform_name} unchanged ({registry_count} ROMs in registry)")
+                    return (
+                        self._reconstruct_platform_from_registry(registry, platform_name, platform_slug),
+                        True,
+                    )
+                self._logger.info(
+                    f"Per-unit fetch {platform_name}: {server_total} updated, "
+                    f"server={unit.rom_count} registry={registry_count} — full fetch"
+                )
+            except Exception as e:
+                self._logger.warning(
+                    f"Per-unit incremental check failed for {platform_name}, falling back to full fetch: {e}"
+                )
+
+        unit_roms: list[dict] = []
+        offset = 0
+        limit = 50
+        while True:
+            self._check_cancelling()
+            try:
+                page = await self._loop.run_in_executor(
+                    None,
+                    self._romm_api.list_roms,
+                    platform_id,
+                    limit,
+                    offset,
+                )
+            except Exception as e:
+                self._logger.error(f"Failed to fetch ROMs for platform {platform_name}: {e}")
+                break
+
+            rom_list = page.get("items", []) if isinstance(page, dict) else page
+            for rom in rom_list:
+                rom.pop("files", None)
+                rom["platform_name"] = platform_name
+                rom["platform_slug"] = platform_slug
+            unit_roms.extend(rom_list)
+
+            if len(rom_list) < limit:
+                break
+            offset += limit
+
+        return unit_roms, False
+
+    async def fetch_collection_unit(self, unit: WorkUnit, synced_rom_ids: set[int]) -> tuple[list[dict], list[int]]:
+        """Fetch ROMs for a single collection unit.
+
+        Mutates *synced_rom_ids* in place: every ROM seen via this
+        collection is added so subsequent units (and the final stale
+        cleanup) treat them as covered.
+
+        Returns ``(new_roms, all_collection_rom_ids)``:
+          * ``new_roms`` — ROMs not already present in *synced_rom_ids*,
+            decorated with platform_name/platform_slug for shortcut
+            construction.
+          * ``all_collection_rom_ids`` — every rom_id in the collection
+            (including those already synced via a platform unit), used
+            to build Steam collection memberships at the final phase.
+        """
+        if unit.type != "collection":
+            raise ValueError(f"fetch_collection_unit called with non-collection unit type={unit.type}")
+
+        new_roms: list[dict] = []
+        all_collection_rom_ids: list[int] = []
+
+        offset = 0
+        limit = 50
+        while True:
+            self._check_cancelling()
+            if unit.is_virtual:
+                page = await self._loop.run_in_executor(
+                    None, self._romm_api.list_roms_by_virtual_collection, str(unit.id), limit, offset
+                )
+            else:
+                page = await self._loop.run_in_executor(
+                    None, self._romm_api.list_roms_by_collection, int(unit.id), limit, offset
+                )
+
+            items = page.get("items", []) if isinstance(page, dict) else page
+            for rom in items:
+                rid = rom["id"]
+                all_collection_rom_ids.append(rid)
+                if rid in synced_rom_ids:
+                    continue
+                synced_rom_ids.add(rid)
+                rom["platform_name"] = rom.get("platform_name", rom.get("platform_display_name", "Unknown"))
+                rom["platform_slug"] = rom.get("platform_slug", rom.get("platform_fs_slug", ""))
+                rom.pop("files", None)
+                new_roms.append(rom)
+
+            if len(items) < limit:
+                break
+            offset += limit
+
+        return new_roms, all_collection_rom_ids
+
+    def cache_metadata_for_unit(self, unit_roms: list[dict]) -> None:
+        """Stamp the metadata cache for one unit's ROMs and flush.
+
+        Mirrors the cache-and-flush step ``_fetch_and_prepare`` runs
+        once at the end of a monolithic sync. Per-unit pipelines call
+        this after each unit so a mid-sync crash leaves cached
+        metadata for every unit that completed.
+        """
+        if self._metadata_service is None or not unit_roms:
+            return
+        for rom in unit_roms:
+            rom_id_str = str(rom["id"])
+            self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
+            self._metadata_service.mark_metadata_dirty()
+        self._metadata_service.flush_metadata_if_dirty()
 
     async def _fetch_and_prepare(self):
         """Fetch platforms + ROMs + collection ROMs, prepare shortcut data.
