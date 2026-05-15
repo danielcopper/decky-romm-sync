@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     import logging
 
     from domain.save_state import FileSyncState
-    from services.protocols import RommApiProtocol
+    from services.protocols import DebugLogger, RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
     from services.saves.sync_engine import SyncEngine
@@ -41,12 +41,14 @@ class VersionsService:
         sync_engine: SyncEngine,
         romm_api: RommApiProtocol,
         logger: logging.Logger,
+        log_debug: DebugLogger,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
         self._sync_engine = sync_engine
         self._romm_api = romm_api
         self._logger = logger
+        self._log_debug = log_debug
 
     # ------------------------------------------------------------------
     # Version History API
@@ -262,7 +264,7 @@ class VersionsService:
                     ),
                 )
             except Exception as e:
-                self._save_service._log_debug(f"rollback_to_version: failed to list saves: {e}")
+                self._log_debug(f"rollback_to_version: failed to list saves: {e}")
                 return {"status": "not_found"}
 
             result = await self._save_service._loop.run_in_executor(

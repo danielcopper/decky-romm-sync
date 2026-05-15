@@ -1,7 +1,6 @@
 """Tests for SaveService aggregate facade — public callable surface and cross-service coordination."""
 
 import asyncio
-import hashlib
 import logging
 import os
 import time
@@ -706,45 +705,6 @@ class TestFindSaveFiles:
         result = svc._find_save_files(999)
 
         assert result == []
-
-
-class TestFileMd5:
-    """Tests for _file_md5."""
-
-    def test_known_content(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        f = tmp_path / "test.srm"
-        content = b"Hello, save file!"
-        f.write_bytes(content)
-
-        assert svc._file_md5(str(f)) == hashlib.md5(content).hexdigest()
-
-    def test_empty_file(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        f = tmp_path / "empty.srm"
-        f.write_bytes(b"")
-
-        assert svc._file_md5(str(f)) == hashlib.md5(b"").hexdigest()
-
-    def test_large_file_chunked(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        f = tmp_path / "large.srm"
-        content = os.urandom(2 * 1024 * 1024)
-        f.write_bytes(content)
-
-        assert svc._file_md5(str(f)) == hashlib.md5(content).hexdigest()
-
-    def test_permission_error(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        f = tmp_path / "locked.srm"
-        f.write_bytes(b"data")
-        f.chmod(0o000)
-
-        try:
-            with pytest.raises(PermissionError):
-                svc._file_md5(str(f))
-        finally:
-            f.chmod(0o644)
 
 
 class TestGetRomSaveInfo:

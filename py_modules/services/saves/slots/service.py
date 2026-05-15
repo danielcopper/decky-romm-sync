@@ -11,7 +11,14 @@ from services.saves._messages import SAVE_SYNC_DISABLED
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import Clock, RetryStrategy, RommApiProtocol, SaveFileAdapter
+    from services.protocols import (
+        Clock,
+        CoreResolverFn,
+        DebugLogger,
+        RetryStrategy,
+        RommApiProtocol,
+        SaveFileAdapter,
+    )
     from services.saves import SaveService
     from services.saves.state import StateService
     from services.saves.sync_engine import SyncEngine
@@ -34,6 +41,8 @@ class SlotsService:
         logger: logging.Logger,
         clock: Clock,
         save_file: SaveFileAdapter,
+        log_debug: DebugLogger,
+        get_active_core: CoreResolverFn,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
@@ -43,6 +52,8 @@ class SlotsService:
         self._logger = logger
         self._clock = clock
         self._save_file = save_file
+        self._log_debug = log_debug
+        self._get_active_core = get_active_core
 
     # ------------------------------------------------------------------
     # Slot listing
@@ -85,7 +96,7 @@ class SlotsService:
             )
             server_slots_list = summary.get("slots", [])
         except Exception as e:
-            self._save_service._log_debug(f"Failed to fetch save slots for rom {rom_id}: {e}")
+            self._log_debug(f"Failed to fetch save slots for rom {rom_id}: {e}")
 
         # Merge: update persisted slots with server data, promote local→server
         merged: dict[str, dict] = {}
@@ -228,7 +239,7 @@ class SlotsService:
             file_state = files_state.get(filename)
             last_sync_hash = file_state.last_sync_hash if file_state else None
             if last_sync_hash:
-                current_hash = self._save_service._file_md5(lf["path"])
+                current_hash = self._save_file.checksum_md5(lf["path"])
                 if current_hash != last_sync_hash:
                     pending.append(filename)
 
@@ -362,9 +373,9 @@ class SlotsService:
         for lf in local_files:
             try:
                 self._save_file.remove(lf["path"])
-                self._save_service._log_debug(f"Deleted local save for switch: {lf['filename']}")
+                self._log_debug(f"Deleted local save for switch: {lf['filename']}")
             except Exception as e:
-                self._save_service._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")
+                self._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")
 
         # Clear file tracking state (but keep slot config)
         self._state_svc.clear_files_state(rom_id_str)
@@ -416,7 +427,7 @@ class SlotsService:
                 ),
             )
         except Exception as e:
-            self._save_service._log_debug(f"get_save_setup_info({rom_id}): failed to list saves: {e}")
+            self._log_debug(f"get_save_setup_info({rom_id}): failed to list saves: {e}")
 
         # Group server saves by slot
         slots_map: dict[str | None, list[dict]] = {}
@@ -537,7 +548,7 @@ class SlotsService:
         system = info["system"] if info else ""
         installed = self._save_service._state["installed_roms"].get(rom_id_str, {})
         rom_filename = os.path.basename(installed.get("file_path", "")) or None
-        core_so, _label = self._save_service._get_active_core(system, rom_filename)
+        core_so, _label = self._get_active_core(system, rom_filename)
         emulator = build_emulator_tag(core_so)
 
         ids_to_delete: list[int] = []
@@ -623,7 +634,7 @@ class SlotsService:
                 )
                 server_save_ids = [s["id"] for s in server_saves]
             except Exception as e:
-                self._save_service._log_debug(f"get_slot_delete_info: failed to list saves for slot '{slot}': {e}")
+                self._log_debug(f"get_slot_delete_info: failed to list saves for slot '{slot}': {e}")
 
         # Local tracked files pointing to server saves in this slot
         files_state = save_state.files

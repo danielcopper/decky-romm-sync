@@ -25,7 +25,14 @@ from services.saves._helpers import _local_save_target
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import Clock, RetryStrategy, RommApiProtocol, SaveFileAdapter
+    from services.protocols import (
+        Clock,
+        CoreResolverFn,
+        DebugLogger,
+        RetryStrategy,
+        RommApiProtocol,
+        SaveFileAdapter,
+    )
     from services.saves import SaveService
     from services.saves.state import StateService
 
@@ -63,6 +70,8 @@ class SyncEngine:
         logger: logging.Logger,
         clock: Clock,
         save_file: SaveFileAdapter,
+        log_debug: DebugLogger,
+        get_active_core: CoreResolverFn,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
@@ -71,6 +80,8 @@ class SyncEngine:
         self._logger = logger
         self._clock = clock
         self._save_file = save_file
+        self._log_debug = log_debug
+        self._get_active_core = get_active_core
 
     # ------------------------------------------------------------------
     # Server Save Hash Helper
@@ -90,9 +101,9 @@ class SyncEngine:
         try:
             tmp_path = self._save_file.make_temp_path(suffix=".tmp")
             self._romm_api.download_save(save_id, tmp_path)
-            return self._save_service._file_md5(tmp_path)
+            return self._save_file.checksum_md5(tmp_path)
         except Exception as e:
-            self._save_service._log_debug(f"Failed to hash server save {save_id}: {e}")
+            self._log_debug(f"Failed to hash server save {save_id}: {e}")
             if self._retry.is_retryable(e):
                 raise
             return None
@@ -130,7 +141,7 @@ class SyncEngine:
 
         now = self._clock.now().isoformat()
         local_exists = self._save_file.is_file(local_path)
-        local_hash = self._save_service._file_md5(local_path) if local_exists else ""
+        local_hash = self._save_file.checksum_md5(local_path) if local_exists else ""
 
         save_entry.files[filename] = FileSyncState(
             last_sync_hash=local_hash,
@@ -173,7 +184,7 @@ class SyncEngine:
 
         self._save_file.rename(tmp_path, local_path)
         self._update_file_sync_state(rom_id_str, filename, server_save, local_path, system)
-        self._save_service._log_debug(f"Downloaded save: {filename} for rom {rom_id_str}")
+        self._log_debug(f"Downloaded save: {filename} for rom {rom_id_str}")
 
     def _resolve_upload_slot(self, rom_id_str: str, device_id: str | None) -> str | None:
         """The slot field to send with an upload; ``None`` when device sync is off."""
@@ -204,7 +215,7 @@ class SyncEngine:
         try:
             self._romm_api.confirm_download(upload_id, device_id)
         except Exception:
-            self._save_service._log_debug(f"confirm_download after upload failed for save {upload_id} (non-fatal)")
+            self._log_debug(f"confirm_download after upload failed for save {upload_id} (non-fatal)")
 
     def _do_upload_save(
         self,
@@ -221,7 +232,7 @@ class SyncEngine:
         # Resolve active core for emulator tag
         installed = self._save_service._state["installed_roms"].get(rom_id_str, {})
         rom_filename = os.path.basename(installed.get("file_path", "")) or None
-        core_so, _label = self._save_service._get_active_core(system, rom_filename)
+        core_so, _label = self._get_active_core(system, rom_filename)
         emulator = build_emulator_tag(core_so)
 
         # v4.7: pass device_id and slot
@@ -247,7 +258,7 @@ class SyncEngine:
 
         self._confirm_upload_sync(result.get("id"), device_id)
 
-        self._save_service._log_debug(f"Uploaded save: {filename} for rom {rom_id_str} (emulator={emulator})")
+        self._log_debug(f"Uploaded save: {filename} for rom {rom_id_str} (emulator={emulator})")
         return result
 
     def _record_own_upload(self, rom_id_str: str, new_id: int | None) -> None:
@@ -342,12 +353,10 @@ class SyncEngine:
         if action.adopt_baseline and local_hash is not None:
             # State-only mutation: write the current local_hash as the baseline
             # so future runs can detect drift. No I/O, no synced count.
-            self._save_service._log_debug(
-                f"_sync_rom_saves({rom_id}): skip + adopt_baseline {filename} ({action.reason})"
-            )
+            self._log_debug(f"_sync_rom_saves({rom_id}): skip + adopt_baseline {filename} ({action.reason})")
             self._adopt_baseline_hash(rom_id_str, filename, local_hash)
         else:
-            self._save_service._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
+            self._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
 
     def _dispatch_upload(
         self,
@@ -374,7 +383,7 @@ class SyncEngine:
         server_save = next((s for s in server_saves if s.get("id") == action.target_save_id), None)
         if server_save is None:
             # Picked save vanished between read and dispatch — best-effort.
-            self._save_service._log_debug(
+            self._log_debug(
                 f"_dispatch_sync_action: target_save_id={action.target_save_id} not in server_saves; skipping",
             )
             return False
@@ -480,7 +489,7 @@ class SyncEngine:
             local_path = lf["path"]
             handled_filenames.add(filename)
             local_exists = self._save_file.is_file(local_path)
-            local_hash = self._save_service._file_md5(local_path) if local_exists else None
+            local_hash = self._save_file.checksum_md5(local_path) if local_exists else None
             file_state = files_state.get(filename, FileSyncState())
             local_mtime_iso = (
                 datetime.fromtimestamp(self._save_file.get_mtime(local_path), tz=UTC).isoformat()
@@ -549,7 +558,7 @@ class SyncEngine:
 
         info = self._save_service._get_rom_save_info(rom_id)
         if not info:
-            self._save_service._log_debug(f"_sync_rom_saves({rom_id}): no save info, skipping")
+            self._log_debug(f"_sync_rom_saves({rom_id}): no save info, skipping")
             return 0, [], []
         system = info["system"]
         saves_dir = info["saves_dir"]
@@ -562,13 +571,13 @@ class SyncEngine:
             self._logger.error(f"_sync_rom_saves({rom_id}): failed to list saves: {e}")
             _code, _msg = classify_error(e)
             return 0, [f"Failed to fetch saves: {_msg}"], []
-        self._save_service._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
+        self._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
 
         save_state = self._state_svc.state.saves.get(rom_id_str)
         active_slot = save_state.active_slot if save_state else None
         server_in_slot = self._filter_server_saves_to_slot(server_saves, active_slot)
 
-        self._save_service._log_debug(
+        self._log_debug(
             f"_sync_rom_saves({rom_id}): system={system}, rom_name={info['rom_name']}, "
             f"server_saves={len(server_saves)}, saves_dir={saves_dir}"
         )
@@ -580,11 +589,11 @@ class SyncEngine:
         pending_migration = self._save_service._is_save_sort_changed()
         for outcome in self.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
             origin = "local" if outcome.local_path is not None else "server-only"
-            self._save_service._log_debug(
+            self._log_debug(
                 f"_sync_rom_saves({rom_id}): {origin} {outcome.filename} -> {type(outcome.action).__name__}"
             )
             if outcome.local_path is None and pending_migration:
-                self._save_service._log_debug(
+                self._log_debug(
                     f"_sync_rom_saves({rom_id}): skipping server_only {outcome.filename} — migration pending"
                 )
                 continue
@@ -607,7 +616,7 @@ class SyncEngine:
         save_entry = self._state_svc.ensure_rom_state(rom_id_str)
         save_entry.last_sync_check_at = self._clock.now().isoformat()
 
-        self._save_service._log_debug(
+        self._log_debug(
             f"[TIMING] _sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"
             f" synced={synced} errors={len(errors)}"
         )

@@ -16,7 +16,7 @@ from services.saves.status.builders import (
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import RommApiProtocol
+    from services.protocols import DebugLogger, RommApiProtocol
     from services.saves import SaveService
     from services.saves.state import StateService
     from services.saves.sync_engine import MatrixOutcome, SyncEngine
@@ -33,12 +33,14 @@ class StatusService:
         sync_engine: SyncEngine,
         romm_api: RommApiProtocol,
         logger: logging.Logger,
+        log_debug: DebugLogger,
     ) -> None:
         self._save_service = save_service
         self._state_svc = state_svc
         self._sync_engine = sync_engine
         self._romm_api = romm_api
         self._logger = logger
+        self._log_debug = log_debug
 
     def _status_entry_from_outcome(
         self,
@@ -70,7 +72,7 @@ class StatusService:
         )
         conflict_entry: dict | None = None
         if isinstance(action, Conflict):
-            self._save_service._log_debug(
+            self._log_debug(
                 f"_get_save_status_io({rom_id}): conflict {outcome.filename} "
                 f"server_save_id={action.server_save.get('id')}"
             )

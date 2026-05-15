@@ -115,8 +115,8 @@ class SaveServiceConfig:
         signal. ``None`` disables the gate (unit tests).
     log_debug:
         ``DebugLogger`` Protocol seam — routes through the user's QAM
-        log-level filter. Sub-services access this via the
-        ``_save_service._log_debug`` back-ref.
+        log-level filter. Injected directly into each sub-service that
+        needs it; not reached through the ``_save_service`` back-ref.
     """
 
     romm_api: RommApiProtocol

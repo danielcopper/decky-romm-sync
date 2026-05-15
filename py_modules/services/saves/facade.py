@@ -83,6 +83,8 @@ class SaveService:
             logger=self._logger,
             clock=self._clock,
             save_file=self._save_file,
+            log_debug=self._log_debug,
+            get_active_core=self._get_active_core,
         )
         self._versions = VersionsService(
             save_service=self,
@@ -90,6 +92,7 @@ class SaveService:
             sync_engine=self._sync_engine,
             romm_api=self._romm_api,
             logger=self._logger,
+            log_debug=self._log_debug,
         )
         self._status = StatusService(
             save_service=self,
@@ -97,6 +100,7 @@ class SaveService:
             sync_engine=self._sync_engine,
             romm_api=self._romm_api,
             logger=self._logger,
+            log_debug=self._log_debug,
         )
         self._slots = SlotsService(
             save_service=self,
@@ -107,6 +111,8 @@ class SaveService:
             logger=self._logger,
             clock=self._clock,
             save_file=self._save_file,
+            log_debug=self._log_debug,
+            get_active_core=self._get_active_core,
         )
 
     def _rom_lock(self, rom_id: int) -> asyncio.Lock:
@@ -277,17 +283,6 @@ class SaveService:
     # ------------------------------------------------------------------
     # File Helpers
     # ------------------------------------------------------------------
-
-    def _file_md5(self, path: str) -> str:
-        """Compute MD5 hash of a file for sync drift detection.
-
-        Delegates to the injected ``SaveFileAdapter``. The hash is used
-        for content-comparison only — drift detection between local
-        file and the recorded ``last_sync_hash`` baseline. A collision
-        here would mean two different save files treated as identical
-        → "sync misses an update", not a security breach.
-        """
-        return self._save_file.checksum_md5(path)
 
     def _find_save_files(self, rom_id: int) -> list[dict]:
         """Find local save files for a ROM.
@@ -904,7 +899,7 @@ class SaveService:
         local_path = os.path.join(saves_dir, filename)
         if not self._save_file.is_file(local_path):
             raise FileNotFoundError(f"Local save not found: {local_path}")
-        local_hash = self._file_md5(local_path)
+        local_hash = self._save_file.checksum_md5(local_path)
         try:
             server_hash = self._retry.with_retry(self._sync_engine._get_server_save_hash, server)
         except Exception:
