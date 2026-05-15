@@ -9,6 +9,7 @@ from services.saves._helpers import _local_save_target
 from services.saves._messages import SAVE_SYNC_DISABLED
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
 
     from services.protocols import (
@@ -19,8 +20,9 @@ if TYPE_CHECKING:
         RommApiProtocol,
         SaveFileAdapter,
     )
-    from services.saves import SaveService
+    from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
+    from services.saves.status import StatusService
     from services.saves.sync_engine import SyncEngine
 
 
@@ -33,22 +35,28 @@ class SlotsService:
     def __init__(
         self,
         *,
-        save_service: SaveService,
+        state: dict,
         state_svc: StateService,
         sync_engine: SyncEngine,
+        status_service: StatusService,
+        rom_info: RomInfoService,
         romm_api: RommApiProtocol,
         retry: RetryStrategy,
+        loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         clock: Clock,
         save_file: SaveFileAdapter,
         log_debug: DebugLogger,
         get_active_core: CoreResolverFn,
     ) -> None:
-        self._save_service = save_service
+        self._state = state
         self._state_svc = state_svc
         self._sync_engine = sync_engine
+        self._status_service = status_service
+        self._rom_info = rom_info
         self._romm_api = romm_api
         self._retry = retry
+        self._loop = loop
         self._logger = logger
         self._clock = clock
         self._save_file = save_file
@@ -68,11 +76,11 @@ class SlotsService:
         exist on the server (unless they are the active_slot).
         """
         rom_id = int(rom_id)
-        if not self._save_service._is_save_sync_enabled():
+        if not self._state_svc.is_save_sync_enabled():
             return {"success": False, "slots": [], "active_slot": "default"}
 
         rom_id_str = str(rom_id)
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
         rom_state = self._state_svc.state.saves.get(rom_id_str)
         default_slot = self._state_svc.state.settings.default_slot or "default"
         # ROM not tracked → fall back to the global default slot. ROM
@@ -88,7 +96,7 @@ class SlotsService:
         # Fetch server slots
         server_slots_list: list[dict] = []
         try:
-            summary = await self._save_service._loop.run_in_executor(
+            summary = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.get_save_summary(rom_id, device_id=device_id),
@@ -159,13 +167,13 @@ class SlotsService:
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
 
-        if not self._save_service._is_save_sync_enabled():
+        if not self._state_svc.is_save_sync_enabled():
             return {"success": False, "slot": slot, "saves": [], "error": SAVE_SYNC_DISABLED}
 
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
 
         try:
-            server_saves: list[dict] = await self._save_service._loop.run_in_executor(
+            server_saves: list[dict] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
@@ -211,7 +219,7 @@ class SlotsService:
             rom_state.slots[slot_key] = {"source": "local", "count": 0, "latest_updated_at": None}
 
         self._state_svc.save_state()
-        self._save_service._loop.create_task(self._save_service.check_save_status_background(rom_id))
+        self._loop.create_task(self._status_service.check_save_status_background(rom_id))
         return {"success": True, "active_slot": resolved_slot}
 
     # ------------------------------------------------------------------
@@ -233,7 +241,7 @@ class SlotsService:
         files_state = save_state.files if save_state else {}
 
         pending: list[str] = []
-        local_files = self._save_service._find_save_files(rom_id)
+        local_files = self._rom_info.find_save_files(rom_id)
         for lf in local_files:
             filename = lf["filename"]
             file_state = files_state.get(filename)
@@ -266,7 +274,7 @@ class SlotsService:
         rom_id_str = str(rom_id)
 
         # 1. Save sync must be enabled
-        if not self._save_service._is_save_sync_enabled():
+        if not self._state_svc.is_save_sync_enabled():
             return {"success": False, "reason": "sync_disabled"}
 
         # 2. Slot normalisation (empty → None for legacy mode)
@@ -274,7 +282,7 @@ class SlotsService:
         resolved_slot: str | None = slot_str if slot_str else None
 
         # 3. ROM must be installed
-        info = self._save_service._get_rom_save_info(rom_id)
+        info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
             return {"success": False, "reason": "not_installed"}
 
@@ -282,7 +290,7 @@ class SlotsService:
         system = info["system"]
 
         # 4. Check for pending local changes (hashing — run in executor)
-        readiness = await self._save_service._loop.run_in_executor(
+        readiness = await self._loop.run_in_executor(
             None,
             self._check_slot_switch_readiness,
             rom_id,
@@ -295,9 +303,9 @@ class SlotsService:
             }
 
         # 5. Fetch server saves for the new slot (also proves server is reachable)
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
         try:
-            all_server_saves: list[dict] = await self._save_service._loop.run_in_executor(
+            all_server_saves: list[dict] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
@@ -317,7 +325,7 @@ class SlotsService:
         if slot_saves:
             # New slot has server saves — download them, replacing local files.
             # rom_name is guaranteed by the earlier ``info`` check (line 1642).
-            await self._save_service._loop.run_in_executor(
+            await self._loop.run_in_executor(
                 None,
                 self._do_switch_downloads,
                 slot_saves,
@@ -328,7 +336,7 @@ class SlotsService:
             )
         else:
             # New slot is empty — delete local save files for a fresh start
-            await self._save_service._loop.run_in_executor(
+            await self._loop.run_in_executor(
                 None,
                 self._delete_local_saves_for_switch,
                 rom_id,
@@ -341,7 +349,7 @@ class SlotsService:
         self._state_svc.save_state()
 
         # 9. Return fresh status
-        save_status = await self._save_service.get_save_status(rom_id)
+        save_status = await self._status_service.get_save_status(rom_id)
         return {"success": True, "save_status": save_status}
 
     def _do_switch_downloads(
@@ -369,7 +377,7 @@ class SlotsService:
         (active_slot, slot_confirmed, slots dict) and only clears files + tracking.
         Runs synchronously — call via run_in_executor.
         """
-        local_files = self._save_service._find_save_files(rom_id)
+        local_files = self._rom_info.find_save_files(rom_id)
         for lf in local_files:
             try:
                 self._save_file.remove(lf["path"])
@@ -406,7 +414,7 @@ class SlotsService:
         rom_id_str = str(rom_id)
 
         # Local saves
-        local_files = self._save_service._find_save_files(rom_id)
+        local_files = self._rom_info.find_save_files(rom_id)
         local_file_info = []
         for lf in local_files:
             local_file_info.append(
@@ -418,9 +426,9 @@ class SlotsService:
 
         # Server saves
         server_saves: list[dict] = []
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
         try:
-            server_saves = await self._save_service._loop.run_in_executor(
+            server_saves = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
@@ -526,10 +534,10 @@ class SlotsService:
         For each local file: upload with new slot, then delete old server save.
         Safe order: POST first, DELETE after.
         """
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
 
         # Find server saves in the old slot
-        all_saves = await self._save_service._loop.run_in_executor(
+        all_saves = await self._loop.run_in_executor(
             None,
             lambda: self._retry.with_retry(
                 lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
@@ -540,13 +548,13 @@ class SlotsService:
             return
 
         # Get local files for re-upload
-        local_files = self._save_service._find_save_files(rom_id)
+        local_files = self._rom_info.find_save_files(rom_id)
         local_by_name = {lf["filename"]: lf for lf in local_files}
 
         # Resolve emulator tag
-        info = self._save_service._get_rom_save_info(rom_id)
+        info = self._rom_info.get_rom_save_info(rom_id)
         system = info["system"] if info else ""
-        installed = self._save_service._state["installed_roms"].get(rom_id_str, {})
+        installed = self._state["installed_roms"].get(rom_id_str, {})
         rom_filename = os.path.basename(installed.get("file_path", "")) or None
         core_so, _label = self._get_active_core(system, rom_filename)
         emulator = build_emulator_tag(core_so)
@@ -558,7 +566,7 @@ class SlotsService:
             local_file = local_by_name.get(fname)
             if local_file and self._save_file.is_file(local_file["path"]):
                 # Upload to new slot
-                await self._save_service._loop.run_in_executor(
+                await self._loop.run_in_executor(
                     None,
                     lambda lf=local_file, em=emulator: self._retry.with_retry(
                         lambda: self._romm_api.upload_save(
@@ -576,7 +584,7 @@ class SlotsService:
 
         # Delete old saves
         if ids_to_delete:
-            await self._save_service._loop.run_in_executor(
+            await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.delete_server_saves(ids_to_delete),
@@ -593,9 +601,9 @@ class SlotsService:
         Returns an error dict on failure, or a (rom_id_str, rom_state, slots_dict)
         tuple on success.
         """
-        if not self._save_service._is_save_sync_enabled():
+        if not self._state_svc.is_save_sync_enabled():
             return {"success": False, "reason": "disabled"}
-        if not self._save_service._get_rom_save_info(rom_id):
+        if not self._rom_info.get_rom_save_info(rom_id):
             return {"success": False, "reason": "not_installed"}
         rom_id_str = str(rom_id)
         save_state = self._state_svc.state.saves.get(rom_id_str)
@@ -624,9 +632,9 @@ class SlotsService:
         # Server save count
         server_save_ids: list[int] = []
         if source == "server":
-            device_id = self._save_service._get_server_device_id()
+            device_id = self._state_svc.get_server_device_id()
             try:
-                server_saves: list[dict] = await self._save_service._loop.run_in_executor(
+                server_saves: list[dict] = await self._loop.run_in_executor(
                     None,
                     lambda: self._retry.with_retry(
                         lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
@@ -658,9 +666,9 @@ class SlotsService:
 
     async def _delete_server_slot_saves(self, rom_id: int, slot: str) -> dict:
         """Delete all server saves in a slot. Returns result dict with count and IDs."""
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
         try:
-            server_saves: list[dict] = await self._save_service._loop.run_in_executor(
+            server_saves: list[dict] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
@@ -668,7 +676,7 @@ class SlotsService:
             )
             save_ids = [s["id"] for s in server_saves]
             if save_ids:
-                await self._save_service._loop.run_in_executor(
+                await self._loop.run_in_executor(
                     None,
                     lambda: self._retry.with_retry(
                         lambda: self._romm_api.delete_server_saves(save_ids),

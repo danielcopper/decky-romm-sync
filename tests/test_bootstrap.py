@@ -344,7 +344,7 @@ class TestWireServices:
         get_core_name_mock = deps["get_core_name"]
         result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
-        assert save_sync_service._get_core_name is get_core_name_mock
+        assert save_sync_service._rom_info._get_core_name is get_core_name_mock
         deps["loop"].close()
 
     def test_save_sync_service_receives_migration_detect_sort_change(self, tmp_path):
@@ -364,9 +364,11 @@ class TestWireServices:
         # Bound method equality: same function + same bound instance.
         # ``is`` fails because Python creates a fresh bound method object
         # on each attribute access.
-        assert save_sync_service._detect_sort_change == migration_service.detect_save_sort_change
+        # detect_sort_change is dispatched by the sync_engine sub-service; the
+        # SaveServiceConfig.detect_sort_change wiring threads through to it.
+        assert save_sync_service._sync_engine._detect_sort_change == migration_service.detect_save_sort_change
         # Also check it's the actual migration instance, not some other.
-        assert save_sync_service._detect_sort_change.__self__ is migration_service  # type: ignore[union-attr]
+        assert save_sync_service._sync_engine._detect_sort_change.__self__ is migration_service  # type: ignore[union-attr]
         deps["loop"].close()
 
     def test_save_sync_and_migration_share_state_reference(self, tmp_path):
@@ -395,8 +397,11 @@ class TestWireServices:
         result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
         migration_service = result["migration_service"]
-        assert save_sync_service._is_retrodeck_migration_pending == migration_service.is_retrodeck_migration_pending
-        assert save_sync_service._is_retrodeck_migration_pending.__self__ is migration_service  # type: ignore[union-attr]
+        # is_retrodeck_migration_pending is consumed by the sync_engine sub-service.
+        assert save_sync_service._sync_engine._is_retrodeck_migration_pending == (
+            migration_service.is_retrodeck_migration_pending
+        )
+        assert save_sync_service._sync_engine._is_retrodeck_migration_pending.__self__ is migration_service  # type: ignore[union-attr]
         deps["loop"].close()
 
     def test_download_service_receives_is_retrodeck_migration_pending(self, tmp_path):
@@ -427,7 +432,7 @@ class TestWireServices:
         save_sync_service = result["save_sync_service"]
 
         # Invoke the bound detect callback SaveService received.
-        save_sync_service._detect_sort_change()  # type: ignore[misc]
+        save_sync_service._sync_engine._detect_sort_change()  # type: ignore[misc]
 
         # State now has the current sort settings written through the
         # shared dict — SaveService will read this on its next

@@ -140,3 +140,61 @@ class StateService:
 
         if changed:
             self.save_state()
+
+    # ------------------------------------------------------------------
+    # Settings convenience accessors
+    # ------------------------------------------------------------------
+
+    def is_save_sync_enabled(self) -> bool:
+        """Whether the save-sync feature toggle is on."""
+        return self._save_sync_state.settings.save_sync_enabled
+
+    def get_server_device_id(self) -> str | None:
+        """Server-side device id (None when this device is not yet registered)."""
+        sid = self._save_sync_state.server_device_id
+        return str(sid) if sid is not None else None
+
+    def get_save_sync_settings(self) -> dict:
+        """Return current save sync settings as the on-disk dict shape."""
+        return self._save_sync_state.settings.to_dict()
+
+    def update_save_sync_settings(self, settings: dict) -> dict:
+        """Update save sync settings (sync toggles, slot, etc.)."""
+        allowed_keys = {
+            "save_sync_enabled",
+            "sync_before_launch",
+            "sync_after_exit",
+            "default_slot",
+            "autocleanup_limit",
+        }
+
+        current = self._save_sync_state.settings
+
+        for key, value in settings.items():
+            if key not in allowed_keys:
+                continue
+            value, skip = self._sanitize_setting(key, value)
+            if skip:
+                continue
+            setattr(current, key, value)
+
+        self.save_state()
+        return {"success": True, "settings": current.to_dict()}
+
+    @staticmethod
+    def _sanitize_setting(key: str, value: object) -> tuple[object, bool]:
+        """Validate and coerce a single settings key/value pair.
+
+        Returns (coerced_value, skip) where skip=True means the value should
+        be discarded (e.g. empty slot name).
+        """
+        if key == "default_slot":
+            if value is None:
+                return None, False  # None = legacy mode
+            coerced = str(value).strip()
+            return (coerced if coerced else None), False  # empty -> None
+        if key == "autocleanup_limit":
+            return max(1, int(value)), False  # type: ignore[arg-type]
+        if key in ("save_sync_enabled", "sync_before_launch", "sync_after_exit"):
+            return bool(value), False
+        return value, False

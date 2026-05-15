@@ -331,14 +331,14 @@ class TestPreLaunchSync:
         svc._save_sync_state.settings.save_sync_enabled = True
         svc._save_sync_state.device_id = "test-device"
 
-        # Track when _is_save_sort_changed is consulted.
-        orig_gate = svc._is_save_sort_changed
+        # Track when is_save_sort_changed is consulted.
+        orig_gate = svc._rom_info.is_save_sort_changed
 
         def wrapped_gate():
             order.append("gate")
             return orig_gate()
 
-        svc._is_save_sort_changed = wrapped_gate  # type: ignore[method-assign]
+        svc._rom_info.is_save_sort_changed = wrapped_gate  # type: ignore[method-assign]
 
         await svc.pre_launch_sync(42)
 
@@ -454,7 +454,7 @@ class TestPostExitSync:
     async def test_post_exit_sync_works_when_detect_sort_change_is_none(self, tmp_path):
         """Default detect_sort_change=None: post_exit_sync still runs without error (#238)."""
         svc, _ = make_service(tmp_path)  # detect_sort_change not passed → None
-        assert svc._detect_sort_change is None
+        assert svc._sync_engine._detect_sort_change is None
         svc._save_sync_state.settings.save_sync_enabled = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
@@ -541,7 +541,7 @@ class TestUploadSpecialChars:
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name=file_name)
         _create_save(tmp_path, system="gba", rom_name=rom_name)
 
-        result = svc._find_save_files(42)
+        result = svc._rom_info.find_save_files(42)
 
         assert len(result) == 1
         assert result[0]["filename"] == f"{rom_name}.srm"

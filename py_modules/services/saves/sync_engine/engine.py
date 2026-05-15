@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
+import socket
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from models.saves import SaveConflict
 
 from domain.emulator_tag import build_emulator_tag
+from domain.save_path import sanitize_save_filename
 from domain.save_state import FileSyncState, RomSaveState
 from domain.sync_action import (
     Conflict,
@@ -20,10 +23,13 @@ from domain.sync_action import (
     compute_sync_action,
 )
 from lib.errors import RommApiError, classify_error
+from lib.iso_time import parse_iso_to_epoch
 from services.saves._helpers import _local_save_target
+from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Callable
 
     from services.protocols import (
         Clock,
@@ -33,7 +39,7 @@ if TYPE_CHECKING:
         RommApiProtocol,
         SaveFileAdapter,
     )
-    from services.saves import SaveService
+    from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
 
 
@@ -58,30 +64,49 @@ class MatrixOutcome:
 
 
 class SyncEngine:
-    """Newest-wins matrix executor + I/O orchestrators for save transfers."""
+    """Newest-wins matrix executor, sync orchestration callables, and rom-level lock dispatch."""
 
     def __init__(
         self,
         *,
-        save_service: SaveService,
+        state: dict,
         state_svc: StateService,
+        rom_info: RomInfoService,
         romm_api: RommApiProtocol,
         retry: RetryStrategy,
+        loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         clock: Clock,
         save_file: SaveFileAdapter,
         log_debug: DebugLogger,
         get_active_core: CoreResolverFn,
+        plugin_version: str,
+        detect_sort_change: Callable[[], None] | None,
+        is_retrodeck_migration_pending: Callable[[], bool] | None,
     ) -> None:
-        self._save_service = save_service
+        self._state = state
         self._state_svc = state_svc
+        self._rom_info = rom_info
         self._romm_api = romm_api
         self._retry = retry
+        self._loop = loop
         self._logger = logger
         self._clock = clock
         self._save_file = save_file
         self._log_debug = log_debug
         self._get_active_core = get_active_core
+        self._plugin_version = plugin_version
+        self._detect_sort_change = detect_sort_change
+        self._is_retrodeck_migration_pending = is_retrodeck_migration_pending
+        # Per-rom lock dict — serializes concurrent sync operations on the
+        # same rom_id (pre_launch_sync, post_exit_sync, manual sync, resolve).
+        self._rom_sync_locks: dict[int, asyncio.Lock] = {}
+
+    def _rom_lock(self, rom_id: int) -> asyncio.Lock:
+        """Return the lock for this rom_id, creating it lazily."""
+        if rom_id not in self._rom_sync_locks:
+            self._rom_sync_locks[rom_id] = asyncio.Lock()
+        return self._rom_sync_locks[rom_id]
 
     # ------------------------------------------------------------------
     # Server Save Hash Helper
@@ -164,7 +189,7 @@ class SyncEngine:
         self._save_file.make_dirs(saves_dir)
         tmp_path = local_path + ".tmp"
 
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
         self._retry.with_retry(
             lambda: self._romm_api.download_save_content(
                 server_save["id"],
@@ -230,13 +255,13 @@ class SyncEngine:
         save_id = server_save.get("id") if server_save else None
 
         # Resolve active core for emulator tag
-        installed = self._save_service._state["installed_roms"].get(rom_id_str, {})
+        installed = self._state["installed_roms"].get(rom_id_str, {})
         rom_filename = os.path.basename(installed.get("file_path", "")) or None
         core_so, _label = self._get_active_core(system, rom_filename)
         emulator = build_emulator_tag(core_so)
 
         # v4.7: pass device_id and slot
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
         slot = self._resolve_upload_slot(rom_id_str, device_id)
 
         is_post = save_id is None
@@ -479,9 +504,9 @@ class SyncEngine:
 
         save_state = self._state_svc.state.saves.get(rom_id_str)
         files_state: dict[str, FileSyncState] = save_state.files if save_state else {}
-        device_id = self._save_service._get_server_device_id() or ""
+        device_id = self._state_svc.get_server_device_id() or ""
 
-        local_files = self._save_service._find_save_files(rom_id)
+        local_files = self._rom_info.find_save_files(rom_id)
 
         handled_filenames: set[str] = set()
         for lf in local_files:
@@ -556,7 +581,7 @@ class SyncEngine:
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
 
-        info = self._save_service._get_rom_save_info(rom_id)
+        info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
             self._log_debug(f"_sync_rom_saves({rom_id}): no save info, skipping")
             return 0, [], []
@@ -565,7 +590,7 @@ class SyncEngine:
 
         t0 = self._clock.time()
         try:
-            device_id = self._save_service._get_server_device_id()
+            device_id = self._state_svc.get_server_device_id()
             server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id))
         except Exception as e:
             self._logger.error(f"_sync_rom_saves({rom_id}): failed to list saves: {e}")
@@ -586,7 +611,7 @@ class SyncEngine:
         conflicts: list[SaveConflict | dict] = []
         synced = 0
 
-        pending_migration = self._save_service._is_save_sort_changed()
+        pending_migration = self._rom_info.is_save_sort_changed()
         for outcome in self.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
             origin = "local" if outcome.local_path is not None else "server-only"
             self._log_debug(
@@ -621,3 +646,509 @@ class SyncEngine:
             f" synced={synced} errors={len(errors)}"
         )
         return synced, errors, conflicts
+
+    # ------------------------------------------------------------------
+    # Device registration — entrypoint for every sync flow that needs
+    # ``device_id``. Kept on SyncEngine because pre_launch_sync,
+    # post_exit_sync, sync_rom_saves, and sync_all_saves all fall back
+    # to this when ``device_id`` is missing; co-locating the fallback
+    # with its callers avoids a constructor callback.
+    # ------------------------------------------------------------------
+
+    async def ensure_device_registered(self) -> dict:
+        """Ensure this device is registered with the RomM server for save sync tracking."""
+        if not self._state_svc.is_save_sync_enabled():
+            return {"success": False, "device_id": "", "device_name": "", "disabled": True}
+
+        # Probe the RomM version when it has not been observed yet. Device
+        # registration is the entrypoint reached from background launchers
+        # that never call test_connection first, so the version on the API
+        # adapter would otherwise stay None and version-gated server-side
+        # features couldn't be enabled until the next manual connection
+        # test. Probe failures are non-fatal — the registration call below
+        # still proceeds and the adapter just retains its current version.
+        if not self._romm_api.get_version():
+            try:
+                heartbeat = await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+                with contextlib.suppress(AttributeError, TypeError):
+                    version = heartbeat.get("SYSTEM", {}).get("VERSION")
+                    if version:
+                        self._romm_api.set_version(version)
+            except Exception as e:
+                self._logger.debug(f"ensure_device_registered: version probe failed (non-fatal): {e}")
+
+        sync_state = self._state_svc.state
+        has_device_id = sync_state.device_id
+        has_server_id = sync_state.server_device_id
+        if has_device_id and has_server_id:
+            server_id_str = str(has_server_id)
+            with contextlib.suppress(Exception):
+                await self._loop.run_in_executor(
+                    None,
+                    lambda: self._romm_api.update_device(server_id_str, client_version=self._plugin_version),
+                )
+            return {
+                "success": True,
+                "device_id": sync_state.device_id,
+                "device_name": sync_state.device_name or "",
+                "server_device_id": has_server_id,
+            }
+
+        hostname = socket.gethostname()
+
+        try:
+            result = await self._loop.run_in_executor(
+                None,
+                lambda: self._romm_api.register_device(
+                    name=hostname,
+                    platform="linux",
+                    client="decky-romm-sync",
+                    client_version=self._plugin_version,
+                ),
+            )
+            server_device_id = result.get("id") or result.get("device_id")
+            if server_device_id:
+                sync_state.device_id = str(server_device_id)
+                sync_state.device_name = hostname
+                sync_state.server_device_id = str(server_device_id)
+                self._state_svc.save_state()
+                self._logger.info(f"Device registered with server: {server_device_id} ({hostname})")
+                return {
+                    "success": True,
+                    "device_id": str(server_device_id),
+                    "device_name": hostname,
+                    "server_device_id": str(server_device_id),
+                }
+        except Exception as e:
+            self._logger.warning(f"Server device registration failed: {e}")
+
+        return {"success": False, "device_id": "", "device_name": "", "error": "registration_failed"}
+
+    async def list_devices(self) -> dict:
+        """List all devices registered with the RomM server for this user."""
+        if not self._state_svc.is_save_sync_enabled():
+            return {"success": False, "devices": [], "disabled": True}
+        try:
+            own_id = self._state_svc.get_server_device_id()
+            devices = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(lambda: self._romm_api.list_devices()),
+            )
+            own_id_str = str(own_id or "")
+            enriched = [
+                {**d, "is_current_device": bool(own_id_str) and (str(d.get("id") or "")) == own_id_str} for d in devices
+            ]
+            return {"success": True, "devices": enriched}
+        except Exception as e:
+            self._log_debug(f"list_devices failed: {e}")
+            return {"success": False, "devices": [], "error": "list_failed"}
+
+    # ------------------------------------------------------------------
+    # Public sync orchestration callables
+    # ------------------------------------------------------------------
+
+    async def _refresh_save_sort_state(self, where: str) -> None:
+        """Refresh save-sort state from the live RetroArch config.
+
+        Save-sync must observe fresh save-sort state before computing
+        ``saves_dir``. This call ensures ``detect_save_sort_change`` has
+        run at least once before we read state, closing the race where
+        another frontend detect trigger arrives after our backend entry
+        point. Without this, a direct-Steam-launch with no pre-detect
+        would silently download stale server content to the wrong
+        layout and destroy real user progress during the subsequent
+        migration (#238).
+
+        Graceful degradation: if detect fails (e.g. retroarch.cfg is
+        temporarily unreadable) we log and continue with the
+        previously-known state — save-sync must not abort because of a
+        config read error.
+        """
+        if self._detect_sort_change is None:
+            return
+        try:
+            await self._loop.run_in_executor(None, self._detect_sort_change)
+        except Exception as e:
+            self._logger.warning(
+                "%s: detect_sort_change failed (%s) — proceeding with stale state",
+                where,
+                e,
+            )
+
+    async def pre_launch_sync(self, rom_id: int) -> dict:
+        """Download newer saves from server before game launch."""
+        rom_id = int(rom_id)
+        async with self._rom_lock(rom_id):
+            if not self._state_svc.is_save_sync_enabled():
+                return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
+
+            # Defense in depth: block pre_launch_sync if a future caller bypasses
+            # the @migration_blocked decorator at the public callable. saves_dir
+            # would otherwise resolve under the new home and silently desync from
+            # files still living at the old home. Internal _sync_rom_saves callers
+            # (sync_all_saves, rollback_to_version) are protected by the decorator
+            # on their own public callables — this guard is for pre_launch_sync.
+            if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+                return {
+                    "success": False,
+                    "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+                    "synced": 0,
+                    "blocked_by_migration": True,
+                }
+
+            # Refresh save-sort state before the migration gate — see #238.
+            await self._refresh_save_sort_state("pre_launch_sync")
+
+            if self._rom_info.is_save_sort_changed():
+                return {
+                    "success": False,
+                    "message": "RetroArch save sorting changed — migrate saves in Settings first",
+                    "synced": 0,
+                    "save_sort_changed": True,
+                }
+
+            if not self._state_svc.state.settings.sync_before_launch:
+                return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
+
+            if not self._state_svc.state.device_id:
+                reg = await self.ensure_device_registered()
+                if not reg.get("success"):
+                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
+
+            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            self._state_svc.save_state()
+
+            msg = f"Downloaded {synced} save(s)"
+            if errors:
+                msg += f", {len(errors)} error(s)"
+            return {
+                "success": len(errors) == 0,
+                "message": msg,
+                "synced": synced,
+                "errors": errors,
+                "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
+            }
+
+    async def post_exit_sync(self, rom_id: int) -> dict:
+        """Upload changed saves after game exit."""
+        self._logger.info("post_exit_sync called for rom_id=%d", rom_id)
+        rom_id = int(rom_id)
+
+        async with self._rom_lock(rom_id):
+            if not self._state_svc.is_save_sync_enabled():
+                self._logger.info("post_exit_sync skipped: save sync disabled")
+                return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
+
+            # Defense in depth: same rationale as pre_launch_sync — internal
+            # _sync_rom_saves callers are protected by @migration_blocked on
+            # their public callables; this guard covers post_exit_sync only.
+            if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+                self._logger.info("post_exit_sync skipped: retrodeck migration pending")
+                return {
+                    "success": False,
+                    "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+                    "synced": 0,
+                    "blocked_by_migration": True,
+                }
+
+            if not self._state_svc.state.settings.sync_after_exit:
+                self._logger.info("post_exit_sync skipped: sync_after_exit disabled")
+                return {"success": True, "message": "Post-exit sync disabled", "synced": 0}
+
+            # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+            await self._refresh_save_sort_state("post_exit_sync")
+
+            try:
+                await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+            except Exception:
+                self._logger.info("post_exit_sync skipped: server offline")
+                return {"success": False, "message": "Server offline", "synced": 0, "offline": True}
+
+            if not self._state_svc.state.device_id:
+                reg = await self.ensure_device_registered()
+                if not reg.get("success"):
+                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
+
+            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            self._state_svc.save_state()
+
+            self._logger.info(
+                "post_exit_sync complete for rom_id=%d: synced=%d, errors=%d, conflicts=%d",
+                rom_id,
+                synced,
+                len(errors),
+                len(conflicts),
+            )
+
+            msg = f"Uploaded {synced} save(s)"
+            if errors:
+                msg += f", {len(errors)} error(s)"
+            if conflicts:
+                msg += f", {len(conflicts)} conflict(s)"
+            return {
+                "success": len(errors) == 0,
+                "message": msg,
+                "synced": synced,
+                "errors": errors,
+                "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
+            }
+
+    async def sync_rom_saves(self, rom_id: int) -> dict:
+        """Bidirectional sync for a single ROM (manual trigger from game detail)."""
+        rom_id = int(rom_id)
+        async with self._rom_lock(rom_id):
+            if not self._state_svc.is_save_sync_enabled():
+                return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0}
+
+            # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+            # Manual sync paths must observe fresh sort state too: a user could
+            # edit retroarch.cfg outside of a session and then trigger a manual
+            # sync before any detect has fired.
+            await self._refresh_save_sort_state("sync_rom_saves")
+
+            if not self._state_svc.state.device_id:
+                reg = await self.ensure_device_registered()
+                if not reg.get("success"):
+                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
+
+            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            self._state_svc.save_state()
+
+            msg = f"Synced {synced} save(s)"
+            if errors:
+                msg += f", {len(errors)} error(s)"
+            if conflicts:
+                msg += f", {len(conflicts)} conflict(s)"
+            return {
+                "success": len(errors) == 0,
+                "message": msg,
+                "synced": synced,
+                "errors": errors,
+                "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
+            }
+
+    async def sync_all_saves(self) -> dict:
+        """Manual full sync of all ROMs with shortcuts (both directions)."""
+        if not self._state_svc.is_save_sync_enabled():
+            return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0, "conflicts": 0}
+
+        # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+        # Manual sync paths must observe fresh sort state too: a user could
+        # edit retroarch.cfg outside of a session and then trigger a manual
+        # sync before any detect has fired.
+        await self._refresh_save_sort_state("sync_all_saves")
+
+        if not self._state_svc.state.device_id:
+            reg = await self.ensure_device_registered()
+            if not reg.get("success"):
+                return {"success": False, "message": DEVICE_NOT_REGISTERED}
+
+        total_synced = 0
+        total_errors: list[str] = []
+        all_conflicts: list[SaveConflict | dict] = []
+        rom_count = 0
+
+        # Only iterate installed ROMs — non-installed ROMs have no save files
+        rom_ids = set(self._state["installed_roms"].keys())
+        self._log_debug(f"sync_all_saves: {len(rom_ids)} ROMs to check")
+
+        for rom_id_str in sorted(rom_ids):
+            rom_count += 1
+            rom_id_int = int(rom_id_str)
+            async with self._rom_lock(rom_id_int):
+                synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id_int)
+            total_synced += synced
+            total_errors.extend(errors)
+            all_conflicts.extend(conflicts)
+
+        self._state_svc.save_state()
+
+        conflicts_count = len(all_conflicts)
+        msg = f"Synced {total_synced} save(s) across {rom_count} ROM(s)"
+        if total_errors:
+            msg += f", {len(total_errors)} error(s)"
+        if conflicts_count:
+            msg += f", {conflicts_count} conflict(s)"
+        return {
+            "success": len(total_errors) == 0,
+            "message": msg,
+            "synced": total_synced,
+            "conflicts": conflicts_count,
+            "conflicts_list": [c if isinstance(c, dict) else asdict(c) for c in all_conflicts],
+            "roms_checked": rom_count,
+            "errors": total_errors,
+        }
+
+    async def resolve_sync_conflict(
+        self,
+        rom_id: int,
+        filename: str,
+        action: str,
+    ) -> dict:
+        """Resolve a pending sync conflict (true two-sided divergence).
+
+        Reached when ``compute_sync_action`` returned ``Conflict`` — the
+        server moved AND local diverged from baseline, so the user picked a
+        side via the conflict UI.
+
+        ``action`` is one of:
+
+        - ``"keep_local"`` — push local to the current server save (PUT). When
+          the local content already matches the server's content hash we adopt
+          it silently without re-uploading.
+        - ``"use_server"`` — download the current server save, replacing local.
+        """
+        rom_id = int(rom_id)
+        rom_id_str = str(rom_id)
+
+        if action not in ("keep_local", "use_server"):
+            return {"success": False, "message": f"Invalid action: {action}"}
+
+        # Frontend-supplied filename flows into ``os.path.join(saves_dir, …)``
+        # via ``_resolve_conflict_keep_local``. Reject anything that isn't
+        # already a clean basename — legitimate callers always pass one.
+        try:
+            sanitized = sanitize_save_filename(filename)
+        except ValueError as e:
+            self._logger.warning(
+                "resolve_sync_conflict(rom_id=%d, action=%s) rejected invalid filename: %s",
+                rom_id,
+                action,
+                e,
+            )
+            return {"success": False, "message": "Invalid filename"}
+        if sanitized != filename:
+            self._logger.warning(
+                "resolve_sync_conflict(rom_id=%d, action=%s) rejected non-basename filename",
+                rom_id,
+                action,
+            )
+            return {"success": False, "message": "Invalid filename"}
+
+        async with self._rom_lock(rom_id):
+            info = self._rom_info.get_rom_save_info(rom_id)
+            if not info:
+                return {"success": False, "message": "ROM not installed"}
+            system = info["system"]
+            saves_dir = info["saves_dir"]
+
+            try:
+                device_id = self._state_svc.get_server_device_id()
+                server_saves = await self._loop.run_in_executor(
+                    None,
+                    lambda: self._retry.with_retry(
+                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
+                    ),
+                )
+            except Exception as e:
+                _code, _msg = classify_error(e)
+                return {"success": False, "message": f"Failed to fetch saves: {_msg}"}
+
+            rom_state = self._state_svc.state.saves.get(rom_id_str)
+            active_slot = rom_state.active_slot if rom_state else None
+            server_in_slot = self._filter_server_saves_to_slot(server_saves, active_slot)
+            if not server_in_slot:
+                return {"success": False, "message": "No server save in active slot"}
+            server = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
+
+            try:
+                if action == "use_server":
+                    await self._loop.run_in_executor(
+                        None,
+                        self._resolve_conflict_use_server,
+                        rom_id_str,
+                        server,
+                        saves_dir,
+                        system,
+                        info["rom_name"],
+                    )
+                    self._logger.info(
+                        "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
+                        rom_id,
+                        filename,
+                        action,
+                    )
+                    return {"success": True, "action": "use_server"}
+
+                # keep_local
+                await self._loop.run_in_executor(
+                    None,
+                    self._resolve_conflict_keep_local,
+                    rom_id,
+                    rom_id_str,
+                    filename,
+                    server,
+                    saves_dir,
+                    system,
+                )
+                self._logger.info(
+                    "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
+                    rom_id,
+                    filename,
+                    action,
+                )
+                return {"success": True, "action": "keep_local"}
+            except Exception as e:
+                self._logger.error(f"resolve_sync_conflict({rom_id}, {filename}, {action}) failed: {e}")
+                return {"success": False, "message": str(e)}
+
+    def _resolve_conflict_use_server(
+        self,
+        rom_id_str: str,
+        server: dict,
+        saves_dir: str,
+        system: str,
+        rom_name: str,
+    ) -> None:
+        """Download *server* into the canonical local save file and update state.
+
+        The write path is always ``<rom_name>.<server.file_extension>`` — the
+        path RetroArch reads. Drives state-key consistency too:
+        ``_update_file_sync_state`` receives the same target name the file
+        lands at.
+        """
+        target = _local_save_target(server, rom_name)
+        self._do_download_save(server, saves_dir, target, rom_id_str, system)
+        self._state_svc.save_state()
+
+    def _resolve_conflict_keep_local(
+        self,
+        rom_id: int,
+        rom_id_str: str,
+        filename: str,
+        server: dict,
+        saves_dir: str,
+        system: str,
+    ) -> None:
+        """Push the local file to *server* (PUT). Adopt-without-upload when the
+        local content already matches the server's content hash.
+        """
+        local_path = os.path.join(saves_dir, filename)
+        if not self._save_file.is_file(local_path):
+            raise FileNotFoundError(f"Local save not found: {local_path}")
+        local_hash = self._save_file.checksum_md5(local_path)
+        try:
+            server_hash = self._retry.with_retry(lambda: self._get_server_save_hash(server))
+        except Exception:
+            server_hash = None
+
+        if server_hash and local_hash == server_hash:
+            # Hashes match — adopt server's id without re-uploading.
+            self._log_debug(
+                f"keep_local: hash matches server, adopting without upload (rom={rom_id} filename={filename})"
+            )
+            rom_state = self._state_svc.ensure_rom_state(rom_id_str)
+            file_state = rom_state.files.setdefault(filename, FileSyncState())
+            file_state.tracked_save_id = server.get("id")
+            file_state.last_sync_hash = local_hash
+            file_state.last_sync_at = self._clock.now().isoformat()
+            file_state.last_sync_server_updated_at = server.get("updated_at", "") or ""
+            file_state.last_sync_server_size = server.get("file_size_bytes")
+            file_state.last_sync_local_mtime = self._save_file.get_mtime(local_path)
+            file_state.last_sync_local_size = self._save_file.get_size(local_path)
+            self._state_svc.save_state()
+            return
+
+        # Upload local content as a PUT against the existing server save.
+        self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server)
+        self._state_svc.save_state()

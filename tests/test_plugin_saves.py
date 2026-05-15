@@ -136,7 +136,14 @@ async def _set_event_loop(plugin):
     """Ensure plugin and service loops match the running event loop for async tests."""
     loop = asyncio.get_event_loop()
     plugin.loop = loop
-    plugin._save_sync_service._loop = loop
+    save_svc = plugin._save_sync_service
+    save_svc._loop = loop
+    # SaveService delegates async orchestration to its sub-services; rebind
+    # their loops too so run_in_executor calls land on the test's loop.
+    save_svc._sync_engine._loop = loop
+    save_svc._status._loop = loop
+    save_svc._slots._loop = loop
+    save_svc._versions._loop = loop
     plugin._playtime_service._loop = loop
 
 
@@ -452,7 +459,7 @@ class TestPostExitSync:
         # visible to SaveService on the next state read.
         assert real_migration._state is plugin._save_sync_service._state
 
-        plugin._save_sync_service._detect_sort_change = real_migration.detect_save_sort_change
+        plugin._save_sync_service._sync_engine._detect_sort_change = real_migration.detect_save_sort_change
 
         # Nothing at the PREVIOUS (OLD: sort_by_content=True → gba/) path.
         prev_save_path = tmp_path / "retrodeck" / "saves" / "gba" / "pokemon.srm"
@@ -829,11 +836,11 @@ class TestSaveSyncFeatureFlag:
 
     @pytest.mark.asyncio
     async def test_is_save_sync_enabled_helper(self, plugin):
-        """_is_save_sync_enabled reflects the settings value."""
+        """is_save_sync_enabled (on StateService) reflects the settings value."""
         plugin._save_sync_state.settings.save_sync_enabled = True
-        assert plugin._save_sync_service._is_save_sync_enabled() is True
+        assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is True
         plugin._save_sync_state.settings.save_sync_enabled = False
-        assert plugin._save_sync_service._is_save_sync_enabled() is False
+        assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is False
 
 
 # ============================================================================

@@ -17,11 +17,12 @@ from typing import TYPE_CHECKING
 from services.saves._helpers import _local_save_target
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
 
     from domain.save_state import FileSyncState
-    from services.protocols import DebugLogger, RommApiProtocol
-    from services.saves import SaveService
+    from services.protocols import DebugLogger, RetryStrategy, RommApiProtocol
+    from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
     from services.saves.sync_engine import SyncEngine
 
@@ -36,17 +37,21 @@ class VersionsService:
     def __init__(
         self,
         *,
-        save_service: SaveService,
         state_svc: StateService,
         sync_engine: SyncEngine,
+        rom_info: RomInfoService,
         romm_api: RommApiProtocol,
+        retry: RetryStrategy,
+        loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         log_debug: DebugLogger,
     ) -> None:
-        self._save_service = save_service
         self._state_svc = state_svc
         self._sync_engine = sync_engine
+        self._rom_info = rom_info
         self._romm_api = romm_api
+        self._retry = retry
+        self._loop = loop
         self._logger = logger
         self._log_debug = log_debug
 
@@ -82,12 +87,12 @@ class VersionsService:
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
-        device_id = self._save_service._get_server_device_id()
+        device_id = self._state_svc.get_server_device_id()
 
         try:
-            server_saves = await self._save_service._loop.run_in_executor(
+            server_saves = await self._loop.run_in_executor(
                 None,
-                lambda: self._save_service._retry.with_retry(
+                lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
                 ),
             )
@@ -233,14 +238,14 @@ class VersionsService:
         rom_id_str = str(rom_id)
         save_id = int(save_id)
 
-        async with self._save_service._rom_lock(rom_id):
-            info = self._save_service._get_rom_save_info(rom_id)
+        async with self._sync_engine._rom_lock(rom_id):
+            info = self._rom_info.get_rom_save_info(rom_id)
             if not info:
                 return {"status": "not_found"}
 
             # Matrix pre-flight: get the tracked save in sync first, or surface
             # a conflict that the user must resolve before any switch can run.
-            _synced, errors, conflicts = await self._save_service._loop.run_in_executor(
+            _synced, errors, conflicts = await self._loop.run_in_executor(
                 None, self._sync_engine._sync_rom_saves, rom_id
             )
             if conflicts:
@@ -255,11 +260,11 @@ class VersionsService:
 
             # Re-fetch server saves after the pre-flight: it may have created
             # or modified saves the switch needs to see.
-            device_id = self._save_service._get_server_device_id()
+            device_id = self._state_svc.get_server_device_id()
             try:
-                server_saves: list[dict] = await self._save_service._loop.run_in_executor(
+                server_saves: list[dict] = await self._loop.run_in_executor(
                     None,
-                    lambda: self._save_service._retry.with_retry(
+                    lambda: self._retry.with_retry(
                         lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
                     ),
                 )
@@ -267,7 +272,7 @@ class VersionsService:
                 self._log_debug(f"rollback_to_version: failed to list saves: {e}")
                 return {"status": "not_found"}
 
-            result = await self._save_service._loop.run_in_executor(
+            result = await self._loop.run_in_executor(
                 None,
                 self._rollback_to_version_io,
                 rom_id_str,

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from models.saves import SaveConflict
 
+from domain.emulator_tag import detect_core_change
 from domain.save_attribution import compute_uploaded_by_us
 from domain.sync_action import Conflict, Skip
 from lib.iso_time import parse_iso_to_epoch
@@ -14,10 +16,17 @@ from services.saves.status.builders import (
 )
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
 
-    from services.protocols import DebugLogger, RommApiProtocol
-    from services.saves import SaveService
+    from services.protocols import (
+        CoreResolverFn,
+        DebugLogger,
+        EventEmitter,
+        RetryStrategy,
+        RommApiProtocol,
+    )
+    from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
     from services.saves.sync_engine import MatrixOutcome, SyncEngine
 
@@ -28,19 +37,29 @@ class StatusService:
     def __init__(
         self,
         *,
-        save_service: SaveService,
+        state: dict,
         state_svc: StateService,
         sync_engine: SyncEngine,
+        rom_info: RomInfoService,
         romm_api: RommApiProtocol,
+        retry: RetryStrategy,
+        loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         log_debug: DebugLogger,
+        get_active_core: CoreResolverFn,
+        emit: EventEmitter | None,
     ) -> None:
-        self._save_service = save_service
+        self._state = state
         self._state_svc = state_svc
         self._sync_engine = sync_engine
+        self._rom_info = rom_info
         self._romm_api = romm_api
+        self._retry = retry
+        self._loop = loop
         self._logger = logger
         self._log_debug = log_debug
+        self._get_active_core = get_active_core
+        self._emit = emit
 
     def _status_entry_from_outcome(
         self,
@@ -134,8 +153,8 @@ class StatusService:
         hygiene, no network traffic.
         """
         rom_id_str = str(rom_id)
-        info = self._save_service._get_rom_save_info(rom_id)
-        server_device_id = self._save_service._get_server_device_id()
+        info = self._rom_info.get_rom_save_info(rom_id)
+        server_device_id = self._state_svc.get_server_device_id()
 
         save_state = self._state_svc.state.saves.get(rom_id_str)
         active_slot = save_state.active_slot if save_state else None
@@ -175,7 +194,83 @@ class StatusService:
             "device_id": self._state_svc.state.device_id or "",
             "last_sync_check_at": save_entry.last_sync_check_at if save_entry else None,
             "conflicts": conflicts,
-            "save_sort_changed": self._save_service._is_save_sort_changed(),
+            "save_sort_changed": self._rom_info.is_save_sort_changed(),
+        }
+
+    # ------------------------------------------------------------------
+    # Public callable surface — invoked via the SaveService aggregate root
+    # ------------------------------------------------------------------
+
+    async def get_save_status(self, rom_id: int) -> dict:
+        """Get save sync status for a ROM (local files, server saves, conflict state)."""
+        rom_id = int(rom_id)
+
+        server_saves: list[dict] = []
+        try:
+            device_id = self._state_svc.get_server_device_id()
+            server_saves = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id)),
+            )
+        except Exception as e:
+            self._log_debug(f"Failed to fetch saves for rom {rom_id}: {e}")
+
+        return await self._loop.run_in_executor(None, self._get_save_status_io, rom_id, server_saves)
+
+    async def check_save_status_background(self, rom_id: int) -> None:
+        """Run full save status check in background and emit result to frontend."""
+        try:
+            result = await self.get_save_status(rom_id)
+            if self._emit is not None:
+                await self._emit("save_status_updated", result)
+        except Exception as e:
+            self._log_debug(f"Background save status check failed for rom {rom_id}: {e}")
+
+    def check_core_change(self, rom_id: int) -> dict:
+        """Check if emulator core changed since last sync for a ROM."""
+        if not self._state_svc.is_save_sync_enabled():
+            return {"changed": False}
+
+        rom_id_str = str(rom_id)
+        save_entry = self._state_svc.state.saves.get(rom_id_str)
+        if not save_entry:
+            return {"changed": False}  # Never synced
+
+        stored_core = save_entry.last_synced_core
+        system = save_entry.system
+        if not stored_core or not system:
+            return {"changed": False}
+
+        # Resolve ROM filename for per-game core detection
+        rom_filename = None
+        installed = self._state.get("installed_roms", {}).get(rom_id_str)
+        if installed:
+            file_path = installed.get("file_path", "")
+            if file_path:
+                rom_filename = os.path.basename(file_path)
+
+        # Core labels come from ES-DE config which may differ from RetroArch's
+        # corename (e.g. "Snes9x - Current" vs "Snes9x"). Aligning with RetroArch
+        # core names is tracked in #208.
+        try:
+            active_core, active_label = self._get_active_core(system, rom_filename)
+        except Exception:
+            return {"changed": False}
+
+        changed = detect_core_change(stored_core, active_core)
+
+        if not changed:
+            return {"changed": False}
+
+        # Strip _libretro suffix for display (stored_core is guaranteed non-None here)
+        old_label = stored_core.replace("_libretro", "")
+
+        return {
+            "changed": True,
+            "old_core": stored_core,
+            "new_core": active_core,
+            "old_label": old_label,
+            "new_label": active_label or (active_core.replace("_libretro", "") if active_core else None),
         }
 
 
