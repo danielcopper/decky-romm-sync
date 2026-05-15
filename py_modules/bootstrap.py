@@ -34,6 +34,7 @@ from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from domain.save_state import SaveSyncState
+from lib.late_binding import LateBinding
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.connection import ConnectionService, ConnectionServiceConfig
@@ -264,13 +265,18 @@ def wire_services(cfg: WiringConfig) -> dict:
     dict with keys ``save_sync_service``, ``playtime_service``,
     ``sync_service``, ``download_service``, and ``firmware_service``.
     """
+    # Forward-reference bindings for producers constructed later in this
+    # function. Consumers receive ``binding.get`` (a bound method); the
+    # binding is populated via ``.set(...)`` once the producer exists.
+    # Accessing ``.get()`` before ``.set()`` raises RuntimeError instead of
+    # the NameError a bare forward-ref lambda would produce.
+    bios_files_index_binding: LateBinding[dict] = LateBinding("bios_files_index")
+    pending_sync_binding: LateBinding[dict] = LateBinding("pending_sync")
+
     # MigrationService is constructed before SaveService so that
     # save_sync_service can receive a bound reference to
     # ``migration_service.detect_save_sort_change``. SaveService must observe
     # fresh sort state before computing saves_dir (#238).
-    # ``get_bios_files_index`` is a lambda that defers the ``firmware_service``
-    # lookup to call time, so it is safe to reference here even though
-    # ``firmware_service`` is constructed later in this function.
     migration_service = MigrationService(
         migration_files=cfg.adapters.migration_files,
         config=MigrationServiceConfig(
@@ -279,7 +285,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             logger=cfg.runtime.logger,
             save_state=cfg.callbacks.save_state,
             emit=cfg.runtime.emit,
-            get_bios_files_index=lambda: firmware_service.bios_files_index,
+            get_bios_files_index=bios_files_index_binding.get,
             get_retrodeck_home=cfg.callbacks.get_retrodeck_home,
             get_saves_path=cfg.callbacks.get_saves_path,
             get_bios_path=cfg.callbacks.get_bios_path,
@@ -345,11 +351,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         config=ArtworkServiceConfig(
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            # ``sync_service`` is constructed after ArtworkService; the
-            # lambda binds at call time, so the deferred lookup is safe
-            # as long as ``get_artwork_base64`` is only invoked after
-            # wire_services returns.
-            get_pending_sync=lambda: sync_service.pending_sync,
+            get_pending_sync=pending_sync_binding.get,
         ),
     )
 
@@ -385,6 +387,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         metadata_service=metadata_service,
         artwork=artwork_service,
     )
+    pending_sync_binding.set(lambda: sync_service.pending_sync)
 
     download_service = DownloadService(
         romm_api=cfg.adapters.romm_api,
@@ -435,6 +438,10 @@ def wire_services(cfg: WiringConfig) -> dict:
             core_info=cfg.callbacks.core_info_provider,
         ),
     )
+    # Load the BIOS registry from disk now so the property does not raise
+    # the pre-load RuntimeError when the binding's reader is later invoked.
+    firmware_service.load_bios_registry()
+    bios_files_index_binding.set(lambda: firmware_service.bios_files_index)
 
     sgdb_service = SteamGridService(
         sgdb_api=cfg.adapters.sgdb_adapter,
@@ -448,7 +455,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             logger=cfg.runtime.logger,
             save_state=cfg.callbacks.save_state,
             save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
-            get_pending_sync=lambda: sync_service.pending_sync,
+            get_pending_sync=pending_sync_binding.get,
         ),
     )
 

@@ -190,7 +190,6 @@ class Plugin:
         self._core_service = services["core_service"]
         self._connection_service = services["connection_service"]
         self._startup_healing_service = services["startup_healing_service"]
-        self._firmware_service.load_bios_registry()
 
         # ── 5. Startup healing ──────────────────────────────────────────────
         self._save_sync_service.init_state()

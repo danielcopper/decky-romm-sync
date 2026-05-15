@@ -286,6 +286,49 @@ class TestWireServices:
         assert "startup_healing_service" in result
         deps["loop"].close()
 
+    def test_pending_sync_binding_observes_library_rebinds(self, tmp_path):
+        """ArtworkService/SgdbService see live LibraryService._pending_sync rebinds.
+
+        Regression for #349: the bootstrap binding must defer the read so
+        post-bind reassignments of ``_pending_sync`` (e.g., line 417 of
+        library.py after a sync diff) are visible to consumers.
+        """
+        deps = self._make_deps(tmp_path)
+        result = wire_services(self._make_config(deps))
+        sync_service = result["sync_service"]
+        artwork_service = result["artwork_service"]
+        sgdb_service = result["sgdb_service"]
+
+        # Producer rebinds _pending_sync to a fresh dict (mirrors sync_apply_delta).
+        sync_service._pending_sync = {42: {"name": "Game", "platform_name": "N64"}}
+
+        assert artwork_service._get_pending_sync() == {42: {"name": "Game", "platform_name": "N64"}}
+        assert sgdb_service._get_pending_sync() == {42: {"name": "Game", "platform_name": "N64"}}
+        deps["loop"].close()
+
+    def test_bios_files_index_binding_observes_firmware_rebinds(self, tmp_path):
+        """MigrationService sees post-load reassignments of bios_files_index.
+
+        Regression for #349: ``firmware_service.load_bios_registry()`` rebinds
+        ``_bios_files_index`` to a fresh dict each call; the binding must
+        re-resolve the property on every read.
+        """
+        deps = self._make_deps(tmp_path)
+        result = wire_services(self._make_config(deps))
+        firmware_service = result["firmware_service"]
+        migration_service = result["migration_service"]
+
+        # Re-loading reassigns _bios_files_index; mutate the new dict and
+        # confirm migration's deferred-read picks up the change.
+        firmware_service.load_bios_registry()
+        firmware_service._bios_files_index["scph5501.bin"] = {
+            "platform": "psx",
+            "description": "PS1 BIOS",
+        }
+
+        assert "scph5501.bin" in migration_service._get_bios_files_index()
+        deps["loop"].close()
+
     def test_migration_service_receives_get_core_name(self, tmp_path):
         """MigrationService must receive the get_core_name callback from wire_services."""
         deps = self._make_deps(tmp_path)
