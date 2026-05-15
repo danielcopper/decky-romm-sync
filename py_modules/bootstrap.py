@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
+from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter as DownloadFileAdapterImpl
 from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapterImpl
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
@@ -237,6 +238,7 @@ def bootstrap(
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
+    debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
 
     return {
         "persistence": persistence,
@@ -262,6 +264,7 @@ def bootstrap(
         "clock": clock,
         "uuid_gen": uuid_gen,
         "sleeper": sleeper,
+        "debug_logger": debug_logger,
         "core_resolver": core_resolver,
         "gamelist_editor": gamelist_editor,
     }
@@ -332,6 +335,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         get_saves_path=cfg.callbacks.get_saves_path,
         get_roms_path=cfg.callbacks.get_roms_path,
         get_active_core=cfg.callbacks.core_info_provider.get_active_core,
+        log_debug=cfg.callbacks.log_debug,
         get_core_name=cfg.callbacks.get_core_name,
         plugin_version=_read_plugin_version(cfg.runtime.plugin_dir),
         emit=cfg.runtime.emit,
@@ -356,6 +360,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         logger=cfg.runtime.logger,
         clock=cfg.runtime.clock,
         save_state=save_sync_service.save_state,
+        log_debug=cfg.callbacks.log_debug,
     )
 
     metadata_service = MetadataService(
@@ -482,6 +487,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             save_state=cfg.callbacks.save_state,
             save_settings_to_disk=cfg.callbacks.save_settings_to_disk,
             get_pending_sync=pending_sync_binding.get,
+            log_debug=cfg.callbacks.log_debug,
         ),
     )
 

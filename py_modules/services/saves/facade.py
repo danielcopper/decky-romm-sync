@@ -5,7 +5,6 @@ import contextlib
 import os
 import socket
 from dataclasses import asdict
-from typing import ClassVar
 
 from models.saves import SaveConflict
 
@@ -59,8 +58,6 @@ class SaveService:
         per-field rationale.
     """
 
-    _LOG_LEVELS: ClassVar[dict[str, int]] = {"debug": 0, "info": 1, "warn": 2, "error": 3}
-
     def __init__(
         self,
         *,
@@ -98,6 +95,7 @@ class SaveService:
         self._emit = config.emit
         self._detect_sort_change = config.detect_sort_change
         self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
+        self._log_debug = config.log_debug
         # Per-rom lock dict — serializes concurrent sync operations on the
         # same rom_id (pre_launch_sync, post_exit_sync, manual sync, resolve).
         self._rom_sync_locks: dict[int, asyncio.Lock] = {}
@@ -140,15 +138,6 @@ class SaveService:
         if rom_id not in self._rom_sync_locks:
             self._rom_sync_locks[rom_id] = asyncio.Lock()
         return self._rom_sync_locks[rom_id]
-
-    # ------------------------------------------------------------------
-    # Debug logging helper
-    # ------------------------------------------------------------------
-
-    def _log_debug(self, msg: str) -> None:
-        configured = self._settings.get("log_level", "warn")
-        if self._LOG_LEVELS.get("debug", 0) >= self._LOG_LEVELS.get(configured, 2):
-            self._logger.info(msg)
 
     def _get_server_device_id(self) -> str | None:
         """Return the server device ID if registered, else None."""

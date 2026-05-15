@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 from domain.sgdb_artwork import (
     asset_type_endpoint,
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     import logging
 
     from services.protocols import (
+        DebugLogger,
         PendingSyncReader,
         RommApiProtocol,
         SettingsPersister,
@@ -62,6 +63,9 @@ class SteamGridConfig:
         Read seam returning the current LibraryService pending-sync map.
         Used to resolve SGDB IDs for ROMs mid-sync that are not yet in
         the registry.
+    log_debug:
+        ``DebugLogger`` Protocol seam — routes through the user's QAM
+        log-level filter.
     """
 
     loop: asyncio.AbstractEventLoop
@@ -69,6 +73,7 @@ class SteamGridConfig:
     save_state: StatePersister
     save_settings_to_disk: SettingsPersister
     get_pending_sync: PendingSyncReader
+    log_debug: DebugLogger
 
 
 class SteamGridService:
@@ -96,15 +101,7 @@ class SteamGridService:
         self._save_state = config.save_state
         self._save_settings_to_disk = config.save_settings_to_disk
         self._get_pending_sync = config.get_pending_sync
-
-    # -- logging -----------------------------------------------------------
-
-    _LOG_LEVELS: ClassVar[dict[str, int]] = {"debug": 0, "info": 1, "warn": 2, "error": 3}
-
-    def _log_debug(self, msg: str) -> None:
-        configured = self._settings.get("log_level", "warn")
-        if self._LOG_LEVELS.get("debug", 0) >= self._LOG_LEVELS.get(configured, 2):
-            self._logger.info(msg)
+        self._log_debug = config.log_debug
 
     # -- SGDB lookup -------------------------------------------------------
 

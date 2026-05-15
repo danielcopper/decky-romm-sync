@@ -50,6 +50,12 @@ def _make_testable_plugin():
     ``@migration_blocked`` decorator does not raise AttributeError in tests
     that don't otherwise wire migration state. Tests that exercise the
     block can override ``is_retrodeck_migration_pending`` per-test.
+
+    Also pre-wires a no-op ``_debug_logger`` so any service that consumes
+    ``Plugin._log_debug`` (which forwards through ``_debug_logger``) works
+    out of the box. Tests that want to assert on debug-log behaviour can
+    override ``_debug_logger`` after construction (e.g. with the real
+    ``SettingsAwareDebugLogger`` bound to a settings dict they control).
     """
     # Import here to ensure decky mock is already installed
     from main import Plugin
@@ -63,6 +69,7 @@ def _make_testable_plugin():
     instance = TestablePlugin()
     instance._migration_service = MagicMock()
     instance._migration_service.is_retrodeck_migration_pending.return_value = False
+    instance._debug_logger = lambda _msg: None
     return instance
 
 

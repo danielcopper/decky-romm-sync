@@ -1,7 +1,6 @@
 import asyncio
 import os
 import sys
-from typing import ClassVar
 
 plugin_dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(plugin_dir, "py_modules"))
@@ -31,14 +30,24 @@ class Plugin:
     _MIN_REQUIRED_VERSION = (4, 8, 1)
 
     # -- logging ---------------------------------------------------------------
-
-    LOG_LEVELS: ClassVar[dict] = {"debug": 0, "info": 1, "warn": 2, "error": 3}
+    #
+    # ``_debug_logger`` is wired by ``_main()`` to the
+    # ``SettingsAwareDebugLogger`` adapter built in ``bootstrap``. The
+    # class-level default is a no-op so a bare ``Plugin()`` (used in test
+    # fixtures that don't reach ``_main``) does not raise on
+    # ``_log_debug`` — production always replaces it before any service
+    # consumes the callback.
+    _debug_logger = staticmethod(lambda _msg: None)
 
     def _log_debug(self, msg):
-        """Log a message only when log_level allows debug messages."""
-        configured = self.settings.get("log_level", "warn")
-        if self.LOG_LEVELS.get("debug", 0) >= self.LOG_LEVELS.get(configured, 2):
-            decky.logger.info(msg)
+        """Forward a debug message through the wired ``DebugLogger`` adapter.
+
+        Thin compatibility shim: production wiring sets ``_debug_logger``
+        from bootstrap; tests construct ``Plugin`` bare and may patch in
+        their own logger. The actual filtering logic lives in
+        :class:`adapters.debug_logger.SettingsAwareDebugLogger`.
+        """
+        self._debug_logger(msg)
 
     # -- persistence delegates -------------------------------------------------
 
@@ -76,6 +85,7 @@ class Plugin:
         self._retrodeck_paths: RetroDeckPathsAdapter = adapters["retrodeck_paths"]
         self._retroarch_config: RetroArchConfigAdapter = adapters["retroarch_config"]
         self._retroarch_core_info: RetroArchCoreInfoAdapter = adapters["retroarch_core_info"]
+        self._debug_logger = adapters["debug_logger"]
 
         # ── 3. Load state ───────────────────────────────────────────────────
         self._state = {
@@ -145,7 +155,7 @@ class Plugin:
                     firmware_cache_persister=adapters["firmware_cache_persister"],
                     core_info_provider=adapters["core_resolver"],
                     save_sync_state_persister=adapters["save_sync_state_persister"],
-                    log_debug=self._log_debug,
+                    log_debug=self._debug_logger,
                 ),
                 min_required_version=self._MIN_REQUIRED_VERSION,
             )

@@ -31,6 +31,7 @@ def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
         logger=logging.getLogger("test"),
         clock=clk,
         save_state=lambda: saved.append(True),
+        log_debug=lambda _msg: None,
     )
     defaults.update(overrides)
     svc = PlaytimeService(**defaults)

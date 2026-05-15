@@ -98,6 +98,7 @@ def plugin(tmp_path):
             get_saves_path=lambda: saves_path,
             get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
             get_active_core=lambda system_name, rom_filename=None: (None, None),
+            log_debug=p._log_debug,
         ),
     )
     p._save_sync_service.init_state()
@@ -110,6 +111,7 @@ def plugin(tmp_path):
         logger=logging.getLogger("test"),
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
         save_state=p._save_sync_service.save_state,
+        log_debug=p._log_debug,
     )
 
     # Store fake_api on plugin for test access

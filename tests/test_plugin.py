@@ -7,6 +7,7 @@ import pytest
 from conftest import FakePathProbe, FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
 
@@ -39,6 +40,7 @@ def plugin():
 
     import decky
 
+    p._debug_logger = SettingsAwareDebugLogger(settings=p.settings, logger=decky.logger)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
@@ -75,6 +77,7 @@ def plugin():
             save_state=MagicMock(),
             save_settings_to_disk=MagicMock(),
             get_pending_sync=lambda: p._sync_service._pending_sync,
+            log_debug=p._log_debug,
         ),
     )
 
@@ -863,6 +866,7 @@ class TestMainStartupOrdering:
             "clock": MagicMock(),
             "uuid_gen": MagicMock(),
             "sleeper": MagicMock(),
+            "debug_logger": MagicMock(),
             "core_resolver": MagicMock(),
             "gamelist_editor": MagicMock(),
         }

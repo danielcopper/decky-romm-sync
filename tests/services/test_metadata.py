@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
 
@@ -27,6 +28,7 @@ def plugin():
 
     import decky
 
+    p._debug_logger = SettingsAwareDebugLogger(settings=p.settings, logger=decky.logger)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 

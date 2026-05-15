@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         Clock,
         CoreNameProviderFn,
         CoreResolverFn,
+        DebugLogger,
         EventEmitter,
         RomsPathProvider,
         SaveFileAdapter,
@@ -99,6 +100,10 @@ class SaveServiceConfig:
         Optional callback returning ``True`` when a RetroDECK migration
         is in flight; SaveService gates destructive operations on this
         signal. ``None`` disables the gate (unit tests).
+    log_debug:
+        ``DebugLogger`` Protocol seam — routes through the user's QAM
+        log-level filter. Sub-services access this via the
+        ``_save_service._log_debug`` back-ref.
     """
 
     runtime_dir: str
@@ -110,6 +115,7 @@ class SaveServiceConfig:
     get_saves_path: SavesPathProvider
     get_roms_path: RomsPathProvider
     get_active_core: CoreResolverFn
+    log_debug: DebugLogger
     get_core_name: CoreNameProviderFn | None = None
     plugin_version: str = "0.0.0"
     emit: EventEmitter | None = None

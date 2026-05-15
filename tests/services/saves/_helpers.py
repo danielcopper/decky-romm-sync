@@ -42,6 +42,7 @@ _CONFIG_FIELDS = frozenset(
         "emit",
         "detect_sort_change",
         "is_retrodeck_migration_pending",
+        "log_debug",
     }
 )
 
@@ -65,6 +66,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         get_saves_path=lambda: str(tmp_path / "saves"),
         get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
         get_active_core=lambda system_name, rom_filename=None: (None, None),
+        log_debug=lambda _msg: None,
         plugin_version="0.14.0",
         emit=emit,
     )

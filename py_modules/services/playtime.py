@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from domain.save_state import PlaytimeEntry, SaveSyncState
 from lib.iso_time import parse_iso
-from services.protocols import Clock, RetryStrategy, RommApiProtocol, StatePersister
+from services.protocols import Clock, DebugLogger, RetryStrategy, RommApiProtocol, StatePersister
 
 if TYPE_CHECKING:
     import asyncio
@@ -37,6 +37,9 @@ class PlaytimeService:
         Standard-library logger.
     save_state:
         Callable to persist the save_sync_state dict to disk.
+    log_debug:
+        ``DebugLogger`` Protocol seam — routes through the user's QAM
+        log-level filter.
     """
 
     PLAYTIME_NOTE_TITLE = "romm-sync:playtime"
@@ -51,6 +54,7 @@ class PlaytimeService:
         logger: logging.Logger,
         clock: Clock,
         save_state: StatePersister,
+        log_debug: DebugLogger,
     ) -> None:
         self._romm_api = romm_api
         self._retry = retry
@@ -59,13 +63,7 @@ class PlaytimeService:
         self._logger = logger
         self._clock = clock
         self._save_state = save_state
-
-    # ------------------------------------------------------------------
-    # Debug logging helper
-    # ------------------------------------------------------------------
-
-    def _log_debug(self, msg: str) -> None:
-        self._logger.debug(msg)
+        self._log_debug = log_debug
 
     # ------------------------------------------------------------------
     # Playtime Notes API Helpers

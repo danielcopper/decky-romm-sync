@@ -7,6 +7,7 @@ import pytest
 from conftest import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
+from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.steam_config import SteamConfigAdapter
 from lib.errors import SgdbApiError, SteamGridDirMissingError
 
@@ -33,6 +34,7 @@ def plugin(sgdb_artwork_cache):
 
     import decky
 
+    p._debug_logger = SettingsAwareDebugLogger(settings=p.settings, logger=decky.logger)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
@@ -71,6 +73,7 @@ def plugin(sgdb_artwork_cache):
             save_state=MagicMock(),
             save_settings_to_disk=MagicMock(),
             get_pending_sync=lambda: p._sync_service._pending_sync,
+            log_debug=p._log_debug,
         ),
     )
     return p
@@ -693,6 +696,129 @@ class TestSaveShortcutIcon:
         result = await plugin.save_shortcut_icon(12345, "not-valid-base64!!!")
 
         assert result["success"] is False
+
+
+class TestDebugLoggerProtocolSeam:
+    """SteamGridService routes debug messages through the injected ``DebugLogger``.
+
+    Locks in the consolidation from #354: SteamGridService no longer owns a
+    per-service ``_log_debug`` method that re-reads settings; the protocol
+    seam is the sole knob. A no-op injection must suppress every SGDB
+    debug message, regardless of log-level settings.
+    """
+
+    @pytest.fixture
+    def plugin_with_captured_log(self, sgdb_artwork_cache):
+        """Plugin fixture where ``log_debug`` is a list-capturing fake."""
+        from unittest.mock import MagicMock as MM
+
+        import decky
+
+        p = Plugin()
+        p.settings = {"log_level": "debug", "steamgriddb_api_key": ""}
+        p._http_adapter = MM()
+        p._romm_api = MM()
+        p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+        p._metadata_cache = {}
+
+        captured: list[str] = []
+
+        def capture(msg: str) -> None:
+            captured.append(msg)
+
+        steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
+        p._steam_config = steam_config
+
+        p._sync_service = LibraryService(
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            state=p._state,
+            settings=p.settings,
+            metadata_cache=p._metadata_cache,
+            config=LibraryServiceConfig(
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                emit=decky.emit,
+                clock=FakeClock(),
+                uuid_gen=FakeUuidGen(),
+                sleeper=FakeSleeper(),
+                save_state=MM(),
+                save_settings_to_disk=MM(),
+                log_debug=capture,
+            ),
+        )
+
+        p._sgdb_service = SteamGridService(
+            sgdb_api=MM(),
+            romm_api=p._romm_api,
+            steam_config=steam_config,
+            sgdb_artwork_cache=sgdb_artwork_cache,
+            state=p._state,
+            settings=p.settings,
+            config=SteamGridConfig(
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                save_state=MM(),
+                save_settings_to_disk=MM(),
+                get_pending_sync=lambda: p._sync_service._pending_sync,
+                log_debug=capture,
+            ),
+        )
+        return p, captured
+
+    @pytest.mark.asyncio
+    async def test_sgdb_messages_route_through_injected_debug_logger(self, plugin_with_captured_log):
+        """SGDB debug messages reach the injected ``log_debug``, not a hidden ``.info()`` seam."""
+        plugin, captured = plugin_with_captured_log
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        # No API key configured -> early "skipped" debug message
+        await plugin.get_sgdb_artwork_base64(42, 1)
+
+        sgdb_msgs = [m for m in captured if "SGDB artwork" in m]
+        assert sgdb_msgs, f"Expected SGDB debug messages on injected seam, got: {captured}"
+
+    @pytest.mark.asyncio
+    async def test_sgdb_debug_does_not_call_logger_info_directly(self, plugin_with_captured_log):
+        """SGDB debug must reach the injected callback only — never ``decky.logger.info``.
+
+        Regression for #354: pre-consolidation, ``SteamGridService._log_debug``
+        was a per-service method that re-read settings and called
+        ``self._logger.info(msg)`` directly whenever
+        ``log_level == "debug"``. That meant the injected ``DebugLogger``
+        callback was ignored — any consumer that wanted to silence
+        SGDB output had no working knob. The protocol consolidation
+        replaces the method with an injected callable, so the only
+        sink is what bootstrap (or this fixture) provides.
+
+        Would fail on ``main``: there a debug-level config would push
+        every SGDB message through ``decky.logger.info`` in addition
+        to (and bypassing) the injected callback.
+        """
+        from unittest.mock import patch
+
+        import decky
+
+        plugin, captured = plugin_with_captured_log
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        # log_level=debug — pre-fix this is exactly the state where the
+        # per-service ``_log_debug`` emitted via ``self._logger.info``.
+        plugin.settings["log_level"] = "debug"
+
+        with patch.object(decky.logger, "info") as mock_info:
+            await plugin.get_sgdb_artwork_base64(42, 1)
+
+        # SGDB messages MUST land on the injected seam …
+        assert any("SGDB artwork" in m for m in captured), (
+            f"SGDB debug must reach the injected log_debug; captured={captured}"
+        )
+        # … and NOT on decky.logger.info.
+        sgdb_info_calls = [c for c in mock_info.call_args_list if "SGDB artwork" in str(c)]
+        assert not sgdb_info_calls, (
+            "SGDB debug must NOT leak to logger.info — the injected "
+            f"DebugLogger is the only sink. Observed leaks: {sgdb_info_calls}"
+        )
 
 
 class TestFakeSgdbArtworkCacheAtomicWrite:
