@@ -128,7 +128,6 @@ class RuntimeBundle:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
-    min_required_version: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -152,12 +151,18 @@ class CallbackBundle:
 
 @dataclass(frozen=True)
 class WiringConfig:
-    """Composition-root inputs for ``wire_services`` grouped into four bundles."""
+    """Composition-root inputs for ``wire_services``.
+
+    Four bundles carry the wiring; ``min_required_version`` sits at the
+    top level — it's plugin metadata, not a runtime seam, and only
+    ConnectionService consumes it.
+    """
 
     adapters: AdapterBundle
     stores: StateBundle
     runtime: RuntimeBundle
     callbacks: CallbackBundle
+    min_required_version: tuple[int, ...]
 
 
 def bootstrap(
@@ -518,7 +523,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             romm_api=cfg.adapters.romm_api,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            min_required_version=cfg.runtime.min_required_version,
+            min_required_version=cfg.min_required_version,
         ),
     )
 

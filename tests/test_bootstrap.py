@@ -226,7 +226,6 @@ class TestWireServices:
                 clock=deps["clock"],
                 uuid_gen=deps["uuid_gen"],
                 sleeper=deps["sleeper"],
-                min_required_version=deps["min_required_version"],
             ),
             callbacks=CallbackBundle(
                 get_saves_path=deps["get_saves_path"],
@@ -243,6 +242,7 @@ class TestWireServices:
                 save_sync_state_persister=deps["save_sync_state_persister"],
                 log_debug=deps["log_debug"],
             ),
+            min_required_version=deps["min_required_version"],
         )
 
     def test_returns_all_services(self, tmp_path):

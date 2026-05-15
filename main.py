@@ -135,7 +135,6 @@ class Plugin:
                     clock=adapters["clock"],
                     uuid_gen=adapters["uuid_gen"],
                     sleeper=adapters["sleeper"],
-                    min_required_version=self._MIN_REQUIRED_VERSION,
                 ),
                 callbacks=CallbackBundle(
                     get_saves_path=self._retrodeck_paths.get_saves_path,
@@ -152,6 +151,7 @@ class Plugin:
                     save_sync_state_persister=SaveSyncStatePersisterAdapter(self._persistence),
                     log_debug=self._log_debug,
                 ),
+                min_required_version=self._MIN_REQUIRED_VERSION,
             )
         )
         self._save_sync_service = services["save_sync_service"]
