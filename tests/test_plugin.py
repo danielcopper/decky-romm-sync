@@ -841,6 +841,8 @@ class TestMainStartupOrdering:
 
         bootstrapped_adapters = {
             "persistence": plugin._persistence,
+            "firmware_cache_persister": MagicMock(),
+            "save_sync_state_persister": MagicMock(),
             "settings": {},
             "http_adapter": MagicMock(),
             "romm_api": MagicMock(),

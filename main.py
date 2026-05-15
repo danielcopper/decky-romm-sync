@@ -18,10 +18,6 @@ from bootstrap import (
     wire_services,
 )
 
-from adapters.persistence import (
-    FirmwareCachePersisterAdapter,
-    SaveSyncStatePersisterAdapter,
-)
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
@@ -146,9 +142,9 @@ class Plugin:
                     save_state=self._save_state,
                     save_settings_to_disk=self._save_settings_to_disk,
                     save_metadata_cache=self._save_metadata_cache,
-                    firmware_cache_persister=FirmwareCachePersisterAdapter(self._persistence),
+                    firmware_cache_persister=adapters["firmware_cache_persister"],
                     core_info_provider=adapters["core_resolver"],
-                    save_sync_state_persister=SaveSyncStatePersisterAdapter(self._persistence),
+                    save_sync_state_persister=adapters["save_sync_state_persister"],
                     log_debug=self._log_debug,
                 ),
                 min_required_version=self._MIN_REQUIRED_VERSION,
