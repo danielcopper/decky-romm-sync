@@ -105,6 +105,12 @@ class LibraryService:
         # Sync-specific state (owned by this service)
         self._sync_state = SyncState.IDLE
         self._sync_last_heartbeat = 0.0
+        # Generation id for the active sync run. Background tasks
+        # (safety timeout) capture this at start and check it still
+        # matches before mutating state — prevents a late timeout from
+        # overwriting the post-cancel/error transition done by
+        # ``_finish_sync``.
+        self._current_sync_id: str | None = None
         self._sync_progress: dict = {
             "running": False,
             "phase": "",
@@ -271,6 +277,7 @@ class LibraryService:
         if self._sync_state != SyncState.IDLE:
             return {"success": False, "message": "Sync already in progress"}
         self._sync_state = SyncState.RUNNING
+        self._current_sync_id = self._uuid_gen.uuid4()
         self._sync_last_heartbeat = self._clock.monotonic()
         self._loop.create_task(self._do_sync())
         return {"success": True, "message": "Sync started"}
@@ -295,6 +302,7 @@ class LibraryService:
         if self._sync_state != SyncState.IDLE:
             return {"success": False, "message": "Sync already in progress"}
         self._sync_state = SyncState.RUNNING
+        self._current_sync_id = self._uuid_gen.uuid4()
         self._sync_last_heartbeat = self._clock.monotonic()
         try:
             fetch_result = await self._fetch_and_prepare()
@@ -379,6 +387,7 @@ class LibraryService:
         delta = self._pending_delta
         self._pending_delta = None
         self._sync_state = SyncState.RUNNING
+        self._current_sync_id = self._uuid_gen.uuid4()
         self._sync_last_heartbeat = self._clock.monotonic()
 
         # Calculate apply step plan
@@ -478,13 +487,24 @@ class LibraryService:
         }
         await self._emit("sync_progress", self._sync_progress)
 
-    def _start_safety_timeout(self, heartbeat_timeout_sec=30):
-        """Launch a background task that auto-completes sync if no heartbeat arrives."""
+    def _start_safety_timeout(self, heartbeat_timeout_sec=30) -> asyncio.Task:
+        """Launch a background task that auto-completes sync if no heartbeat arrives.
+
+        Returns the spawned task so tests can deterministically await its
+        completion; production callers ignore the return value.
+        """
         self._sync_last_heartbeat = self._clock.monotonic()
+        captured_sync_id = self._current_sync_id
 
         async def _safety_timeout():
             while self._sync_progress.get("running"):
                 await self._sleeper.sleep(10)
+                # Generation guard: if our sync has ended (cancel, error,
+                # normal completion), _current_sync_id was cleared or
+                # replaced. Don't fire stale "done" or overwrite the new
+                # sync state.
+                if self._current_sync_id != captured_sync_id:
+                    return
                 elapsed = self._clock.monotonic() - self._sync_last_heartbeat
                 if elapsed > heartbeat_timeout_sec:
                     self._logger.warning(f"Sync safety timeout: no heartbeat for {elapsed:.0f}s")
@@ -498,10 +518,16 @@ class LibraryService:
                         ),
                         running=False,
                     )
+                    # Second generation check: the await above yielded the
+                    # event loop, so a new sync may have started during
+                    # _emit_progress. Don't stomp its state.
+                    if self._current_sync_id != captured_sync_id:
+                        return
                     self._sync_state = SyncState.IDLE
+                    self._current_sync_id = None
                     return
 
-        self._loop.create_task(_safety_timeout())
+        return self._loop.create_task(_safety_timeout())
 
     # ── Fetch & prepare ──────────────────────────────────────
 
@@ -899,6 +925,7 @@ class LibraryService:
         }
         await self._emit("sync_progress", self._sync_progress)
         self._sync_state = SyncState.IDLE
+        self._current_sync_id = None
         self._logger.info(message)
 
     # ── Sync results (called by frontend) ────────────────────
@@ -1029,6 +1056,9 @@ class LibraryService:
             )
             self._logger.info(f"Sync results reported: {total} games")
         self._sync_state = SyncState.IDLE
+        # Invalidate any in-flight safety timeout — sync is over, no
+        # late "done" event should fire on top of the one we just emitted.
+        self._current_sync_id = None
         return {"success": True}
 
     # ── Artwork delegation ───────────────────────────────────
