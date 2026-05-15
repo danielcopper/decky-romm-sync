@@ -724,7 +724,7 @@ class SyncOrchestrator:
                 await self._sleeper.sleep(_UNIT_WAIT_POLL_SEC)
             except asyncio.CancelledError:
                 self._logger.info(f"Per-unit wait cancelled for unit {unit.name}")
-                return None
+                raise
 
         results = box.last_unit_results or {}
         box.last_unit_results = None

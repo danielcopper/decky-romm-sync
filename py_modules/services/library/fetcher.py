@@ -517,6 +517,53 @@ class LibraryFetcher:
 
         return units
 
+    async def _try_unit_incremental_skip(self, unit: WorkUnit) -> list[dict] | None:
+        """Per-unit incremental-skip pre-check for a platform unit.
+
+        Returns the registry-reconstructed ROM list when the platform is
+        unchanged (server reports zero rows updated after ``last_sync``
+        and the unit's ``rom_count`` matches the registry count for this
+        platform). Returns ``None`` to signal "fall through to a full
+        paginated fetch" — either the registry has no entries for this
+        platform, no prior sync timestamp exists, the delta check
+        raised, or the server reports changes.
+        """
+        platform_name = unit.name
+        platform_slug = unit.slug
+
+        registry = self._state.get("shortcut_registry", {})
+        last_sync = self._state.get("last_sync")
+        registry_count = sum(1 for e in registry.values() if e.get("platform_name") == platform_name)
+
+        if not last_sync or registry_count == 0:
+            return None
+
+        try:
+            delta_resp = await self._loop.run_in_executor(
+                None,
+                self._romm_api.list_roms_updated_after,
+                int(unit.id),
+                last_sync,
+                1,
+                0,
+            )
+        except Exception as e:
+            self._logger.warning(
+                f"Per-unit incremental check failed for {platform_name}, falling back to full fetch: {e}"
+            )
+            return None
+
+        server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
+        if server_total == 0 and unit.rom_count == registry_count:
+            self._logger.info(f"Per-unit skip: {platform_name} unchanged ({registry_count} ROMs in registry)")
+            return self._reconstruct_platform_from_registry(registry, platform_name, platform_slug)
+
+        self._logger.info(
+            f"Per-unit fetch {platform_name}: {server_total} updated, "
+            f"server={unit.rom_count} registry={registry_count} — full fetch"
+        )
+        return None
+
     async def fetch_platform_unit(self, unit: WorkUnit) -> tuple[list[dict], bool]:
         """Fetch ROMs for a single platform unit.
 
@@ -533,39 +580,13 @@ class LibraryFetcher:
         if unit.type != "platform":
             raise ValueError(f"fetch_platform_unit called with non-platform unit type={unit.type}")
 
+        skip_roms = await self._try_unit_incremental_skip(unit)
+        if skip_roms is not None:
+            return skip_roms, True
+
         platform_id = int(unit.id)
         platform_name = unit.name
         platform_slug = unit.slug
-
-        registry = self._state.get("shortcut_registry", {})
-        last_sync = self._state.get("last_sync")
-        registry_count = sum(1 for e in registry.values() if e.get("platform_name") == platform_name)
-
-        if last_sync and registry_count > 0:
-            try:
-                delta_resp = await self._loop.run_in_executor(
-                    None,
-                    self._romm_api.list_roms_updated_after,
-                    platform_id,
-                    last_sync,
-                    1,
-                    0,
-                )
-                server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
-                if server_total == 0 and unit.rom_count == registry_count:
-                    self._logger.info(f"Per-unit skip: {platform_name} unchanged ({registry_count} ROMs in registry)")
-                    return (
-                        self._reconstruct_platform_from_registry(registry, platform_name, platform_slug),
-                        True,
-                    )
-                self._logger.info(
-                    f"Per-unit fetch {platform_name}: {server_total} updated, "
-                    f"server={unit.rom_count} registry={registry_count} — full fetch"
-                )
-            except Exception as e:
-                self._logger.warning(
-                    f"Per-unit incremental check failed for {platform_name}, falling back to full fetch: {e}"
-                )
 
         unit_roms: list[dict] = []
         offset = 0

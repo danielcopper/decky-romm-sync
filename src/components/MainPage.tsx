@@ -241,11 +241,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       const result = await syncPreview();
       stopPolling();
       if (result.success) {
-        {
-          setPreview(result);
-          setSyncing(false);
-          setLoading(false);
-        }
+        setPreview(result);
+        setSyncing(false);
+        setLoading(false);
       } else {
         setStatus(result.message || "Preview failed");
         setSyncing(false);
