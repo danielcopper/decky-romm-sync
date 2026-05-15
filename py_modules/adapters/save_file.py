@@ -86,3 +86,13 @@ class SaveFileAdapter:
         fd, path = tempfile.mkstemp(suffix=suffix)
         os.close(fd)
         return path
+
+    def read_bytes(self, path: str) -> bytes:
+        """Return the contents of *path* as raw bytes."""
+        with open(path, "rb") as f:
+            return f.read()
+
+    def write_bytes(self, path: str, data: bytes) -> None:
+        """Write *data* to *path*, overwriting any existing contents."""
+        with open(path, "wb") as f:
+            f.write(data)

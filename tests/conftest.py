@@ -760,6 +760,15 @@ class FakeSaveFileAdapter:
         self._ensure_mtime(path)
         return path
 
+    def read_bytes(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    def write_bytes(self, path: str, data: bytes) -> None:
+        self.files[path] = data
+        self._ensure_mtime(path)
+
 
 class FakePathProbe:
     """In-memory ``PathExistsProbe`` for tests.

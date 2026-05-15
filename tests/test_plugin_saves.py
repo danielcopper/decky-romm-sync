@@ -80,8 +80,10 @@ def plugin(tmp_path):
     )
     decky.DECKY_USER_HOME = str(tmp_path)
 
-    # Wire services with FakeSaveApi
-    fake_api = FakeSaveApi()
+    # Wire services with FakeSaveApi sharing the SaveFileAdapter so download
+    # bytes land on the same filesystem view the service inspects.
+    save_file_adapter = SaveFileAdapter()
+    fake_api = FakeSaveApi(save_file=save_file_adapter)
     p._save_sync_state = SaveService.make_default_state()
     saves_path = str(tmp_path / "retrodeck" / "saves")
 
@@ -103,7 +105,7 @@ def plugin(tmp_path):
                     logger=logging.getLogger("test"),
                 )
             ),
-            save_file=SaveFileAdapter(),
+            save_file=save_file_adapter,
             get_saves_path=lambda: saves_path,
             get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
             get_active_core=lambda system_name, rom_filename=None: (None, None),

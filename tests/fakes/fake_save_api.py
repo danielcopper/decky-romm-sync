@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from services.protocols import SaveFileAdapter
 
 
 class FakeSaveApi:
@@ -12,14 +15,22 @@ class FakeSaveApi:
     Only save, note, and download_save methods are implemented.
     ROM, firmware, and platform methods raise NotImplementedError — use MagicMock()
     when those methods are needed.
+
+    Server-side save bytes live in ``_save_content`` (``save_id -> bytes``).
+    All filesystem I/O is delegated to the injected ``save_file`` adapter so
+    this fake never imports ``os``, ``open``, or ``shutil`` directly. When
+    ``save_file`` is None the fake is fully in-memory: uploads record a zero-
+    byte snapshot and downloads write the default zero-byte payload nowhere.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, save_file: SaveFileAdapter | None = None) -> None:
+        self.save_file: SaveFileAdapter | None = save_file
         self.saves: dict[int, dict] = {}  # save_id -> save dict
         self.roms: dict[int, dict] = {}  # rom_id -> rom detail dict
         self.notes: dict[int, list[dict]] = {}  # rom_id -> [note dicts]
-        self.uploaded_files: dict[int, str] = {}  # save_id -> file_path
-        self.downloaded_files: dict[int, str] = {}  # save_id -> dest_path
+        self.uploaded_files: dict[int, str] = {}  # save_id -> source file_path (log only)
+        self.downloaded_files: dict[int, str] = {}  # save_id -> dest_path (log only)
+        self._save_content: dict[int, bytes] = {}  # save_id -> server-side bytes
         self.call_log: list[tuple[str, tuple, dict]] = []
         self._next_save_id = 1000
         self._next_note_id = 2000
@@ -32,11 +43,62 @@ class FakeSaveApi:
         """Make the next call raise the given exception."""
         self._fail_on_next = exc
 
+    def set_server_save_content(self, save_id: int, content: bytes) -> None:
+        """Stage server-side bytes for *save_id* without writing to disk.
+
+        Tests use this to seed the bytes a later ``download_save_content``
+        will write to ``dest_path``. Mirrors the in-memory ``_save_content``
+        dict directly so callers don't have to reach into a private name.
+        """
+        self._save_content[save_id] = content
+
     def _check_fail(self) -> None:
         if self._fail_on_next is not None:
             exc = self._fail_on_next
             self._fail_on_next = None
             raise exc
+
+    def _basename(self, path: str) -> str:
+        # Path algebra only — split on both separators so callers using
+        # tmp_path style absolute paths still get the file component.
+        last_sep = max(path.rfind("/"), path.rfind("\\"))
+        return path[last_sep + 1 :] if last_sep >= 0 else path
+
+    def _capture_upload(self, save_id: int, file_path: str) -> int:
+        """Read bytes from *file_path* via the injected adapter and return size.
+
+        When no ``save_file`` adapter is wired, records empty bytes (size 0)
+        — tests that exercise size/hash semantics must wire an adapter.
+        """
+        if self.save_file is None:
+            self._save_content[save_id] = b""
+            return 0
+        if not self.save_file.is_file(file_path):
+            self._save_content[save_id] = b""
+            return 0
+        data = self.save_file.read_bytes(file_path)
+        self._save_content[save_id] = data
+        return len(data)
+
+    def _materialize_download(self, save_id: int, dest_path: str) -> None:
+        """Write the staged bytes for *save_id* to *dest_path* via the adapter.
+
+        Resolution order:
+        1. ``_save_content[save_id]`` — bytes captured at upload or staged
+           via ``set_server_save_content``.
+        2. ``uploaded_files[save_id]`` — legacy staging where a test wrote
+           a file to disk and pointed at it; we re-read via the adapter.
+        3. Fallback to 1024 zero-bytes so callers always get a file.
+        """
+        if self.save_file is None:
+            return
+        if save_id in self._save_content:
+            data = self._save_content[save_id]
+        elif save_id in self.uploaded_files and self.save_file.is_file(self.uploaded_files[save_id]):
+            data = self.save_file.read_bytes(self.uploaded_files[save_id])
+        else:
+            data = b"\x00" * 1024
+        self.save_file.write_bytes(dest_path, data)
 
     # ------------------------------------------------------------------
     # Unimplemented RommApiProtocol methods (use MagicMock for these)
@@ -112,6 +174,7 @@ class FakeSaveApi:
         self._check_fail()
         for sid in save_ids:
             self.saves.pop(sid, None)
+            self._save_content.pop(sid, None)
         return {"deleted": len(save_ids)}
 
     def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
@@ -151,20 +214,7 @@ class FakeSaveApi:
         self._check_fail()
 
         self.downloaded_files[save_id] = dest_path
-
-        # If we have uploaded content for this save, copy it
-        if save_id in self.uploaded_files:
-            import os
-            import shutil
-
-            src = self.uploaded_files[save_id]
-            if os.path.isfile(src):
-                shutil.copy2(src, dest_path)
-                return
-
-        # Write default content so the file exists
-        with open(dest_path, "wb") as f:
-            f.write(b"\x00" * 1024)
+        self._materialize_download(save_id, dest_path)
 
     def confirm_download(self, save_id: int, device_id: str) -> dict:
         self.call_log.append(("confirm_download", (save_id, device_id), {}))
@@ -239,13 +289,11 @@ class FakeSaveApi:
         )
         self._check_fail()
 
-        import os
-
-        filename = os.path.basename(file_path)
+        filename = self._basename(file_path)
         now = datetime.now(UTC).isoformat()
-        size = os.path.getsize(file_path) if os.path.isfile(file_path) else 0
 
         if save_id and save_id in self.saves:
+            size = self._capture_upload(save_id, file_path)
             entry = self.saves[save_id]
             entry["updated_at"] = now
             entry["file_size_bytes"] = size
@@ -259,6 +307,8 @@ class FakeSaveApi:
                     break
             if existing:
                 save_id = existing["id"]
+                assert save_id is not None
+                size = self._capture_upload(save_id, file_path)
                 existing["updated_at"] = now
                 existing["file_size_bytes"] = size
                 existing["emulator"] = emulator
@@ -266,6 +316,7 @@ class FakeSaveApi:
             else:
                 save_id = self._next_save_id
                 self._next_save_id += 1
+                size = self._capture_upload(save_id, file_path)
                 entry = {
                     "id": save_id,
                     "rom_id": rom_id,
@@ -286,21 +337,7 @@ class FakeSaveApi:
         self._check_fail()
 
         self.downloaded_files[save_id] = dest_path
-
-        # If we have uploaded content for this save, copy it
-        if save_id in self.uploaded_files:
-            import shutil
-
-            src = self.uploaded_files[save_id]
-            import os
-
-            if os.path.isfile(src):
-                shutil.copy2(src, dest_path)
-                return
-
-        # Write default content so the file exists
-        with open(dest_path, "wb") as f:
-            f.write(b"\x00" * 1024)
+        self._materialize_download(save_id, dest_path)
 
     def get_save_metadata(self, save_id: int) -> dict:
         self.call_log.append(("get_save_metadata", (save_id,), {}))

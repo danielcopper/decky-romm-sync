@@ -64,11 +64,17 @@ _CONFIG_FIELDS = frozenset(
 
 def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["SaveService", "FakeSaveApi"]:
     """Create a SaveService with sensible defaults for testing."""
-    fake: FakeSaveApi = fake_api or FakeSaveApi()
+    save_file = SaveFileAdapter()
+    fake: FakeSaveApi = fake_api or FakeSaveApi(save_file=save_file)
+    # Tests that build their own FakeSaveApi without wiring the adapter get
+    # the same instance as the service so download_save_content materializes
+    # bytes onto the shared filesystem view.
+    if fake.save_file is None:
+        fake.save_file = save_file
     config_kwargs: dict[str, Any] = dict(
         runtime_dir=str(tmp_path),
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
-        save_file=SaveFileAdapter(),
+        save_file=save_file,
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
