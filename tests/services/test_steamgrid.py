@@ -14,7 +14,7 @@ from lib.errors import SgdbApiError, SteamGridDirMissingError
 # conftest.py patches decky before this import
 from main import Plugin
 from services.library import LibraryService, LibraryServiceConfig
-from services.steamgrid import SteamGridConfig, SteamGridService
+from services.steamgrid import SteamGridService, SteamGridServiceConfig
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ def plugin(sgdb_artwork_cache):
     sgdb_api = MagicMock()
 
     p._sgdb_service = SteamGridService(
-        config=SteamGridConfig(
+        config=SteamGridServiceConfig(
             sgdb_api=sgdb_api,
             romm_api=p._romm_api,
             steam_config=steam_config,
@@ -750,7 +750,7 @@ class TestDebugLoggerProtocolSeam:
         )
 
         p._sgdb_service = SteamGridService(
-            config=SteamGridConfig(
+            config=SteamGridServiceConfig(
                 sgdb_api=MM(),
                 romm_api=p._romm_api,
                 steam_config=steam_config,

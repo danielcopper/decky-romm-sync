@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class SteamGridConfig:
+class SteamGridServiceConfig:
     """Frozen wiring bundle handed to ``SteamGridService.__init__``.
 
     Holds the Protocol-typed adapters (``sgdb_api``, ``romm_api``,
@@ -48,12 +48,6 @@ class SteamGridConfig:
     settings dicts, runtime infrastructure, persistence callbacks, the
     pending-sync read seam, and the debug-logger seam SteamGridService
     needs at construction time.
-
-    Note
-    ----
-    The dataclass is named ``SteamGridConfig`` rather than
-    ``SteamGridServiceConfig`` for transitional reasons; renaming is
-    tracked separately and does not affect the Always-Config shape.
     """
 
     sgdb_api: SteamGridDbApi
@@ -73,7 +67,7 @@ class SteamGridConfig:
 class SteamGridService:
     """SteamGridDB orchestration: API key flow, artwork fetch/cache, icon save."""
 
-    def __init__(self, *, config: SteamGridConfig) -> None:
+    def __init__(self, *, config: SteamGridServiceConfig) -> None:
         self._sgdb_api = config.sgdb_api
         self._romm_api = config.romm_api
         self._steam_config = config.steam_config

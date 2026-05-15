@@ -88,7 +88,7 @@ from services.saves import SaveService, SaveServiceConfig
 from services.settings import SettingsService, SettingsServiceConfig
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
-from services.steamgrid import SteamGridConfig, SteamGridService
+from services.steamgrid import SteamGridService, SteamGridServiceConfig
 
 
 @dataclass(frozen=True)
@@ -479,7 +479,7 @@ def wire_services(cfg: WiringConfig) -> dict:
     bios_files_index_binding.set(lambda: firmware_service.bios_files_index)
 
     sgdb_service = SteamGridService(
-        config=SteamGridConfig(
+        config=SteamGridServiceConfig(
             sgdb_api=cfg.adapters.sgdb_adapter,
             romm_api=cfg.adapters.romm_api,
             steam_config=cfg.adapters.steam_config,

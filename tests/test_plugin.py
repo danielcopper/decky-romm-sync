@@ -17,7 +17,7 @@ from services.connection import ConnectionService, ConnectionServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.settings import SettingsService, SettingsServiceConfig
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
-from services.steamgrid import SteamGridConfig, SteamGridService
+from services.steamgrid import SteamGridService, SteamGridServiceConfig
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def plugin():
     )
 
     p._sgdb_service = SteamGridService(
-        config=SteamGridConfig(
+        config=SteamGridServiceConfig(
             sgdb_api=MagicMock(),
             romm_api=p._romm_api,
             steam_config=steam_config,
