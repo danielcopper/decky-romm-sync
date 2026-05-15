@@ -651,8 +651,8 @@ class TestShortcutDataFormat:
             ]
         )
         plugin._sync_service._loop = mock_loop
-        plugin._sync_service._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         plugin._sync_service._sync_state = SyncState.IDLE
 
         # Mock decky.emit to capture the shortcuts
@@ -665,12 +665,12 @@ class TestShortcutDataFormat:
             emitted_events.append((event, args))
 
         decky.emit = mock_emit
-        plugin._sync_service._emit = mock_emit
+        plugin._sync_service._orchestrator._emit =mock_emit
 
         try:
             # Call _do_sync directly (start_sync creates a background task
             # that never runs with a mock loop)
-            await plugin._sync_service._do_sync()
+            await plugin._sync_service._orchestrator._do_sync()
         except Exception:
             pass
         finally:
@@ -767,10 +767,10 @@ class TestSyncPreview:
             {"rom_id": 2, "name": "Game B", "platform_name": "N64", "platform_slug": "n64", "fs_name": "b.z64"},
             {"rom_id": 3, "name": "Game C", "platform_name": "N64", "platform_slug": "n64", "fs_name": "c.z64"},
         ]
-        plugin._sync_service._fetch_and_prepare = AsyncMock(
+        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
             return_value=(all_roms, shortcuts_data, platforms, {}, set())
         )
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         # Set up registry: rom 1 unchanged, rom 2 changed name
         plugin._state["shortcut_registry"] = {
@@ -801,10 +801,10 @@ class TestSyncPreview:
         shortcuts_data = [
             {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
         ]
-        plugin._sync_service._fetch_and_prepare = AsyncMock(
+        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
             return_value=(all_roms, shortcuts_data, platforms, {}, set())
         )
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         result = await plugin.sync_preview()
         assert plugin._sync_service._pending_delta is not None
@@ -835,10 +835,10 @@ class TestSyncPreview:
         shortcuts_data = [
             {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
         ]
-        plugin._sync_service._fetch_and_prepare = AsyncMock(
+        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
             return_value=(all_roms, shortcuts_data, platforms, {}, set())
         )
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         await plugin.sync_preview()
         assert plugin._sync_service._sync_state == SyncState.IDLE
@@ -935,7 +935,7 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin, "preview-xyz")
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         # Just under the 30-minute window.
         plugin._sync_service._clock.advance(1799)
 
@@ -958,7 +958,7 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         result = await plugin.sync_apply_delta("test-preview-123")
         assert result["success"] is True
@@ -985,7 +985,7 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
         assert 1 in plugin._sync_service._pending_sync
@@ -1006,7 +1006,7 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
         assert plugin._sync_service._pending_delta is None
@@ -1043,7 +1043,7 @@ class TestSyncApplyDelta:
             collection_memberships={},
             platform_rom_ids=set(),
         )
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
 
@@ -1288,14 +1288,14 @@ class TestCheckCancelling:
     def test_raises_when_cancelling(self, plugin):
         plugin._sync_service._sync_state = SyncState.CANCELLING
         with pytest.raises(asyncio.CancelledError):
-            plugin._sync_service._check_cancelling()
+            plugin._sync_service._fetcher._check_cancelling()
 
     def test_noop_when_running(self, plugin):
         plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._check_cancelling()  # should not raise
+        plugin._sync_service._fetcher._check_cancelling()  # should not raise
 
     def test_noop_when_idle(self, plugin):
-        plugin._sync_service._check_cancelling()  # should not raise
+        plugin._sync_service._fetcher._check_cancelling()  # should not raise
 
 
 class TestBuildShortcutsData:
@@ -1315,7 +1315,7 @@ class TestBuildShortcutsData:
             },
             {"id": 2, "name": "Game B", "platform_name": "SNES", "platform_slug": "snes"},
         ]
-        result = plugin._sync_service._build_shortcuts_data(roms)
+        result = plugin._sync_service._fetcher._build_shortcuts_data(roms)
         assert len(result) == 2
         assert result[0]["rom_id"] == 1
         assert result[0]["name"] == "Game A"
@@ -1331,12 +1331,12 @@ class TestBuildShortcutsData:
         assert result[1]["fs_name"] == ""
 
     def test_empty_roms(self, plugin):
-        result = plugin._sync_service._build_shortcuts_data([])
+        result = plugin._sync_service._fetcher._build_shortcuts_data([])
         assert result == []
 
     def test_missing_optional_fields(self, plugin):
         roms = [{"id": 5, "name": "Minimal"}]
-        result = plugin._sync_service._build_shortcuts_data(roms)
+        result = plugin._sync_service._fetcher._build_shortcuts_data(roms)
         assert result[0]["rom_id"] == 5
         assert result[0]["platform_name"] == "Unknown"
         assert result[0]["platform_slug"] == ""
@@ -1362,7 +1362,7 @@ class TestFetchEnabledPlatforms:
         plugin._sync_service._loop = mock_loop
         plugin.settings["enabled_platforms"] = {"1": True, "2": False, "3": True}
 
-        result = await plugin._sync_service._fetch_enabled_platforms()
+        result = await plugin._sync_service._fetcher._fetch_enabled_platforms()
         assert len(result) == 2
         names = [p["name"] for p in result]
         assert "N64" in names
@@ -1383,7 +1383,7 @@ class TestFetchEnabledPlatforms:
         plugin._sync_service._loop = mock_loop
         plugin.settings["enabled_platforms"] = {}
 
-        result = await plugin._sync_service._fetch_enabled_platforms()
+        result = await plugin._sync_service._fetcher._fetch_enabled_platforms()
         assert len(result) == 2
 
     @pytest.mark.asyncio
@@ -1394,7 +1394,7 @@ class TestFetchEnabledPlatforms:
         mock_loop.run_in_executor = AsyncMock(return_value={"error": "bad response"})
         plugin._sync_service._loop = mock_loop
 
-        result = await plugin._sync_service._fetch_enabled_platforms()
+        result = await plugin._sync_service._fetcher._fetch_enabled_platforms()
         assert result == []
 
 
@@ -1414,7 +1414,7 @@ class TestReconstructPlatformFromRegistry:
             "2": {"name": "Game B", "fs_name": "b.z64", "platform_name": "N64"},
             "3": {"name": "Game C", "fs_name": "c.z64", "platform_name": "SNES"},
         }
-        result = plugin._sync_service._reconstruct_platform_from_registry(
+        result = plugin._sync_service._fetcher._reconstruct_platform_from_registry(
             plugin._state["shortcut_registry"], "N64", "n64"
         )
         assert len(result) == 2
@@ -1431,13 +1431,13 @@ class TestReconstructPlatformFromRegistry:
         plugin._state["shortcut_registry"] = {
             "1": {"name": "Game A", "platform_name": "SNES"},
         }
-        result = plugin._sync_service._reconstruct_platform_from_registry(
+        result = plugin._sync_service._fetcher._reconstruct_platform_from_registry(
             plugin._state["shortcut_registry"], "N64", "n64"
         )
         assert result == []
 
     def test_empty_registry(self, plugin):
-        result = plugin._sync_service._reconstruct_platform_from_registry({}, "N64", "n64")
+        result = plugin._sync_service._fetcher._reconstruct_platform_from_registry({}, "N64", "n64")
         assert result == []
 
 
@@ -1451,7 +1451,7 @@ class TestTryIncrementalSkip:
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(return_value={"total": 0})
         plugin._sync_service._loop = mock_loop
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         plugin._state["shortcut_registry"] = {
             "1": {"name": "Game A", "platform_name": "N64"},
@@ -1460,7 +1460,7 @@ class TestTryIncrementalSkip:
         platform = {"id": 1, "rom_count": 2}
         all_roms = []
 
-        skipped = await plugin._sync_service._try_incremental_skip(
+        skipped = await plugin._sync_service._fetcher._try_incremental_skip(
             platform, plugin._state["shortcut_registry"], "2025-01-01T00:00:00", "N64", "n64", all_roms, 1, 1
         )
         assert skipped is True
@@ -1477,7 +1477,9 @@ class TestTryIncrementalSkip:
         all_roms = []
 
         # last_sync is None => no skip
-        skipped = await plugin._sync_service._try_incremental_skip(platform, {}, None, "N64", "n64", all_roms, 1, 1)
+        skipped = await plugin._sync_service._fetcher._try_incremental_skip(
+            platform, {}, None, "N64", "n64", all_roms, 1, 1
+        )
         assert skipped is False
 
     @pytest.mark.asyncio
@@ -1491,7 +1493,7 @@ class TestTryIncrementalSkip:
         all_roms = []
 
         # registry has no entries for this platform
-        skipped = await plugin._sync_service._try_incremental_skip(
+        skipped = await plugin._sync_service._fetcher._try_incremental_skip(
             platform, {}, "2025-01-01T00:00:00", "N64", "n64", all_roms, 1, 1
         )
         assert skipped is False
@@ -1510,7 +1512,7 @@ class TestTryIncrementalSkip:
         platform = {"id": 1, "rom_count": 1}
         all_roms = []
 
-        skipped = await plugin._sync_service._try_incremental_skip(
+        skipped = await plugin._sync_service._fetcher._try_incremental_skip(
             platform, plugin._state["shortcut_registry"], "2025-01-01T00:00:00", "N64", "n64", all_roms, 1, 1
         )
         assert skipped is False
@@ -1530,7 +1532,7 @@ class TestTryIncrementalSkip:
         platform = {"id": 1, "rom_count": 5}  # server has 5, registry has 1
         all_roms = []
 
-        skipped = await plugin._sync_service._try_incremental_skip(
+        skipped = await plugin._sync_service._fetcher._try_incremental_skip(
             platform, plugin._state["shortcut_registry"], "2025-01-01T00:00:00", "N64", "n64", all_roms, 1, 1
         )
         assert skipped is False
@@ -1549,7 +1551,7 @@ class TestTryIncrementalSkip:
         platform = {"id": 1, "rom_count": 1}
         all_roms = []
 
-        skipped = await plugin._sync_service._try_incremental_skip(
+        skipped = await plugin._sync_service._fetcher._try_incremental_skip(
             platform, plugin._state["shortcut_registry"], "2025-01-01T00:00:00", "N64", "n64", all_roms, 1, 1
         )
         assert skipped is False
@@ -1572,10 +1574,10 @@ class TestFullFetchPlatformRoms:
             }
         )
         plugin._sync_service._loop = mock_loop
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         all_roms = []
-        await plugin._sync_service._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
+        await plugin._sync_service._fetcher._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
         assert len(all_roms) == 2
         assert all_roms[0]["platform_name"] == "N64"
         assert all_roms[0]["platform_slug"] == "n64"
@@ -1592,10 +1594,10 @@ class TestFullFetchPlatformRoms:
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(side_effect=[page1, page2])
         plugin._sync_service._loop = mock_loop
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         all_roms = []
-        await plugin._sync_service._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
+        await plugin._sync_service._fetcher._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
         assert len(all_roms) == 51
 
     @pytest.mark.asyncio
@@ -1605,10 +1607,10 @@ class TestFullFetchPlatformRoms:
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(side_effect=Exception("Server error"))
         plugin._sync_service._loop = mock_loop
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         all_roms = []
-        await plugin._sync_service._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
+        await plugin._sync_service._fetcher._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
         assert len(all_roms) == 0  # gracefully handles error
 
     @pytest.mark.asyncio
@@ -1616,11 +1618,11 @@ class TestFullFetchPlatformRoms:
         from unittest.mock import AsyncMock
 
         plugin._sync_service._sync_state = SyncState.CANCELLING
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         all_roms = []
         with pytest.raises(asyncio.CancelledError):
-            await plugin._sync_service._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
+            await plugin._sync_service._fetcher._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
 
 
 class TestFinalizeCoverPath:
@@ -1631,7 +1633,7 @@ class TestFinalizeCoverPath:
         staging = tmp_path / "romm_1_cover.png"
         staging.write_text("cover data")
 
-        result = plugin._sync_service._finalize_cover_path(grid, str(staging), 100001, "1")
+        result = plugin._sync_service._reporter._finalize_cover_path(grid, str(staging), 100001, "1")
         expected = os.path.join(grid, "100001p.png")
         assert result == expected
         assert not staging.exists()
@@ -1642,15 +1644,15 @@ class TestFinalizeCoverPath:
         final = tmp_path / "100001p.png"
         final.write_text("final data")
 
-        result = plugin._sync_service._finalize_cover_path(grid, "/nonexistent/path.png", 100001, "1")
+        result = plugin._sync_service._reporter._finalize_cover_path(grid, "/nonexistent/path.png", 100001, "1")
         assert result == str(final)
 
     def test_returns_cover_path_when_no_grid(self, plugin):
-        result = plugin._sync_service._finalize_cover_path(None, "/some/path.png", 100001, "1")
+        result = plugin._sync_service._reporter._finalize_cover_path(None, "/some/path.png", 100001, "1")
         assert result == "/some/path.png"
 
     def test_returns_cover_path_when_empty(self, plugin, tmp_path):
-        result = plugin._sync_service._finalize_cover_path(str(tmp_path), "", 100001, "1")
+        result = plugin._sync_service._reporter._finalize_cover_path(str(tmp_path), "", 100001, "1")
         assert result == ""
 
     def test_handles_rename_os_error(self, plugin, tmp_path):
@@ -1661,7 +1663,7 @@ class TestFinalizeCoverPath:
         staging.write_text("data")
 
         with patch("os.replace", side_effect=OSError("perm denied")):
-            result = plugin._sync_service._finalize_cover_path(grid, str(staging), 100001, "1")
+            result = plugin._sync_service._reporter._finalize_cover_path(grid, str(staging), 100001, "1")
         # Should return original path on error
         assert result == str(staging)
 
@@ -1679,7 +1681,7 @@ class TestBuildRegistryEntry:
             "sgdb_id": 200,
             "ra_id": 300,
         }
-        result = plugin._sync_service._build_registry_entry(pending, 100001, "/grid/100001p.png")
+        result = plugin._sync_service._reporter._build_registry_entry(pending, 100001, "/grid/100001p.png")
         assert result["app_id"] == 100001
         assert result["name"] == "Game A"
         assert result["fs_name"] == "gamea.z64"
@@ -1700,14 +1702,14 @@ class TestBuildRegistryEntry:
             "sgdb_id": None,
             "ra_id": None,
         }
-        result = plugin._sync_service._build_registry_entry(pending, 100002, "")
+        result = plugin._sync_service._reporter._build_registry_entry(pending, 100002, "")
         assert "igdb_id" not in result
         assert "sgdb_id" not in result
         assert "ra_id" not in result
 
     def test_missing_keys_default_to_empty(self, plugin):
         pending = {}
-        result = plugin._sync_service._build_registry_entry(pending, 100003, "")
+        result = plugin._sync_service._reporter._build_registry_entry(pending, 100003, "")
         assert result["name"] == ""
         assert result["fs_name"] == ""
         assert result["platform_name"] == ""
@@ -1773,13 +1775,15 @@ class TestDoSyncErrorHandling:
         from unittest.mock import AsyncMock
 
         plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._fetch_and_prepare = AsyncMock(side_effect=Exception("API down"))
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(side_effect=Exception("API down"))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
-        await plugin._sync_service._do_sync()
+        await plugin._sync_service._orchestrator._do_sync()
 
         # Should have emitted error progress
-        error_calls = [c for c in plugin._sync_service._emit_progress.call_args_list if c[0][0] == "error"]
+        error_calls = [
+            c for c in plugin._sync_service._orchestrator._emit_progress.call_args_list if c[0][0] == "error"
+        ]
         assert len(error_calls) >= 1
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
@@ -1792,12 +1796,14 @@ class TestDoSyncErrorHandling:
         decky.emit.reset_mock()
 
         plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._fetch_and_prepare = AsyncMock(side_effect=asyncio.CancelledError("Sync cancelled"))
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
+            side_effect=asyncio.CancelledError("Sync cancelled")
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         # CancelledError is caught, _finish_sync called, then re-raised
         with pytest.raises(asyncio.CancelledError):
-            await plugin._sync_service._do_sync()
+            await plugin._sync_service._orchestrator._do_sync()
 
         # Should be idle after _finish_sync
         assert plugin._sync_service._sync_state == SyncState.IDLE
@@ -1815,9 +1821,9 @@ class TestDoSyncErrorHandling:
             # Successfully fetch but then fail during artwork
             raise RuntimeError("Unexpected error")
 
-        plugin._sync_service._fetch_and_prepare = failing_fetch
+        plugin._sync_service._fetcher._fetch_and_prepare = failing_fetch
 
-        await plugin._sync_service._do_sync()
+        await plugin._sync_service._orchestrator._do_sync()
 
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
@@ -1833,7 +1839,7 @@ class TestFinishSync:
         plugin._sync_service._sync_state = SyncState.RUNNING
         plugin._sync_service._sync_progress = {"running": True, "current": 5, "total": 10}
 
-        await plugin._sync_service._finish_sync("Sync cancelled")
+        await plugin._sync_service._orchestrator._finish_sync("Sync cancelled")
 
         assert plugin._sync_service._sync_state == SyncState.IDLE
         assert plugin._sync_service._sync_progress["running"] is False
@@ -1848,7 +1854,7 @@ class TestFinishSync:
         plugin._sync_service._sync_progress = {"running": True}
         plugin._sync_service._current_sync_id = "sync-abc"
 
-        await plugin._sync_service._finish_sync("Sync cancelled")
+        await plugin._sync_service._orchestrator._finish_sync("Sync cancelled")
 
         assert plugin._sync_service._current_sync_id is None
 
@@ -1890,7 +1896,7 @@ class TestSafetyTimeoutGenerationGuard:
         svc._sync_progress = {"running": True, "current": 5, "total": 10}
 
         decky.emit.reset_mock()
-        task = svc._start_safety_timeout(heartbeat_timeout_sec=1)
+        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
         # Advance past the heartbeat timeout so the elapsed check would
         # otherwise fire — the generation guard must override it.
         svc._clock.advance(999)
@@ -1898,7 +1904,7 @@ class TestSafetyTimeoutGenerationGuard:
         # Let the safety-timeout task park on the gated sleep.
         await asyncio.sleep(0)
         # Cancel completes — clears _current_sync_id while timeout is parked.
-        await svc._finish_sync("Sync cancelled")
+        await svc._orchestrator._finish_sync("Sync cancelled")
         # Release the timeout; its generation guard should fire and exit.
         release.set()
         await task
@@ -1928,7 +1934,7 @@ class TestSafetyTimeoutGenerationGuard:
         svc._state["sync_stats"] = {"roms": 5, "platforms": 1}
 
         decky.emit.reset_mock()
-        task = svc._start_safety_timeout(heartbeat_timeout_sec=1)
+        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
         # Advance the FakeClock past the timeout so elapsed > heartbeat_timeout.
         svc._clock.advance(999)
 
@@ -1969,7 +1975,7 @@ class TestSafetyTimeoutGenerationGuard:
         svc._pending_sync = {}
 
         decky.emit.reset_mock()
-        task = svc._start_safety_timeout(heartbeat_timeout_sec=1)
+        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
         svc._clock.advance(999)
 
         await asyncio.sleep(0)
@@ -2011,10 +2017,10 @@ class TestSafetyTimeoutGenerationGuard:
             svc._sync_state = SyncState.RUNNING
             svc._current_sync_id = "sync-new"
 
-        svc._emit_progress = _emit_progress_mid_start
+        svc._orchestrator._emit_progress = _emit_progress_mid_start
 
         decky.emit.reset_mock()
-        task = svc._start_safety_timeout(heartbeat_timeout_sec=1)
+        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
         svc._clock.advance(999)
 
         await asyncio.sleep(0)
@@ -2034,8 +2040,8 @@ class TestSyncPreviewErrorHandling:
     async def test_general_exception_returns_error(self, plugin):
         from unittest.mock import AsyncMock
 
-        plugin._sync_service._fetch_and_prepare = AsyncMock(side_effect=RuntimeError("Something broke"))
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(side_effect=RuntimeError("Something broke"))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         result = await plugin._sync_service.sync_preview()
         assert result["success"] is False
@@ -2050,8 +2056,8 @@ class TestSyncPreviewErrorHandling:
 
         decky.emit.reset_mock()
 
-        plugin._sync_service._fetch_and_prepare = AsyncMock(side_effect=asyncio.CancelledError("cancelled"))
-        plugin._sync_service._emit_progress = AsyncMock()
+        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(side_effect=asyncio.CancelledError("cancelled"))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         with pytest.raises(asyncio.CancelledError):
             await plugin._sync_service.sync_preview()
@@ -2557,7 +2563,7 @@ class TestFetchCollectionRoms:
         """When no collections are enabled, returns empty results immediately."""
         plugin._sync_service._settings["enabled_collections"] = {"1": False, "2": False}
 
-        roms, memberships = await plugin._sync_service._fetch_collection_roms(set())
+        roms, memberships = await plugin._sync_service._fetcher._fetch_collection_roms(set())
 
         assert roms == []
         assert memberships == {}
@@ -2567,7 +2573,7 @@ class TestFetchCollectionRoms:
         """When enabled_collections key is absent, returns empty results."""
         plugin._sync_service._settings.pop("enabled_collections", None)
 
-        roms, memberships = await plugin._sync_service._fetch_collection_roms(set())
+        roms, memberships = await plugin._sync_service._fetcher._fetch_collection_roms(set())
 
         assert roms == []
         assert memberships == {}
@@ -2585,7 +2591,7 @@ class TestFetchCollectionRoms:
         }
         plugin._sync_service._loop = _make_loop_with_executor(user, [], page)
 
-        roms, memberships = await plugin._sync_service._fetch_collection_roms({10})
+        roms, memberships = await plugin._sync_service._fetcher._fetch_collection_roms({10})
 
         # ROM A (id=10) was already seen, only ROM B is new
         assert len(roms) == 1
@@ -2607,7 +2613,7 @@ class TestFetchCollectionRoms:
         }
         plugin._sync_service._loop = _make_loop_with_executor(user, [], page)
 
-        roms, memberships = await plugin._sync_service._fetch_collection_roms(set())
+        roms, memberships = await plugin._sync_service._fetcher._fetch_collection_roms(set())
 
         assert set(memberships["Favorites"]) == {5, 6}
         assert len(roms) == 2
@@ -2625,7 +2631,7 @@ class TestFetchCollectionRoms:
         # third: list_roms_by_collection for collection id=2
         plugin._sync_service._loop = _make_loop_with_executor(user, [], page)
 
-        _roms, memberships = await plugin._sync_service._fetch_collection_roms(set())
+        _roms, memberships = await plugin._sync_service._fetcher._fetch_collection_roms(set())
 
         assert "Disabled" not in memberships
         assert "Enabled" in memberships
@@ -2642,7 +2648,7 @@ class TestFetchCollectionRoms:
         }
         plugin._sync_service._loop = _make_loop_with_executor(user, [], page)
 
-        roms, _ = await plugin._sync_service._fetch_collection_roms(set())
+        roms, _ = await plugin._sync_service._fetcher._fetch_collection_roms(set())
 
         assert "files" not in roms[0]
 
@@ -2652,7 +2658,7 @@ class TestFetchCollectionRoms:
         plugin._sync_service._settings["enabled_collections"] = {"1": True}
         plugin._sync_service._loop = _make_loop_raising(Exception("Connection refused"))
 
-        roms, memberships = await plugin._sync_service._fetch_collection_roms(set())
+        roms, memberships = await plugin._sync_service._fetcher._fetch_collection_roms(set())
 
         assert roms == []
         assert memberships == {}
@@ -2683,7 +2689,7 @@ class TestFetchCollectionRoms:
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
         plugin._sync_service._loop = mock_loop
 
-        roms, memberships = await plugin._sync_service._fetch_collection_roms(set())
+        roms, memberships = await plugin._sync_service._fetcher._fetch_collection_roms(set())
 
         # The third call should use list_roms_by_virtual_collection
         third_fn = captured_calls[2][0]
@@ -2892,7 +2898,9 @@ class TestCollectionSyncEdgeCases:
         svc._loop = mock_loop
 
         # _fetch_and_prepare drives the whole flow
-        all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids = await svc._fetch_and_prepare()
+        all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids = (
+            await svc._fetcher._fetch_and_prepare()
+        )
 
         assert len(all_roms) == 1
         assert all_roms[0]["id"] == 1
@@ -2936,7 +2944,7 @@ class TestCollectionSyncEdgeCases:
             },
         }
 
-        platform_app_ids, _romm_collection_app_ids = svc._report_sync_results_io({}, [])
+        platform_app_ids, _romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
 
         assert "Game Boy Advance" in platform_app_ids
         assert 1001 in platform_app_ids["Game Boy Advance"]
@@ -2974,7 +2982,7 @@ class TestCollectionSyncEdgeCases:
             },
         }
 
-        platform_app_ids, _romm_collection_app_ids = svc._report_sync_results_io({}, [])
+        platform_app_ids, _romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
 
         assert "Game Boy Advance" in platform_app_ids
         assert 1001 in platform_app_ids["Game Boy Advance"]
@@ -2999,7 +3007,7 @@ class TestCollectionSyncEdgeCases:
         }
         platform_rom_ids = {1}  # Only ROM 1 from platform
 
-        platform_app_ids, _ = svc._build_collection_app_ids(registry, platform_rom_ids, {"Favorites": [1, 2]})
+        platform_app_ids, _ = svc._reporter._build_collection_app_ids(registry, platform_rom_ids, {"Favorites": [1, 2]})
 
         assert "Game Boy Advance" in platform_app_ids
         assert 1001 in platform_app_ids["Game Boy Advance"]
@@ -3016,7 +3024,7 @@ class TestCollectionSyncEdgeCases:
         }
         platform_rom_ids = {1}
 
-        platform_app_ids, _ = svc._build_collection_app_ids(registry, platform_rom_ids, {})
+        platform_app_ids, _ = svc._reporter._build_collection_app_ids(registry, platform_rom_ids, {})
 
         assert "Game Boy Advance" in platform_app_ids
         assert "PlayStation" in platform_app_ids, "PSX should be included (toggle ON)"
@@ -3066,7 +3074,9 @@ class TestCollectionSyncEdgeCases:
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
         svc._loop = mock_loop
 
-        _all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids = await svc._fetch_and_prepare()
+        _all_roms, shortcuts_data, _platforms, collection_memberships, platform_rom_ids = (
+            await svc._fetcher._fetch_and_prepare()
+        )
 
         # ROM A should appear exactly once despite being in both platform and collection
         rom_ids_in_shortcuts = [sd["rom_id"] for sd in shortcuts_data]
@@ -3094,7 +3104,7 @@ class TestCollectionSyncEdgeCases:
         svc._pending_collection_memberships = {"Favorites": [1]}
         svc._pending_sync = {}
 
-        platform_app_ids, romm_collection_app_ids = svc._report_sync_results_io({}, [])
+        platform_app_ids, romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
 
         # Platform group for GBA exists (ROM A is a platform ROM)
         assert "Game Boy Advance" in platform_app_ids
@@ -3157,7 +3167,7 @@ class TestCollectionSyncEdgeCases:
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
         svc._loop = mock_loop
 
-        roms, memberships = await svc._fetch_collection_roms(set())
+        roms, memberships = await svc._fetcher._fetch_collection_roms(set())
 
         assert roms == []
         # Empty collection produces no membership entry (no rom_ids collected)
@@ -3208,7 +3218,7 @@ class TestCollectionSyncEdgeCases:
             _platforms,
             collection_memberships,
             _platform_rom_ids,
-        ) = await svc._fetch_and_prepare()
+        ) = await svc._fetcher._fetch_and_prepare()
 
         # Platform ROM was still fetched
         assert len(all_roms) == 1
@@ -3230,7 +3240,7 @@ class TestCollectionSyncEdgeCases:
         svc._pending_collection_memberships = {"Favorites": [1]}
         svc._pending_platform_rom_ids = {1}
 
-        svc._report_sync_results_io({}, [])
+        svc._reporter._report_sync_results_io({}, [])
 
         assert svc._pending_sync == {}
         assert svc._pending_collection_memberships == {}
@@ -3247,7 +3257,7 @@ class TestCollectionSyncEdgeCases:
         svc._pending_collection_memberships = {}
         svc._pending_sync = {}
 
-        _platform_app_ids, romm_collection_app_ids = svc._report_sync_results_io({}, [])
+        _platform_app_ids, romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
 
         assert romm_collection_app_ids == {}
 
@@ -3263,7 +3273,7 @@ class TestCollectionSyncEdgeCases:
         svc._pending_collection_memberships = {"Favorites": [1, 99]}
         svc._pending_sync = {}
 
-        _platform_app_ids, romm_collection_app_ids = svc._report_sync_results_io({}, [])
+        _platform_app_ids, romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
 
         assert "Favorites" in romm_collection_app_ids
         assert 1001 in romm_collection_app_ids["Favorites"]
@@ -3289,7 +3299,7 @@ class TestCollectionSyncEdgeCases:
             }
         }
 
-        platform_app_ids, _romm = svc._report_sync_results_io({"1": 1001}, [])
+        platform_app_ids, _romm = svc._reporter._report_sync_results_io({"1": 1001}, [])
 
         assert "Game Boy Advance" in platform_app_ids
         assert 1001 in platform_app_ids["Game Boy Advance"]
