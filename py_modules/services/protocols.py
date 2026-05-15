@@ -984,23 +984,6 @@ class BiosChecker(Protocol):
     async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict: ...
 
 
-class PlatformBiosChecker(Protocol):
-    """Cross-service read seam: ask the firmware service whether a
-    platform's required BIOS files are present, optionally narrowed
-    by a per-game core override.
-
-    Exposes only the single async ``check_platform_bios`` entry point
-    CoreService needs after writing a core override, without dragging
-    in the rest of FirmwareService's surface.
-    """
-
-    async def check_platform_bios(
-        self,
-        platform_slug: str,
-        rom_filename: str | None = None,
-    ) -> dict: ...
-
-
 class AchievementsReader(Protocol):
     """Achievement data access consumed by GameDetailService."""
 

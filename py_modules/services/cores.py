@@ -21,9 +21,9 @@ if TYPE_CHECKING:
     import logging
 
     from services.protocols import (
+        BiosChecker,
         CoreInfoProvider,
         GamelistXmlEditorProtocol,
-        PlatformBiosChecker,
         RetroDeckHomeProvider,
     )
 
@@ -43,7 +43,7 @@ class CoreServiceConfig:
     core_info: CoreInfoProvider
     gamelist_editor: GamelistXmlEditorProtocol
     retrodeck_home: RetroDeckHomeProvider
-    bios_checker: PlatformBiosChecker
+    bios_checker: BiosChecker
 
 
 class CoreService:

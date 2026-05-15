@@ -41,7 +41,7 @@ class FakeGamelistEditor:
 
 
 class FakeBiosChecker:
-    """In-memory ``PlatformBiosChecker`` for tests."""
+    """In-memory ``BiosChecker`` for tests (only implements the async entry CoreService uses)."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
