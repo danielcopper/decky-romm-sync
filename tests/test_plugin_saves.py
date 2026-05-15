@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import _make_testable_plugin
+from conftest import _make_retry, _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
@@ -21,17 +21,6 @@ from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService
 from services.saves import SaveService, SaveServiceConfig
-
-
-def _no_retry(fn, *a, **kw):
-    return fn(*a, **kw)
-
-
-def _make_retry():
-    retry = MagicMock()
-    retry.with_retry.side_effect = _no_retry
-    retry.is_retryable.return_value = False
-    return retry
 
 
 @pytest.fixture

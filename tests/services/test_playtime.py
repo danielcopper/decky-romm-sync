@@ -6,29 +6,14 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-from unittest.mock import MagicMock
-
 import pytest
+from conftest import _make_retry
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
 
 from domain.save_state import PlaytimeEntry, SaveSyncState
 from lib.errors import RommApiError
 from services.playtime import PlaytimeService
-
-
-def _no_retry(fn, *a, **kw):
-    return fn(*a, **kw)
-
-
-def _make_retry():
-    retry = MagicMock()
-    retry.with_retry.side_effect = _no_retry
-    retry.is_retryable.return_value = False
-    return retry
 
 
 def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):

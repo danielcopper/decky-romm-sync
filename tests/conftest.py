@@ -28,6 +28,21 @@ mock_decky.emit = AsyncMock()
 sys.modules["decky"] = mock_decky
 
 
+def _no_retry(fn, *a, **kw):
+    """Pass-through Retry side_effect: invoke the wrapped callable once, no backoff."""
+    return fn(*a, **kw)
+
+
+def _make_retry():
+    """Build a Retry ``MagicMock`` that runs ``with_retry`` callables exactly once
+    and reports every exception as non-retryable. Used everywhere services
+    take a ``Retry`` Protocol injection in tests."""
+    retry = MagicMock()
+    retry.with_retry.side_effect = _no_retry
+    retry.is_retryable.return_value = False
+    return retry
+
+
 def _make_testable_plugin():
     """Return a TestablePlugin instance with test-only attributes declared.
 

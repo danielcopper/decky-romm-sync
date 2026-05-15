@@ -5,8 +5,8 @@ import hashlib
 import logging
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import MagicMock
 
+from conftest import _make_retry
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
 
@@ -24,22 +24,6 @@ def _make_save_sync_state_persister(tmp_path) -> SaveSyncStatePersisterAdapter:
             logger=logging.getLogger("test"),
         )
     )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _no_retry(fn, *a, **kw):
-    return fn(*a, **kw)
-
-
-def _make_retry():
-    retry = MagicMock()
-    retry.with_retry.side_effect = _no_retry
-    retry.is_retryable.return_value = False
-    return retry
 
 
 _CONFIG_FIELDS = frozenset(
