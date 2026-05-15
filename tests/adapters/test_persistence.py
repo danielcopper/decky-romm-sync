@@ -291,6 +291,116 @@ class TestLoadingEdgeCases:
         assert result["shortcut_registry"] == {}
         assert result["version"] == _STATE_VERSION
 
+    def test_save_state_rotates_existing_to_prev(self, adapter):
+        """Each save_state call rotates the current state.json to state.json.prev."""
+        adapter.save_state({"shortcut_registry": {"1": {"name": "Game A"}}})
+        adapter.save_state({"shortcut_registry": {"2": {"name": "Game B"}}})
+
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(state_path) as f:
+            current = json.load(f)
+        with open(prev_path) as f:
+            prev = json.load(f)
+
+        assert current["shortcut_registry"] == {"2": {"name": "Game B"}}
+        assert prev["shortcut_registry"] == {"1": {"name": "Game A"}}
+
+    def test_save_state_first_write_creates_no_prev(self, adapter):
+        """First save_state has nothing to rotate; .prev should not be created."""
+        adapter.save_state({"shortcut_registry": {"1": {"name": "Game A"}}})
+
+        prev_path = os.path.join(adapter._runtime_dir, "state.json.prev")
+        assert not os.path.exists(prev_path)
+
+    def test_load_state_recovers_from_prev_when_primary_empty(self, adapter, caplog):
+        """state.json with empty registry → recovery from state.json.prev (full dict, not just registry)."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(prev_path, "w") as f:
+            json.dump(
+                {
+                    "version": _STATE_VERSION,
+                    "shortcut_registry": {"42": {"name": "Game A"}},
+                    "last_sync": "2026-05-15T10:00:00",
+                },
+                f,
+            )
+        with open(state_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
+
+        with caplog.at_level(logging.WARNING):
+            result = adapter.load_state({"shortcut_registry": {}, "last_sync": None})
+
+        assert result["shortcut_registry"] == {"42": {"name": "Game A"}}
+        # Non-registry fields recovered too — caller sees the full prior state.
+        assert result["last_sync"] == "2026-05-15T10:00:00"
+        assert any("state.json.prev" in rec.message for rec in caplog.records)
+
+    def test_load_state_recovers_from_prev_when_primary_corrupt(self, adapter):
+        """state.json with corrupt JSON → recovery from state.json.prev."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(prev_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {"42": {"name": "Game A"}}}, f)
+        with open(state_path, "w") as f:
+            f.write("{not valid json")
+
+        result = adapter.load_state({"shortcut_registry": {}})
+
+        assert result["shortcut_registry"] == {"42": {"name": "Game A"}}
+
+    def test_load_state_no_recovery_when_prev_also_empty(self, adapter, caplog):
+        """Both primary and .prev empty → no recovery, no warning."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(state_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
+        with open(prev_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
+
+        with caplog.at_level(logging.WARNING):
+            result = adapter.load_state({"shortcut_registry": {}})
+
+        assert result["shortcut_registry"] == {}
+        assert not any("recovered" in rec.message for rec in caplog.records)
+
+    def test_load_state_no_recovery_when_prev_missing(self, adapter):
+        """Empty primary + missing .prev → no crash, returns defaults."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        with open(state_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
+
+        result = adapter.load_state({"shortcut_registry": {}})
+
+        assert result["shortcut_registry"] == {}
+
+    def test_load_state_no_recovery_when_prev_corrupt(self, adapter):
+        """Empty primary + corrupt .prev → no crash, no recovery."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(state_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
+        with open(prev_path, "w") as f:
+            f.write("garbage{")
+
+        result = adapter.load_state({"shortcut_registry": {}})
+
+        assert result["shortcut_registry"] == {}
+
+    def test_load_state_prefers_primary_when_registry_populated(self, adapter):
+        """Primary with populated registry → use it, ignore .prev."""
+        state_path = os.path.join(adapter._runtime_dir, "state.json")
+        prev_path = state_path + ".prev"
+        with open(state_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {"1": {"name": "Current"}}}, f)
+        with open(prev_path, "w") as f:
+            json.dump({"version": _STATE_VERSION, "shortcut_registry": {"2": {"name": "Stale"}}}, f)
+
+        result = adapter.load_state({"shortcut_registry": {}})
+
+        assert result["shortcut_registry"] == {"1": {"name": "Current"}}
+
     def test_load_metadata_cache_non_dict_json_returns_empty(self, adapter):
         cache_path = os.path.join(adapter._runtime_dir, "metadata_cache.json")
         with open(cache_path, "w") as f:

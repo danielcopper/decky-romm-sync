@@ -55,13 +55,23 @@ class PersistenceAdapter:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _locked_write(self, path: str, data: dict) -> None:
-        """Atomic write of *data* to *path* under an exclusive file lock."""
+    def _locked_write(self, path: str, data: dict, *, rotate_to: str | None = None) -> None:
+        """Atomic write of *data* to *path* under an exclusive file lock.
+
+        When ``rotate_to`` is provided, the existing file at ``path`` is
+        atomically renamed to that path before the new contents are
+        written — a one-deep backup that callers can fall back to if a
+        crash leaves the primary file empty or corrupt. Missing primary
+        is fine: rotation is a no-op in that case.
+        """
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp_path = path + ".tmp"
         lock_fd = os.open(path + _LOCK_EXT, os.O_WRONLY | os.O_CREAT, 0o600)
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if rotate_to is not None:
+                with contextlib.suppress(FileNotFoundError):
+                    os.replace(path, rotate_to)
             fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
                 with os.fdopen(fd, "w") as f:
@@ -120,29 +130,54 @@ class PersistenceAdapter:
     def load_state(self, defaults: dict) -> dict:
         """Read ``state.json`` and merge with *defaults*.
 
-        Returns the merged dict.  If the file is missing or corrupt the
-        returned dict is a copy of *defaults* with the version stamp.
+        If the primary file is missing/corrupt or its ``shortcut_registry``
+        is empty, falls back to the one-deep ``state.json.prev`` backup
+        when that file has a non-empty registry — a crash mid-write
+        otherwise wipes the user's shortcut library.
         """
         state_path = os.path.join(self._runtime_dir, "state.json")
+        backup_path = state_path + ".prev"
         state = dict(defaults)
-        try:
-            with open(state_path) as f:
-                saved = json.load(f)
-            if not isinstance(saved, dict):
-                saved = {}
-            if "version" not in saved:
-                saved["version"] = _STATE_VERSION
-            state.update(saved)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+
+        primary = self._read_state_json(state_path)
+        if primary is not None and primary.get("shortcut_registry"):
+            saved = primary
+        else:
+            backup = self._read_state_json(backup_path)
+            if backup is not None and backup.get("shortcut_registry"):
+                self._logger.warning(
+                    "state.json empty/corrupt; recovered %d shortcut_registry entries from state.json.prev",
+                    len(backup["shortcut_registry"]),
+                )
+                saved = backup
+            else:
+                saved = primary if primary is not None else {}
+
+        if "version" not in saved:
+            saved["version"] = _STATE_VERSION
+        state.update(saved)
         state.setdefault("version", _STATE_VERSION)
         return state
 
+    def _read_state_json(self, path: str) -> dict | None:
+        """Read a state.json-shaped file. Returns ``None`` on missing or corrupt input."""
+        try:
+            with open(path) as f:
+                loaded = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        return loaded if isinstance(loaded, dict) else None
+
     def save_state(self, data: dict) -> None:
-        """Atomic write of *data* to ``state.json`` with flock, stamping version."""
+        """Atomic write of *data* to ``state.json`` with flock, stamping version.
+
+        Rotates the current ``state.json`` to ``state.json.prev`` before
+        the write — that backup is the recovery source if a subsequent
+        crash leaves the primary empty (see :meth:`load_state`).
+        """
         data["version"] = _STATE_VERSION
         state_path = os.path.join(self._runtime_dir, "state.json")
-        self._locked_write(state_path, data)
+        self._locked_write(state_path, data, rotate_to=state_path + ".prev")
 
     # ------------------------------------------------------------------
     # Metadata cache
