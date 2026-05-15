@@ -26,7 +26,7 @@ from services.saves.versions import VersionsService
 
 
 class SaveService:
-    """Façade for bidirectional save file sync between RetroDECK and RomM.
+    """Aggregate root for bidirectional save file sync between RetroDECK and RomM.
 
     Composes the save-sync sub-services (state, sync_engine, status,
     versions, slots) and exposes the callable surface consumed by the

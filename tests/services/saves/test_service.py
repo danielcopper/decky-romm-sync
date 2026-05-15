@@ -1,4 +1,4 @@
-"""Tests for SaveService aggregate facade — public callable surface and cross-service coordination."""
+"""Tests for SaveService aggregate root — public callable surface and cross-service coordination."""
 
 import asyncio
 import logging
