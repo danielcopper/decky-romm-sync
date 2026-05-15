@@ -56,13 +56,17 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 - No clocks or randomness: no `time.time()`, `time.monotonic()`, `datetime.now()`, `uuid.uuid4()`, `asyncio.sleep()`, `random.*` directly. Inject `Clock` / `UuidGen` / `Sleeper` Protocols.
 - No service-to-service concrete imports — services are independent. Cross-service deps are Protocol-typed.
 - Module functions from `domain/` are still a coupling — if tests need `patch("services.X.module_name.fn")`, wrap the module behind a Protocol and inject it.
-- God-class signal: services > ~600 LOC or `__init__` > 6 params (S107) — decompose into sub-services with constructor injection (see `services/saves/` for the reference pattern).
+- **Constructor shape: every service takes a single `config: XxxServiceConfig` keyword argument.** Frozen dataclass, named `<ServiceName>Config` — the `Service` component is part of the name (`SteamGridConfig` is wrong, `SteamGridServiceConfig` is right). All deps live in the config: Protocol-typed adapters, infrastructure (loop, logger, clock, uuid_gen, sleeper), persistence callbacks, settings-derived values. No bare-param ctors, no mixed (some-explicit + some-in-config) ctors. Test setup is uniform: build `XxxServiceConfig(...)`, pass `XxxService(config=...)`.
+- **Debug logging: inject the `DebugLogger` Protocol.** Don't add per-service `_log_debug` methods that re-read settings at call time, and don't reach for `decky.logger.info` to bypass log-level filtering. The Protocol's wiring decision is the only knob.
+- God-class signal: services > ~600 LOC — decompose into sub-services with constructor injection (see `services/saves/` for the reference pattern). The S107 ctor-param threshold no longer fires because all Protocol-typed deps live in the config.
 
 **Adapters**: own all I/O. Never import from `services/`. Implement Protocols defined in `services/protocols.py`.
 
 **Domain**: pure compute only. No I/O, no state mutation, no service or adapter imports. Functions take inputs, return outputs. Anything stateless and I/O-free that's currently in a service belongs here.
 
-**Bootstrap (`bootstrap.py`)**: the only place where concrete adapters meet services. `WiringConfig` holds the wiring; protocols come in, services come out.
+**Bootstrap (`bootstrap.py`)**: the only place where concrete adapters meet services. `WiringConfig` holds the wiring; protocols come in, services come out. Adapter instantiation never happens in `main.py` — if a service needs a Protocol-wrapped persister, the wrapper adapter is built in `bootstrap()` and passed through `CallbackBundle`.
+
+**Process boundaries — `main.py` vs `bootstrap.py`**: `main.py` owns the Decky lifecycle (`_main`, `_unload`) and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter instantiation and service wiring. The split is binding — no callables in `bootstrap.py`, no service wiring in `main.py`. Both files grow with the surface they describe (callables for `main.py`, services for `bootstrap.py`); this is unavoidable density, not god-class. Split `bootstrap.py` into `bootstrap/{adapters,services}.py` only when it exceeds ~700 LOC.
 
 If a refactor breaks one of these rules, that's a Cosmic Python regression — call it out and fix it in the same PR or open a follow-up.
 
@@ -97,17 +101,28 @@ The Cosmic Python migration is complete (modulo deferred #259 — SonarCloud arc
 
 **Sub-issue policy**: Epic bodies do **not** carry markdown sub-issue lists — open work is tracked via GitHub's native Sub-Issues panel on each epic. If a new sub-issue is needed, link it natively (don't add a body bullet).
 
-## Sub-package layout — `__init__.py` is re-export only
+## Subfolder layout — when a subfolder is justified
 
-For sub-packages (e.g. `services/saves/status/`, `services/saves/sync_engine/`), `__init__.py` holds only:
+Layer top-level folders (`services/`, `adapters/`, `domain/`, `lib/`, `models/`) are flat by default — one file per concept. A subfolder is justified **only when the modules within share an internal type, helper, or state**, not when they share a brand-name prefix.
 
-1. The package's contract-style module docstring (describing what belongs in the package)
-2. Re-exports of the public class(es) from named implementation modules
-3. Optional `__all__`
+- `adapters/romm/` qualifies: `http.py` is the internal HTTP transport for `romm_api.py`; the two share types and only `romm_api.py` is the public surface.
+- `services/saves/` qualifies: facade + sub-services (`sync_engine/`, `slots/`, `status/`, `versions.py`) share a `SaveSyncState` aggregate.
+- `adapters/retroarch/` would NOT qualify: `retroarch_config.py` (RetroArch.cfg reader) and `retroarch_core_info.py` (core lookup) share nothing but a brand name. False cohesion.
+- `adapters/steam/` would NOT qualify: would mix Steam (`steam_config.py`) with SteamGridDB (`steamgriddb.py`, `sgdb_artwork_cache.py`) — different vendor, different concern.
 
-Implementation lives in named modules (`engine.py`, `service.py`, `builders.py`, etc.). Don't put 500+ LOC class definitions directly in `__init__.py` — that obscures the package's public surface and breaks the "init = namespace marker + re-export" Python convention.
+When a service-level decomposition produces sub-services with shared state (e.g. a future `services/library/` decomposition with shared preview-delta state), a subfolder is the right home. Until then, file-level layout is the default.
 
-Example:
+## Sub-package `__init__.py` — when populated, when empty
+
+Decision rule by how the package is consumed:
+
+- **Top-level layer namespace** (`adapters/`, `services/`, `domain/`, `lib/`, `models/`): `__init__.py` is empty (a docstring is acceptable but not required). These exist as namespace markers; consumers always deep-import (`from adapters.romm.romm_api import RommApi`).
+- **Sub-package consumed via package import** (consumers write `from package import X`): `__init__.py` holds the package's contract-style module docstring, re-exports of the public class(es), and optional `__all__`. Examples: `services/saves/`, `services/saves/sync_engine/`, `services/saves/slots/`, `services/saves/status/`.
+- **Sub-package only consumed via deep-import** (consumers always write `from package.module import X`): empty or just docstring, no re-exports. Example: `adapters/romm/` — `bootstrap` deep-imports `from adapters.romm.romm_api import RommApi`.
+
+Implementation never lives in `__init__.py`. Don't put 500+ LOC class definitions there — that obscures the package's public surface and breaks the "init = namespace marker + re-export" Python convention.
+
+Example of a re-export-only `__init__.py`:
 
 ```python
 # services/saves/sync_engine/__init__.py
@@ -123,8 +138,6 @@ __all__ = ["SyncEngine"]
 from __future__ import annotations
 # ... imports, then the SyncEngine class
 ```
-
-**Top-level package `__init__.py`** (e.g. `services/saves/__init__.py`) may contain primary code because it IS the public API of the parent package — that's where `SaveService` lives.
 
 ## Docstrings — intent over behavior
 
