@@ -1592,12 +1592,52 @@ class TestFirmwareListCache:
         assert len(result1) == 1
         assert api.list_firmware.call_count == 1
 
-        # Simulate TTL expiry by backdating the cache timestamp
-        fw._firmware_cache_at = fw._clock.monotonic() - 3601
+        # Simulate TTL expiry by backdating the wall-clock cache epoch
+        fw._firmware_cache_epoch = fw._clock.time() - 3601
 
         result2 = fw._get_firmware_list()
         assert len(result2) == 2
         assert api.list_firmware.call_count == 2
+
+    def test_firmware_cache_ttl_uses_wall_clock_across_restart(self):
+        """Cache restored from disk with stale ``cached_at`` must re-fetch.
+
+        Regression for #344: monotonic-based TTL reset on every plugin
+        restart, making a disk-restored cache appear fresh forever.
+        """
+        import decky
+
+        cached_items = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
+        clock = _make_clock()
+        # Pin disk-cache epoch two hours before the clock's current wall time —
+        # well past _FIRMWARE_CACHE_TTL (1 h).
+        stale_epoch = clock.time() - 7200
+        persister = FakeFirmwareCachePersister(canned_load={"items": cached_items, "cached_at": stale_epoch})
+
+        api = MagicMock()
+        api.list_firmware.return_value = [{"id": 2, "file_name": "fresh.bin"}]
+        fw = FirmwareService(
+            config=FirmwareServiceConfig(
+                romm_api=api,
+                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                clock=clock,
+                save_state=MagicMock(),
+                firmware_cache_persister=persister,
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=FakeCoreInfoProvider(),
+            ),
+        )
+        assert fw._firmware_cache == cached_items
+        assert fw._firmware_cache_epoch == stale_epoch
+
+        result = fw._get_firmware_list()
+
+        assert result == [{"id": 2, "file_name": "fresh.bin"}]
+        assert api.list_firmware.call_count == 1
 
     def test_firmware_cache_invalidate(self):
         """Explicit invalidation triggers a re-fetch on next call."""
@@ -1630,7 +1670,7 @@ class TestFirmwareListCache:
 
         # Expire the cache so it tries to re-fetch (must be far enough in the past
         # to exceed TTL even when system uptime is short)
-        fw._firmware_cache_at = fw._clock.monotonic() - 7200
+        fw._firmware_cache_epoch = fw._clock.time() - 7200
 
         result2 = fw._get_firmware_list()
         assert result2 == result1  # Falls back to stale cache
@@ -1652,7 +1692,7 @@ class TestCheckPlatformBiosCached:
     def _make_service(
         self,
         firmware_cache=None,
-        firmware_cache_at: float = 0,
+        firmware_cache_epoch: float = 0,
         bios_registry=None,
         state=None,
     ) -> tuple[FirmwareService, FakeCoreInfoProvider]:
@@ -1675,8 +1715,7 @@ class TestCheckPlatformBiosCached:
             ),
         )
         fw._firmware_cache = firmware_cache
-        fw._firmware_cache_at = firmware_cache_at
-        fw._firmware_cache_epoch = firmware_cache_at
+        fw._firmware_cache_epoch = firmware_cache_epoch
         if bios_registry:
             fw._bios_registry = bios_registry
         return fw, core_info
@@ -1693,7 +1732,7 @@ class TestCheckPlatformBiosCached:
             firmware_cache=[
                 {"file_path": "bios/snes/some.bin", "file_name": "some.bin", "file_size_bytes": 100, "md5_hash": ""}
             ],
-            firmware_cache_at=1000.0,
+            firmware_cache_epoch=1000.0,
         )
 
         core_info.active_core = (None, None)
@@ -1715,7 +1754,7 @@ class TestCheckPlatformBiosCached:
                     "id": 1,
                 },
             ],
-            firmware_cache_at=42.0,
+            firmware_cache_epoch=42.0,
         )
 
         core_info.active_core = ("mgba_libretro.so", "mGBA")
@@ -1755,7 +1794,6 @@ class TestCheckPlatformBiosCached:
             ),
         )
         fw._firmware_cache = []
-        fw._firmware_cache_at = 1.0
         fw._firmware_cache_epoch = 1.0
 
         core_info.active_core = (None, None)
@@ -1792,8 +1830,6 @@ class TestFirmwareCachePersistence:
         )
         assert fw._firmware_cache == cached_items
         assert fw._firmware_cache_epoch == 1000.0
-        # cache_at is set from the clock's monotonic reading (deterministic in tests)
-        assert fw._firmware_cache_at == clock.monotonic()
         assert persister.load_count == 1
 
     def test_empty_disk_cache_leaves_memory_none(self):
@@ -1858,7 +1894,6 @@ class TestFirmwareCachePersistence:
     def test_invalidate_clears_persisted_cache(self, fw):
         """invalidate_firmware_cache writes empty dict to disk."""
         fw._firmware_cache = [{"id": 1}]
-        fw._firmware_cache_at = 1.0
         fw._firmware_cache_epoch = 1.0
 
         fw.invalidate_firmware_cache()

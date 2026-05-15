@@ -78,7 +78,6 @@ class FirmwareService:
         self._bios_registry: dict = {}
         self._bios_files_index: dict = {}
         self._firmware_cache: list | None = None
-        self._firmware_cache_at: float = 0
         self._firmware_cache_epoch: float = 0
         self._restore_firmware_cache()
 
@@ -161,7 +160,6 @@ class FirmwareService:
             if data and "items" in data and "cached_at" in data:
                 self._firmware_cache = data["items"]
                 self._firmware_cache_epoch = data["cached_at"]
-                self._firmware_cache_at = self._clock.monotonic()
                 self._logger.info("Restored firmware cache from disk (%d items)", len(data["items"]))
         except Exception as e:
             self._logger.warning(f"Failed to load firmware cache from disk: {e}")
@@ -180,16 +178,17 @@ class FirmwareService:
     def _get_firmware_list(self) -> list:
         """Return firmware list, using cache if TTL has not expired.
 
+        TTL is checked against the wall-clock cache epoch so a cache
+        restored from disk after a plugin restart still expires.
         On HTTP error, falls back to cached data (if any) or empty list.
         """
-        now = self._clock.monotonic()
-        if self._firmware_cache is not None and (now - self._firmware_cache_at) < _FIRMWARE_CACHE_TTL:
+        now = self._clock.time()
+        if self._firmware_cache is not None and (now - self._firmware_cache_epoch) < _FIRMWARE_CACHE_TTL:
             return self._firmware_cache
 
         try:
             result = self._romm_api.list_firmware()
             self._firmware_cache = result
-            self._firmware_cache_at = self._clock.monotonic()
             self._firmware_cache_epoch = self._clock.time()
             self._persist_firmware_cache()
             return result
@@ -202,7 +201,6 @@ class FirmwareService:
     def invalidate_firmware_cache(self) -> None:
         """Clear cached firmware list so the next call re-fetches."""
         self._firmware_cache = None
-        self._firmware_cache_at = 0
         self._firmware_cache_epoch = 0
         try:
             self._firmware_cache_persister.save({})

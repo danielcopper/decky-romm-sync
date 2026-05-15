@@ -479,7 +479,6 @@ class TestGetCachedGameDetailBiosFromCache:
                 "id": 1,
             },
         ]
-        plugin._firmware_service._firmware_cache_at = 99.0
         plugin._firmware_service._firmware_cache_epoch = 99.0
 
         plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
@@ -515,7 +514,6 @@ class TestGetCachedGameDetailBiosFromCache:
             "platform_name": "Game Boy",
         }
         plugin._firmware_service._firmware_cache = []
-        plugin._firmware_service._firmware_cache_at = 50.0
         plugin._firmware_service._firmware_cache_epoch = 50.0
 
         plugin._firmware_service._core_info.active_core = (None, None)
