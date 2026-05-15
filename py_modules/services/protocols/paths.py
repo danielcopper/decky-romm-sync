@@ -20,28 +20,23 @@ class SystemResolver(Protocol):
     def __call__(self, platform_slug: str, platform_fs_slug: str | None = None) -> str: ...
 
 
-class SavesPathProvider(Protocol):
-    """Return the current RetroDECK saves directory path."""
+class RetroDeckPaths(Protocol):
+    """Bundled accessor for the four RetroDECK runtime directory paths.
 
-    def __call__(self) -> str: ...
+    Replaces the four single-method ``*Provider`` Protocols, each of
+    which had the same ``def __call__(self) -> str`` shape — making
+    them structurally interchangeable and silently swappable at the
+    call site. Distinct method names give the type checker enough
+    information to flag a saves-for-bios mix-up.
+    """
 
+    def saves_path(self) -> str: ...
 
-class RomsPathProvider(Protocol):
-    """Return the current RetroDECK roms directory path."""
+    def roms_path(self) -> str: ...
 
-    def __call__(self) -> str: ...
+    def bios_path(self) -> str: ...
 
-
-class BiosPathProvider(Protocol):
-    """Return the current RetroDECK BIOS directory path."""
-
-    def __call__(self) -> str: ...
-
-
-class RetroDeckHomeProvider(Protocol):
-    """Return the current RetroDECK home directory path."""
-
-    def __call__(self) -> str: ...
+    def retrodeck_home(self) -> str: ...
 
 
 class RetroArchSaveSortingProvider(Protocol):

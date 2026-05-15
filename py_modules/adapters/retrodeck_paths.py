@@ -68,14 +68,14 @@ class RetroDeckPathsAdapter:
                 return path
         return os.path.join(self._user_home, "retrodeck", fallback_subdir)
 
-    def get_bios_path(self) -> str:
+    def bios_path(self) -> str:
         return self._get_path("bios_path", "bios")
 
-    def get_roms_path(self) -> str:
+    def roms_path(self) -> str:
         return self._get_path("roms_path", "roms")
 
-    def get_saves_path(self) -> str:
+    def saves_path(self) -> str:
         return self._get_path("saves_path", "saves")
 
-    def get_retrodeck_home(self) -> str:
+    def retrodeck_home(self) -> str:
         return self._get_path("rd_home_path", "")

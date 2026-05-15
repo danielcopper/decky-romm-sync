@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeCoreInfoProvider
+from conftest import FakeCoreInfoProvider, FakeRetroDeckPaths
 
 from services.cores import CoreService, CoreServiceConfig
 
@@ -86,19 +85,19 @@ def bios_checker() -> FakeBiosChecker:
 
 
 @pytest.fixture
-def retrodeck_home() -> MagicMock:
-    return MagicMock(return_value="/home/deck/retrodeck")
+def retrodeck_paths() -> FakeRetroDeckPaths:
+    return FakeRetroDeckPaths(home="/home/deck/retrodeck")
 
 
 @pytest.fixture
-def service(event_loop, logger, core_info, gamelist_editor, bios_checker, retrodeck_home) -> CoreService:
+def service(event_loop, logger, core_info, gamelist_editor, bios_checker, retrodeck_paths) -> CoreService:
     return CoreService(
         config=CoreServiceConfig(
             loop=event_loop,
             logger=logger,
             core_info=core_info,
             gamelist_editor=gamelist_editor,
-            retrodeck_home=retrodeck_home,
+            retrodeck_paths=retrodeck_paths,
             bios_checker=bios_checker,
         ),
     )
@@ -150,12 +149,12 @@ class TestSetSystemCore:
         self,
         event_loop,
         service,
-        retrodeck_home,
+        retrodeck_paths,
         gamelist_editor,
         bios_checker,
         core_info,
     ):
-        retrodeck_home.return_value = ""
+        retrodeck_paths.home = ""
         result = event_loop.run_until_complete(service.set_system_core("snes", "Snes9x"))
         assert result == {"success": False, "message": "RetroDECK home not found"}
         assert gamelist_editor.system_calls == []
@@ -218,12 +217,12 @@ class TestSetGameCore:
         self,
         event_loop,
         service,
-        retrodeck_home,
+        retrodeck_paths,
         gamelist_editor,
         bios_checker,
         core_info,
     ):
-        retrodeck_home.return_value = ""
+        retrodeck_paths.home = ""
         result = event_loop.run_until_complete(
             service.set_game_core("n64", "n64/zelda.z64", "Mupen64Plus"),
         )

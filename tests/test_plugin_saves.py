@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import _make_retry, _make_testable_plugin
+from conftest import FakeRetroDeckPaths, _make_retry, _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
@@ -95,8 +95,10 @@ def plugin(tmp_path):
                 )
             ),
             save_file=save_file_adapter,
-            get_saves_path=lambda: saves_path,
-            get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
+            retrodeck_paths=FakeRetroDeckPaths(
+                saves=saves_path,
+                roms=str(tmp_path / "retrodeck" / "roms"),
+            ),
             get_active_core=lambda system_name, rom_filename=None: (None, None),
             log_debug=p._log_debug,
         ),

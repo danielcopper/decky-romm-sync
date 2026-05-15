@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from conftest import _make_retry
+from conftest import FakeRetroDeckPaths, _make_retry
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
 
@@ -47,8 +47,10 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-        get_saves_path=lambda: str(tmp_path / "saves"),
-        get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
+        retrodeck_paths=FakeRetroDeckPaths(
+            saves=str(tmp_path / "saves"),
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        ),
         get_active_core=lambda system_name, rom_filename=None: (None, None),
         log_debug=lambda _msg: None,
         plugin_version="0.14.0",

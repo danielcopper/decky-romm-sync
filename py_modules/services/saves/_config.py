@@ -23,11 +23,10 @@ if TYPE_CHECKING:
         CoreResolverFn,
         DebugLogger,
         EventEmitter,
+        RetroDeckPaths,
         RetryStrategy,
         RommApiProtocol,
-        RomsPathProvider,
         SaveFileAdapter,
-        SavesPathProvider,
         SaveSyncStatePersister,
     )
 
@@ -69,10 +68,11 @@ class SaveServiceConfig:
         The plugin's ``asyncio`` event loop (for ``run_in_executor``).
     logger:
         Standard-library logger (replaces ``decky.logger``).
-    get_saves_path:
-        Callable returning the current RetroDECK saves directory.
-    get_roms_path:
-        Callable returning the current RetroDECK roms directory.
+    retrodeck_paths:
+        Bundled accessor for the four RetroDECK runtime directory
+        paths. SaveService consumes ``saves_path()`` and ``roms_path()``;
+        the BIOS and home accessors are unused here but the Protocol
+        is bundled so every service shares a uniform shape.
     get_active_core:
         Callable resolving the active RetroArch core for a system/game.
         Returns ``(core_so, label)`` tuple; either may be None if
@@ -130,8 +130,7 @@ class SaveServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
-    get_saves_path: SavesPathProvider
-    get_roms_path: RomsPathProvider
+    retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
     log_debug: DebugLogger
     get_core_name: CoreNameProviderFn | None = None

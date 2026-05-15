@@ -7,7 +7,7 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeDownloadQueueCleanup, FakeRomFileAdapter
+from conftest import FakeDownloadQueueCleanup, FakeRetroDeckPaths, FakeRomFileAdapter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -56,7 +56,7 @@ def service(state, save_sync_state, logger, queue_cleanup, rom_files):
             save_state=MagicMock(),
             save_save_sync_state=MagicMock(),
             rom_files=rom_files,
-            get_roms_path=lambda: _ROMS_BASE,
+            retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
             download_queue_cleanup=queue_cleanup,
         ),
     )
@@ -423,7 +423,7 @@ class TestDownloadQueueCleanup:
                 save_state=MagicMock(),
                 save_save_sync_state=MagicMock(),
                 rom_files=rom_files,
-                get_roms_path=lambda: _ROMS_BASE,
+                retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
                 download_queue_cleanup=None,
             ),
         )

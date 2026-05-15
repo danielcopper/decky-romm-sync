@@ -6,7 +6,7 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakePathProbe
+from conftest import FakePathProbe, FakeRetroDeckPaths
 
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 
@@ -44,7 +44,7 @@ def _make_service(
             state=state,
             logger=logger,
             save_state=save_state,
-            retrodeck_home=lambda: retrodeck_home,
+            retrodeck_paths=FakeRetroDeckPaths(home=retrodeck_home),
             path_probe=probe,
         ),
     )

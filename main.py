@@ -19,8 +19,8 @@ from bootstrap import (
 
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
-from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from lib.migration_gate import migration_blocked
+from services.protocols import RetroDeckPaths
 
 
 class Plugin:
@@ -82,7 +82,7 @@ class Plugin:
         self._romm_api = adapters["romm_api"]
         self._steam_config = adapters["steam_config"]
         self._sgdb_adapter = adapters["sgdb_adapter"]
-        self._retrodeck_paths: RetroDeckPathsAdapter = adapters["retrodeck_paths"]
+        self._retrodeck_paths: RetroDeckPaths = adapters["retrodeck_paths"]
         self._retroarch_config: RetroArchConfigAdapter = adapters["retroarch_config"]
         self._retroarch_core_info: RetroArchCoreInfoAdapter = adapters["retroarch_core_info"]
         self._debug_logger = adapters["debug_logger"]
@@ -143,10 +143,7 @@ class Plugin:
                     sleeper=adapters["sleeper"],
                 ),
                 callbacks=CallbackBundle(
-                    get_saves_path=self._retrodeck_paths.get_saves_path,
-                    get_roms_path=self._retrodeck_paths.get_roms_path,
-                    get_bios_path=self._retrodeck_paths.get_bios_path,
-                    get_retrodeck_home=self._retrodeck_paths.get_retrodeck_home,
+                    retrodeck_paths=self._retrodeck_paths,
                     get_retroarch_save_sorting=self._retroarch_config.get_retroarch_save_sorting,
                     get_core_name=self._retroarch_core_info.get_corename,
                     save_state=self._save_state,

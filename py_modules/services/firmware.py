@@ -20,11 +20,11 @@ if TYPE_CHECKING:
     import logging
 
     from services.protocols import (
-        BiosPathProvider,
         Clock,
         CoreInfoProvider,
         FirmwareCachePersister,
         FirmwareFileAdapter,
+        RetroDeckPaths,
         RommApiProtocol,
         StatePersister,
     )
@@ -52,7 +52,7 @@ class FirmwareServiceConfig:
     save_state: StatePersister
     firmware_cache_persister: FirmwareCachePersister
     firmware_files: FirmwareFileAdapter
-    get_bios_path: BiosPathProvider
+    retrodeck_paths: RetroDeckPaths
     core_info: CoreInfoProvider
 
 
@@ -73,7 +73,7 @@ class FirmwareService:
         self._save_state = config.save_state
         self._firmware_cache_persister = config.firmware_cache_persister
         self._firmware_files = config.firmware_files
-        self._get_bios_path = config.get_bios_path
+        self._retrodeck_paths = config.retrodeck_paths
         self._core_info = config.core_info
         self._bios_registry: dict = {}
         self._bios_files_index: dict | None = None
@@ -150,7 +150,7 @@ class FirmwareService:
         placement (e.g. dc/dc_boot.bin). Falls back to flat in bios root
         for files not in the registry.
         """
-        bios_base = self._get_bios_path()
+        bios_base = self._retrodeck_paths.bios_path()
         file_name = firmware.get("file_name", "")
         reg_entry = self.bios_files_index.get(file_name)
         if reg_entry and reg_entry.get("firmware_path"):
@@ -286,7 +286,7 @@ class FirmwareService:
 
     def _group_registry_firmware(self):
         """Build platform map from bios registry (offline fallback)."""
-        bios_base = self._get_bios_path()
+        bios_base = self._retrodeck_paths.bios_path()
         platforms_map = {}
         for reg_slug, reg_files in self._bios_registry.get("platforms", {}).items():
             if reg_slug not in platforms_map:
@@ -507,7 +507,7 @@ class FirmwareService:
         except Exception:
             if not registry_platform:
                 return {"needs_bios": False}
-            bios_base = self._get_bios_path()
+            bios_base = self._retrodeck_paths.bios_path()
             registry_items = [
                 {
                     "file_name": file_name,

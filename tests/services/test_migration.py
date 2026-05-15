@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeMigrationFileAdapter
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeMigrationFileAdapter, FakeRetroDeckPaths
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.firmware_file import FirmwareFileAdapter
@@ -52,7 +52,7 @@ def plugin(tmp_path):
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
+            retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
         ),
     )
@@ -87,11 +87,8 @@ def plugin(tmp_path):
             save_state=p._save_state,
             emit=decky.emit,
             get_bios_files_index=lambda: p._firmware_service.bios_files_index,
-            get_retrodeck_home=MagicMock(return_value=""),
-            get_saves_path=MagicMock(return_value=""),
-            get_bios_path=MagicMock(return_value=""),
+            retrodeck_paths=FakeRetroDeckPaths(),
             get_retroarch_save_sorting=MagicMock(return_value=(True, False)),
-            get_roms_path=MagicMock(return_value=""),
             get_active_core=MagicMock(return_value=(None, None)),
             get_core_name=MagicMock(return_value=None),
         ),
@@ -123,7 +120,7 @@ class TestPathChangeDetection:
         fake_home = str(tmp_path / "retrodeck")
         os.makedirs(fake_home, exist_ok=True)
 
-        plugin._migration_service._get_retrodeck_home = MagicMock(return_value=fake_home)
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=fake_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
         assert plugin._state["retrodeck_home_path"] == fake_home
@@ -145,7 +142,7 @@ class TestPathChangeDetection:
         mock_loop = MagicMock()
         plugin._migration_service._loop = mock_loop
 
-        plugin._migration_service._get_retrodeck_home = MagicMock(return_value=fake_home)
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=fake_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
         mock_loop.create_task.assert_not_called()
@@ -175,7 +172,7 @@ class TestPathChangeDetection:
         mock_loop.create_task = _close_coro_task
         plugin._migration_service._loop = mock_loop
 
-        plugin._migration_service._get_retrodeck_home = MagicMock(return_value=new_home)
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=new_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
         assert plugin._state["retrodeck_home_path"] == new_home
@@ -193,7 +190,7 @@ class TestPathChangeDetection:
         mock_loop = MagicMock()
         plugin._migration_service._loop = mock_loop
 
-        plugin._migration_service._get_retrodeck_home = MagicMock(return_value="")
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home="")
         plugin._migration_service.detect_retrodeck_path_change()
 
         mock_loop.create_task.assert_not_called()
@@ -216,7 +213,7 @@ class TestPathChangeDetection:
         mock_loop = MagicMock()
         plugin._migration_service._loop = mock_loop
 
-        plugin._migration_service._get_retrodeck_home = MagicMock(return_value=old_home)
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=old_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
         assert plugin._state["retrodeck_home_path"] == old_home
@@ -262,7 +259,7 @@ class TestPathChangeDetection:
 
         plugin._migration_service._emit = fake_emit  # type: ignore[method-assign]
 
-        plugin._migration_service._get_retrodeck_home = MagicMock(return_value=old_home)
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=old_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
         assert len(emit_calls) == 1
@@ -584,7 +581,7 @@ class TestMigrateSaveFiles:
         plugin._state["retrodeck_home_path_previous"] = old_home
         plugin._state["retrodeck_home_path"] = new_home
 
-        plugin._migration_service._get_saves_path = MagicMock(return_value=os.path.join(new_home, "saves"))
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(new_home, "saves"))
         result = await plugin.migrate_retrodeck_files()
 
         assert result["success"] is True
@@ -617,7 +614,7 @@ class TestMigrateSaveFiles:
         plugin._state["retrodeck_home_path_previous"] = old_home
         plugin._state["retrodeck_home_path"] = new_home
 
-        plugin._migration_service._get_saves_path = MagicMock(return_value=os.path.join(new_home, "saves"))
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(new_home, "saves"))
         result = await plugin.migrate_retrodeck_files()
 
         assert result["needs_confirmation"] is True
@@ -647,7 +644,7 @@ class TestMigrateSaveFiles:
         plugin._state["retrodeck_home_path_previous"] = old_home
         plugin._state["retrodeck_home_path"] = new_home
 
-        plugin._migration_service._get_saves_path = MagicMock(return_value=os.path.join(new_home, "saves"))
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(new_home, "saves"))
         result = await plugin.migrate_retrodeck_files("overwrite")
 
         assert result["success"] is True
@@ -678,7 +675,7 @@ class TestMigrateSaveFiles:
         plugin._state["retrodeck_home_path_previous"] = old_home
         plugin._state["retrodeck_home_path"] = new_home
 
-        plugin._migration_service._get_saves_path = MagicMock(return_value=os.path.join(new_home, "saves"))
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(new_home, "saves"))
         result = await plugin.migrate_retrodeck_files("skip")
 
         assert result["success"] is True
@@ -709,7 +706,7 @@ class TestMigrateSaveFiles:
         plugin._state["retrodeck_home_path_previous"] = old_home
         plugin._state["retrodeck_home_path"] = new_home
 
-        plugin._migration_service._get_saves_path = MagicMock(return_value=os.path.join(new_home, "saves"))
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(new_home, "saves"))
         result = await plugin.migrate_retrodeck_files()
 
         assert result["saves_moved"] == 1  # only the real save, not the backup
@@ -733,7 +730,7 @@ class TestMigrateSaveFiles:
         plugin._state["retrodeck_home_path_previous"] = old_home
         plugin._state["retrodeck_home_path"] = new_home
 
-        plugin._migration_service._get_saves_path = MagicMock(return_value=os.path.join(new_home, "saves"))
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(new_home, "saves"))
         status = await plugin.get_migration_status()
 
         assert status["pending"] is True
@@ -870,11 +867,8 @@ class TestMigrationFailureInjection:
             "save_state": MagicMock(),
             "emit": MagicMock(),
             "get_bios_files_index": lambda: {},
-            "get_retrodeck_home": MagicMock(return_value=""),
-            "get_saves_path": MagicMock(return_value=""),
-            "get_bios_path": MagicMock(return_value=""),
+            "retrodeck_paths": FakeRetroDeckPaths(),
             "get_retroarch_save_sorting": MagicMock(return_value=(False, False)),
-            "get_roms_path": MagicMock(return_value=""),
             "get_active_core": MagicMock(return_value=(None, None)),
             "get_core_name": MagicMock(return_value=None),
         }

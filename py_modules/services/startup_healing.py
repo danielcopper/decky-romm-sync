@@ -18,7 +18,7 @@ from domain.installed_roms import is_pending_migration_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import PathExistsProbe, RetroDeckHomeProvider, StatePersister
+    from services.protocols import PathExistsProbe, RetroDeckPaths, StatePersister
 
 
 @dataclass(frozen=True)
@@ -26,15 +26,15 @@ class StartupHealingServiceConfig:
     """Frozen wiring bundle handed to ``StartupHealingService.__init__``.
 
     Carries the live state dict, the runtime logger, the state
-    persister, the RetroDECK home provider, and the generic path-exists
-    probe. Bundled here so the ctor stays within the S107 parameter
-    budget and the service stays free of raw filesystem I/O.
+    persister, the bundled RetroDECK paths provider, and the generic
+    path-exists probe. Bundled here so the ctor stays within the S107
+    parameter budget and the service stays free of raw filesystem I/O.
     """
 
     state: dict
     logger: logging.Logger
     save_state: StatePersister
-    retrodeck_home: RetroDeckHomeProvider
+    retrodeck_paths: RetroDeckPaths
     path_probe: PathExistsProbe
 
 
@@ -45,7 +45,7 @@ class StartupHealingService:
         self._state = config.state
         self._logger = config.logger
         self._save_state = config.save_state
-        self._retrodeck_home = config.retrodeck_home
+        self._retrodeck_paths = config.retrodeck_paths
         self._path_probe = config.path_probe
 
     def prune_stale_installed_roms(self) -> None:
@@ -59,7 +59,7 @@ class StartupHealingService:
         but the user hasn't migrated yet, so the entries must survive
         until they do.
         """
-        retrodeck_home = self._retrodeck_home()
+        retrodeck_home = self._retrodeck_paths.retrodeck_home()
         if not retrodeck_home or not self._path_probe.exists(retrodeck_home):
             self._logger.info(
                 f"Skipping installed_roms prune: retrodeck home unavailable ({retrodeck_home or 'unset'})"

@@ -8,6 +8,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from conftest import FakeRetroDeckPaths
 
 from adapters.migration_file import MigrationFileAdapter
 from services.migration import MigrationService, MigrationServiceConfig
@@ -57,11 +58,13 @@ def _make_service(
             save_state=save_state_mock,
             emit=MagicMock(),
             get_bios_files_index=lambda: {},
-            get_retrodeck_home=lambda: str(tmp_path),
-            get_saves_path=lambda: saves_path,
-            get_bios_path=lambda: str(tmp_path / "bios"),
+            retrodeck_paths=FakeRetroDeckPaths(
+                saves=saves_path,
+                roms=roms_path,
+                bios=str(tmp_path / "bios"),
+                home=str(tmp_path),
+            ),
             get_retroarch_save_sorting=lambda: sort_settings,
-            get_roms_path=lambda: roms_path,
             get_active_core=active_core,
             get_core_name=get_core_name,
         ),
@@ -189,8 +192,7 @@ class TestCollectSaveSortingItems:
                 "installed_roms": installed_roms,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         old_settings = {"sort_by_content": True, "sort_by_core": False}
         new_settings = {"sort_by_content": False, "sort_by_core": False}
@@ -221,8 +223,7 @@ class TestCollectSaveSortingItems:
             }
         }
         svc, _ = _make_service(tmp_path, installed_roms=installed_roms)
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         # Same settings -> same dir
         same_settings = {"sort_by_content": True, "sort_by_core": False}
@@ -249,8 +250,7 @@ class TestCollectSaveSortingItems:
             }
         }
         svc, _ = _make_service(tmp_path, installed_roms=installed_roms)
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         old_settings = {"sort_by_content": True, "sort_by_core": False}
         new_settings = {"sort_by_content": False, "sort_by_core": False}
@@ -304,8 +304,7 @@ class TestSaveSortMigrationStatus:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         result = await svc.get_save_sort_migration_status()
 
@@ -352,8 +351,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         result = await svc.migrate_save_sort_files()
 
@@ -410,8 +408,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         result = await svc.migrate_save_sort_files()
 
@@ -464,8 +461,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         result = await svc.migrate_save_sort_files()
 
@@ -513,8 +509,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         real_getmtime = os.path.getmtime
 
@@ -578,8 +573,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         def boom_remove(path):
             raise OSError("remove failed")
@@ -636,8 +630,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         def boom_replace(src, dst):
             raise OSError("replace failed")
@@ -673,8 +666,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings": new_settings,
             },
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         result = await svc.migrate_save_sort_files()
 
@@ -848,8 +840,7 @@ class TestSortByCoreMigrationEndToEnd:
             active_core=active_core,
             get_core_name=get_core_name,
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         items = svc._collect_save_sorting_items(old_settings, new_settings)
 
@@ -902,8 +893,7 @@ class TestSortByCoreMigrationEndToEnd:
             active_core=active_core,
             get_core_name=get_core_name,
         )
-        svc._get_saves_path = lambda: str(saves_path)
-        svc._get_roms_path = lambda: str(roms_path)
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         with caplog.at_level(logging.WARNING):
             items = svc._collect_save_sorting_items(old_settings, new_settings)

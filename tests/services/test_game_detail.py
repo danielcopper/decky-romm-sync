@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, _make_retry, _make_testable_plugin
+from conftest import (
+    FakeCoreInfoProvider,
+    FakeFirmwareCachePersister,
+    FakeRetroDeckPaths,
+    _make_retry,
+    _make_testable_plugin,
+)
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
@@ -92,8 +98,10 @@ def plugin(tmp_path):
                 )
             ),
             save_file=SaveFileAdapter(),
-            get_saves_path=lambda: saves_path,
-            get_roms_path=lambda: str(tmp_path / "retrodeck" / "roms"),
+            retrodeck_paths=FakeRetroDeckPaths(
+                saves=saves_path,
+                roms=str(tmp_path / "retrodeck" / "roms"),
+            ),
             get_active_core=lambda system_name, rom_filename=None: (None, None),
             log_debug=p._log_debug,
         ),
@@ -135,7 +143,7 @@ def plugin(tmp_path):
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
+            retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
         ),
     )
@@ -481,7 +489,7 @@ class TestGetCachedGameDetailBiosFromCache:
 
         plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
         plugin._firmware_service._core_info.available_cores = []
-        with patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(tmp_path)):
+        with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = game_detail_service.get_cached_game_detail(50000)
 
         assert result["found"] is True
@@ -695,7 +703,9 @@ class TestComputedFields:
 
         plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
         plugin._firmware_service._core_info.available_cores = []
-        with patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(tmp_path / "nonexistent")):
+        with patch.object(
+            plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "nonexistent"))
+        ):
             result = game_detail_service.get_cached_game_detail(99999)
 
         assert result["bios_level"] is not None
@@ -747,7 +757,7 @@ class TestComputedFields:
 
         plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
         plugin._firmware_service._core_info.available_cores = []
-        with patch.object(plugin._firmware_service, "_get_bios_path", return_value=str(bios_dir)):
+        with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             result = game_detail_service.get_cached_game_detail(99999)
 
         assert result["bios_level"] == "ok"

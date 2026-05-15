@@ -24,7 +24,7 @@ if TYPE_CHECKING:
         BiosChecker,
         CoreInfoProvider,
         GamelistXmlEditorProtocol,
-        RetroDeckHomeProvider,
+        RetroDeckPaths,
     )
 
 
@@ -33,16 +33,16 @@ class CoreServiceConfig:
     """Frozen wiring bundle handed to ``CoreService.__init__``.
 
     Carries the runtime infrastructure (event loop, logger), the
-    ES-DE read/write seams, the RetroDECK home provider, and the
-    cross-service BIOS checker. Bundled here so the ctor stays
-    within the S107 parameter budget.
+    ES-DE read/write seams, the bundled RetroDECK paths provider,
+    and the cross-service BIOS checker. Bundled here so the ctor
+    stays within the S107 parameter budget.
     """
 
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     core_info: CoreInfoProvider
     gamelist_editor: GamelistXmlEditorProtocol
-    retrodeck_home: RetroDeckHomeProvider
+    retrodeck_paths: RetroDeckPaths
     bios_checker: BiosChecker
 
 
@@ -54,7 +54,7 @@ class CoreService:
         self._logger = config.logger
         self._core_info = config.core_info
         self._gamelist_editor = config.gamelist_editor
-        self._retrodeck_home = config.retrodeck_home
+        self._retrodeck_paths = config.retrodeck_paths
         self._bios_checker = config.bios_checker
 
     async def get_available_cores(self, platform_slug: str) -> dict:
@@ -86,7 +86,7 @@ class CoreService:
         RetroDECK home, XML write error, BIOS recheck error) returns
         ``{"success": False, "message": ...}``.
         """
-        retrodeck_home = self._retrodeck_home()
+        retrodeck_home = self._retrodeck_paths.retrodeck_home()
         if not retrodeck_home:
             return {"success": False, "message": "RetroDECK home not found"}
         try:
@@ -122,7 +122,7 @@ class CoreService:
         so the response reflects the per-game core selection. Returns
         the same success/error shape as ``set_system_core``.
         """
-        retrodeck_home = self._retrodeck_home()
+        retrodeck_home = self._retrodeck_paths.retrodeck_home()
         if not retrodeck_home:
             return {"success": False, "message": "RetroDECK home not found"}
         try:

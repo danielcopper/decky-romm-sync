@@ -64,8 +64,7 @@ class SaveService:
         self._logger = config.logger
         self._clock = config.clock
         self._save_file = config.save_file
-        self._get_saves_path = config.get_saves_path
-        self._get_roms_path = config.get_roms_path
+        self._retrodeck_paths = config.retrodeck_paths
         self._get_active_core = config.get_active_core
         self._get_core_name = config.get_core_name
         self._plugin_version = config.plugin_version
@@ -207,8 +206,8 @@ class SaveService:
         # session that just ended still wrote to the old directory. Reading
         # the current settings here would point sync at the wrong location
         # and risk downloading stale server content to the new layout (#238).
-        saves_base = self._get_saves_path()
-        roms_base = self._get_roms_path()
+        saves_base = self._retrodeck_paths.saves_path()
+        roms_base = self._retrodeck_paths.roms_path()
         sort_state = self._pending_sort_settings() or self._state.get("save_sort_settings")
         if sort_state:
             sort_by_content = sort_state.get("sort_by_content", True)

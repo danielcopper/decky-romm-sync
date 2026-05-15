@@ -3,7 +3,7 @@
 Stateless safety checks that answer "is path X safely inside configured
 root Y?" using only path algebra (``realpath``/``relpath``/``split``) —
 no filesystem reads, no clocks, no service collaborators. The source of
-the configured root (e.g. the ``RomsPathProvider`` Protocol) stays in
+the configured root (e.g. the ``RetroDeckPaths`` Protocol) stays in
 ``services/``; this module only consumes the resolved string.
 """
 

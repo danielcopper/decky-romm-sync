@@ -21,13 +21,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from services.protocols import (
-        BiosPathProvider,
         Clock,
         DownloadFileAdapter,
         DownloadQueueAdapter,
         EventEmitter,
+        RetroDeckPaths,
         RommApiProtocol,
-        RomsPathProvider,
         Sleeper,
         StatePersister,
         SystemResolver,
@@ -59,8 +58,7 @@ class DownloadServiceConfig:
     clock: Clock
     sleeper: Sleeper
     save_state: StatePersister
-    get_roms_path: RomsPathProvider | None = None
-    get_bios_path: BiosPathProvider | None = None
+    retrodeck_paths: RetroDeckPaths | None = None
     is_retrodeck_migration_pending: Callable[[], bool] | None = None
 
 
@@ -80,8 +78,7 @@ class DownloadService:
         self._clock = config.clock
         self._sleeper = config.sleeper
         self._save_state = config.save_state
-        self._get_roms_path = config.get_roms_path
-        self._get_bios_path = config.get_bios_path
+        self._retrodeck_paths = config.retrodeck_paths
         self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
 
         # Owned state
@@ -151,7 +148,7 @@ class DownloadService:
 
     def _clean_rom_tmp_files(self):
         """Remove leftover .tmp and .zip.tmp files from ROM directories."""
-        roms_base = self._get_roms_path() if self._get_roms_path else ""
+        roms_base = self._retrodeck_paths.roms_path() if self._retrodeck_paths else ""
         if not roms_base:
             return 0
         paths = self._download_files.walk_files_matching_suffixes(roms_base, (_TMP_EXT, _ZIP_TMP_EXT))
@@ -159,7 +156,7 @@ class DownloadService:
 
     def _clean_bios_tmp_files(self):
         """Remove leftover .tmp files from BIOS directory."""
-        bios_base = self._get_bios_path() if self._get_bios_path else ""
+        bios_base = self._retrodeck_paths.bios_path() if self._retrodeck_paths else ""
         if not bios_base:
             return 0
         paths = self._download_files.walk_files_matching_suffixes(bios_base, (_TMP_EXT,))
@@ -212,7 +209,7 @@ class DownloadService:
         platform_fs_slug = rom_detail.get("platform_fs_slug")
         system = self._resolve_system(platform_slug, platform_fs_slug)
 
-        roms_dir = os.path.join(self._get_roms_path() if self._get_roms_path else "", system)
+        roms_dir = os.path.join(self._retrodeck_paths.roms_path() if self._retrodeck_paths else "", system)
         file_name, files_missing = resolve_local_file_name(rom_detail)
         if files_missing:
             self._logger.warning(
@@ -266,7 +263,7 @@ class DownloadService:
         rom_dir_name = os.path.splitext(file_name)[0]
         extract_dir = os.path.join(os.path.dirname(target_path), rom_dir_name)
         self._download_files.make_dirs(extract_dir)
-        roms_base = self._get_roms_path() if self._get_roms_path else ""
+        roms_base = self._retrodeck_paths.roms_path() if self._retrodeck_paths else ""
         tmp_zip = target_path + _ZIP_TMP_EXT
         # ZIP-slip protection: adapter validates members resolve within extract_dir
         # AND that extract_dir itself resolves within roms_base.

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeFirmwareFileAdapter
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeFirmwareFileAdapter, FakeRetroDeckPaths
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
 
@@ -54,7 +54,7 @@ def plugin():
             save_state=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
             firmware_files=FirmwareFileAdapter(),
-            get_bios_path=MagicMock(return_value=""),
+            retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
         ),
     )
@@ -104,7 +104,7 @@ class TestFirmwareDestPath:
     def test_flat_default_no_registry(self, fw, tmp_path):
         """File not in registry goes flat in bios root."""
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        fw._get_bios_path = MagicMock(return_value=bios)
+        fw._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
         firmware = {"file_name": "bios.bin", "file_path": "bios/n64/bios.bin"}
         dest = fw._firmware_dest_path(firmware)
         assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "bios.bin")
@@ -119,7 +119,7 @@ class TestFirmwareDestPath:
         }
 
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        fw._get_bios_path = MagicMock(return_value=bios)
+        fw._retrodeck_paths = FakeRetroDeckPaths(bios=bios)
         firmware = {"file_name": "dc_boot.bin", "file_path": "bios/dc/dc_boot.bin"}
         dest = fw._firmware_dest_path(firmware)
         assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "dc", "dc_boot.bin")
@@ -135,16 +135,16 @@ class TestFirmwareDestPath:
         }
 
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        with patch.object(fw, "_get_bios_path", return_value=bios):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
             firmware = {"file_name": "scph5501.bin", "file_path": "bios/ps/scph5501.bin"}
             dest = fw._firmware_dest_path(firmware)
             assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "scph5501.bin")
 
     def test_uses_dynamic_bios_path(self, fw, tmp_path):
-        """Uses ``retrodeck_paths.get_bios_path()`` for the base directory."""
+        """Uses ``retrodeck_paths.bios_path()`` for the base directory."""
 
         sd_bios = "/run/media/deck/Emulation/retrodeck/bios"
-        with patch.object(fw, "_get_bios_path", return_value=sd_bios):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=sd_bios)):
             firmware = {"file_name": "fw.bin", "file_path": "bios/saturn/fw.bin"}
             dest = fw._firmware_dest_path(firmware)
             assert dest == os.path.join(sd_bios, "fw.bin")
@@ -153,7 +153,7 @@ class TestFirmwareDestPath:
         """File not in registry falls back to flat in bios root."""
 
         bios = os.path.join(str(tmp_path), "retrodeck", "bios")
-        with patch.object(fw, "_get_bios_path", return_value=bios):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=bios)):
             firmware = {"file_name": "fw.bin", "file_path": "bios/saturn/fw.bin"}
             dest = fw._firmware_dest_path(firmware)
             assert dest == os.path.join(str(tmp_path), "retrodeck", "bios", "fw.bin")
@@ -221,7 +221,7 @@ class TestGetFirmwareStatus:
         fw._loop = MagicMock()
         fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
 
-        with patch.object(fw, "_get_bios_path", return_value=str(bios_dir)):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             result = await fw.get_firmware_status()
         assert result["success"] is True
         assert result["platforms"][0]["files"][0]["downloaded"] is True
@@ -262,7 +262,7 @@ class TestDownloadFirmware:
             with open(dest, "wb") as f:
                 f.write(content)
 
-        fw._get_bios_path = MagicMock(return_value=str(bios_dir))
+        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
         fw._loop = asyncio.get_event_loop()
 
         with (
@@ -338,7 +338,7 @@ class TestDownloadAllFirmware:
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
             patch.object(fw, "download_firmware", side_effect=fake_download_firmware),
-            patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.download_all_firmware("dc")
 
@@ -751,7 +751,7 @@ class TestCheckPlatformBiosRequired:
         fw._loop = MagicMock()
         fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
 
-        with patch.object(fw, "_get_bios_path", return_value=str(bios_dir)):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             result = await fw.check_platform_bios("dc")
         assert result["needs_bios"] is True
         assert result["required_count"] == 2
@@ -945,7 +945,7 @@ class TestDownloadRequiredFirmware:
         with (
             patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list),
             patch.object(fw, "download_firmware", side_effect=fake_download_firmware),
-            patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.download_required_firmware("dc")
 
@@ -995,7 +995,7 @@ class TestCheckPlatformBiosOffline:
 
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.check_platform_bios("psx")
 
@@ -1015,7 +1015,7 @@ class TestCheckPlatformBiosOffline:
 
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch.object(fw, "_get_bios_path", return_value=str(tmp_path / "bios")),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))),
         ):
             result = await fw.check_platform_bios("n64")
 
@@ -1053,7 +1053,7 @@ class TestCheckPlatformBiosOffline:
 
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.check_platform_bios("dc")
 
@@ -1211,7 +1211,7 @@ class TestPerCoreFiltering:
         # gpSP only uses gba_bios.bin — all files returned but gb/sgb marked as not used by active
         fw._core_info.active_core = ("gpsp_libretro", "gpSP")
         fw._core_info.available_cores = []
-        with patch.object(fw, "_get_bios_path", return_value=str(tmp_path / "bios")):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
             result = await fw.check_platform_bios("gba")
 
         assert result["needs_bios"] is True
@@ -1394,7 +1394,7 @@ class TestPerCoreFiltering:
         fw._core_info.available_cores = []
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.check_platform_bios("gba")
 
@@ -1445,7 +1445,7 @@ class TestBiosFilesIndexUnloadedRaises:
                 save_state=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
         )
@@ -1468,7 +1468,7 @@ class TestBiosFilesIndexUnloadedRaises:
                 save_state=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
         )
@@ -1502,7 +1502,7 @@ class TestDownloadFirmwarePostIORegistryHash:
         fw._state["downloaded_bios"] = {}
 
         fw_data = {"file_name": "test.bin", "file_path": "bios/test/test.bin", "md5_hash": ""}
-        with patch.object(fw, "_get_bios_path", return_value=str(bios_dir)):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             md5_match, reg_hash_valid = fw._download_firmware_post_io(fw_data, 1, dest, tmp_path_file)
 
         assert md5_match is None
@@ -1526,7 +1526,7 @@ class TestDownloadFirmwarePostIORegistryHash:
         fw._state["downloaded_bios"] = {}
 
         fw_data = {"file_name": "bad.bin", "file_path": "bios/test/bad.bin", "md5_hash": ""}
-        with patch.object(fw, "_get_bios_path", return_value=str(bios_dir)):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             _md5_match, reg_hash_valid = fw._download_firmware_post_io(fw_data, 2, dest, tmp_path_file)
 
         assert reg_hash_valid is False
@@ -1585,7 +1585,7 @@ class TestGetFirmwareStatusOfflineFallback:
         fw._core_info.available_cores = []
         with (
             patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
-            patch.object(fw, "_get_bios_path", return_value=str(bios_dir)),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
         ):
             result = await fw.get_firmware_status()
 
@@ -1615,7 +1615,7 @@ class TestFirmwareListCache:
                 save_state=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
         )
@@ -1683,7 +1683,7 @@ class TestFirmwareListCache:
                 save_state=MagicMock(),
                 firmware_cache_persister=persister,
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
         )
@@ -1766,7 +1766,7 @@ class TestCheckPlatformBiosCached:
                 save_state=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=core_info,
             ),
         )
@@ -1816,7 +1816,7 @@ class TestCheckPlatformBiosCached:
 
         core_info.active_core = ("mgba_libretro.so", "mGBA")
         core_info.available_cores = [{"label": "mGBA", "so": "mgba_libretro.so"}]
-        with patch.object(fw, "_get_bios_path", return_value=str(tmp_path)):
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = fw.check_platform_bios_cached("gba")
 
         assert result is not None
@@ -1846,7 +1846,7 @@ class TestCheckPlatformBiosCached:
                 save_state=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=core_info,
             ),
         )
@@ -1881,7 +1881,7 @@ class TestFirmwareCachePersistence:
                 save_state=MagicMock(),
                 firmware_cache_persister=persister,
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
         )
@@ -1905,7 +1905,7 @@ class TestFirmwareCachePersistence:
                 save_state=MagicMock(),
                 firmware_cache_persister=persister,
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
         )
@@ -1927,7 +1927,7 @@ class TestFirmwareCachePersistence:
                 save_state=MagicMock(),
                 firmware_cache_persister=persister,
                 firmware_files=FirmwareFileAdapter(),
-                get_bios_path=MagicMock(return_value=""),
+                retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
         )

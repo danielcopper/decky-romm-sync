@@ -4,7 +4,7 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakePathProbe, FakeSgdbArtworkCache
+from conftest import FakePathProbe, FakeRetroDeckPaths, FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger
@@ -29,10 +29,9 @@ def plugin():
     p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
     p._metadata_cache = {}
     # Default to "/tmp" so the prune guard sees an existing home in tests that
-    # don't override it. Tests exercising the guard set get_retrodeck_home to
-    # return a non-existent path or empty string.
-    p._retrodeck_paths = MagicMock()
-    p._retrodeck_paths.get_retrodeck_home.return_value = "/tmp"
+    # don't override it. Tests exercising the guard rebuild this with a
+    # non-existent path or empty string.
+    p._retrodeck_paths = FakeRetroDeckPaths(home="/tmp")
     # Default migration service mock — no migration pending. Tests that need
     # to exercise the @migration_blocked gate override this.
     p._migration_service = MagicMock()
@@ -106,7 +105,7 @@ def plugin():
             state=p._state,
             logger=decky.logger,
             save_state=p._save_state,
-            retrodeck_home=p._retrodeck_paths.get_retrodeck_home,
+            retrodeck_paths=p._retrodeck_paths,
             path_probe=FakePathProbe(),
         ),
     )

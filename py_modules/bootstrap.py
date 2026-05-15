@@ -54,7 +54,6 @@ from services.metadata import MetadataService, MetadataServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
 from services.protocols import (
-    BiosPathProvider,
     Clock,
     CoreInfoProvider,
     CoreNameProviderFn,
@@ -69,12 +68,10 @@ from services.protocols import (
     MigrationFileAdapter,
     PathExistsProbe,
     RetroArchSaveSortingProvider,
-    RetroDeckHomeProvider,
+    RetroDeckPaths,
     RomFileAdapter,
     RommApiProtocol,
-    RomsPathProvider,
     SaveFileAdapter,
-    SavesPathProvider,
     SaveSyncStatePersister,
     SettingsPersister,
     SgdbArtworkCache,
@@ -139,10 +136,7 @@ class RuntimeBundle:
 class CallbackBundle:
     """Provider callables and persister Protocols injected into services."""
 
-    get_saves_path: SavesPathProvider
-    get_roms_path: RomsPathProvider
-    get_bios_path: BiosPathProvider
-    get_retrodeck_home: RetroDeckHomeProvider
+    retrodeck_paths: RetroDeckPaths
     get_retroarch_save_sorting: RetroArchSaveSortingProvider
     get_core_name: CoreNameProviderFn
     save_state: StatePersister
@@ -212,7 +206,7 @@ def bootstrap(
     core_resolver = CoreResolver(
         plugin_dir=plugin_dir,
         logger=logger,
-        get_retrodeck_home=retrodeck_paths.get_retrodeck_home,
+        get_retrodeck_home=retrodeck_paths.retrodeck_home,
     )
     gamelist_editor = GamelistXmlEditor(logger=logger)
 
@@ -315,11 +309,8 @@ def wire_services(cfg: WiringConfig) -> dict:
             save_state=cfg.callbacks.save_state,
             emit=cfg.runtime.emit,
             get_bios_files_index=bios_files_index_binding.get,
-            get_retrodeck_home=cfg.callbacks.get_retrodeck_home,
-            get_saves_path=cfg.callbacks.get_saves_path,
-            get_bios_path=cfg.callbacks.get_bios_path,
+            retrodeck_paths=cfg.callbacks.retrodeck_paths,
             get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
-            get_roms_path=cfg.callbacks.get_roms_path,
             get_active_core=cfg.callbacks.core_info_provider.get_active_core,
             get_core_name=cfg.callbacks.get_core_name,
         ),
@@ -337,8 +328,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         loop=cfg.runtime.loop,
         logger=cfg.runtime.logger,
         clock=cfg.runtime.clock,
-        get_saves_path=cfg.callbacks.get_saves_path,
-        get_roms_path=cfg.callbacks.get_roms_path,
+        retrodeck_paths=cfg.callbacks.retrodeck_paths,
         get_active_core=cfg.callbacks.core_info_provider.get_active_core,
         log_debug=cfg.callbacks.log_debug,
         get_core_name=cfg.callbacks.get_core_name,
@@ -438,8 +428,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             clock=cfg.runtime.clock,
             sleeper=cfg.runtime.sleeper,
             save_state=cfg.callbacks.save_state,
-            get_roms_path=cfg.callbacks.get_roms_path,
-            get_bios_path=cfg.callbacks.get_bios_path,
+            retrodeck_paths=cfg.callbacks.retrodeck_paths,
             is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
         ),
     )
@@ -453,7 +442,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             save_state=cfg.callbacks.save_state,
             save_save_sync_state=save_sync_service.save_state,
             rom_files=cfg.adapters.rom_files,
-            get_roms_path=cfg.callbacks.get_roms_path,
+            retrodeck_paths=cfg.callbacks.retrodeck_paths,
             download_queue_cleanup=download_service,
         ),
     )
@@ -469,7 +458,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             save_state=cfg.callbacks.save_state,
             firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
             firmware_files=cfg.adapters.firmware_files,
-            get_bios_path=cfg.callbacks.get_bios_path,
+            retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.callbacks.core_info_provider,
         ),
     )
@@ -534,7 +523,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             logger=cfg.runtime.logger,
             core_info=cfg.callbacks.core_info_provider,
             gamelist_editor=cfg.adapters.gamelist_editor,
-            retrodeck_home=cfg.callbacks.get_retrodeck_home,
+            retrodeck_paths=cfg.callbacks.retrodeck_paths,
             bios_checker=firmware_service,
         ),
     )
@@ -554,7 +543,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             state=cfg.stores.state,
             logger=cfg.runtime.logger,
             save_state=cfg.callbacks.save_state,
-            retrodeck_home=cfg.callbacks.get_retrodeck_home,
+            retrodeck_paths=cfg.callbacks.retrodeck_paths,
             path_probe=cfg.adapters.path_probe,
         ),
     )

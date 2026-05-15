@@ -12,7 +12,7 @@ from domain.save_state import SaveSyncState
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import DownloadQueueCleanup, RomFileAdapter, RomsPathProvider, StatePersister
+    from services.protocols import DownloadQueueCleanup, RetroDeckPaths, RomFileAdapter, StatePersister
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class RomRemovalServiceConfig:
 
     Holds the live state dicts, runtime infrastructure, persistence
     callbacks, the Protocol-typed filesystem adapter, optional
-    roms-path provider, and the optional ``DownloadQueueCleanup``
+    RetroDECK paths bundle, and the optional ``DownloadQueueCleanup``
     eviction seam. Decomposes the ctor so a new dependency does not
     push past the S107 parameter-count limit.
     """
@@ -33,7 +33,7 @@ class RomRemovalServiceConfig:
     save_state: StatePersister
     save_save_sync_state: StatePersister
     rom_files: RomFileAdapter
-    get_roms_path: RomsPathProvider | None = None
+    retrodeck_paths: RetroDeckPaths | None = None
     download_queue_cleanup: DownloadQueueCleanup | None = None
 
 
@@ -52,7 +52,7 @@ class RomRemovalService:
         self._save_state = config.save_state
         self._save_save_sync_state = config.save_save_sync_state
         self._rom_files = config.rom_files
-        self._get_roms_path = config.get_roms_path
+        self._retrodeck_paths = config.retrodeck_paths
         self._download_queue_cleanup = config.download_queue_cleanup
 
     def _delete_rom_files(self, installed: dict) -> None:
@@ -60,13 +60,14 @@ class RomRemovalService:
         rom_dir = installed.get("rom_dir", "")
         file_path = installed.get("file_path", "")
 
+        roms_base = self._retrodeck_paths.roms_path() if self._retrodeck_paths else ""
         if rom_dir and self._rom_files.is_dir(rom_dir):
-            if not is_safe_rom_path(rom_dir, self._get_roms_path() if self._get_roms_path else ""):
+            if not is_safe_rom_path(rom_dir, roms_base):
                 self._logger.error(f"Refusing to delete path outside roms directory: {rom_dir}")
                 return
             self._rom_files.remove_tree(rom_dir)
         elif file_path:
-            if not is_safe_rom_path(file_path, self._get_roms_path() if self._get_roms_path else ""):
+            if not is_safe_rom_path(file_path, roms_base):
                 self._logger.error(f"Refusing to delete path outside roms directory: {file_path}")
                 return
             if self._rom_files.is_dir(file_path):
