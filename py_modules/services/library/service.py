@@ -145,6 +145,11 @@ class LibraryService:
                 artwork=config.artwork,
             )
         )
+        # Late-bound: the orchestrator dispatches the per-unit pipeline's
+        # finalize step (sync_collections + sync_complete) through the
+        # reporter so the registry-driven collection-mapping path is
+        # shared with the monolithic ``report_sync_results`` flow.
+        self._orchestrator._reporter = self._reporter
 
     async def _emit_progress_proxy(self, phase, **kwargs):
         """Late-bound proxy to the orchestrator's _emit_progress.
@@ -344,6 +349,9 @@ class LibraryService:
     # Reporting
     async def report_sync_results(self, rom_id_to_app_id, removed_rom_ids, cancelled=False):
         return await self._reporter.report_sync_results(rom_id_to_app_id, removed_rom_ids, cancelled)
+
+    async def report_unit_results(self, rom_id_to_app_id):
+        return await self._reporter.report_unit_results(rom_id_to_app_id)
 
     # Registry queries
     def get_registry_platforms(self):

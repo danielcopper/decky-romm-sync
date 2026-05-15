@@ -19,12 +19,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.preview_delta import PreviewDelta
+from domain.shortcut_data import build_shortcuts_data
 from domain.sync_diff import (
     classify_roms,
     compute_collection_diff,
     compute_platform_collection_diff,
 )
 from domain.sync_state import SyncState
+from domain.work_unit import WorkUnit
 from lib.errors import classify_error
 from services.library._state import LibrarySyncStateBox
 
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
     import logging
 
     from services.library.fetcher import LibraryFetcher
+    from services.library.reporter import SyncReporter
     from services.protocols import (
         ArtworkManager,
         Clock,
@@ -45,6 +48,17 @@ if TYPE_CHECKING:
 
 _SYNC_CANCELLED = "Sync cancelled"
 _PREVIEW_MAX_AGE_SECONDS = 1800  # 30 minutes — preview snapshots stale beyond this
+
+# Per-unit heartbeat-based timeout. If the frontend stops calling
+# ``sync_heartbeat`` for this many seconds while the orchestrator is
+# waiting for ``report_unit_results``, the wait is treated as a
+# recoverable cancellation — the in-flight unit is dropped and the
+# next sync resumes via the incremental-skip path.
+_UNIT_HEARTBEAT_TIMEOUT_SEC = 60.0
+# Polling cadence the wait loop uses while watching the heartbeat
+# clock. Kept short so cancel propagation feels responsive without
+# burning CPU.
+_UNIT_WAIT_POLL_SEC = 1.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +89,13 @@ class SyncOrchestratorConfig:
     fetcher: LibraryFetcher
     metadata_service: MetadataExtractor | None = None
     artwork: ArtworkManager | None = None
+    # Late-bound reporter reference — the per-unit pipeline emits its
+    # final ``sync_complete`` / ``sync_collections`` through the reporter
+    # so the same registry-driven collection-mapping code path is reused.
+    # Optional because the orchestrator is constructed before the
+    # reporter exists in :class:`LibraryService`; the façade injects the
+    # binding immediately after the reporter is built.
+    reporter: SyncReporter | None = None
 
 
 class SyncOrchestrator:
@@ -94,6 +115,7 @@ class SyncOrchestrator:
         self._fetcher = config.fetcher
         self._metadata_service = config.metadata_service
         self._artwork = config.artwork
+        self._reporter = config.reporter
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -104,7 +126,7 @@ class SyncOrchestrator:
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
-        self._loop.create_task(self._do_sync())
+        self._loop.create_task(self._do_sync_per_unit())
         return {"success": True, "message": "Sync started"}
 
     def cancel_sync(self):
@@ -482,6 +504,260 @@ class SyncOrchestrator:
         box.sync_state = SyncState.IDLE
         box.current_sync_id = None
         self._logger.info(message)
+
+    # ── Per-unit pipeline ────────────────────────────────────────
+
+    async def _do_sync_per_unit(self):
+        """Per-unit sync pipeline (Phase 0 + per-unit dispatch + finalize).
+
+        Replaces the monolithic all-platforms-then-all-shortcuts flow:
+        builds a work queue, processes each platform/collection unit
+        to completion (fetch -> shortcuts -> artwork -> apply ->
+        registry update) before moving on, then emits stale-removal +
+        Steam-collection mappings + ``sync_complete`` at the end. Each
+        completed unit is a crash-safe checkpoint in the on-disk
+        registry.
+        """
+        box = self._sync_state
+        # Cross-unit accumulators — built up unit-by-unit, consumed by the
+        # final phase. ``synced_rom_ids`` is shared with collection units
+        # for dedup. ``all_rom_id_to_app_id`` aggregates every unit's
+        # frontend-reported mapping for stale detection. ``collection_
+        # memberships`` and ``platform_rom_ids`` mirror the values
+        # ``_fetch_and_prepare`` produces in the monolithic path so the
+        # reporter's ``_build_collection_app_ids`` can run unchanged.
+        synced_rom_ids: set[int] = set()
+        all_rom_id_to_app_id: dict[str, int] = {}
+        collection_memberships: dict[str, list[int]] = {}
+        platform_rom_ids: set[int] = set()
+        total_games_applied = 0
+        cancelled = False
+
+        try:
+            try:
+                work_queue = await self._fetcher.build_work_queue()
+            except asyncio.CancelledError:
+                await self._finish_sync(_SYNC_CANCELLED)
+                raise
+            except Exception as e:
+                self._logger.error(f"Failed to build work queue: {e}")
+                _code, _msg = classify_error(e)
+                await self._emit_progress("error", message=_msg, running=False)
+                box.sync_state = SyncState.IDLE
+                return
+
+            total_units = len(work_queue)
+            total_roms_planned = sum(u.rom_count for u in work_queue)
+            self._logger.info(f"Per-unit pipeline: {total_units} units planned, {total_roms_planned} ROMs total")
+            await self._emit(
+                "sync_plan",
+                {
+                    "units": [u.to_event_payload() for u in work_queue],
+                    "total_units": total_units,
+                    "total_roms": total_roms_planned,
+                },
+            )
+
+            if total_units == 0:
+                await self._emit_progress("done", message="Nothing to sync", running=False)
+                box.sync_state = SyncState.IDLE
+                box.current_sync_id = None
+                return
+
+            for unit_index, unit in enumerate(work_queue):
+                if box.sync_state == SyncState.CANCELLING:
+                    cancelled = True
+                    break
+
+                applied = await self._sync_one_unit(
+                    unit,
+                    unit_index=unit_index,
+                    total_units=total_units,
+                    synced_rom_ids=synced_rom_ids,
+                    collection_memberships=collection_memberships,
+                    platform_rom_ids=platform_rom_ids,
+                    all_rom_id_to_app_id=all_rom_id_to_app_id,
+                )
+                total_games_applied += applied
+
+                if box.sync_state == SyncState.CANCELLING:
+                    cancelled = True
+                    break
+
+            # Final phase: stale cleanup + Steam collections + sync_complete.
+            await self._finalize_per_unit(
+                total_games_applied=total_games_applied,
+                synced_rom_ids=synced_rom_ids,
+                collection_memberships=collection_memberships,
+                platform_rom_ids=platform_rom_ids,
+                cancelled=cancelled,
+            )
+        except Exception as e:
+            import traceback
+
+            self._logger.error(f"Per-unit sync failed: {e}\n{traceback.format_exc()}")
+            _code, _msg = classify_error(e)
+            box.sync_progress = {
+                "running": False,
+                "phase": "error",
+                "current": 0,
+                "total": 0,
+                "message": f"Sync failed — {_msg}",
+            }
+            self._loop.create_task(self._emit("sync_progress", box.sync_progress))
+            box.sync_state = SyncState.IDLE
+        finally:
+            if self._metadata_service is not None:
+                self._metadata_service.flush_metadata_if_dirty()
+
+    async def _sync_one_unit(
+        self,
+        unit: WorkUnit,
+        *,
+        unit_index: int,
+        total_units: int,
+        synced_rom_ids: set[int],
+        collection_memberships: dict[str, list[int]],
+        platform_rom_ids: set[int],
+        all_rom_id_to_app_id: dict[str, int],
+    ) -> int:
+        """Process one work unit start-to-finish; return shortcuts applied."""
+        box = self._sync_state
+        await self._emit_progress(
+            "unit",
+            current=unit_index,
+            total=total_units,
+            message=f"{unit.name} ({unit_index + 1}/{total_units})",
+        )
+
+        # Fetch this unit's ROMs. Platform units may incremental-skip;
+        # collection units always paginate (collection membership is the
+        # source of truth, no per-collection "last_sync" gate today).
+        if unit.type == "platform":
+            unit_roms, skipped = await self._fetcher.fetch_platform_unit(unit)
+            platform_rom_ids.update(r["id"] for r in unit_roms)
+            synced_rom_ids.update(r["id"] for r in unit_roms)
+        else:
+            skipped = False
+            unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
+            if all_collection_rom_ids:
+                collection_memberships[unit.name] = all_collection_rom_ids
+
+        if box.sync_state == SyncState.CANCELLING:
+            return 0
+
+        # Build shortcut data + cache metadata for this unit only.
+        shortcuts_data = build_shortcuts_data(unit_roms, self._fetcher._plugin_dir)
+        self._fetcher.cache_metadata_for_unit(unit_roms)
+
+        # Download artwork for this unit (skipped if the incremental
+        # path already populated cover_path from the registry).
+        if not skipped and unit_roms:
+            cover_paths = await self._download_artwork(
+                unit_roms, progress_step=unit_index + 1, progress_total_steps=total_units
+            )
+            for sd in shortcuts_data:
+                sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
+
+        if box.sync_state == SyncState.CANCELLING:
+            return 0
+
+        # Stage pending_sync for this unit so report_unit_results can
+        # finalise cover paths + build registry entries against it.
+        box.pending_sync = {sd["rom_id"]: sd for sd in shortcuts_data}
+
+        # Emit per-unit apply event + wait for the frontend callback.
+        box.unit_complete_event = asyncio.Event()
+        box.last_unit_results = None
+        box.sync_last_heartbeat = self._clock.monotonic()
+        await self._emit(
+            "sync_apply_unit",
+            {
+                "unit_type": unit.type,
+                "unit_id": unit.id,
+                "unit_name": unit.name,
+                "unit_index": unit_index,
+                "total_units": total_units,
+                "shortcuts": shortcuts_data,
+            },
+        )
+
+        applied = await self._wait_for_unit_complete(unit, box.unit_complete_event)
+        if applied is None:
+            # Heartbeat timeout or cancel — drop the unit's pending state
+            # and surface the cancellation. The orchestrator's outer loop
+            # observes CANCELLING and stops.
+            box.pending_sync = {}
+            box.unit_complete_event = None
+            box.sync_state = SyncState.CANCELLING
+            return 0
+
+        # Reporter has already updated the registry + persisted state via
+        # report_unit_results — mirror the rom_id_to_app_id into the
+        # cross-run accumulator for stale + Steam-collection mapping.
+        all_rom_id_to_app_id.update(applied)
+        box.pending_sync = {}
+        box.unit_complete_event = None
+        return len(applied)
+
+    async def _wait_for_unit_complete(self, unit: WorkUnit, event: asyncio.Event) -> dict[str, int] | None:
+        """Heartbeat-based wait for the active unit's frontend callback.
+
+        Returns the frontend-reported ``rom_id_to_app_id`` on success.
+        Returns ``None`` on timeout or cancel — the outer loop maps that
+        onto a recoverable cancellation. The wait poll polls the
+        heartbeat clock rather than ``asyncio.wait_for(timeout=...)``
+        because the frontend sends ``sync_heartbeat`` calls during long
+        per-unit applies (artwork download, Set* calls) and a 60s
+        absolute cap would still race those.
+        """
+        box = self._sync_state
+        while not event.is_set():
+            if box.sync_state == SyncState.CANCELLING:
+                self._logger.info(f"Per-unit cancel observed while waiting for unit {unit.name}")
+                return None
+            elapsed = self._clock.monotonic() - box.sync_last_heartbeat
+            if elapsed > _UNIT_HEARTBEAT_TIMEOUT_SEC:
+                self._logger.warning(f"Per-unit timeout: no heartbeat for {elapsed:.0f}s waiting on unit {unit.name}")
+                return None
+            try:
+                await self._sleeper.sleep(_UNIT_WAIT_POLL_SEC)
+            except asyncio.CancelledError:
+                self._logger.info(f"Per-unit wait cancelled for unit {unit.name}")
+                return None
+
+        results = box.last_unit_results or {}
+        box.last_unit_results = None
+        return results
+
+    async def _finalize_per_unit(
+        self,
+        *,
+        total_games_applied: int,
+        synced_rom_ids: set[int],
+        collection_memberships: dict[str, list[int]],
+        platform_rom_ids: set[int],
+        cancelled: bool,
+    ):
+        """Emit stale-removal, collection mappings, and the terminal sync_complete."""
+        # Stale rom_ids: anything in the registry whose rom_id wasn't seen
+        # by any processed unit. Only meaningful on a non-cancelled run —
+        # a partial run can't tell "stale" from "didn't get to it yet".
+        if not cancelled:
+            stale_rom_ids = [
+                int(rid) for rid in self._state.get("shortcut_registry", {}) if int(rid) not in synced_rom_ids
+            ]
+        else:
+            stale_rom_ids = []
+        await self._emit("sync_stale", {"remove_rom_ids": stale_rom_ids})
+
+        if self._reporter is not None:
+            await self._reporter.finalize_per_unit_run(
+                pending_collection_memberships=collection_memberships,
+                pending_platform_rom_ids=platform_rom_ids,
+                total_games=total_games_applied,
+                cancelled=cancelled,
+            )
 
     # ── Artwork delegation ───────────────────────────────────────
 
