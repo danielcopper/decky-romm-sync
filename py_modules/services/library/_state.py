@@ -10,6 +10,7 @@ preceded the decomposition.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -49,3 +50,13 @@ class LibrarySyncStateBox:
     pending_delta: PreviewDelta | None = None
     pending_collection_memberships: dict = field(default_factory=dict)
     pending_platform_rom_ids: set[int] | None = None
+    # Per-unit pipeline coordination. ``unit_complete_event`` is set by
+    # :meth:`SyncReporter.report_unit_results` when the frontend reports
+    # back for the active unit; the orchestrator awaits it (with a
+    # heartbeat-based timeout) before dispatching the next unit. Cleared
+    # back to None between units.
+    unit_complete_event: asyncio.Event | None = None
+    # Holds the frontend-supplied ``rom_id_to_app_id`` mapping reported
+    # for the active unit. Surfaces the result so the orchestrator can
+    # accumulate the per-unit registry into the cross-run accumulators.
+    last_unit_results: dict[str, int] | None = None
