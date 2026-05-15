@@ -55,6 +55,7 @@ def plugin():
             core_info=FakeCoreInfoProvider(),
         ),
     )
+    p._firmware_service.load_bios_registry()
 
     p._sync_service = LibraryService(
         romm_api=p._romm_api,

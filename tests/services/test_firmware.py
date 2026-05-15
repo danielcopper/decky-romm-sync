@@ -58,6 +58,9 @@ def plugin():
             core_info=FakeCoreInfoProvider(),
         ),
     )
+    # Mirror main.py: load_bios_registry runs at startup so the index is a
+    # ready-to-use empty dict (or populated, if a fake registry is on disk).
+    p._firmware_service.load_bios_registry()
 
     p._sync_service = LibraryService(
         romm_api=p._romm_api,
@@ -1424,6 +1427,57 @@ class TestLoadBiosRegistryErrors:
         assert fw._bios_registry == {}
 
 
+class TestBiosFilesIndexUnloadedRaises:
+    """Regression for #348: the property must raise before load_bios_registry()."""
+
+    def test_property_raises_before_load(self):
+        """Accessing bios_files_index before load_bios_registry() raises RuntimeError."""
+        import decky
+
+        fw = FirmwareService(
+            config=FirmwareServiceConfig(
+                romm_api=MagicMock(),
+                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                clock=_make_clock(),
+                save_state=MagicMock(),
+                firmware_cache_persister=FakeFirmwareCachePersister(),
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=FakeCoreInfoProvider(),
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="firmware registry not loaded"):
+            _ = fw.bios_files_index
+
+    def test_property_returns_dict_after_load(self):
+        """After load_bios_registry(), the property returns a dict (possibly empty)."""
+        import decky
+
+        fw = FirmwareService(
+            config=FirmwareServiceConfig(
+                romm_api=MagicMock(),
+                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir="/nonexistent",
+                clock=_make_clock(),
+                save_state=MagicMock(),
+                firmware_cache_persister=FakeFirmwareCachePersister(),
+                firmware_files=FirmwareFileAdapter(),
+                get_bios_path=MagicMock(return_value=""),
+                core_info=FakeCoreInfoProvider(),
+            ),
+        )
+
+        fw.load_bios_registry()
+        # FileNotFoundError path still leaves _bios_files_index initialized to {}.
+        assert fw.bios_files_index == {}
+
+
 class TestDownloadFirmwarePostIORegistryHash:
     """Tests for _download_firmware_post_io registry hash verification."""
 
@@ -1550,7 +1604,7 @@ class TestFirmwareListCache:
     def _make_service(self, romm_api):
         import decky
 
-        return FirmwareService(
+        fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=romm_api,
                 state={"shortcut_registry": {}, "downloaded_bios": {}},
@@ -1565,6 +1619,8 @@ class TestFirmwareListCache:
                 core_info=FakeCoreInfoProvider(),
             ),
         )
+        fw.load_bios_registry()
+        return fw
 
     def test_firmware_list_cached(self):
         """Second call returns cached data without hitting the API again."""
@@ -1714,6 +1770,7 @@ class TestCheckPlatformBiosCached:
                 core_info=core_info,
             ),
         )
+        fw.load_bios_registry()
         fw._firmware_cache = firmware_cache
         fw._firmware_cache_epoch = firmware_cache_epoch
         if bios_registry:

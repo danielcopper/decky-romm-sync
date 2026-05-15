@@ -144,6 +144,7 @@ def plugin(tmp_path):
             core_info=FakeCoreInfoProvider(),
         ),
     )
+    p._firmware_service.load_bios_registry()
 
     # Store fake_api on plugin for test access
     p._fake_api = fake_api
@@ -635,7 +636,7 @@ class TestGetBiosStatusNotFound:
             "name": "Game",
             "platform_slug": "gba",
         }
-        game_detail_service._check_platform_bios = AsyncMock(side_effect=Exception("fail"))
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(side_effect=Exception("fail"))
 
         result = await game_detail_service.get_bios_status(42)
         assert result["bios_status"] is None

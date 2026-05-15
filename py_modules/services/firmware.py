@@ -76,14 +76,20 @@ class FirmwareService:
         self._get_bios_path = config.get_bios_path
         self._core_info = config.core_info
         self._bios_registry: dict = {}
-        self._bios_files_index: dict = {}
+        self._bios_files_index: dict | None = None
         self._firmware_cache: list | None = None
         self._firmware_cache_epoch: float = 0
         self._restore_firmware_cache()
 
     @property
     def bios_files_index(self) -> dict:
-        """Flat reverse index of BIOS files: {filename: entry_data}."""
+        """Flat reverse index of BIOS files: {filename: entry_data}.
+
+        Raises ``RuntimeError`` if accessed before ``load_bios_registry()`` —
+        a silent empty dict at startup masks order-sensitive wiring bugs.
+        """
+        if self._bios_files_index is None:
+            raise RuntimeError("firmware registry not loaded — call load_bios_registry() first")
         return self._bios_files_index
 
     # ── Registry loading ─────────────────────────────────────
@@ -111,7 +117,7 @@ class FirmwareService:
     # ── Internal helpers ─────────────────────────────────────
 
     def _enrich_firmware_file(self, file_dict, core_so=None):
-        entry = self._bios_files_index.get(file_dict.get("file_name", ""))
+        entry = self.bios_files_index.get(file_dict.get("file_name", ""))
         if entry:
             # Use per-core required value if active core is known
             if core_so and "cores" in entry and core_so in entry["cores"]:
@@ -146,7 +152,7 @@ class FirmwareService:
         """
         bios_base = self._get_bios_path()
         file_name = firmware.get("file_name", "")
-        reg_entry = self._bios_files_index.get(file_name)
+        reg_entry = self.bios_files_index.get(file_name)
         if reg_entry and reg_entry.get("firmware_path"):
             return os.path.join(bios_base, reg_entry["firmware_path"])
         return os.path.join(bios_base, file_name)
@@ -342,7 +348,7 @@ class FirmwareService:
 
         # Compute local MD5 once (used for both server-hash and registry-hash checks)
         expected_md5 = fw.get("md5_hash", "")
-        reg_entry = self._bios_files_index.get(file_name)
+        reg_entry = self.bios_files_index.get(file_name)
         reg_md5 = reg_entry.get("md5", "") if reg_entry else ""
 
         local_md5 = self._firmware_files.checksum_md5(dest) if (expected_md5 or reg_md5) else None
@@ -427,7 +433,7 @@ class FirmwareService:
 
     def _is_firmware_required(self, file_name, core_so):
         """Check if a firmware file is required for the given core."""
-        index_entry = self._bios_files_index.get(file_name)
+        index_entry = self.bios_files_index.get(file_name)
         if not index_entry:
             return None  # Unknown file
         if core_so and "cores" in index_entry and core_so in index_entry["cores"]:
