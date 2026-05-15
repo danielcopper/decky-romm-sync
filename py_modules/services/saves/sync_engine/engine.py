@@ -193,6 +193,7 @@ class SyncEngine:
         if slot_entry and slot_entry.get("source") == "local":
             slot_entry["source"] = "server"
             slot_entry["count"] = 1
+            self._state_svc.save_state()
 
     def _confirm_upload_sync(self, upload_id: int | None, device_id: str | None) -> None:
         """Ack the uploaded save on the server's DeviceSaveSync row (non-fatal)."""

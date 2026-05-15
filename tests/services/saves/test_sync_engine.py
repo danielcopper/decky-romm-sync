@@ -1330,6 +1330,50 @@ class TestOwnUploadIds:
         assert rom_state.own_upload_ids == [26]
 
 
+class TestPromoteLocalSlotPersistsState:
+    """Regression for #346.
+
+    The PUT-path edge case from the issue: server save tracked but the slot
+    marker is still ``'local'`` (stale). On promotion, the in-memory mutation
+    must reach disk so the next plugin start sees ``source='server'``.
+    """
+
+    def test_put_path_promotion_survives_reload(self, tmp_path):
+        """A PUT upload that promotes a stale local-slot marker persists to disk."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="dev-1")
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+
+        # Pre-existing tracked server save → upload_save called with save_id=100 (PUT path).
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        server_save = fake.saves[100]
+
+        # rom_state has the slot still flagged 'local' (stale marker).
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "old"}},
+                "system": "gba",
+                "active_slot": "default",
+                "slots": {"default": {"source": "local", "count": 1}},
+            }
+        )
+
+        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba", server_save=server_save)
+
+        in_mem = svc._save_sync_state.saves["42"].slots["default"]
+        assert in_mem["source"] == "server"
+        assert in_mem["count"] == 1
+
+        # A fresh service reading from the same on-disk state sees the promotion —
+        # the in-memory mutation reached disk.
+        reloaded_svc, _ = make_service(tmp_path)
+        reloaded_svc.load_state()
+        reloaded = reloaded_svc._save_sync_state.saves["42"].slots["default"]
+        assert reloaded["source"] == "server"
+        assert reloaded["count"] == 1
+
+
 class TestSyncRomSavesDispatch:
     def test_sync_rom_saves_skip_when_synced(self, tmp_path):
         """is_current=true + matching hash + tracked → Skip, no I/O."""
