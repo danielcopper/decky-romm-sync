@@ -20,7 +20,6 @@ from bootstrap import (
 
 from adapters.persistence import (
     FirmwareCachePersisterAdapter,
-    PersistenceAdapter,
     SaveSyncStatePersisterAdapter,
 )
 from adapters.retroarch_config import RetroArchConfigAdapter
@@ -47,21 +46,6 @@ class Plugin:
 
     # -- persistence delegates -------------------------------------------------
 
-    @property
-    def _persistence(self) -> PersistenceAdapter:
-        """Lazy-init persistence adapter; overwritten by _main() with the bootstrap instance."""
-        if not hasattr(self, "_persistence_instance"):
-            self._persistence_instance = PersistenceAdapter(
-                decky.DECKY_PLUGIN_SETTINGS_DIR,
-                decky.DECKY_PLUGIN_RUNTIME_DIR,
-                decky.logger,
-            )
-        return self._persistence_instance
-
-    @_persistence.setter
-    def _persistence(self, value: PersistenceAdapter) -> None:
-        self._persistence_instance = value
-
     def _save_state(self):
         self._persistence.save_state(self._state)
 
@@ -77,23 +61,18 @@ class Plugin:
     async def _main(self):  # Decky lifecycle — must be async
         self.loop = asyncio.get_event_loop()
 
-        # ── 1. Load settings & run migrations ───────────────────────────────
-        from domain.state_migrations import migrate_settings, migrate_state
-
-        self.settings = self._persistence.load_settings()
-        self.settings = migrate_settings(self.settings)
-        self._save_settings_to_disk()
-
-        # ── 2. Wire adapters ────────────────────────────────────────────────
+        # ── 1. Wire adapters ────────────────────────────────────────────────
+        # Bootstrap loads + migrates settings as part of adapter construction
+        # so RommHttpAdapter binds the live, migrated dict in one pass.
         adapters = bootstrap(
             settings_dir=decky.DECKY_PLUGIN_SETTINGS_DIR,
             runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             user_home=decky.DECKY_USER_HOME,
             logger=decky.logger,
-            settings=self.settings,
         )
         self._persistence = adapters["persistence"]
+        self.settings = adapters["settings"]
         self._http_adapter = adapters["http_adapter"]
         self._romm_api = adapters["romm_api"]
         self._steam_config = adapters["steam_config"]
@@ -113,6 +92,8 @@ class Plugin:
             "save_sort_settings": None,
         }
         self._metadata_cache = {}
+        from domain.state_migrations import migrate_state
+
         self._state = self._persistence.load_state(self._state)
         self._state = migrate_state(self._state)
         self._metadata_cache = self._persistence.load_metadata_cache()

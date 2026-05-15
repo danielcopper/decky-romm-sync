@@ -110,6 +110,44 @@ def plugin():
     return p
 
 
+class TestPersistenceAttributeIsLoud:
+    """Regression for #350: dropped the lazy-property fallback.
+
+    Pre-``_main()`` access to ``self._persistence`` must raise
+    ``AttributeError`` instead of silently constructing a second
+    ``PersistenceAdapter`` instance.
+    """
+
+    def test_attribute_missing_on_bare_plugin(self):
+        """Direct access to _persistence pre-_main() raises — no lazy fallback."""
+        from main import Plugin
+
+        bare = Plugin()
+
+        with pytest.raises(AttributeError, match="_persistence"):
+            _ = bare._persistence
+
+    def test_save_state_without_main_raises(self):
+        """Calling _save_state before _main() sets _persistence raises."""
+        from main import Plugin
+
+        bare = Plugin()
+        bare._state = {}
+
+        with pytest.raises(AttributeError, match="_persistence"):
+            bare._save_state()
+
+    def test_save_settings_without_main_raises(self):
+        """Calling _save_settings_to_disk before _main() raises."""
+        from main import Plugin
+
+        bare = Plugin()
+        bare.settings = {}
+
+        with pytest.raises(AttributeError, match="_persistence"):
+            bare._save_settings_to_disk()
+
+
 class TestSettings:
     @pytest.mark.asyncio
     async def test_get_settings_masks_password(self, plugin):
@@ -803,6 +841,7 @@ class TestMainStartupOrdering:
 
         bootstrapped_adapters = {
             "persistence": plugin._persistence,
+            "settings": {},
             "http_adapter": MagicMock(),
             "romm_api": MagicMock(),
             "steam_config": MagicMock(),

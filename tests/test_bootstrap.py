@@ -54,7 +54,6 @@ class TestBootstrap:
             plugin_dir=str(tmp_path / "plugin"),
             user_home=str(tmp_path / "home"),
             logger=logging.getLogger("test"),
-            settings={},
         )
         assert "persistence" in result
         assert isinstance(result["persistence"], PersistenceAdapter)
@@ -66,24 +65,23 @@ class TestBootstrap:
             plugin_dir=str(tmp_path / "plugin"),
             user_home=str(tmp_path / "home"),
             logger=logging.getLogger("test"),
-            settings={},
         )
         assert "http_adapter" in result
         assert isinstance(result["http_adapter"], RommHttpAdapter)
 
     def test_http_adapter_shares_settings_reference(self, tmp_path):
-        settings = {"romm_url": "http://example.com"}
+        """RommHttpAdapter binds the same dict bootstrap returns under "settings"."""
         result = bootstrap(
             settings_dir=str(tmp_path / "settings"),
             runtime_dir=str(tmp_path / "runtime"),
             plugin_dir=str(tmp_path / "plugin"),
             user_home=str(tmp_path / "home"),
             logger=logging.getLogger("test"),
-            settings=settings,
         )
-        # Mutate original — client should see the change
-        settings["romm_url"] = "http://changed.com"
+        # Mutate the dict bootstrap returned — http_adapter holds the same ref.
+        result["settings"]["romm_url"] = "http://changed.com"
         assert result["http_adapter"]._settings["romm_url"] == "http://changed.com"
+        assert result["http_adapter"]._settings is result["settings"]
 
     def test_persistence_has_correct_paths(self, tmp_path):
         settings_dir = str(tmp_path / "s")
@@ -94,7 +92,6 @@ class TestBootstrap:
             plugin_dir=str(tmp_path / "p"),
             user_home=str(tmp_path / "home"),
             logger=logging.getLogger("test"),
-            settings={},
         )
         assert result["persistence"]._settings_dir == settings_dir
         assert result["persistence"]._runtime_dir == runtime_dir
@@ -106,7 +103,6 @@ class TestBootstrap:
             plugin_dir=str(tmp_path / "plugin"),
             user_home=str(tmp_path / "home"),
             logger=logging.getLogger("test"),
-            settings={},
         )
         assert "steam_config" in result
         assert isinstance(result["steam_config"], SteamConfigAdapter)
@@ -118,7 +114,6 @@ class TestBootstrap:
             plugin_dir=str(tmp_path / "plugin"),
             user_home=str(tmp_path / "home"),
             logger=logging.getLogger("test"),
-            settings={},
         )
         assert "romm_api" in result
         assert isinstance(result["romm_api"], RommApi)
@@ -131,7 +126,6 @@ class TestBootstrap:
             plugin_dir=str(tmp_path / "plugin"),
             user_home=str(tmp_path / "home"),
             logger=logging.getLogger("test"),
-            settings={},
         )
         assert isinstance(result["retrodeck_paths"], RetroDeckPathsAdapter)
         assert isinstance(result["retroarch_config"], RetroArchConfigAdapter)

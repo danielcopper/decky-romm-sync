@@ -20,7 +20,7 @@ from services.migration import MigrationService, MigrationServiceConfig
 
 
 @pytest.fixture
-def plugin():
+def plugin(tmp_path):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
@@ -36,6 +36,7 @@ def plugin():
 
     import decky
 
+    p._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 

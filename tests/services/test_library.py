@@ -20,7 +20,7 @@ from services.shortcut_removal import ShortcutRemovalService
 
 
 @pytest.fixture
-def plugin():
+def plugin(tmp_path):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._romm_api = MagicMock()
@@ -29,6 +29,9 @@ def plugin():
 
     import decky
 
+    # _persistence is no longer a lazy property; tests that touch persistence
+    # via _save_metadata_cache / _save_state need it wired up explicitly.
+    p._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 

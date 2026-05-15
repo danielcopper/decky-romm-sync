@@ -1,9 +1,10 @@
-"""Composition root — wires adapters and services for the plugin.
+"""Composition root — instantiates adapters and wires services.
 
-Called from ``Plugin._main()`` to create adapter instances with
-the correct Decky paths and logger.  Returns a dict so that
-``_main()`` can assign them to the plugin's lazy-property backing
-attributes (bypassing auto-creation from ``self.settings``).
+Adapter construction lives here so ``main.py`` only deals with the
+Decky lifecycle and the callable surface. ``bootstrap()`` also loads
+and migrates settings as part of adapter wiring so ``RommHttpAdapter``
+binds the live, migrated dict in a single pass; that same dict is
+returned for the caller to keep as its source of truth.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from domain.save_state import SaveSyncState
+from domain.state_migrations import migrate_settings
 from lib.late_binding import LateBinding
 from services.achievements import AchievementsService
 from services.artwork import ArtworkService, ArtworkServiceConfig
@@ -165,9 +167,16 @@ def bootstrap(
     plugin_dir: str,
     user_home: str,
     logger: logging.Logger,
-    settings: dict,
 ) -> dict:
     """Create and return all adapters.
+
+    Bootstrap owns adapter instantiation and is the only path that
+    constructs ``PersistenceAdapter``. Settings are loaded + migrated
+    inside here so ``RommHttpAdapter`` receives a stable reference to
+    the live dict; the migrated dict is written back to disk before
+    return and shared with the caller under the ``"settings"`` key —
+    mutating that dict from the caller side is visible to all
+    adapters/services that bound the same reference.
 
     Parameters
     ----------
@@ -177,15 +186,15 @@ def bootstrap(
         ``decky.DECKY_PLUGIN_RUNTIME_DIR``
     plugin_dir:
         ``decky.DECKY_PLUGIN_DIR``
+    user_home:
+        ``decky.DECKY_USER_HOME`` — base for RetroDECK and Steam path lookups.
     logger:
         ``decky.logger``
-    settings:
-        The live settings dict (passed by reference to ``RommHttpAdapter``).
 
     Returns
     -------
-    dict with keys ``persistence``, ``http_adapter``, and ``wire_services``
-    (a factory callable for deferred service creation).
+    Mapping of adapter name to instance, plus ``"settings"`` (the live
+    migrated settings dict shared with ``RommHttpAdapter``).
     """
     retrodeck_paths = RetroDeckPathsAdapter(user_home=user_home, logger=logger)
     retroarch_config = RetroArchConfigAdapter(user_home=user_home, logger=logger)
@@ -198,6 +207,9 @@ def bootstrap(
     gamelist_editor = GamelistXmlEditor(logger=logger)
 
     persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
+    settings = persistence.load_settings()
+    settings = migrate_settings(settings)
+    persistence.save_settings(settings)
     http_adapter = RommHttpAdapter(settings, plugin_dir, logger)
     romm_api = RommApi(http_adapter)
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
@@ -217,6 +229,7 @@ def bootstrap(
 
     return {
         "persistence": persistence,
+        "settings": settings,
         "http_adapter": http_adapter,
         "romm_api": romm_api,
         "steam_config": steam_config,
