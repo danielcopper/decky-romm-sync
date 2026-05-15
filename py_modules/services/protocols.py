@@ -27,7 +27,7 @@ class RommApiProtocol(Protocol):
     """Domain-oriented interface for all RomM server operations.
 
     Replaces raw HTTP path construction in services with semantic methods.
-    Concrete implementation: ``adapters.romm.romm_api.RommApi``.
+    Concrete implementation: ``adapters.romm.romm_api.RommApiAdapter``.
     Requires RomM >= 4.8.1.
     """
 

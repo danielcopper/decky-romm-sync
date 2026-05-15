@@ -116,9 +116,9 @@ When a service-level decomposition produces sub-services with shared state (e.g.
 
 Decision rule by how the package is consumed:
 
-- **Top-level layer namespace** (`adapters/`, `services/`, `domain/`, `lib/`, `models/`): `__init__.py` is empty (a docstring is acceptable but not required). These exist as namespace markers; consumers always deep-import (`from adapters.romm.romm_api import RommApi`).
+- **Top-level layer namespace** (`adapters/`, `services/`, `domain/`, `lib/`, `models/`): `__init__.py` is empty (a docstring is acceptable but not required). These exist as namespace markers; consumers always deep-import (`from adapters.romm.romm_api import RommApiAdapter`).
 - **Sub-package consumed via package import** (consumers write `from package import X`): `__init__.py` holds the package's contract-style module docstring, re-exports of the public class(es), and optional `__all__`. Examples: `services/saves/`, `services/saves/sync_engine/`, `services/saves/slots/`, `services/saves/status/`.
-- **Sub-package only consumed via deep-import** (consumers always write `from package.module import X`): empty or just docstring, no re-exports. Example: `adapters/romm/` — `bootstrap` deep-imports `from adapters.romm.romm_api import RommApi`.
+- **Sub-package only consumed via deep-import** (consumers always write `from package.module import X`): empty or just docstring, no re-exports. Example: `adapters/romm/` — `bootstrap` deep-imports `from adapters.romm.romm_api import RommApiAdapter`.
 
 Implementation never lives in `__init__.py`. Don't put 500+ LOC class definitions there — that obscures the package's public surface and breaks the "init = namespace marker + re-export" Python convention.
 

@@ -11,7 +11,7 @@ import urllib.parse
 from adapters.romm.http import RommHttpAdapter
 
 
-class RommApi:
+class RommApiAdapter:
     """Concrete RomM API adapter for RomM >= 4.8.1."""
 
     def __init__(self, client: RommHttpAdapter) -> None:

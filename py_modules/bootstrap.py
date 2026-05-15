@@ -32,7 +32,7 @@ from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.rom_files import RomFileAdapter as RomFileAdapterImpl
 from adapters.romm.http import RommHttpAdapter
-from adapters.romm.romm_api import RommApi
+from adapters.romm.romm_api import RommApiAdapter
 from adapters.save_file import SaveFileAdapter as SaveFileAdapterImpl
 from adapters.sgdb_artwork_cache import SgdbArtworkCacheAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -223,7 +223,7 @@ def bootstrap(
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
     http_adapter = RommHttpAdapter(settings, plugin_dir, logger)
-    romm_api = RommApi(http_adapter)
+    romm_api = RommApiAdapter(http_adapter)
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
     sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
     cover_art_file_store = CoverArtFileStoreAdapter()

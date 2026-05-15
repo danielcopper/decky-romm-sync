@@ -1,4 +1,4 @@
-"""Tests for RommApi — the consolidated RomM API adapter (>= 4.7.0)."""
+"""Tests for RommApiAdapter — the consolidated RomM API adapter (>= 4.7.0)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from adapters.romm.romm_api import RommApi
+from adapters.romm.romm_api import RommApiAdapter
 
 
 def _make_api():
@@ -16,7 +16,7 @@ def _make_api():
     client.post_json = MagicMock()
     client.put_json = MagicMock()
     client.upload_multipart = MagicMock()
-    return RommApi(client), client
+    return RommApiAdapter(client), client
 
 
 class TestHeartbeat:
