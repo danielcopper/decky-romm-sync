@@ -297,58 +297,75 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     };
     window.addEventListener("romm_rom_uninstalled", onUninstall);
 
-    const onDataChanged = async (e: Event) => {
-      try {
-      const detail = (e as CustomEvent).detail;
-      if (!romIdRef.current) return;
-
-      if (detail?.type === "save_sync_settings") {
-        const enabled = detail.save_sync_enabled as boolean;
-        if (enabled) {
-          const updatedStatus = await getSaveStatus(romIdRef.current).catch((): SaveStatus | null => null);
-          const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-          setState((prev) => ({
-            ...prev,
-            saveSyncEnabled: true,
-            saveStatus: updatedStatus,
-            conflicts,
-          }));
-        } else {
-          setState((prev) => ({ ...prev, saveSyncEnabled: false }));
-        }
-        return;
-      }
-
-      if (detail?.type === "save_sync" && (!detail.rom_id || detail.rom_id === romIdRef.current)) {
-        const updatedStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romIdRef.current).catch((): SaveStatus | null => null);
+    // Per-event-type handlers — each owns one branch of the data-changed dispatch.
+    // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
+    const handleSaveSyncSettingsChange = async (detail: any) => {
+      const enabled = detail.save_sync_enabled as boolean;
+      if (enabled) {
+        const updatedStatus = await getSaveStatus(romIdRef.current!).catch((): SaveStatus | null => null);
         const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
         setState((prev) => ({
           ...prev,
+          saveSyncEnabled: true,
           saveStatus: updatedStatus,
           conflicts,
         }));
-        // Also re-check slot configuration + refresh slot data
-        refreshSlotState(romIdRef.current, setState);
-      } else if (detail?.type === "bios" && detail.platform_slug) {
-        const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus => ({ needs_bios: false }));
-        setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null }));
-      } else if (detail?.type === "core_changed") {
-        // Re-fetch cached game detail to pick up new core info
-        delete (_cachedGameDetailCache as Record<number, unknown>)[appId];
-        const cached = await getCachedGameDetail(appId);
-        if (cancelled || !cached.found) return;
-        let biosStatus: BiosStatus | null = null;
-        if (cached.bios_status) {
-          biosStatus = {
-            needs_bios: true,
-            ...cached.bios_status,
-          };
-        }
-        setState((prev) => ({ ...prev, biosStatus }));
-      } else if (detail?.type === "metadata" && detail.rom_id === romIdRef.current) {
-        const meta = await getRomMetadata(romIdRef.current).catch((): RomMetadata | null => null);
-        setState((prev) => ({ ...prev, metadata: meta }));
+      } else {
+        setState((prev) => ({ ...prev, saveSyncEnabled: false }));
       }
+    };
+
+    const handleSaveSyncChange = async (detail: any) => {
+      if (detail.rom_id && detail.rom_id !== romIdRef.current) return;
+      const updatedStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romIdRef.current!).catch((): SaveStatus | null => null);
+      const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
+      setState((prev) => ({
+        ...prev,
+        saveStatus: updatedStatus,
+        conflicts,
+      }));
+      // Also re-check slot configuration + refresh slot data
+      refreshSlotState(romIdRef.current!, setState);
+    };
+
+    const handleBiosChange = async (detail: any) => {
+      if (!detail.platform_slug) return;
+      const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus => ({ needs_bios: false }));
+      setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null }));
+    };
+
+    const handleCoreChange = async () => {
+      // Re-fetch cached game detail to pick up new core info
+      delete (_cachedGameDetailCache as Record<number, unknown>)[appId];
+      const cached = await getCachedGameDetail(appId);
+      if (cancelled || !cached.found) return;
+      let biosStatus: BiosStatus | null = null;
+      if (cached.bios_status) {
+        biosStatus = {
+          needs_bios: true,
+          ...cached.bios_status,
+        };
+      }
+      setState((prev) => ({ ...prev, biosStatus }));
+    };
+
+    const handleMetadataChange = async (detail: any) => {
+      if (detail.rom_id !== romIdRef.current) return;
+      const meta = await getRomMetadata(romIdRef.current!).catch((): RomMetadata | null => null);
+      setState((prev) => ({ ...prev, metadata: meta }));
+    };
+
+    const onDataChanged = async (e: Event) => {
+      try {
+        const detail = (e as CustomEvent).detail;
+        if (!romIdRef.current) return;
+        switch (detail?.type) {
+          case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
+          case "save_sync": await handleSaveSyncChange(detail); break;
+          case "bios": await handleBiosChange(detail); break;
+          case "core_changed": await handleCoreChange(); break;
+          case "metadata": await handleMetadataChange(detail); break;
+        }
       } catch (err) {
         debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`);
       }
