@@ -38,8 +38,7 @@ class LibrarySyncStateBox:
     generation id used by the safety-timeout guard, the heartbeat
     timestamp, the live progress dict emitted to the frontend, and the
     apply-staging dicts populated during ``sync_preview`` /
-    ``sync_apply_delta`` / ``_do_sync`` and consumed by
-    ``report_sync_results``.
+    ``sync_apply_delta`` and consumed by ``report_sync_results``.
     """
 
     sync_state: SyncState = SyncState.IDLE

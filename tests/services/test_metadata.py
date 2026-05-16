@@ -369,7 +369,7 @@ class TestLoadMetadataCache:
 
 
 class TestSyncMetadataCapture:
-    """Tests for metadata capture during _do_sync."""
+    """Tests for metadata capture during a sync run."""
 
     def test_extract_metadata_during_sync(self, plugin, tmp_path):
         """Verify that extract_metadata produces correct cache entries for ROM list items."""

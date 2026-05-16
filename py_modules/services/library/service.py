@@ -1,11 +1,11 @@
 """LibraryService façade.
 
 Owns the public callable surface exposed via ``main.py`` (platform/
-collection metadata, sync preview/apply/cancel, full sync, reporting,
+collection metadata, sync preview/apply/cancel, reporting,
 registry queries) and the shared :class:`LibrarySyncStateBox` that
 threads through every sub-service. Implementation lives in the
 sub-service modules: :class:`LibraryFetcher` for ROM/metadata
-roundtrips, :class:`SyncOrchestrator` for the preview/apply/full-sync
+roundtrips, :class:`SyncOrchestrator` for the preview/apply
 lifecycle and safety heartbeat, :class:`SyncReporter` for post-apply
 finalisation and registry queries. The façade itself only wires the
 pieces together and delegates — anything that touches RomM or mutates
@@ -78,7 +78,7 @@ class LibraryService:
 
     Composes :class:`LibraryFetcher` (platform/collection roundtrips +
     metadata-cache stamping), :class:`SyncOrchestrator` (preview/apply
-    /full-sync lifecycle + safety heartbeat), and :class:`SyncReporter`
+    lifecycle + safety heartbeat), and :class:`SyncReporter`
     (post-apply finalisation + registry queries) over a single shared
     :class:`LibrarySyncStateBox`. The façade itself owns the box and
     exposes the callable surface; every implementation method lives on

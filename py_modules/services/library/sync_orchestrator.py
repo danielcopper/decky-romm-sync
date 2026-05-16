@@ -1,15 +1,15 @@
-"""Preview / apply / full-sync lifecycle and the safety heartbeat.
+"""Preview / apply / per-unit sync lifecycle and the safety heartbeat.
 
 Owns every async path the user triggers from the QAM that mutates
 in-flight sync state: starting and cancelling syncs, building a
 preview delta from a fetch result, applying that delta back via the
-``sync_apply`` event, and the safety-timeout watchdog that closes
-out stuck "applying" phases. Progress emission also lives here —
-sub-services that need to surface progress receive the orchestrator's
-``_emit_progress`` callback through their config. Anything that
-fetches ROMs belongs in :class:`LibraryFetcher`; anything that
-finalises shortcuts after the apply completes belongs in
-:class:`SyncReporter`.
+``sync_apply`` event, driving the per-unit sync pipeline, and the
+safety-timeout watchdog that closes out stuck "applying" phases.
+Progress emission also lives here — sub-services that need to
+surface progress receive the orchestrator's ``_emit_progress``
+callback through their config. Anything that fetches ROMs belongs in
+:class:`LibraryFetcher`; anything that finalises shortcuts after the
+apply completes belongs in :class:`SyncReporter`.
 """
 
 from __future__ import annotations
@@ -383,113 +383,7 @@ class SyncOrchestrator:
 
         return self._loop.create_task(_safety_timeout())
 
-    # ── Full sync ────────────────────────────────────────────────
-
-    async def _do_sync(self):
-        box = self._sync_state
-        try:
-            try:
-                fetch_result = await self._fetcher._fetch_and_prepare()
-                all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids = fetch_result
-            except asyncio.CancelledError:
-                await self._finish_sync(_SYNC_CANCELLED)
-                raise
-            except Exception as e:
-                self._logger.error(f"Failed to fetch platforms: {e}")
-                _code, _msg = classify_error(e)
-                await self._emit_progress("error", message=_msg, running=False)
-                box.sync_state = SyncState.IDLE
-                return
-
-            # Calculate step plan for full sync
-            has_artwork = len(all_roms) > 0
-            has_shortcuts = len(shortcuts_data) > 0
-            full_steps = []
-            if has_artwork:
-                full_steps.append("artwork")
-            if has_shortcuts:
-                full_steps.append("shortcuts")
-            full_total_steps = len(full_steps)
-            full_current_step = 0
-
-            if has_artwork:
-                full_current_step += 1
-                await self._emit_progress(
-                    "applying",
-                    total=len(all_roms),
-                    message=f"Downloading artwork 0/{len(all_roms)}",
-                    step=full_current_step,
-                    total_steps=full_total_steps,
-                )
-                cover_paths = await self._download_artwork(
-                    all_roms, progress_step=full_current_step, progress_total_steps=full_total_steps
-                )
-            else:
-                cover_paths = {}
-
-            if box.sync_state == SyncState.CANCELLING:
-                await self._finish_sync(_SYNC_CANCELLED)
-                return
-
-            for sd in shortcuts_data:
-                sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
-
-            # Determine stale rom_ids by comparing current sync with registry
-            current_rom_ids = {r["id"] for r in all_roms}
-            stale_rom_ids = [int(rid) for rid in self._state["shortcut_registry"] if int(rid) not in current_rom_ids]
-
-            # Emit sync_apply for frontend to process via SteamClient
-            next_step = full_current_step + 1
-            await self._emit_progress(
-                "applying",
-                total=len(shortcuts_data),
-                message=f"Applying shortcuts 0/{len(shortcuts_data)}",
-                step=next_step,
-                total_steps=full_total_steps,
-            )
-
-            # Save sync stats (registry updated by report_sync_results)
-            self._state["sync_stats"] = {
-                "platforms": len(platforms),
-                "roms": len(all_roms),
-            }
-            self._state_persister.save_state()
-
-            # Store pending data for report_sync_results to reference
-            box.pending_sync = {sd["rom_id"]: sd for sd in shortcuts_data}
-            box.pending_collection_memberships = collection_memberships
-            box.pending_platform_rom_ids = platform_rom_ids
-
-            await self._emit(
-                "sync_apply",
-                {
-                    "shortcuts": shortcuts_data,
-                    "remove_rom_ids": stale_rom_ids,
-                    "next_step": next_step,
-                    "total_steps": full_total_steps,
-                },
-            )
-
-            self._logger.info(f"Sync data emitted: {len(shortcuts_data)} shortcuts, {len(stale_rom_ids)} stale")
-        except Exception as e:
-            import traceback
-
-            self._logger.error(f"Sync failed: {e}\n{traceback.format_exc()}")
-            _code, _msg = classify_error(e)
-            box.sync_progress = {
-                "running": False,
-                "phase": "error",
-                "current": 0,
-                "total": 0,
-                "message": f"Sync failed — {_msg}",
-            }
-            self._loop.create_task(self._emit("sync_progress", box.sync_progress))
-        finally:
-            if self._metadata_service is not None:
-                self._metadata_service.flush_metadata_if_dirty()
-            box.sync_state = SyncState.IDLE
-            if box.sync_progress.get("phase") != "error" and box.sync_progress.get("running"):
-                self._start_safety_timeout()
+    # ── Sync termination ─────────────────────────────────────────
 
     async def _finish_sync(self, message):
         box = self._sync_state

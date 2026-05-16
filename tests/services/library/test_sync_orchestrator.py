@@ -2,7 +2,7 @@
 
 import asyncio
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -22,71 +22,6 @@ class TestShortcutDataFormat:
     The backend prepares shortcut data that the frontend uses to create
     Steam shortcuts. These tests ensure the data is well-formed.
     """
-
-    @pytest.mark.asyncio
-    async def test_shortcut_data_has_required_fields(self, plugin):
-        """Every shortcut entry must have all required fields."""
-
-        plugin.settings["romm_url"] = "http://romm.local"
-        plugin.settings["enabled_platforms"] = {"gba": True}
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            side_effect=[
-                # _fetch_platforms
-                [{"id": 1, "slug": "gba", "name": "Game Boy Advance", "rom_count": 1}],
-                # _fetch_roms_for_platform
-                [
-                    {
-                        "id": 42,
-                        "name": "Test Game",
-                        "platform_name": "Game Boy Advance",
-                        "platform_slug": "gba",
-                        "igdb_id": 100,
-                        "sgdb_id": 200,
-                        "path_cover_large": "/cover.png",
-                    }
-                ],
-            ]
-        )
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-        plugin._sync_service._sync_state = SyncState.IDLE
-
-        # Mock decky.emit to capture the shortcuts
-        import decky
-
-        emitted_events = []
-        original_emit = getattr(decky, "emit", None)
-
-        async def mock_emit(event, *args):
-            emitted_events.append((event, args))
-
-        decky.emit = mock_emit
-        plugin._sync_service._orchestrator._emit = mock_emit
-
-        try:
-            # Call _do_sync directly (start_sync creates a background task
-            # that never runs with a mock loop)
-            await plugin._sync_service._orchestrator._do_sync()
-        except Exception:
-            pass
-        finally:
-            if original_emit:
-                decky.emit = original_emit
-
-        # Find the sync_apply emission
-        sync_items = None
-        for event, args in emitted_events:
-            if event == "sync_apply" and args:
-                sync_items = args[0] if args else None
-                break
-
-        assert sync_items is not None, "sync_apply event should have been emitted"
-        required_fields = {"rom_id", "name", "exe", "start_dir", "launch_options", "platform_name", "platform_slug"}
-        for item in sync_items.get("shortcuts", sync_items):
-            for field in required_fields:
-                assert field in item, f"Missing field '{field}' in shortcut data"
 
     @pytest.mark.asyncio
     async def test_exe_path_points_to_romm_launcher(self, plugin):
@@ -512,65 +447,6 @@ class TestSyncControl:
         result = plugin._sync_service.sync_heartbeat()
         assert result["success"] is True
         assert plugin._sync_service._sync_last_heartbeat > old
-
-
-class TestDoSyncErrorHandling:
-    """Tests for _do_sync error/edge handling — lines 587-695."""
-
-    @pytest.mark.asyncio
-    async def test_fetch_error_emits_error_progress(self, plugin):
-
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(side_effect=Exception("API down"))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-
-        await plugin._sync_service._orchestrator._do_sync()
-
-        # Should have emitted error progress
-        error_calls = [
-            c for c in plugin._sync_service._orchestrator._emit_progress.call_args_list if c[0][0] == "error"
-        ]
-        assert len(error_calls) >= 1
-        assert plugin._sync_service._sync_state == SyncState.IDLE
-
-    @pytest.mark.asyncio
-    async def test_cancel_during_sync(self, plugin):
-
-        import decky
-
-        decky.emit.reset_mock()
-
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
-            side_effect=asyncio.CancelledError("Sync cancelled")
-        )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-
-        # CancelledError is caught, _finish_sync called, then re-raised
-        with pytest.raises(asyncio.CancelledError):
-            await plugin._sync_service._orchestrator._do_sync()
-
-        # Should be idle after _finish_sync
-        assert plugin._sync_service._sync_state == SyncState.IDLE
-
-    @pytest.mark.asyncio
-    async def test_general_exception_in_do_sync(self, plugin):
-
-        import decky
-
-        decky.emit.reset_mock()
-
-        plugin._sync_service._sync_state = SyncState.RUNNING
-
-        async def failing_fetch():
-            # Successfully fetch but then fail during artwork
-            raise RuntimeError("Unexpected error")
-
-        plugin._sync_service._fetcher._fetch_and_prepare = failing_fetch
-
-        await plugin._sync_service._orchestrator._do_sync()
-
-        assert plugin._sync_service._sync_state == SyncState.IDLE
 
 
 class TestFinishSync:

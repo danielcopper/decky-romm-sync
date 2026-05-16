@@ -340,7 +340,7 @@ export default definePlugin(() => {
     },
   );
 
-  // Backend emits sync_progress events throughout _do_sync — update the module-level store
+  // Backend emits sync_progress events throughout the sync run — update the module-level store
   const syncProgressListener = addEventListener<[SyncProgress]>(
     "sync_progress",
     (progress: SyncProgress) => {
