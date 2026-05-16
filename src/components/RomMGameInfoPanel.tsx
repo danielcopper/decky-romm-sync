@@ -142,6 +142,137 @@ function refreshMetadataInBackground(
   }).catch(() => {});
 }
 
+/** Build a `BiosStatus` from a cached game detail's `bios_status` field. */
+function biosStatusFromCache(cachedBios: Record<string, unknown> | null | undefined): BiosStatus | null {
+  if (!cachedBios) return null;
+  return {
+    needs_bios: true,
+    ...cachedBios,
+  } as BiosStatus;
+}
+
+/** Build a `SaveStatus` from a cached game detail's `save_status` field. */
+function saveStatusFromCache(
+  romId: number,
+  cachedSave: NonNullable<Awaited<ReturnType<typeof getCachedGameDetail>>["save_status"]> | null | undefined,
+): SaveStatus | null {
+  if (!cachedSave) return null;
+  return {
+    rom_id: romId,
+    files: cachedSave.files.map((f) => ({
+      filename: f.filename,
+      status: f.status as "skip" | "download" | "upload" | "conflict",
+      local_path: null,
+      local_hash: null,
+      local_mtime: null,
+      local_size: null,
+      server_save_id: null,
+      server_file_name: null,
+      server_emulator: null,
+      server_updated_at: null,
+      server_size: null,
+      last_sync_at: f.last_sync_at ?? null,
+    })),
+    playtime: { total_seconds: 0, session_count: 0, last_session_start: null, last_session_duration_sec: null },
+    device_id: "",
+    last_sync_check_at: cachedSave.last_sync_check_at ?? null,
+  };
+}
+
+/** Kick off background fetches that fill in fields not present in the cache:
+ *  installed-rom details, cover art, and fresh metadata (if stale or missing). */
+function startBackgroundRefreshes(
+  cached: Awaited<ReturnType<typeof getCachedGameDetail>>,
+  romId: number,
+  cancelled: () => boolean,
+  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+): Promise<void[]> {
+  const bgPromises: Promise<void>[] = [];
+
+  if (cached.installed) {
+    bgPromises.push(refreshInstalledRomInBackground(romId, cancelled, setter));
+  }
+
+  bgPromises.push(refreshCoverArtInBackground(romId, cancelled, setter));
+
+  const metaStale = cached.stale_fields?.includes("metadata") ?? true;
+  if (!cached.metadata || metaStale) {
+    bgPromises.push(refreshMetadataInBackground(romId, cancelled, setter));
+  }
+
+  return Promise.all(bgPromises);
+}
+
+/** Cache-first initial render. Resolves the cached game detail for this appId,
+ *  pushes it into PanelState, and fires the background refresh tasks whose
+ *  results are merged in later. Module-scope so the FC body stays focused on
+ *  rendering. */
+async function loadData(
+  appId: number,
+  cancelled: () => boolean,
+  romIdRef: React.MutableRefObject<number | null>,
+  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+): Promise<void> {
+  try {
+    // Phase 1: Cache-first — render instantly from cached data
+    const cached = await getCachedGameDetail(appId);
+    if (cancelled()) return;
+    if (!cached.found) {
+      setter((prev) => ({ ...prev, loading: false, error: true }));
+      return;
+    }
+
+    const romId = cached.rom_id!;
+    const romName = cached.rom_name || "";
+    const platformName = cached.platform_name || "";
+    const platformSlug = cached.platform_slug || "";
+
+    romIdRef.current = romId;
+
+    const biosStatus = biosStatusFromCache(cached.bios_status);
+    const saveStatus = saveStatusFromCache(romId, cached.save_status);
+    const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
+    const raId = (cached as any).ra_id ?? null;
+
+    // Render immediately with cached data (metadata may be null — that's OK)
+    setter({
+      loading: false,
+      romId,
+      romName,
+      platformName,
+      platformSlug,
+      installed: cached.installed ?? false,
+      installedRom: null, // Will be filled by background fetch if installed
+      metadata: cached.metadata as RomMetadata | null,
+      coverBase64: null, // Will be filled by background fetch
+      biosStatus,
+      saveSyncEnabled: cached.save_sync_enabled ?? false,
+      saveStatus,
+      conflicts,
+      error: false,
+      activeTab: "info",
+      achievements: [],
+      achievementProgress: null,
+      achievementsLoading: false,
+      raId,
+      slotConfirmed: false,
+      activeSlot: "default",
+      availableSlots: [],
+      slotsLoading: false,
+    });
+
+    if (cached.save_sync_enabled) {
+      refreshSlotState(romId, setter);
+    }
+
+    // Phase 2: Background fetch for data not available in cache
+    await startBackgroundRefreshes(cached, romId, cancelled, setter);
+  } catch (e) {
+    debugLog(`RomMGameInfoPanel: loadData error: ${e}`);
+    if (!cancelled()) setter((prev) => ({ ...prev, loading: false, error: true }));
+  }
+}
+
 export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
@@ -193,122 +324,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadData() {
-      try {
-        // Phase 1: Cache-first — render instantly from cached data
-        const cached = await getCachedGameDetail(appId);
-        if (cancelled) return;
-        if (!cached.found) {
-          setState((prev) => ({ ...prev, loading: false, error: true }));
-          return;
-        }
-
-        const romId = cached.rom_id!;
-        const romName = cached.rom_name || "";
-        const platformName = cached.platform_name || "";
-        const platformSlug = cached.platform_slug || "";
-
-        romIdRef.current = romId;
-
-        // Build initial BIOS status from cache
-        let biosStatus: BiosStatus | null = null;
-        if (cached.bios_status) {
-          biosStatus = {
-            needs_bios: true,
-            ...cached.bios_status,
-          };
-        }
-
-        // Build initial save status from cache
-        let saveStatus: SaveStatus | null = null;
-        if (cached.save_status) {
-          saveStatus = {
-            rom_id: romId,
-            files: cached.save_status.files.map((f) => ({
-              filename: f.filename,
-              status: f.status as "skip" | "download" | "upload" | "conflict",
-              local_path: null,
-              local_hash: null,
-              local_mtime: null,
-              local_size: null,
-              server_save_id: null,
-              server_file_name: null,
-              server_emulator: null,
-              server_updated_at: null,
-              server_size: null,
-              last_sync_at: f.last_sync_at ?? null,
-            })),
-            playtime: { total_seconds: 0, session_count: 0, last_session_start: null, last_session_duration_sec: null },
-            device_id: "",
-            last_sync_check_at: cached.save_status.last_sync_check_at ?? null,
-          };
-        }
-
-        // Use pre-computed conflicts from backend
-        const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
-
-        // Store ra_id for tab visibility
-        const raId = (cached as any).ra_id ?? null;
-
-        // Render immediately with cached data (metadata may be null — that's OK)
-        setState({
-          loading: false,
-          romId,
-          romName,
-          platformName,
-          platformSlug,
-          installed: cached.installed ?? false,
-          installedRom: null, // Will be filled by background fetch if installed
-          metadata: cached.metadata as RomMetadata | null,
-          coverBase64: null, // Will be filled by background fetch
-          biosStatus,
-          saveSyncEnabled: cached.save_sync_enabled ?? false,
-          saveStatus,
-          conflicts,
-          error: false,
-          activeTab: "info",
-          achievements: [],
-          achievementProgress: null,
-          achievementsLoading: false,
-          raId,
-          slotConfirmed: false,
-          activeSlot: "default",
-          availableSlots: [],
-          slotsLoading: false,
-        });
-
-        // Check if save slot tracking is configured for this game
-        if (cached.save_sync_enabled) {
-          refreshSlotState(romId, setState);
-        }
-
-        // Phase 2: Background fetch for data not available in cache
-        // (installed ROM details, cover art, full save/BIOS detail, metadata if missing)
-        const isCancelled = () => cancelled;
-        const bgPromises: Promise<void>[] = [];
-
-        // Installed ROM details (for filename display)
-        if (cached.installed) {
-          bgPromises.push(refreshInstalledRomInBackground(romId, isCancelled, setState));
-        }
-
-        // Cover art
-        bgPromises.push(refreshCoverArtInBackground(romId, isCancelled, setState));
-
-        // Metadata (if missing or stale)
-        const metaStale = cached.stale_fields?.includes("metadata") ?? true;
-        if (!cached.metadata || metaStale) {
-          bgPromises.push(refreshMetadataInBackground(romId, isCancelled, setState));
-        }
-
-        await Promise.all(bgPromises);
-      } catch (e) {
-        debugLog(`RomMGameInfoPanel: loadData error: ${e}`);
-        if (!cancelled) setState((prev) => ({ ...prev, loading: false, error: true }));
-      }
-    }
-
-    loadData();
+    loadData(appId, () => cancelled, romIdRef, setState);
 
     // Listen for uninstall events to update state (uses ref to avoid stale closure)
     const onUninstall = (e: Event) => {
