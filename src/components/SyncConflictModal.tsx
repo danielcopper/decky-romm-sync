@@ -165,8 +165,23 @@ const SyncConflictModalHost: FC<SyncConflictModalHostProps> = ({ conflict, close
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const result = await resolveSyncConflict(conflict.rom_id, conflict.filename, action);
+      const result = await resolveSyncConflict(
+        conflict.rom_id,
+        conflict.filename,
+        conflict.server_save_id,
+        action,
+      );
       if (!result.success) {
+        if (result.error_code === "stale_conflict") {
+          const staleMsg =
+            "The server save has been updated by another device. Please cancel and retry sync to get the latest version.";
+          logError(
+            `resolveSyncConflict(${conflict.rom_id}, ${conflict.filename}, ${action}) stale: ${result.message ?? ""}`,
+          );
+          setErrorMessage(staleMsg);
+          setIsLoading(false);
+          return;
+        }
         const msg = result.message ?? "Failed to resolve conflict";
         logError(`resolveSyncConflict(${conflict.rom_id}, ${conflict.filename}, ${action}) failed: ${msg}`);
         setErrorMessage(msg);

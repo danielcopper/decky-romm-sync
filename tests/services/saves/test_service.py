@@ -889,6 +889,7 @@ class TestPathTraversalDefense:
             result = await svc.resolve_sync_conflict(
                 rom_id=42,
                 filename="../../etc/passwd",
+                server_save_id=100,
                 action="keep_local",
             )
 
@@ -913,6 +914,7 @@ class TestPathTraversalDefense:
         result = await svc.resolve_sync_conflict(
             rom_id=42,
             filename="pokemon\x00.srm",
+            server_save_id=100,
             action="keep_local",
         )
 

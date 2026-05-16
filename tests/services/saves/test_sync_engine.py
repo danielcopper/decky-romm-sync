@@ -1763,7 +1763,12 @@ class TestResolveSyncConflict:
         fake.saves[100] = ss
         fake.uploaded_files[100] = str(save_path)
 
-        result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="keep_local")
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
 
         assert result["success"] is True
         assert result["action"] == "keep_local"
@@ -1791,7 +1796,12 @@ class TestResolveSyncConflict:
         fake.saves[100] = ss
         fake.uploaded_files[100] = str(other)
 
-        result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="keep_local")
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
 
         assert result["success"] is True
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
@@ -1819,7 +1829,12 @@ class TestResolveSyncConflict:
         fake.saves[100] = ss
         fake.uploaded_files[100] = str(server_content)
 
-        result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="use_server")
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="use_server",
+        )
 
         assert result["success"] is True
         # Local file overwritten with server content
@@ -1834,7 +1849,12 @@ class TestResolveSyncConflict:
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
 
-        result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="foo")
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="foo",
+        )
 
         assert result["success"] is False
         assert "invalid" in result["message"].lower()
@@ -1844,7 +1864,12 @@ class TestResolveSyncConflict:
         svc, _ = make_service(tmp_path)
         _enable_sync_with_device(svc)
 
-        result = await svc.resolve_sync_conflict(rom_id=999, filename="pokemon.srm", action="keep_local")
+        result = await svc.resolve_sync_conflict(
+            rom_id=999,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
 
         assert result["success"] is False
         assert result["message"]
@@ -1865,7 +1890,12 @@ class TestResolveSyncConflict:
 
         fake.fail_on_next(RommApiError("network"))
 
-        result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="keep_local")
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
 
         assert result["success"] is False
         assert "Failed to fetch saves" in result["message"]
@@ -1884,7 +1914,12 @@ class TestResolveSyncConflict:
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
 
-        result = await svc.resolve_sync_conflict(rom_id=42, filename="pokemon.srm", action="keep_local")
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
 
         assert result["success"] is False
         assert "no server save" in result["message"].lower()
@@ -1921,6 +1956,7 @@ class TestResolveSyncConflict:
         result = await svc.resolve_sync_conflict(
             rom_id=42,
             filename="pokemon.sav",  # diverges from server canonical
+            server_save_id=100,
             action="keep_local",
         )
 
@@ -1965,6 +2001,7 @@ class TestResolveSyncConflict:
         result = await svc.resolve_sync_conflict(
             rom_id=42,
             filename="pokemon.sav",  # frontend label diverges from canonical
+            server_save_id=100,
             action="use_server",
         )
 
@@ -2006,6 +2043,7 @@ class TestResolveSyncConflict:
         result = await svc.resolve_sync_conflict(
             rom_id=42,
             filename="pokemon.sav",
+            server_save_id=100,
             action="keep_local",
         )
 
@@ -2013,3 +2051,115 @@ class TestResolveSyncConflict:
         assert "not found" in result["message"].lower()
         # No upload was attempted.
         assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+
+class TestResolveSyncConflictStaleConflict:
+    """Round-trip validation of ``server_save_id`` guards against a third-device
+    race: another device PUTs into the slot while the conflict modal is open,
+    and the client's stale id should not be silently rewritten."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_keep_local_rejects_when_server_head_advanced(self, tmp_path):
+        """Client passes server_save_id=100; server head is id=200 → stale_conflict.
+
+        Asserts the dangerous PUT never fires and state stays untouched.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"local-edited")
+
+        # The id=100 save the modal was opened against is no longer the head:
+        # a third device uploaded id=200 with a newer updated_at into the slot.
+        newer_server = _server_save_with_syncs(
+            save_id=200,
+            updated_at="2026-01-02T00:00:00Z",
+            device_syncs=[{"device_id": "device-2", "is_current": True}],
+        )
+        fake.saves[200] = newer_server
+
+        # Snapshot state so the no-mutation assertion is exact.
+        state_before = svc._save_sync_state.to_dict()
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
+
+        assert result["success"] is False
+        assert result["error_code"] == "stale_conflict"
+        assert result["message"]
+        # No PUT/POST fired against the head save — the whole point of the guard.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        # State unchanged.
+        assert svc._save_sync_state.to_dict() == state_before
+
+    @pytest.mark.asyncio
+    async def test_resolve_use_server_rejects_when_server_head_advanced(self, tmp_path):
+        """use_server with a stale server_save_id is also rejected — the user
+        chose to download id=100, not id=200; surfacing id=200 silently would
+        also be a silent overwrite of the user's intent."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local-stale")
+
+        newer_server = _server_save_with_syncs(
+            save_id=200,
+            updated_at="2026-01-02T00:00:00Z",
+            device_syncs=[{"device_id": "device-2", "is_current": True}],
+        )
+        # Make the server's "newer" save downloadable so we can prove the
+        # download never fired.
+        server_bytes = tmp_path / "third-device-bytes.bin"
+        server_bytes.write_bytes(b"third-device-content")
+        fake.saves[200] = newer_server
+        fake.uploaded_files[200] = str(server_bytes)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="use_server",
+        )
+
+        assert result["success"] is False
+        assert result["error_code"] == "stale_conflict"
+        # Local file untouched — no silent download of the wrong server save.
+        assert save_path.read_bytes() == b"local-stale"
+
+    @pytest.mark.asyncio
+    async def test_resolve_succeeds_when_server_head_matches(self, tmp_path):
+        """Same flow but id=100 is still the head — resolution proceeds normally."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local-edited")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(
+            save_id=100,
+            updated_at="2026-01-01T00:00:00Z",
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        other = tmp_path / "server-bytes.bin"
+        other.write_bytes(b"server-flavor")
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(other)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "keep_local"
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2]["save_id"] == 100
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.last_sync_hash == local_hash

@@ -995,6 +995,7 @@ class SyncEngine:
         self,
         rom_id: int,
         filename: str,
+        server_save_id: int,
         action: str,
     ) -> dict:
         """Resolve a pending sync conflict (true two-sided divergence).
@@ -1002,6 +1003,13 @@ class SyncEngine:
         Reached when ``compute_sync_action`` returned ``Conflict`` — the
         server moved AND local diverged from baseline, so the user picked a
         side via the conflict UI.
+
+        ``server_save_id`` is the id of the server save that was surfaced to
+        the user in the conflict modal. The backend round-trips it: if a
+        third device has uploaded a newer save into the slot since the modal
+        opened, the picked server head won't match and we return
+        ``error_code="stale_conflict"`` instead of silently overwriting the
+        third device's work.
 
         ``action`` is one of:
 
@@ -1062,6 +1070,21 @@ class SyncEngine:
             if not server_in_slot:
                 return {"success": False, "message": "No server save in active slot"}
             server = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
+
+            actual_server_id = server.get("id")
+            if actual_server_id != server_save_id:
+                self._logger.warning(
+                    "resolve_sync_conflict(rom_id=%d, action=%s) stale: client server_save_id=%s, head=%s",
+                    rom_id,
+                    action,
+                    server_save_id,
+                    actual_server_id,
+                )
+                return {
+                    "success": False,
+                    "error_code": "stale_conflict",
+                    "message": "Server save changed since conflict was shown; please retry sync.",
+                }
 
             try:
                 if action == "use_server":

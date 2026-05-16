@@ -151,7 +151,10 @@ export const preLaunchSync = callable<[number], { success: boolean; message: str
 export const postExitSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[]; offline?: boolean }>("post_exit_sync");
 export const syncRomSaves = callable<[number], { success: boolean; message: string; synced: number; errors?: string[] }>("sync_rom_saves");
 export const syncAllSaves = callable<[], { success: boolean; message: string; synced: number; conflicts: number }>("sync_all_saves");
-export const resolveSyncConflict = callable<[number, string, "keep_local" | "use_server"], { success: boolean; message?: string; action?: "keep_local" | "use_server" }>("resolve_sync_conflict");
+export const resolveSyncConflict = callable<
+  [number, string, number, "keep_local" | "use_server"],
+  { success: boolean; message?: string; error_code?: string; action?: "keep_local" | "use_server" }
+>("resolve_sync_conflict");
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
 export const recordSessionEnd = callable<[number], { success: boolean; duration_sec?: number; total_seconds?: number; session_count?: number; message?: string }>("record_session_end");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");

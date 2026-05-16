@@ -189,10 +189,11 @@ class SaveService:
         self,
         rom_id: int,
         filename: str,
+        server_save_id: int,
         action: str,
     ) -> dict:
         """Resolve a pending sync conflict (true two-sided divergence)."""
-        return await self._sync_engine.resolve_sync_conflict(rom_id, filename, action)
+        return await self._sync_engine.resolve_sync_conflict(rom_id, filename, server_save_id, action)
 
     # ------------------------------------------------------------------
     # Slots (delegated to SlotsService)
