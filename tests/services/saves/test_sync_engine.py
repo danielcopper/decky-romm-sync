@@ -1813,6 +1813,67 @@ class TestResolveSyncConflict:
         assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
+    async def test_resolve_keep_local_falls_back_when_server_hash_fetch_raises(self, tmp_path):
+        """When ``_get_server_save_hash`` raises out of retry (retries exhausted),
+        the keep_local resolver swallows it and treats ``server_hash`` as ``None``.
+
+        That sinks the adopt-without-upload short-circuit (which requires
+        ``server_hash`` truthy and equal to ``local_hash``) and the PUT path
+        runs unconditionally. Degraded behaviour, but no failure surfaced to
+        the user.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local-edited")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        fake.saves[100] = ss
+        # No uploaded_files entry — wouldn't matter anyway, the download_save
+        # call inside _get_server_save_hash is going to raise before reading.
+
+        # Make ``_get_server_save_hash`` re-raise: ``download_save`` raises
+        # and the retry mock reports the exception as retryable, so the
+        # inner ``except Exception`` in ``_get_server_save_hash`` re-raises
+        # and the outer ``except Exception`` in
+        # ``_resolve_conflict_keep_local`` catches it. We monkey-patch
+        # ``download_save`` directly (rather than ``fail_on_next``, which
+        # would consume on the earlier ``list_saves`` call).
+        def _raise_on_download(save_id: int, dest_path: str) -> None:
+            fake.call_log.append(("download_save", (save_id, dest_path), {}))
+            raise RommApiError("transient")
+
+        fake.download_save = _raise_on_download  # type: ignore[method-assign]
+        svc._sync_engine._retry.is_retryable.return_value = True  # type: ignore[attr-defined]
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "keep_local"
+        # The hash-match short-circuit MUST NOT have fired — its branch
+        # records ``tracked_save_id`` without an upload. We instead expect
+        # the PUT upload path to have run.
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # PUT — save_id was passed (existing save id, not None).
+        assert upload_calls[0][2]["save_id"] == 100
+        # download_save was attempted exactly once (the one that raised).
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert len(download_calls) == 1
+
+        # State carries the local hash from the successful PUT.
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.last_sync_hash == local_hash
+
+    @pytest.mark.asyncio
     async def test_resolve_use_server_downloads_and_persists(self, tmp_path):
         """use_server downloads server, overwrites local, updates state."""
         svc, fake = make_service(tmp_path)
@@ -2118,6 +2179,9 @@ class TestResolveSyncConflictStaleConflict:
         fake.saves[200] = newer_server
         fake.uploaded_files[200] = str(server_bytes)
 
+        # Snapshot state so the no-mutation assertion is exact.
+        state_before = svc._save_sync_state.to_dict()
+
         result = await svc.resolve_sync_conflict(
             rom_id=42,
             filename="pokemon.srm",
@@ -2129,6 +2193,8 @@ class TestResolveSyncConflictStaleConflict:
         assert result["error_code"] == "stale_conflict"
         # Local file untouched — no silent download of the wrong server save.
         assert save_path.read_bytes() == b"local-stale"
+        # State unchanged.
+        assert svc._save_sync_state.to_dict() == state_before
 
     @pytest.mark.asyncio
     async def test_resolve_succeeds_when_server_head_matches(self, tmp_path):
