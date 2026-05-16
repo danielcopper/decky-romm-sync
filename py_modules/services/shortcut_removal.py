@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         ArtworkRemover,
         EventEmitter,
-        RommApiProtocol,
+        RommPlatformReader,
         StatePersister,
         SteamConfigAdapter,
     )
@@ -27,7 +27,7 @@ class ShortcutRemovalServiceConfig:
     ShortcutRemovalService needs at construction time.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommPlatformReader
     steam_config: SteamConfigAdapter
     state: dict
     loop: asyncio.AbstractEventLoop

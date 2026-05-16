@@ -24,6 +24,17 @@ class SteamConfigAdapter(Protocol):
     def fix_retroarch_input_driver(self) -> dict: ...
 
 
+class RommPlatformReader(Protocol):
+    """Read-only RomM platform listing surface."""
+
+    def list_platforms(self) -> list[dict]:
+        """Fetch all platforms configured on the RomM server.
+
+        Returns a list of platform dicts from /api/platforms.
+        """
+        ...
+
+
 class RommApiProtocol(Protocol):
     """Domain-oriented interface for all RomM server operations.
 
