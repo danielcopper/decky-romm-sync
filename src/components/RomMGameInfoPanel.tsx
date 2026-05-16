@@ -103,6 +103,45 @@ function refreshSlotState(
     .catch(() => {});
 }
 
+/** Fire-and-forget installed-rom fetch — kept at module scope to avoid nesting. */
+function refreshInstalledRomInBackground(
+  romId: number,
+  cancelled: () => boolean,
+  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+): Promise<void> {
+  return getInstalledRom(romId).then((installed) => {
+    if (!cancelled() && installed) {
+      setter((prev) => ({ ...prev, installedRom: installed }));
+    }
+  }).catch(() => {});
+}
+
+/** Fire-and-forget cover-art fetch — kept at module scope to avoid nesting. */
+function refreshCoverArtInBackground(
+  romId: number,
+  cancelled: () => boolean,
+  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+): Promise<void> {
+  return getArtworkBase64(romId).then((result) => {
+    if (!cancelled() && result.base64) {
+      setter((prev) => ({ ...prev, coverBase64: result.base64 }));
+    }
+  }).catch(() => {});
+}
+
+/** Fire-and-forget metadata fetch — kept at module scope to avoid nesting. */
+function refreshMetadataInBackground(
+  romId: number,
+  cancelled: () => boolean,
+  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+): Promise<void> {
+  return getRomMetadata(romId).then((meta) => {
+    if (!cancelled() && meta) {
+      setter((prev) => ({ ...prev, metadata: meta }));
+    }
+  }).catch(() => {});
+}
+
 export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
@@ -245,38 +284,21 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
         // Phase 2: Background fetch for data not available in cache
         // (installed ROM details, cover art, full save/BIOS detail, metadata if missing)
+        const isCancelled = () => cancelled;
         const bgPromises: Promise<void>[] = [];
 
         // Installed ROM details (for filename display)
         if (cached.installed) {
-          bgPromises.push(
-            getInstalledRom(romId).then((installed) => {
-              if (!cancelled && installed) {
-                setState((prev) => ({ ...prev, installedRom: installed }));
-              }
-            }).catch(() => {}),
-          );
+          bgPromises.push(refreshInstalledRomInBackground(romId, isCancelled, setState));
         }
 
         // Cover art
-        bgPromises.push(
-          getArtworkBase64(romId).then((result) => {
-            if (!cancelled && result.base64) {
-              setState((prev) => ({ ...prev, coverBase64: result.base64 }));
-            }
-          }).catch(() => {}),
-        );
+        bgPromises.push(refreshCoverArtInBackground(romId, isCancelled, setState));
 
         // Metadata (if missing or stale)
         const metaStale = cached.stale_fields?.includes("metadata") ?? true;
         if (!cached.metadata || metaStale) {
-          bgPromises.push(
-            getRomMetadata(romId).then((meta) => {
-              if (!cancelled && meta) {
-                setState((prev) => ({ ...prev, metadata: meta }));
-              }
-            }).catch(() => {}),
-          );
+          bgPromises.push(refreshMetadataInBackground(romId, isCancelled, setState));
         }
 
         await Promise.all(bgPromises);

@@ -230,6 +230,23 @@ function refreshBiosInBackground(
   }).catch((e) => debugLog(`Background BIOS status fetch error: ${e}`));
 }
 
+/** Fire-and-forget achievement progress refresh — kept at module scope to avoid nesting. */
+function refreshAchievementsInBackground(
+  romId: number,
+  cancelled: () => boolean,
+  setter: React.Dispatch<React.SetStateAction<InfoState>>,
+) {
+  getAchievementProgress(romId).then((result) => {
+    if (!cancelled() && result.success) {
+      setter((prev) => ({
+        ...prev,
+        achievementEarned: result.earned,
+        achievementTotal: result.total,
+      }));
+    }
+  }).catch((e) => debugLog(`Background achievement progress fetch error: ${e}`));
+}
+
 export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
@@ -322,36 +339,19 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         }
 
         // Achievements: render from cache, background refresh if stale
-        const refreshAchievements = (result: { success: boolean; earned: number; total: number }) => {
-          if (!cancelled && result.success) {
-            setInfo((prev) => ({
-              ...prev,
-              achievementEarned: result.earned,
-              achievementTotal: result.total,
-            }));
-          }
-        };
         if (cached.ra_id && staleFields.includes("achievements")) {
-          getAchievementProgress(romId).then(refreshAchievements)
-            .catch((e) => debugLog(`Background achievement progress fetch error: ${e}`));
+          refreshAchievementsInBackground(romId, () => cancelled, setInfo);
         }
 
         // BIOS: render from cache first, background refresh if stale
         const cachedBios = cached.bios_status;
         if (cachedBios) {
-          const activeCoreLabel = cachedBios.active_core_label ?? null;
-          const availableCores = cachedBios.available_cores ?? [];
-          const defaultCore = availableCores.find((c) => c.is_default);
-          const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
-          setInfo((prev) => ({
-            ...prev,
-            biosNeeded: true,
-            biosStatus: cached.bios_level ?? null,
-            biosLabel: cached.bios_label ?? "",
-            activeCoreLabel,
-            activeCoreIsDefault,
-            availableCores,
-          }));
+          const biosPartial = extractBiosInfo(
+            cachedBios as BiosStatus,
+            cached.bios_level ?? null,
+            cached.bios_label ?? "",
+          );
+          setInfo((prev) => ({ ...prev, ...biosPartial }));
         }
 
         if (staleFields.includes("bios")) {
