@@ -294,6 +294,49 @@ class TestGetSaveSetupInfo:
         assert result["has_local_saves"] is False
         assert result["local_files"] == []
 
+    @pytest.mark.asyncio
+    async def test_get_save_setup_info_recommends_auto_confirm_when_local_saves_no_server_slots(self, tmp_path):
+        """Local saves + no server slots -> wizard should auto-confirm the default slot."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        result = await svc.get_save_setup_info(42)
+        assert result["has_local_saves"] is True
+        assert result["server_slots"] == []
+        assert result["recommended_action"] == "auto_confirm_default"
+
+    @pytest.mark.asyncio
+    async def test_get_save_setup_info_recommends_wizard_when_server_has_slots(self, tmp_path):
+        """Local saves + server has slots -> user must choose, wizard required."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.saves[1] = _server_save(save_id=1, slot="desktop")
+
+        result = await svc.get_save_setup_info(42)
+        assert result["has_local_saves"] is True
+        assert len(result["server_slots"]) == 1
+        assert result["recommended_action"] == "show_wizard"
+
+    @pytest.mark.asyncio
+    async def test_get_save_setup_info_recommends_wizard_when_no_local_saves(self, tmp_path):
+        """No local saves -> wizard required regardless of server state."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        _install_rom(svc, tmp_path)
+        # No _create_save call - no local saves
+        fake.saves[1] = _server_save(save_id=1, slot=None)
+
+        result = await svc.get_save_setup_info(42)
+        assert result["has_local_saves"] is False
+        assert result["recommended_action"] == "show_wizard"
+
 
 class TestConfirmSlotChoice:
     @pytest.mark.asyncio

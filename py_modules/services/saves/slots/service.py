@@ -470,6 +470,13 @@ class SlotsService:
         slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
         active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
 
+        # Pre-computed wizard recommendation: auto-confirm the default slot only
+        # when there are local saves and the server has no slots yet. Every other
+        # combination needs the wizard so the user can choose.
+        recommended_action = (
+            "auto_confirm_default" if (len(local_files) > 0 and len(server_slots) == 0) else "show_wizard"
+        )
+
         return {
             "has_local_saves": len(local_files) > 0,
             "local_files": local_file_info,
@@ -477,6 +484,7 @@ class SlotsService:
             "default_slot": default_slot,
             "slot_confirmed": slot_confirmed,
             "active_slot": active_slot,
+            "recommended_action": recommended_action,
         }
 
     async def confirm_slot_choice(

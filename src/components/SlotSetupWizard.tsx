@@ -70,23 +70,6 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
   useEffect(() => {
     let cancelled = false;
 
-    const autoConfirmIfNeeded = async (result: SaveSetupInfo): Promise<boolean> => {
-      if (!result.has_local_saves || result.server_slots.length > 0) return false;
-      setConfirming(true);
-      try {
-        await confirmSlotChoice(romId, result.default_slot, null);
-        if (!cancelled) onComplete();
-      } catch (e) {
-        if (!cancelled) {
-          setError(`Auto-setup failed: ${e}`);
-          logError(`SlotSetupWizard auto-confirm failed: ${e}`);
-          setConfirming(false);
-          setInfo(result);
-        }
-      }
-      return true;
-    };
-
     const fetchInfo = async () => {
       setLoading(true);
       setError(null);
@@ -94,9 +77,19 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
         const result = await getSaveSetupInfo(romId);
         if (cancelled) return;
 
-        const autoConfirmed = await autoConfirmIfNeeded(result);
-        if (autoConfirmed) {
-          if (!cancelled) setLoading(false);
+        if (result.recommended_action === "auto_confirm_default") {
+          setConfirming(true);
+          try {
+            await confirmSlotChoice(romId, result.default_slot, null);
+            if (!cancelled) onComplete();
+          } catch (e) {
+            if (!cancelled) {
+              setError(`Auto-setup failed: ${e}`);
+              logError(`SlotSetupWizard auto-confirm failed: ${e}`);
+              setConfirming(false);
+              setInfo(result);
+            }
+          }
           return;
         }
 

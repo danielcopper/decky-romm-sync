@@ -410,6 +410,7 @@ export interface SaveSetupInfo {
   default_slot: string;
   slot_confirmed: boolean;
   active_slot: string | null;
+  recommended_action: "auto_confirm_default" | "show_wizard";
 }
 
 export interface RomLookupResult {
