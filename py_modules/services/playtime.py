@@ -1,6 +1,6 @@
 """PlaytimeService — playtime tracking via RomM Notes API.
 
-All RomM communication goes through ``RommApiProtocol``.
+All RomM communication goes through ``RommPlaytimeApi``.
 No ``import decky``.
 """
 
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from domain.save_state import PlaytimeEntry, SaveSyncState
 from lib.iso_time import parse_iso
-from services.protocols import Clock, DebugLogger, RetryStrategy, RommApiProtocol, StatePersister
+from services.protocols import Clock, DebugLogger, RetryStrategy, RommPlaytimeApi, StatePersister
 
 if TYPE_CHECKING:
     import asyncio
@@ -30,7 +30,7 @@ class PlaytimeServiceConfig:
     construction time.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommPlaytimeApi
     retry: RetryStrategy
     save_sync_state: SaveSyncState
     loop: asyncio.AbstractEventLoop

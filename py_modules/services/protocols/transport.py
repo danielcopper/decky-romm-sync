@@ -35,6 +35,31 @@ class RommPlatformReader(Protocol):
         ...
 
 
+class RommPlaytimeApi(Protocol):
+    """RomM Notes API surface for playtime tracking."""
+
+    def get_rom_with_notes(self, rom_id: int) -> dict:
+        """Fetch full ROM detail including user notes.
+
+        Used for playtime tracking. Notes are in the all_user_notes field.
+        """
+        ...
+
+    def create_note(self, rom_id: int, data: dict) -> dict:
+        """Create a note on a ROM.
+
+        Used for playtime tracking. POST /api/roms/{rom_id}/notes.
+        """
+        ...
+
+    def update_note(self, rom_id: int, note_id: int, data: dict) -> dict:
+        """Update an existing note on a ROM.
+
+        PUT /api/roms/{rom_id}/notes/{note_id}.
+        """
+        ...
+
+
 class RommApiProtocol(Protocol):
     """Domain-oriented interface for all RomM server operations.
 
