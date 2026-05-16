@@ -5,48 +5,51 @@ No I/O, no service/adapter imports. Stateless functions only.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from typing import Literal
 
-from lib.iso_time import parse_iso
+SaveSyncStatus = Literal["synced", "conflict", "none"]
 
 
-def _format_time_ago(iso_timestamp: str) -> str | None:
-    """Format an ISO timestamp as a human-readable time-ago label, or None on error."""
-    check_dt = parse_iso(iso_timestamp)
-    if check_dt is None:
-        return None
-    if check_dt.tzinfo is None:
-        check_dt = check_dt.replace(tzinfo=UTC)
-    diff_min = int((datetime.now(UTC) - check_dt).total_seconds() // 60)
-    if diff_min < 1:
-        return "Just now"
-    if diff_min < 60:
-        return f"{diff_min}m ago"
-    if diff_min < 1440:
-        return f"{diff_min // 60}h ago"
-    return f"{diff_min // 1440}d ago"
+@dataclass(frozen=True)
+class SaveSyncDisplay:
+    """Backend-computed save-sync display fields shipped to the frontend.
+
+    Time-relative formatting of ``last_sync_check_at`` is intentionally a
+    frontend concern: the backend cannot keep an "Xm ago" label fresh
+    between fetches. For the only time-relative case (``synced`` with a
+    recorded sync check), ``label`` is ``None`` and the frontend renders
+    a time-ago label from ``last_sync_check_at``. For every other case
+    ``label`` is a fully-formed static string and ``last_sync_check_at``
+    is ``None``.
+    """
+
+    status: SaveSyncStatus
+    label: str | None
+    last_sync_check_at: str | None
 
 
 def compute_save_sync_display(
     files: list[dict] | None,
     last_sync_check_at: str | None,
-) -> dict:
+) -> SaveSyncDisplay:
     """Compute save sync display status and label.
 
-    Returns dict with 'status' ('synced' | 'conflict' | 'none') and 'label' (str).
+    Returns ``SaveSyncDisplay`` with ``status`` ('synced' | 'conflict' |
+    'none'), ``label`` (static text or ``None`` when the frontend formats
+    a time-ago label), and ``last_sync_check_at`` (passthrough for the
+    time-ago case).
     """
     if not files:
-        return {"status": "none", "label": "No saves"}
+        return SaveSyncDisplay(status="none", label="No saves", last_sync_check_at=None)
 
     if any(f.get("status") == "conflict" for f in files):
-        return {"status": "conflict", "label": "Conflict"}
+        return SaveSyncDisplay(status="conflict", label="Conflict", last_sync_check_at=None)
 
     has_local = any(f.get("local_path") or f.get("status") in ("synced", "upload") for f in files)
     if has_local:
         if last_sync_check_at:
-            label = _format_time_ago(last_sync_check_at)
-            if label:
-                return {"status": "synced", "label": label}
-        return {"status": "synced", "label": "Not synced"}
+            return SaveSyncDisplay(status="synced", label=None, last_sync_check_at=last_sync_check_at)
+        return SaveSyncDisplay(status="synced", label="Not synced", last_sync_check_at=None)
 
-    return {"status": "none", "label": "No local saves"}
+    return SaveSyncDisplay(status="none", label="No local saves", last_sync_check_at=None)

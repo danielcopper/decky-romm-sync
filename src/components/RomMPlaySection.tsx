@@ -32,7 +32,6 @@ import {
   _cachedGameDetailCache,
   testConnection,
   getSaveStatus,
-  checkPlatformBios,
   getBiosStatus,
   getSgdbArtworkBase64,
   getRomMetadata,
@@ -45,7 +44,8 @@ import {
   getAchievementProgress,
   debugLog,
 } from "../api/backend";
-import type { AvailableCore, BiosStatus, SaveStatus } from "../types";
+import type { AvailableCore, BiosStatus, SaveStatus, SaveSyncDisplay } from "../types";
+import { formatTimeAgo } from "../utils/formatters";
 
 /** Track which appIds have had auto-artwork applied this session */
 const artworkApplied = new Set<number>();
@@ -146,56 +146,29 @@ function formatPlaytime(minutes: number): string {
   return `${hours}h ${remainingMin}m`;
 }
 
-/** Format BIOS status counts into a label */
-function formatBiosLabel(bios: BiosStatus): string {
-  const reqCount = bios.required_count;
-  const reqDone = bios.required_downloaded;
-  if (reqCount != null && reqDone != null) {
-    if (reqDone >= reqCount) return "OK";
-    if (reqDone > 0) return `${reqDone}/${reqCount} required`;
-    return "Missing";
+/** Resolve the human-readable save-sync label from the backend's typed display payload.
+ *  Backend ships a static `label` for every case except `synced + has-recent-check`,
+ *  where it leaves `label` null and passes `last_sync_check_at` through for time-ago
+ *  formatting at render time. */
+function resolveSaveSyncLabel(display: SaveSyncDisplay): string {
+  if (display.label !== null) return display.label;
+  if (display.last_sync_check_at) {
+    return formatTimeAgo(display.last_sync_check_at) ?? "Not synced";
   }
-  if (bios.all_downloaded) return "OK";
-  if ((bios.local_count ?? 0) > 0) return `${bios.local_count}/${bios.server_count}`;
-  return "Missing";
+  return "Not synced";
 }
 
-/** Determine BIOS status level */
-function getBiosLevel(bios: BiosStatus): "ok" | "partial" | "missing" {
-  const reqCount = bios.required_count;
-  const reqDone = bios.required_downloaded;
-  if (reqCount != null && reqDone != null) {
-    if (reqDone >= reqCount) return "ok";
-    if (reqDone > 0) return "partial";
-    return "missing";
+/** Apply a typed SaveSyncDisplay to InfoState, deriving the rendered label. */
+function applySaveSyncDisplay(
+  display: SaveSyncDisplay | undefined,
+  saveStatus: SaveStatus | null,
+): { status: "synced" | "conflict" | "none"; label: string } {
+  if (display) {
+    return { status: display.status, label: resolveSaveSyncLabel(display) };
   }
-  if (bios.all_downloaded) return "ok";
-  if ((bios.local_count ?? 0) > 0) return "partial";
-  return "missing";
-}
-
-/** Compute save sync display status and label from a SaveStatus response */
-function computeSaveSyncDisplay(saveStatus: SaveStatus | null): { status: "synced" | "conflict" | "none"; label: string } {
-  const hasConflict = hasAnySaveConflict(saveStatus);
-  if (hasConflict) return { status: "conflict", label: "Conflict" };
-
-  const hasLocalFiles = saveStatus?.files?.some((f) => f.local_path || f.status === "synced" || f.status === "upload") ?? false;
-  if (hasLocalFiles) {
-    const lastCheck = saveStatus?.last_sync_check_at;
-    if (lastCheck) {
-      const diffMs = Date.now() - new Date(lastCheck).getTime();
-      const diffMin = Math.floor(diffMs / 60000);
-      let label: string;
-      if (diffMin < 1) label = "Just now";
-      else if (diffMin < 60) label = `${diffMin}m ago`;
-      else if (diffMin < 1440) label = `${Math.floor(diffMin / 60)}h ago`;
-      else label = `${Math.floor(diffMin / 1440)}d ago`;
-      return { status: "synced", label };
-    }
-    return { status: "synced", label: "Not synced" };
-  }
-
-  if (saveStatus && saveStatus.files.length > 0) return { status: "none", label: "No local saves" };
+  // Defensive fallback: a SaveStatus payload missing the pre-computed field.
+  // Should not occur in current callers; keep behaviour conservative.
+  if (hasAnySaveConflict(saveStatus)) return { status: "conflict", label: "Conflict" };
   return { status: "none", label: "No saves" };
 }
 
@@ -203,16 +176,22 @@ import { setRommConnectionState, setVersionError } from "../utils/connectionStat
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
 
-/** Extract BIOS fields from a bios_status response into an InfoState partial. */
-function extractBiosInfo(b: BiosStatus): Partial<InfoState> {
+/** Extract BIOS fields from a bios_status response into an InfoState partial.
+ *  `bios_level` and `bios_label` are pre-computed by the backend so the frontend
+ *  never re-derives them. */
+function extractBiosInfo(
+  b: BiosStatus,
+  level: "ok" | "partial" | "missing" | null,
+  label: string | null,
+): Partial<InfoState> {
   const activeCoreLabel = b.active_core_label ?? null;
   const availableCores = b.available_cores ?? [];
   const defaultCore = availableCores.find((c) => c.is_default);
   const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
   return {
     biosNeeded: true,
-    biosStatus: getBiosLevel(b),
-    biosLabel: formatBiosLabel(b),
+    biosStatus: level,
+    biosLabel: label ?? "",
     activeCoreLabel,
     activeCoreIsDefault,
     availableCores,
@@ -245,7 +224,9 @@ function refreshBiosInBackground(
 ) {
   getBiosStatus(romId).then((result) => {
     const b = result.bios_status;
-    if (!cancelled && b) setter((prev) => ({ ...prev, ...extractBiosInfo(b as BiosStatus) }));
+    if (!cancelled && b) {
+      setter((prev) => ({ ...prev, ...extractBiosInfo(b as BiosStatus, result.bios_level, result.bios_label) }));
+    }
   }).catch((e) => debugLog(`Background BIOS status fetch error: ${e}`));
 }
 
@@ -302,7 +283,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         let saveSyncLabel = "";
         if (cached.save_sync_enabled && cached.save_sync_display) {
           saveSyncStatus = cached.save_sync_display.status;
-          saveSyncLabel = cached.save_sync_display.label;
+          saveSyncLabel = resolveSaveSyncLabel(cached.save_sync_display);
         }
 
         if (cancelled) return;
@@ -395,7 +376,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
           const rid = romIdRef.current;
           if (rid) {
             const saveStatus = await getSaveStatus(rid).catch((): SaveStatus | null => null);
-            const { status: ss, label: sl } = computeSaveSyncDisplay(saveStatus);
+            const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
             setInfo((prev) => ({ ...prev, saveSyncEnabled: true, saveSyncStatus: ss, saveSyncLabel: sl }));
           } else {
             setInfo((prev) => ({ ...prev, saveSyncEnabled: true }));
@@ -423,8 +404,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
             activeCoreLabel,
             activeCoreIsDefault,
             availableCores,
-            biosStatus: getBiosLevel(b as BiosStatus),
-            biosLabel: formatBiosLabel(b as BiosStatus),
+            biosStatus: result.bios_level,
+            biosLabel: result.bios_label ?? "",
           }));
         }
         return;
@@ -436,7 +417,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       // If event specifies a rom_id, skip if it's not for this game
       if (detail.rom_id && romIdRef.current && detail.rom_id !== romIdRef.current) return;
       const saveStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romId).catch((): SaveStatus | null => null);
-      const { status: saveSyncStatus, label: saveSyncLabel } = computeSaveSyncDisplay(saveStatus);
+      const { status: saveSyncStatus, label: saveSyncLabel } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
       setInfo((prev) => ({ ...prev, saveSyncStatus, saveSyncLabel, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
       } catch (err) {
         debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
@@ -465,7 +446,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
           detail: { type: "save_sync", rom_id: romId, has_conflict: hasConflict },
         }));
-        const { status: ss, label: sl } = computeSaveSyncDisplay(saveStatus);
+        const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
         setInfo((prev) => ({ ...prev, saveSyncStatus: ss, saveSyncLabel: sl, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
       } catch (e) {
         debugLog(`RomMPlaySection: background save check error: ${e}`);
@@ -597,14 +578,20 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `BIOS downloaded (${result.downloaded ?? 0} files)` });
         window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: info.platformSlug } }));
-        // Refresh BIOS status
-        const updated = await checkPlatformBios(info.platformSlug).catch((): BiosStatus => ({ needs_bios: false }));
-        if (updated.needs_bios) {
-          setInfo((prev) => ({
-            ...prev,
-            biosStatus: getBiosLevel(updated),
-            biosLabel: formatBiosLabel(updated),
+        // Refresh BIOS status — getBiosStatus ships pre-computed level/label so we don't re-derive.
+        if (info.romId) {
+          const refreshed = await getBiosStatus(info.romId).catch(() => ({
+            bios_status: null as BiosStatus | null,
+            bios_level: null as "ok" | "partial" | "missing" | null,
+            bios_label: null as string | null,
           }));
+          if (refreshed.bios_status) {
+            setInfo((prev) => ({
+              ...prev,
+              biosStatus: refreshed.bios_level,
+              biosLabel: refreshed.bios_label ?? "",
+            }));
+          }
         }
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "BIOS download failed" });
@@ -674,20 +661,26 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       debugLog(`handleChangeGameCore: result=${JSON.stringify(result)}`);
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `Core set to ${coreLabel}` });
-        // Use bios_status from the set_game_core response directly (avoids cache staleness)
+        // Use bios_status from the set_game_core response directly (avoids cache staleness).
+        // For pre-computed level/label, re-fetch via getBiosStatus which ships them.
         const bios = result.bios_status;
         debugLog(`handleChangeGameCore: bios active_core_label=${bios?.active_core_label}`);
-        if (bios) {
+        if (bios && info.romId) {
           const newLabel = bios.active_core_label ?? null;
           const cores = bios.available_cores ?? info.availableCores;
           const defaultC = cores.find((c: AvailableCore) => c.is_default);
+          const refreshed = await getBiosStatus(info.romId).catch(() => ({
+            bios_status: null as BiosStatus | null,
+            bios_level: null as "ok" | "partial" | "missing" | null,
+            bios_label: null as string | null,
+          }));
           setInfo((prev) => ({
             ...prev,
             activeCoreLabel: newLabel,
             activeCoreIsDefault: !newLabel || (defaultC != null && newLabel === defaultC.label),
             availableCores: cores,
-            biosStatus: getBiosLevel(bios as BiosStatus),
-            biosLabel: formatBiosLabel(bios as BiosStatus),
+            biosStatus: refreshed.bios_level,
+            biosLabel: refreshed.bios_label ?? "",
           }));
         }
         // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)

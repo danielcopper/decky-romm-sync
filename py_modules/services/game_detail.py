@@ -162,9 +162,11 @@ class GameDetailService:
         save_status = self._build_save_status(rom_id_str)
         save_sync_display = None
         if save_status is not None:
-            save_sync_display = compute_save_sync_display(
-                save_status["files"],
-                save_status.get("last_sync_check_at"),
+            save_sync_display = asdict(
+                compute_save_sync_display(
+                    save_status["files"],
+                    save_status.get("last_sync_check_at"),
+                )
             )
 
         # Metadata from cache
@@ -222,15 +224,21 @@ class GameDetailService:
         }
 
     async def get_bios_status(self, rom_id) -> dict:
-        """Return BIOS status for a ROM by looking up platform/rom_file from registry."""
+        """Return BIOS status for a ROM by looking up platform/rom_file from registry.
+
+        Response always includes ``bios_status`` (dict or ``None``), ``bios_level``
+        (``"ok"`` / ``"partial"`` / ``"missing"`` or ``None``), and ``bios_label``
+        (str or ``None``). The pre-computed level + label match what the cached
+        ``get_cached_game_detail`` ships so the frontend never re-derives them.
+        """
         rom_id_str = str(rom_id)
         entry = self._state["shortcut_registry"].get(rom_id_str)
         if not entry:
-            return {"bios_status": None}
+            return {"bios_status": None, "bios_level": None, "bios_label": None}
 
         platform_slug = entry.get("platform_slug", "")
         if not platform_slug:
-            return {"bios_status": None}
+            return {"bios_status": None, "bios_level": None, "bios_label": None}
 
         # Resolve rom_file for per-game core override detection
         rom_file = self._resolve_rom_file(rom_id_str, entry)
@@ -238,8 +246,13 @@ class GameDetailService:
         try:
             bios = await self._bios_checker.check_platform_bios(platform_slug, rom_filename=rom_file or None)
             if bios.get("needs_bios"):
-                return {"bios_status": asdict(format_bios_status(bios, platform_slug))}
+                bios_obj = format_bios_status(bios, platform_slug)
+                return {
+                    "bios_status": asdict(bios_obj),
+                    "bios_level": compute_bios_level(bios_obj),
+                    "bios_label": compute_bios_label(bios_obj),
+                }
         except Exception as e:
             self._logger.warning(f"BIOS status check failed for {platform_slug}: {e}")
 
-        return {"bios_status": None}
+        return {"bios_status": None, "bios_level": None, "bios_label": None}

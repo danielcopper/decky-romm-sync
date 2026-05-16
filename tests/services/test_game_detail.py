@@ -538,7 +538,7 @@ class TestGetBiosStatusFound:
 
     @pytest.mark.asyncio
     async def test_returns_bios_status(self, plugin, game_detail_service):
-        """ROM with needs_bios=True returns full bios_status dict."""
+        """ROM with needs_bios=True returns full bios_status dict + pre-computed level/label."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 50000,
             "name": "Game",
@@ -571,10 +571,13 @@ class TestGetBiosStatusFound:
         assert bs["required_count"] == 2
         assert bs["required_downloaded"] == 1
         assert bs["active_core_label"] == "mGBA"
+        # Pre-computed display fields removed from the frontend.
+        assert result["bios_level"] == "partial"
+        assert result["bios_label"] == "1/2 required"
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_bios_needed(self, plugin, game_detail_service):
-        """ROM with needs_bios=False returns bios_status=None."""
+        """ROM with needs_bios=False returns bios_status / level / label all None."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 50000,
             "name": "Game",
@@ -585,6 +588,8 @@ class TestGetBiosStatusFound:
 
         result = await game_detail_service.get_bios_status(42)
         assert result["bios_status"] is None
+        assert result["bios_level"] is None
+        assert result["bios_label"] is None
 
     @pytest.mark.asyncio
     async def test_uses_rom_file_from_installed(self, plugin, game_detail_service):
@@ -619,23 +624,23 @@ class TestGetBiosStatusNotFound:
 
     @pytest.mark.asyncio
     async def test_unknown_rom_id(self, game_detail_service):
-        """Unknown rom_id returns bios_status=None."""
+        """Unknown rom_id returns bios_status / level / label all None."""
         result = await game_detail_service.get_bios_status(999)
-        assert result["bios_status"] is None
+        assert result == {"bios_status": None, "bios_level": None, "bios_label": None}
 
     @pytest.mark.asyncio
     async def test_no_platform_slug(self, plugin, game_detail_service):
-        """Registry entry without platform_slug returns bios_status=None."""
+        """Registry entry without platform_slug returns bios_status / level / label all None."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 50000,
             "name": "Game",
         }
         result = await game_detail_service.get_bios_status(42)
-        assert result["bios_status"] is None
+        assert result == {"bios_status": None, "bios_level": None, "bios_label": None}
 
     @pytest.mark.asyncio
     async def test_firmware_error_returns_none(self, plugin, game_detail_service):
-        """Firmware service exception returns bios_status=None."""
+        """Firmware service exception returns bios_status / level / label all None."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 50000,
             "name": "Game",
@@ -644,7 +649,7 @@ class TestGetBiosStatusNotFound:
         game_detail_service._bios_checker.check_platform_bios = AsyncMock(side_effect=Exception("fail"))
 
         result = await game_detail_service.get_bios_status(42)
-        assert result["bios_status"] is None
+        assert result == {"bios_status": None, "bios_level": None, "bios_label": None}
 
 
 class TestGetCachedGameDetailSaveStatusConflicts:
@@ -764,7 +769,7 @@ class TestComputedFields:
 
     @pytest.mark.asyncio
     async def test_save_sync_display_with_saves(self, plugin, game_detail_service):
-        """When save data exists, save_sync_display should be computed."""
+        """When save data exists, save_sync_display is the typed dataclass payload."""
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 99999,
             "name": "Test",
@@ -779,8 +784,9 @@ class TestComputedFields:
         result = game_detail_service.get_cached_game_detail(99999)
         assert result["save_sync_display"] is not None
         assert result["save_sync_display"]["status"] == "synced"
-        label = result["save_sync_display"]["label"]
-        assert "ago" in label or label in ("Just now", "Not synced")
+        # Synced + recorded check → backend leaves label None for frontend formatTimeAgo.
+        assert result["save_sync_display"]["label"] is None
+        assert result["save_sync_display"]["last_sync_check_at"] == "2026-01-01T00:00:00Z"
 
     @pytest.mark.asyncio
     async def test_save_sync_display_none_when_no_saves(self, plugin, game_detail_service):

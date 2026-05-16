@@ -247,3 +247,79 @@ class TestGetSaveStatusComputeAction:
 
         assert result["files"] == []
         assert result["conflicts"] == []
+
+
+class TestSaveSyncDisplayEnrichment:
+    """get_save_status ships a pre-computed save_sync_display alongside files/conflicts."""
+
+    def test_empty_slot_display_no_saves(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        svc._save_sync_state.saves["42"] = RomSaveState()
+
+        result = svc._status._get_save_status_io(42, [])
+
+        assert result["save_sync_display"] == {
+            "status": "none",
+            "label": "No saves",
+            "last_sync_check_at": None,
+        }
+
+    def test_synced_display_passes_through_check_timestamp(self, tmp_path):
+        """Synced state with a recorded sync check passes the ISO through; frontend formats time-ago."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"matches baseline")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        fake.saves[100] = ss
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": ss["updated_at"],
+                    }
+                },
+                "last_sync_check_at": "2026-04-01T08:00:00+00:00",
+            }
+        )
+
+        result = svc._status._get_save_status_io(42, [ss])
+
+        assert result["save_sync_display"] == {
+            "status": "synced",
+            "label": None,
+            "last_sync_check_at": "2026-04-01T08:00:00+00:00",
+        }
+
+    def test_conflict_display(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"diverged local")
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
+        fake.saves[100] = ss
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
+                }
+            }
+        )
+
+        result = svc._status._get_save_status_io(42, [ss])
+
+        assert result["save_sync_display"]["status"] == "conflict"
+        assert result["save_sync_display"]["label"] == "Conflict"
+        assert result["save_sync_display"]["last_sync_check_at"] is None

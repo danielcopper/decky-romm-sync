@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SyncConflict, RomLookupResult, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse } from "../types";
+import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, RomLookupResult, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse } from "../types";
 
 export interface BackendResult {
   success: boolean;
@@ -27,7 +27,7 @@ export interface CachedGameDetail {
   achievement_summary?: AchievementSummary | null;
   bios_level?: "ok" | "partial" | "missing" | null;
   bios_label?: string | null;
-  save_sync_display?: { status: "synced" | "conflict" | "none"; label: string } | null;
+  save_sync_display?: SaveSyncDisplay | null;
   stale_fields?: string[];
 }
 
@@ -99,7 +99,14 @@ export const downloadFirmware = callable<[number], FirmwareDownloadResult>("down
 export const downloadAllFirmware = callable<[string], FirmwareDownloadResult>("download_all_firmware");
 export const downloadRequiredFirmware = callable<[string], FirmwareDownloadResult>("download_required_firmware");
 export const checkPlatformBios = callable<[string], BiosStatus>("check_platform_bios");
-export const getBiosStatus = callable<[number], { bios_status: CachedGameDetail["bios_status"] }>("get_bios_status");
+export const getBiosStatus = callable<
+  [number],
+  {
+    bios_status: CachedGameDetail["bios_status"];
+    bios_level: "ok" | "partial" | "missing" | null;
+    bios_label: string | null;
+  }
+>("get_bios_status");
 export const getAvailableCores = callable<[string], { cores: AvailableCore[]; active_core: string | null; active_core_label: string | null }>("get_available_cores");
 export const setSystemCore = callable<[string, string], { success: boolean; message?: string; bios_status?: BiosStatus }>("set_system_core");
 export const setGameCore = callable<[string, string, string], { success: boolean; message?: string; bios_status?: BiosStatus }>("set_game_core");

@@ -339,6 +339,17 @@ export interface PlaytimeEntry {
   last_session_duration_sec: number | null;
 }
 
+export interface SaveSyncDisplay {
+  status: "synced" | "conflict" | "none";
+  /** Static label, e.g. "No saves" / "Conflict" / "Not synced". `null` for the
+   *  synced+recent-check case, where the frontend formats a time-ago label
+   *  from `last_sync_check_at`. */
+  label: string | null;
+  /** Raw ISO-8601 timestamp passed through from the backend for time-ago
+   *  formatting. `null` whenever `label` carries a fully-formed string. */
+  last_sync_check_at: string | null;
+}
+
 export interface SaveStatus {
   rom_id: number;
   files: SaveFileStatus[];
@@ -347,6 +358,7 @@ export interface SaveStatus {
   last_sync_check_at: string | null;
   conflicts?: SyncConflict[];
   active_slot?: string | null;
+  save_sync_display?: SaveSyncDisplay;
 }
 
 export interface SaveSlotSummary {

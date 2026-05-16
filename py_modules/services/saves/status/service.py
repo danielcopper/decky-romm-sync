@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 from models.saves import SaveConflict
 
 from domain.emulator_tag import detect_core_change
 from domain.save_attribution import compute_uploaded_by_us
+from domain.save_status import compute_save_sync_display
 from domain.sync_action import Conflict, Skip
 from lib.iso_time import parse_iso_to_epoch
 from services.saves.status.builders import (
@@ -186,15 +188,17 @@ class StatusService:
         playtime_entry = self._state_svc.state.playtime.get(rom_id_str)
         playtime = playtime_entry.to_dict() if playtime_entry is not None else {}
         save_entry = self._state_svc.state.saves.get(rom_id_str)
+        last_sync_check_at = save_entry.last_sync_check_at if save_entry else None
 
         return {
             "rom_id": rom_id,
             "files": file_statuses,
             "playtime": playtime,
             "device_id": self._state_svc.state.device_id or "",
-            "last_sync_check_at": save_entry.last_sync_check_at if save_entry else None,
+            "last_sync_check_at": last_sync_check_at,
             "conflicts": conflicts,
             "save_sort_changed": self._rom_info.is_save_sort_changed(),
+            "save_sync_display": asdict(compute_save_sync_display(file_statuses, last_sync_check_at)),
         }
 
     # ------------------------------------------------------------------
