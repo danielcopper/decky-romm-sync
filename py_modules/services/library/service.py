@@ -34,7 +34,7 @@ if TYPE_CHECKING:
         DebugLogger,
         EventEmitter,
         MetadataExtractor,
-        RommApiProtocol,
+        RommLibraryApi,
         SettingsPersister,
         Sleeper,
         StatePersister,
@@ -54,7 +54,7 @@ class LibraryServiceConfig:
     needs at construction time.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommLibraryApi
     steam_config: SteamConfigAdapter
     state: dict
     settings: dict

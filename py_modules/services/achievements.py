@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import Clock, DebugLogger, RommApiProtocol
+    from services.protocols import Clock, DebugLogger, RommAchievementsApi
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class AchievementsServiceConfig:
     needs at construction time.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommAchievementsApi
     state: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger

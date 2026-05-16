@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         DebugLogger,
         MetadataExtractor,
-        RommApiProtocol,
+        RommLibraryApi,
         SettingsPersister,
     )
 
@@ -57,7 +57,7 @@ class LibraryFetcherConfig:
     cache through.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommLibraryApi
     state: dict
     settings: dict
     metadata_cache: dict

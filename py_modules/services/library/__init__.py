@@ -6,7 +6,7 @@ composes the library sync sub-services (:class:`LibraryFetcher`,
 :class:`LibrarySyncStateBox` and exposes the callable surface consumed
 by the Decky entrypoints (platform/collection metadata, sync preview/
 apply, full sync, post-apply reporting, registry queries). RomM
-communication goes through ``RommApiProtocol``; no ``import decky``.
+communication goes through Protocol-typed adapters; no ``import decky``.
 """
 
 from services.library.service import LibraryService, LibraryServiceConfig

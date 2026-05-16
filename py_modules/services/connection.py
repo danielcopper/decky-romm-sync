@@ -2,10 +2,10 @@
 
 Owns the ``test_connection`` flow: heartbeat + version sniff +
 authenticated endpoint probe + minimum-version gate. Pure I/O happens
-through the ``RommApiProtocol``; this service composes that I/O with the
-response-shape contract the frontend depends on. The minimum version is
-injected so the policy stays anchored at the plugin entrypoint while
-this service remains a pure orchestration layer.
+through the ``RommConnectionApi`` Protocol; this service composes that
+I/O with the response-shape contract the frontend depends on. The
+minimum version is injected so the policy stays anchored at the plugin
+entrypoint while this service remains a pure orchestration layer.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import RommApiProtocol
+    from services.protocols import RommConnectionApi
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class ConnectionServiceConfig:
     """
 
     settings: dict
-    romm_api: RommApiProtocol
+    romm_api: RommConnectionApi
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     min_required_version: tuple[int, ...]

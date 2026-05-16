@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         EventEmitter,
         RetroDeckPaths,
         RetryStrategy,
-        RommApiProtocol,
+        RommSyncApi,
         SaveFileAdapter,
         SaveSyncStatePersister,
     )
@@ -119,7 +119,7 @@ class SaveServiceConfig:
         needs it; not reached through the ``_save_service`` back-ref.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommSyncApi
     retry: RetryStrategy
     settings: dict
     state: dict

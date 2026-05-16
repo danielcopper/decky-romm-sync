@@ -36,7 +36,7 @@ if TYPE_CHECKING:
         CoreResolverFn,
         DebugLogger,
         RetryStrategy,
-        RommApiProtocol,
+        RommSyncApi,
         SaveFileAdapter,
     )
     from services.saves.rom_info import RomInfoService
@@ -72,7 +72,7 @@ class SyncEngine:
         state: dict,
         state_svc: StateService,
         rom_info: RomInfoService,
-        romm_api: RommApiProtocol,
+        romm_api: RommSyncApi,
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,

@@ -39,7 +39,6 @@ def plugin():
 
     metadata_service = MetadataService(
         config=MetadataServiceConfig(
-            romm_api=p._romm_api,
             state=p._state,
             metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),

@@ -18,19 +18,18 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import Clock, DebugLogger, MetadataCachePersister, RommApiProtocol
+    from services.protocols import Clock, DebugLogger, MetadataCachePersister
 
 
 @dataclass(frozen=True)
 class MetadataServiceConfig:
     """Frozen wiring bundle handed to ``MetadataService.__init__``.
 
-    Holds the Protocol-typed RomM adapter, the live state and metadata
-    cache dicts, runtime infrastructure, persistence callback, and the
-    clock/debug-logger seams MetadataService needs at construction time.
+    Holds the live state and metadata cache dicts, runtime
+    infrastructure, persistence callback, and the clock/debug-logger
+    seams MetadataService needs at construction time.
     """
 
-    romm_api: RommApiProtocol
     state: dict
     metadata_cache: dict
     loop: asyncio.AbstractEventLoop
@@ -44,7 +43,6 @@ class MetadataService:
     """ROM metadata cache: extract, store, flush, and fetch on demand."""
 
     def __init__(self, *, config: MetadataServiceConfig) -> None:
-        self._romm_api = config.romm_api
         self._state = config.state
         self._metadata_cache = config.metadata_cache
         self._loop = config.loop

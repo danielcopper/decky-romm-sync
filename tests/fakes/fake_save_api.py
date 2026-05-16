@@ -1,4 +1,4 @@
-"""In-memory RommApiProtocol (save/note methods) implementation for service tests."""
+"""In-memory ``RommSaveApi`` (save/note methods) implementation for service tests."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 class FakeSaveApi:
-    """In-memory fake that satisfies RommApiProtocol save/note methods without HTTP.
+    """In-memory fake that satisfies ``RommSaveApi`` save/note methods without HTTP.
 
     Only save, note, and download_save methods are implemented.
     ROM, firmware, and platform methods raise NotImplementedError — use MagicMock()
@@ -101,7 +101,7 @@ class FakeSaveApi:
         self.save_file.write_bytes(dest_path, data)
 
     # ------------------------------------------------------------------
-    # Unimplemented RommApiProtocol methods (use MagicMock for these)
+    # Unimplemented RomM API methods (use MagicMock for these)
     # ------------------------------------------------------------------
 
     def set_version(self, version: str | None) -> None:

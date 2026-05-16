@@ -24,6 +24,59 @@ class SteamConfigAdapter(Protocol):
     def fix_retroarch_input_driver(self) -> dict: ...
 
 
+class RommDeviceApi(Protocol):
+    """RomM device registration / sync API surface."""
+
+    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
+        """Register this client as a sync device on the RomM server.
+
+        Returns device dict with id, name, created_at.
+        """
+        ...
+
+    def list_devices(self) -> list[dict]:
+        """List all devices registered with the RomM server for the current user.
+
+        Returns a list of device dicts from /api/devices.
+        """
+        ...
+
+    def update_device(self, device_id: str, **fields) -> dict:
+        """Update a registered device's metadata on the RomM server.
+
+        Currently the plugin only sends ``client_version`` via the reconciliation
+        loop; the server accepts additional fields per its OpenAPI schema (name,
+        platform, client, ip_address, mac_address, hostname, sync_enabled) but
+        they are not exercised by this plugin.
+        """
+        ...
+
+
+class RommFirmwareApi(Protocol):
+    """RomM firmware/BIOS API surface."""
+
+    def list_firmware(self) -> list[dict]:
+        """Fetch all available firmware/BIOS files from the server.
+
+        Returns a list of firmware dicts from /api/firmware.
+        """
+        ...
+
+    def get_firmware(self, firmware_id: int) -> dict:
+        """Fetch metadata for a single firmware file.
+
+        Returns firmware dict from /api/firmware/{firmware_id}.
+        """
+        ...
+
+    def download_firmware(self, firmware_id: int, filename: str, dest: str) -> None:
+        """Download a firmware/BIOS file to a local path.
+
+        Streams /api/firmware/{firmware_id}/content/{filename} to dest.
+        """
+        ...
+
+
 class RommPlatformReader(Protocol):
     """Read-only RomM platform listing surface."""
 
@@ -56,59 +109,6 @@ class RommPlaytimeApi(Protocol):
         """Update an existing note on a ROM.
 
         PUT /api/roms/{rom_id}/notes/{note_id}.
-        """
-        ...
-
-
-class RommFirmwareApi(Protocol):
-    """RomM firmware/BIOS API surface."""
-
-    def list_firmware(self) -> list[dict]:
-        """Fetch all available firmware/BIOS files from the server.
-
-        Returns a list of firmware dicts from /api/firmware.
-        """
-        ...
-
-    def get_firmware(self, firmware_id: int) -> dict:
-        """Fetch metadata for a single firmware file.
-
-        Returns firmware dict from /api/firmware/{firmware_id}.
-        """
-        ...
-
-    def download_firmware(self, firmware_id: int, filename: str, dest: str) -> None:
-        """Download a firmware/BIOS file to a local path.
-
-        Streams /api/firmware/{firmware_id}/content/{filename} to dest.
-        """
-        ...
-
-
-class RommDeviceApi(Protocol):
-    """RomM device registration / sync API surface."""
-
-    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
-        """Register this client as a sync device on the RomM server.
-
-        Returns device dict with id, name, created_at.
-        """
-        ...
-
-    def list_devices(self) -> list[dict]:
-        """List all devices registered with the RomM server for the current user.
-
-        Returns a list of device dicts from /api/devices.
-        """
-        ...
-
-    def update_device(self, device_id: str, **fields) -> dict:
-        """Update a registered device's metadata on the RomM server.
-
-        Currently the plugin only sends ``client_version`` via the reconciliation
-        loop; the server accepts additional fields per its OpenAPI schema (name,
-        platform, client, ip_address, mac_address, hostname, sync_enabled) but
-        they are not exercised by this plugin.
         """
         ...
 
@@ -282,272 +282,20 @@ class RommVersion(Protocol):
         ...
 
 
-class RommApiProtocol(Protocol):
-    """Domain-oriented interface for all RomM server operations.
+class RommAchievementsApi(RommRomReader, RommVersion, Protocol):
+    """RomM surface for AchievementsService — ROM detail + server identity."""
 
-    Replaces raw HTTP path construction in services with semantic methods.
-    Concrete implementation: ``adapters.romm.romm_api.RommApiAdapter``.
-    Requires RomM >= 4.8.1.
-    """
 
-    def set_version(self, version: str | None) -> None:
-        """Store the detected RomM server version string.
+class RommConnectionApi(RommPlatformReader, RommVersion, Protocol):
+    """RomM surface for ConnectionService — platform listing + version/heartbeat."""
 
-        Passing ``None`` clears the cached version (used when the server
-        becomes unreachable and the cached version should no longer be
-        trusted).
-        """
-        ...
 
-    def get_version(self) -> str | None:
-        """Return the detected RomM server version string, or ``None`` if unset."""
-        ...
+class RommLibraryApi(RommPlatformReader, RommRomReader, Protocol):
+    """RomM surface for LibraryService — platforms, collections, ROM listing & downloads."""
 
-    def heartbeat(self) -> dict:
-        """Check server connectivity and retrieve version info.
 
-        Returns the raw heartbeat response dict from /api/heartbeat.
-        """
-        ...
-
-    def list_platforms(self) -> list[dict]:
-        """Fetch all platforms configured on the RomM server.
-
-        Returns a list of platform dicts from /api/platforms.
-        """
-        ...
-
-    def list_collections(self) -> list[dict]:
-        """Fetch all user-created collections from the RomM server."""
-        ...
-
-    def list_virtual_collections(self, collection_type: str) -> list[dict]:
-        """Fetch virtual (autogenerated) collections of a given type (e.g., 'franchise')."""
-        ...
-
-    def get_current_user(self) -> dict:
-        """Fetch the currently authenticated user profile.
-
-        Returns user dict from /api/users/me.
-        """
-        ...
-
-    def get_rom(self, rom_id: int) -> dict:
-        """Fetch a single ROM by ID.
-
-        Returns the ROM dict from /api/roms/{rom_id}.
-        """
-        ...
-
-    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict:
-        """List ROMs for a platform with pagination.
-
-        Returns paginated response {"items": [...], "total": N}
-        from /api/roms filtered by platform_ids.
-        """
-        ...
-
-    def list_roms_updated_after(
-        self,
-        platform_id: int,
-        updated_after: str,
-        limit: int = 1,
-        offset: int = 0,
-    ) -> dict:
-        """List ROMs updated after a given timestamp.
-
-        Used for incremental sync to detect changes since last sync.
-        Returns paginated response filtered by updated_after parameter.
-        """
-        ...
-
-    def download_rom_content(
-        self,
-        rom_id: int,
-        filename: str,
-        dest: str,
-        progress_callback: Any = None,
-    ) -> None:
-        """Download a ROM file to a local destination.
-
-        Streams /api/roms/{rom_id}/content/{filename} to dest.
-        Filename is URL-encoded. Optional progress_callback for tracking.
-        """
-        ...
-
-    def download_cover(self, cover_url: str, dest: str) -> None:
-        """Download a ROM cover image to a local path.
-
-        cover_url is the relative path from the RomM server.
-        Spaces in the URL are encoded before downloading.
-        """
-        ...
-
-    def list_firmware(self) -> list[dict]:
-        """Fetch all available firmware/BIOS files from the server.
-
-        Returns a list of firmware dicts from /api/firmware.
-        """
-        ...
-
-    def get_firmware(self, firmware_id: int) -> dict:
-        """Fetch metadata for a single firmware file.
-
-        Returns firmware dict from /api/firmware/{firmware_id}.
-        """
-        ...
-
-    def download_firmware(self, firmware_id: int, filename: str, dest: str) -> None:
-        """Download a firmware/BIOS file to a local path.
-
-        Streams /api/firmware/{firmware_id}/content/{filename} to dest.
-        """
-        ...
-
-    def list_saves(
-        self,
-        rom_id: int,
-        *,
-        device_id: str | None = None,
-        slot: str | None = None,
-    ) -> list[dict]:
-        """List saves for a ROM.
-
-        Pass device_id to populate device_syncs in response,
-        and slot to filter by save slot.
-        """
-        ...
-
-    def upload_save(
-        self,
-        rom_id: int,
-        file_path: str,
-        emulator: str,
-        save_id: int | None = None,
-        *,
-        device_id: str | None = None,
-        slot: str | None = None,
-        overwrite: bool = False,
-    ) -> dict:
-        """Upload or update a save file.
-
-        Pass device_id for sync tracking, slot for slot assignment,
-        and overwrite=True to force-upload over conflicts.
-        Raises RommConflictError on 409 when overwrite=False and conflict detected.
-        """
-        ...
-
-    def download_save_content(
-        self,
-        save_id: int,
-        dest_path: str,
-        *,
-        device_id: str | None = None,
-        optimistic: bool = True,
-    ) -> None:
-        """Download save content with optional device sync tracking.
-
-        When device_id is set, optimistic=True auto-marks device as synced;
-        optimistic=False requires a manual confirm_download() call.
-        """
-        ...
-
-    def confirm_download(self, save_id: int, device_id: str) -> dict:
-        """Manually confirm a save download for device sync tracking.
-
-        Only needed when download_save_content() was called with optimistic=False.
-        """
-        ...
-
-    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
-        """Fetch grouped save summary for a ROM with slot breakdown.
-
-        Uses /api/saves/summary — returns structured response grouped by slot.
-        Pass device_id to include device sync status per save.
-        """
-        ...
-
-    def download_save(self, save_id: int, dest_path: str) -> None:
-        """Download a save file to a local path.
-
-        Downloads directly via /api/saves/{save_id}/content.
-        """
-        ...
-
-    def get_save_metadata(self, save_id: int) -> dict:
-        """Fetch metadata for a single save.
-
-        Returns save dict from /api/saves/{save_id}.
-        """
-        ...
-
-    def get_rom_with_notes(self, rom_id: int) -> dict:
-        """Fetch full ROM detail including user notes.
-
-        Used for playtime tracking. Notes are in the all_user_notes field.
-        """
-        ...
-
-    def create_note(self, rom_id: int, data: dict) -> dict:
-        """Create a note on a ROM.
-
-        Used for playtime tracking. POST /api/roms/{rom_id}/notes.
-        """
-        ...
-
-    def update_note(self, rom_id: int, note_id: int, data: dict) -> dict:
-        """Update an existing note on a ROM.
-
-        PUT /api/roms/{rom_id}/notes/{note_id}.
-        """
-        ...
-
-    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict:
-        """List ROMs belonging to a user-created collection with pagination.
-
-        Returns paginated response {"items": [...], "total": N}
-        from /api/roms filtered by collection_id.
-        """
-        ...
-
-    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict:
-        """List ROMs belonging to a virtual (autogenerated) collection with pagination.
-
-        Returns paginated response {"items": [...], "total": N}
-        from /api/roms filtered by virtual_collection_id.
-        """
-        ...
-
-    def delete_server_saves(self, save_ids: list[int]) -> dict:
-        """Delete saves from the RomM server by ID.
-
-        Endpoint: POST /api/saves/delete with body {"saves": [id1, id2, ...]}.
-        """
-        ...
-
-    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
-        """Register this client as a sync device on the RomM server.
-
-        Returns device dict with id, name, created_at.
-        """
-        ...
-
-    def list_devices(self) -> list[dict]:
-        """List all devices registered with the RomM server for the current user.
-
-        Returns a list of device dicts from /api/devices.
-        """
-        ...
-
-    def update_device(self, device_id: str, **fields) -> dict:
-        """Update a registered device's metadata on the RomM server.
-
-        Currently the plugin only sends ``client_version`` via the reconciliation
-        loop; the server accepts additional fields per its OpenAPI schema (name,
-        platform, client, ip_address, mac_address, hostname, sync_enabled) but
-        they are not exercised by this plugin.
-        """
-        ...
+class RommSyncApi(RommSaveApi, RommVersion, RommDeviceApi, Protocol):
+    """RomM surface for save-sync — saves cluster + server identity + device registration."""
 
 
 class SteamGridDbApi(Protocol):

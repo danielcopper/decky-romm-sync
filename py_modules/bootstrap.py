@@ -74,7 +74,6 @@ from services.protocols import (
     RetroArchSaveSortingProvider,
     RetroDeckPaths,
     RomFileAdapter,
-    RommApiProtocol,
     SaveFileAdapter,
     SaveSyncStatePersister,
     SettingsPersister,
@@ -107,7 +106,7 @@ class AdapterBundle:
     """Concrete I/O adapters wired into services."""
 
     http_adapter: RommHttpAdapter
-    romm_api: RommApiProtocol
+    romm_api: RommApiAdapter
     steam_config: SteamConfigProtocol
     sgdb_adapter: SteamGridDbAdapter
     cover_art_file_store: CoverArtFileStore
@@ -383,7 +382,6 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     metadata_service = MetadataService(
         config=MetadataServiceConfig(
-            romm_api=cfg.adapters.romm_api,
             state=cfg.stores.state,
             metadata_cache=cfg.stores.metadata_cache,
             loop=cfg.runtime.loop,
