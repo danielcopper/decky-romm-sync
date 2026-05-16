@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install Python test dependencies
         run: pip install pytest pytest-asyncio pytest-cov
@@ -57,7 +57,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install lint dependencies
         run: pip install import-linter ruff basedpyright

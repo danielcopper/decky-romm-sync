@@ -17,9 +17,12 @@ underlying object).
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
 
 
-class LateBinding[T]:
+class LateBinding(Generic[T]):
     """Typed forward-reference for service wiring."""
 
     __slots__ = ("_name", "_reader")

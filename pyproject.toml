@@ -1,5 +1,5 @@
 [tool.basedpyright]
-pythonVersion = "3.12"
+pythonVersion = "3.11"
 extraPaths = ["py_modules"]
 stubPath = "typings"
 typeCheckingMode = "basic"
@@ -11,7 +11,7 @@ reportUnusedParameter = "none"
 reportUnusedVariable = "warning"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 120
 extend-exclude = ["py_modules/vdf", "scripts"]
 
