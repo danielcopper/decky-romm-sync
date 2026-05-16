@@ -86,6 +86,7 @@ from services.protocols import (
 from services.protocols import SteamConfigAdapter as SteamConfigProtocol
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
+from services.session_lifecycle import SessionLifecycleService, SessionLifecycleServiceConfig
 from services.settings import SettingsService, SettingsServiceConfig
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
@@ -584,6 +585,16 @@ def wire_services(cfg: WiringConfig) -> dict:
         ),
     )
 
+    session_lifecycle_service = SessionLifecycleService(
+        config=SessionLifecycleServiceConfig(
+            playtime_recorder=playtime_service,
+            post_exit_sync=save_sync_service,
+            achievement_sync=achievements_service,
+            migration_reader=migration_service,
+            logger=cfg.runtime.logger,
+        ),
+    )
+
     return {
         "save_sync_service": save_sync_service,
         "playtime_service": playtime_service,
@@ -603,4 +614,5 @@ def wire_services(cfg: WiringConfig) -> dict:
         "connection_service": connection_service,
         "startup_healing_service": startup_healing_service,
         "launch_gate_service": launch_gate_service,
+        "session_lifecycle_service": session_lifecycle_service,
     }

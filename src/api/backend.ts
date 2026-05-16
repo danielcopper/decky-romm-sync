@@ -251,6 +251,36 @@ export const migrateSaveSortFiles = callable<[string | null], MigrationResult>("
 export const dismissSaveSortMigration = callable<[], { success: boolean }>("dismiss_save_sort_migration");
 export const refreshMigrationState = callable<[], { retrodeck: MigrationStatus; save_sort: SaveSortMigrationStatus }>("refresh_migration_state");
 
+// End-of-session orchestration — collapses recordSessionEnd + syncAchievementsAfterSession
+// + postExitSync + refreshMigrationState into a single backend round-trip.
+// See SessionLifecycleService in py_modules/services/session_lifecycle.py.
+export interface SessionFinalizeSyncResult {
+  offline: boolean;
+  success: boolean;
+  synced: number | null;
+  conflicts: SyncConflict[];
+  toast_title: string | null;
+  toast_body: string | null;
+  conflicts_toast: string | null;
+}
+
+export interface SessionFinalizeMigration {
+  retrodeck: MigrationStatus;
+  save_sort: SaveSortMigrationStatus;
+}
+
+export interface SessionFinalizeResult {
+  total_seconds: number | null;
+  sync: SessionFinalizeSyncResult;
+  // ``null`` when the backend's migration-state refresh raised — the
+  // frontend then leaves the migration stores untouched (any stale
+  // ``pending`` badge keeps showing), matching the pre-PR behavior
+  // where ``refreshMigrationState().catch`` logged without clearing.
+  migration: SessionFinalizeMigration | null;
+}
+
+export const finalizeGameSession = callable<[number], SessionFinalizeResult>("finalize_game_session");
+
 // Delete operations
 export const deleteLocalSaves = callable<[number], { success: boolean; deleted_count: number; message: string }>("delete_local_saves");
 export const deletePlatformSaves = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_saves");

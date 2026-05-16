@@ -8,18 +8,14 @@
 
 import { toaster } from "@decky/api";
 import {
-  postExitSync,
   recordSessionStart,
-  recordSessionEnd,
   getAppIdRomIdMap,
-  syncAchievementsAfterSession,
-  refreshMigrationState,
+  finalizeGameSession,
   logInfo,
   logError,
 } from "../api/backend";
 import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
-import type { SyncConflict } from "../types";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 
 declare var Router: {
@@ -94,68 +90,46 @@ async function handleGameStop(): Promise<void> {
   sessionStartTime = null;
   totalPausedMs = 0;
 
-  // Record session end for playtime tracking
   try {
-    const result = await recordSessionEnd(romId);
-    if (result.success && result.total_seconds) {
-      // Find the Steam app ID for this rom and update the display
+    const result = await finalizeGameSession(romId);
+
+    // Playtime display update — appStore mutation must stay frontend.
+    if (result.total_seconds != null) {
       const appId = getAppIdForRom(romId);
       if (appId) {
         updatePlaytimeDisplay(appId, result.total_seconds);
       }
     }
-  } catch (e) {
-    logError(`Failed to record session end: ${e}`);
-  }
 
-  // Post-session achievement sync (fire-and-forget, non-blocking)
-  syncAchievementsAfterSession(romId)
-    .then(() => logInfo(`Achievement sync complete for romId=${romId}`))
-    .catch((e) => logError(`Achievement sync failed for romId=${romId}: ${e}`));
-
-  // Post-exit save sync — backend reads the previous save-sort layout when a
-  // migration is pending (#238), so this call is order-independent wrt
-  // refreshMigrationState below. The ordering here is incidental, not
-  // load-bearing.
-  try {
-    const result = await postExitSync(romId);
-    if (result.offline) {
-      toaster.toast({ title: "RomM Save Sync", body: "Server offline — saves will sync next time" });
-      window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-    } else if (result.success) {
-      if (result.synced && result.synced > 0) {
-        toaster.toast({ title: "RomM Save Sync", body: "Saves synced with RomM" });
-      }
-      window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-    } else {
-      toaster.toast({ title: "RomM Save Sync", body: "Failed to sync saves after exit" });
+    // Post-exit sync toast (backend rendered).
+    if (result.sync.toast_title && result.sync.toast_body) {
+      toaster.toast({ title: result.sync.toast_title, body: result.sync.toast_body });
     }
-    if (result.conflicts && result.conflicts.length > 0) {
-      notifyConflicts(result.conflicts);
+
+    // Save-sync event dispatch — fires for offline OR success (pre-PR parity:
+    // offline branch dispatched, success branch dispatched, failure did not).
+    if (result.sync.offline || result.sync.success) {
+      window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
+    }
+
+    // Additive conflicts toast — backend renders the count string.
+    if (result.sync.conflicts_toast) {
+      toaster.toast({ title: "RomM Save Sync", body: result.sync.conflicts_toast });
+    }
+
+    // Migration store updates — backend ran refresh_state, frontend just
+    // feeds the typed payloads into the stores. When backend refresh
+    // failed (``migration == null``) leave the stores untouched, matching
+    // the pre-PR ``refreshMigrationState().catch`` behavior where a
+    // refresh failure logged a warning without clearing any stale
+    // "pending" badge.
+    if (result.migration) {
+      setMigrationStatus(result.migration.retrodeck);
+      setSaveSortMigrationStatus(result.migration.save_sort);
     }
   } catch (e) {
-    logError(`Post-exit sync failed: ${e}`);
+    logError(`Failed to finalize game session: ${e}`);
   }
-
-  // Post-game migration detection — runs unconditionally. refreshMigrationState
-  // only reads config files + state and emits events on genuine change; it
-  // does not touch user save files. Actual migration runs only when the user
-  // explicitly clicks the migrate button in Settings.
-  refreshMigrationState()
-    .then(({ retrodeck, save_sort }) => {
-      setMigrationStatus(retrodeck);
-      setSaveSortMigrationStatus(save_sort);
-    })
-    .catch((e) => logError(`Post-exit migration refresh failed: ${e}`));
-}
-
-function notifyConflicts(conflicts: SyncConflict[]): void {
-  const count = conflicts.length;
-  if (count === 0) return;
-  toaster.toast({
-    title: "RomM Save Sync",
-    body: `${count} save conflict${count === 1 ? "" : "s"} need resolution`,
-  });
 }
 
 function handleSuspend(): void {

@@ -155,6 +155,7 @@ class Plugin:
         self._connection_service = services["connection_service"]
         self._startup_healing_service = services["startup_healing_service"]
         self._launch_gate_service = services["launch_gate_service"]
+        self._session_lifecycle_service = services["session_lifecycle_service"]
 
         # ── 5. Startup healing ──────────────────────────────────────────────
         self._save_sync_service.init_state()
@@ -372,6 +373,10 @@ class Plugin:
     async def evaluate_launch(self, steam_app_id):
         verdict = await self._launch_gate_service.evaluate(int(steam_app_id))
         return asdict(verdict)
+
+    async def finalize_game_session(self, rom_id):
+        result = await self._session_lifecycle_service.finalize(int(rom_id))
+        return asdict(result)
 
     # ── Download delegation to DownloadService ──────────────
 

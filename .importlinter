@@ -114,6 +114,7 @@ modules =
     services.playtime
     services.rom_removal
     services.saves
+    services.session_lifecycle
     services.settings
     services.shortcut_removal
     services.startup_healing

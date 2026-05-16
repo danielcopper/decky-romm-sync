@@ -110,3 +110,58 @@ class LaunchGateSaveStatusReader(Protocol):
     """
 
     async def get_save_status(self, rom_id: int) -> dict: ...
+
+
+class SessionPlaytimeRecorder(Protocol):
+    """Playtime end-of-session record consumed by SessionLifecycleService.
+
+    The composition root satisfies this with ``PlaytimeService``'s
+    ``record_session_end``. The lifecycle service forwards the
+    ``total_seconds`` field to the frontend so the playtime display can
+    be updated; a falsy ``success`` value yields ``total_seconds=None``
+    on the returned DTO so the frontend leaves the display untouched.
+    """
+
+    async def record_session_end(self, rom_id: int) -> dict: ...
+
+
+class SessionPostExitSync(Protocol):
+    """Post-exit save sync consumed by SessionLifecycleService.
+
+    The composition root satisfies this with ``SaveService``'s
+    ``post_exit_sync``. Returned shape carries ``offline`` / ``success``
+    / ``synced`` / ``conflicts`` which the lifecycle service maps into
+    toast strings; any raised exception is collapsed to the "failed"
+    toast.
+    """
+
+    async def post_exit_sync(self, rom_id: int) -> dict: ...
+
+
+class SessionAchievementSync(Protocol):
+    """Post-session achievement refresh consumed by SessionLifecycleService.
+
+    The composition root satisfies this with ``AchievementsService``'s
+    ``sync_achievements_after_session``. The lifecycle service kicks
+    this off as a background task — its result and any failure are
+    logged backend-side; the frontend never observes the outcome.
+    """
+
+    async def sync_achievements_after_session(self, rom_id: int) -> dict: ...
+
+
+class SessionMigrationReader(Protocol):
+    """Migration-state refresh + pending check consumed by SessionLifecycleService.
+
+    The composition root satisfies this with ``MigrationService``'s
+    ``refresh_state`` and ``is_retrodeck_migration_pending``. The
+    refresh result is repacked into the typed DTO the frontend feeds
+    into its migration stores; the pending check matches the safety
+    net the ``@migration_blocked`` decorator provides for other
+    callables, gating the destructive post-exit save sync from inside
+    the lifecycle orchestration.
+    """
+
+    async def refresh_state(self) -> dict: ...
+
+    def is_retrodeck_migration_pending(self) -> bool: ...

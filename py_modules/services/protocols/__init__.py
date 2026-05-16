@@ -33,6 +33,10 @@ from services.protocols.cross_service import (
     LaunchGateSaveStatusReader,
     MetadataExtractor,
     RetryStrategy,
+    SessionAchievementSync,
+    SessionMigrationReader,
+    SessionPlaytimeRecorder,
+    SessionPostExitSync,
 )
 from services.protocols.determinism import Clock, Sleeper, UuidGen
 from services.protocols.files import (
@@ -127,6 +131,10 @@ __all__ = [
     "RommVersion",
     "SaveFileAdapter",
     "SaveSyncStatePersister",
+    "SessionAchievementSync",
+    "SessionMigrationReader",
+    "SessionPlaytimeRecorder",
+    "SessionPostExitSync",
     "SettingsPersister",
     "SgdbArtworkCache",
     "Sleeper",

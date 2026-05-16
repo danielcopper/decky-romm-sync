@@ -691,6 +691,15 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_download_queue",
     "get_installed_rom",
     "evaluate_launch",
+    # End-of-session orchestration — composes record_session_end (whitelisted),
+    # post_exit_sync (decorator-gated, but SessionLifecycleService applies its
+    # own ``is_retrodeck_migration_pending`` check internally so the
+    # destructive sync stays gated), the fire-and-forget achievement refresh,
+    # and refresh_migration_state (whitelisted). Whitelisting the umbrella
+    # callable matches pre-PR behaviour: the playtime record and migration
+    # refresh ran regardless of pending migration; only the save sync was
+    # gated, and the lifecycle service preserves that gate inline.
+    "finalize_game_session",
     # Firmware / BIOS read-only checks.
     "get_firmware_status",
     "check_platform_bios",
@@ -861,6 +870,7 @@ class TestMainStartupOrdering:
             "connection_service": MagicMock(),
             "startup_healing_service": startup_healing_service,
             "launch_gate_service": MagicMock(),
+            "session_lifecycle_service": MagicMock(),
         }
 
         bootstrapped_adapters = {
