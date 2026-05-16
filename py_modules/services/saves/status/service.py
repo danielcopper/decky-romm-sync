@@ -24,7 +24,7 @@ if TYPE_CHECKING:
         DebugLogger,
         EventEmitter,
         RetryStrategy,
-        RommApiProtocol,
+        RommSaveApi,
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
@@ -41,7 +41,7 @@ class StatusService:
         state_svc: StateService,
         sync_engine: SyncEngine,
         rom_info: RomInfoService,
-        romm_api: RommApiProtocol,
+        romm_api: RommSaveApi,
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,

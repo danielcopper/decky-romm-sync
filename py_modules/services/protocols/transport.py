@@ -192,6 +192,94 @@ class RommRomReader(Protocol):
         ...
 
 
+class RommSaveApi(Protocol):
+    """RomM saves API surface (list, up/download, confirm, summary, delete)."""
+
+    def list_saves(
+        self,
+        rom_id: int,
+        *,
+        device_id: str | None = None,
+        slot: str | None = None,
+    ) -> list[dict]:
+        """List saves for a ROM.
+
+        Pass device_id to populate device_syncs in response,
+        and slot to filter by save slot.
+        """
+        ...
+
+    def upload_save(
+        self,
+        rom_id: int,
+        file_path: str,
+        emulator: str,
+        save_id: int | None = None,
+        *,
+        device_id: str | None = None,
+        slot: str | None = None,
+        overwrite: bool = False,
+    ) -> dict:
+        """Upload or update a save file.
+
+        Pass device_id for sync tracking, slot for slot assignment,
+        and overwrite=True to force-upload over conflicts.
+        Raises RommConflictError on 409 when overwrite=False and conflict detected.
+        """
+        ...
+
+    def download_save_content(
+        self,
+        save_id: int,
+        dest_path: str,
+        *,
+        device_id: str | None = None,
+        optimistic: bool = True,
+    ) -> None:
+        """Download save content with optional device sync tracking.
+
+        When device_id is set, optimistic=True auto-marks device as synced;
+        optimistic=False requires a manual confirm_download() call.
+        """
+        ...
+
+    def confirm_download(self, save_id: int, device_id: str) -> dict:
+        """Manually confirm a save download for device sync tracking.
+
+        Only needed when download_save_content() was called with optimistic=False.
+        """
+        ...
+
+    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
+        """Fetch grouped save summary for a ROM with slot breakdown.
+
+        Uses /api/saves/summary — returns structured response grouped by slot.
+        Pass device_id to include device sync status per save.
+        """
+        ...
+
+    def download_save(self, save_id: int, dest_path: str) -> None:
+        """Download a save file to a local path.
+
+        Downloads directly via /api/saves/{save_id}/content.
+        """
+        ...
+
+    def get_save_metadata(self, save_id: int) -> dict:
+        """Fetch metadata for a single save.
+
+        Returns save dict from /api/saves/{save_id}.
+        """
+        ...
+
+    def delete_server_saves(self, save_ids: list[int]) -> dict:
+        """Delete saves from the RomM server by ID.
+
+        Endpoint: POST /api/saves/delete with body {"saves": [id1, id2, ...]}.
+        """
+        ...
+
+
 class RommVersion(Protocol):
     """RomM server identity & health-check surface."""
 

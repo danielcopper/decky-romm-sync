@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     import logging
 
     from domain.save_state import FileSyncState
-    from services.protocols import DebugLogger, RetryStrategy, RommApiProtocol
+    from services.protocols import DebugLogger, RetryStrategy, RommSaveApi
     from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
     from services.saves.sync_engine import SyncEngine
@@ -40,7 +40,7 @@ class VersionsService:
         state_svc: StateService,
         sync_engine: SyncEngine,
         rom_info: RomInfoService,
-        romm_api: RommApiProtocol,
+        romm_api: RommSaveApi,
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
