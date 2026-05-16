@@ -54,6 +54,77 @@ function deepTreeDump(node: any, depth: number, index: number, prefix: string): 
   }
 }
 
+/**
+ * Locate the InnerContainer node in Steam's app-details React subtree.
+ * Returns the matched node (with an array `children` prop) or null/undefined.
+ */
+function findInsertionPoint(ret: any): any {
+  return findInReactTree(
+    ret,
+    (x: any) =>
+      Array.isArray(x?.props?.children) &&
+      x?.props?.className?.includes(appDetailsClasses.InnerContainer),
+  );
+}
+
+/**
+ * Locate the native AppDetailsOverviewPanel index among the InnerContainer's
+ * children. Identified by children whose props carry details + overview +
+ * bFastRender. Returns -1 if not found.
+ */
+function findNativeOverviewIndex(children: any[]): number {
+  for (let i = 0; i < children.length; i++) {
+    const cp = children[i]?.props?.children?.props || {};
+    if (cp.details && cp.overview && cp.bFastRender !== undefined) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * One-time diagnostic dump of the InnerContainer subtree. Runs at most once
+ * per plugin load (guarded by module-level `treeDumped`). No-op when the
+ * appId is not a RomM shortcut.
+ */
+function dumpTree(container: any, appId: number): void {
+  if (!rommAppIds.has(appId) || treeDumped) return;
+  treeDumped = true;
+
+  debugLog(`===== DEEP TREE DUMP for appId=${appId} =====`);
+  debugLog(`InnerContainer className: ${container.props.className}`);
+
+  const children = container.props.children;
+  debugLog(`InnerContainer direct children count: ${children.length}`);
+  for (let i = 0; i < children.length; i++) {
+    deepTreeDump(children[i], 0, i, "TREE: ");
+  }
+
+  // Search for playSectionClasses.Container deep in tree
+  const psContainerClass = playSectionClasses?.Container;
+  debugLog(`playSectionClasses.Container = "${psContainerClass || "UNDEFINED"}"`);
+  if (psContainerClass) {
+    const psFound = findInReactTree(
+      container,
+      (x: any) => x?.props?.className?.includes?.(psContainerClass),
+    );
+    debugLog(`findInReactTree(playSectionClasses.Container): ${psFound ? "FOUND" : "NOT FOUND"}`);
+  }
+
+  // Search for basicAppDetailsSectionStylerClasses.PlaySection deep in tree
+  const bpsClass = basicAppDetailsSectionStylerClasses?.PlaySection;
+  debugLog(`basicAppDetailsSectionStylerClasses.PlaySection = "${bpsClass || "UNDEFINED"}"`);
+  if (bpsClass) {
+    const bpsFound = findInReactTree(
+      container,
+      (x: any) => x?.props?.className?.includes?.(bpsClass),
+    );
+    debugLog(`findInReactTree(basicAppDetailsSectionStylerClasses.PlaySection): ${bpsFound ? "FOUND" : "NOT FOUND"}`);
+  }
+
+  debugLog(`===== END DEEP TREE DUMP =====`);
+}
+
 export function registerRomMAppId(appId: number) {
   rommAppIds.add(appId);
 }
@@ -84,14 +155,7 @@ export function registerGameDetailPatch() {
               )?.props?.children,
           ],
           (_args: unknown[], ret?: any) => {
-            // Find the InnerContainer by its CSS class
-            const container = findInReactTree(
-              ret,
-              (x: any) =>
-                Array.isArray(x?.props?.children) &&
-                x?.props?.className?.includes(appDetailsClasses.InnerContainer),
-            );
-
+            const container = findInsertionPoint(ret);
             if (typeof container !== "object" || !container) {
               return ret;
             }
@@ -112,43 +176,7 @@ export function registerGameDetailPatch() {
             const isRomM = rommAppIds.has(appId);
             debugLog(`gameDetailPatch: appId=${appId} isRomM=${isRomM} setSize=${rommAppIds.size}`);
 
-            // Diagnostic tree dump — runs once per appId per plugin load.
-            // Logs the full InnerContainer structure for debugging tree changes.
-            if (isRomM && !treeDumped) {
-              treeDumped = true;
-              debugLog(`===== DEEP TREE DUMP for appId=${appId} =====`);
-              debugLog(`InnerContainer className: ${container.props.className}`);
-
-              const children = container.props.children;
-              debugLog(`InnerContainer direct children count: ${children.length}`);
-              for (let i = 0; i < children.length; i++) {
-                deepTreeDump(children[i], 0, i, "TREE: ");
-              }
-
-              // Search for playSectionClasses.Container deep in tree
-              const psContainerClass = playSectionClasses?.Container;
-              debugLog(`playSectionClasses.Container = "${psContainerClass || "UNDEFINED"}"`);
-              if (psContainerClass) {
-                const psFound = findInReactTree(
-                  container,
-                  (x: any) => x?.props?.className?.includes?.(psContainerClass),
-                );
-                debugLog(`findInReactTree(playSectionClasses.Container): ${psFound ? "FOUND" : "NOT FOUND"}`);
-              }
-
-              // Search for basicAppDetailsSectionStylerClasses.PlaySection deep in tree
-              const bpsClass = basicAppDetailsSectionStylerClasses?.PlaySection;
-              debugLog(`basicAppDetailsSectionStylerClasses.PlaySection = "${bpsClass || "UNDEFINED"}"`);
-              if (bpsClass) {
-                const bpsFound = findInReactTree(
-                  container,
-                  (x: any) => x?.props?.className?.includes?.(bpsClass),
-                );
-                debugLog(`findInReactTree(basicAppDetailsSectionStylerClasses.PlaySection): ${bpsFound ? "FOUND" : "NOT FOUND"}`);
-              }
-
-              debugLog(`===== END DEEP TREE DUMP =====`);
-            }
+            dumpTree(container, appId);
 
             // For RomM games: replace the native AppDetailsOverviewPanel
             // (which renders Play button + tabs + all native content via `se`)
@@ -161,19 +189,7 @@ export function registerGameDetailPatch() {
                 (c: any) => c?.key === "romm-play-section",
               );
               if (!alreadyHasPlayBtn) {
-                // Find the AppDetailsOverviewPanel by its distinctive child props.
-                // This is the component that wraps `se` which renders the native
-                // Play button, tabs (ACTIVITY, YOUR STUFF, COMMUNITY, GAME INFO),
-                // and all tab content. We identify it by its children carrying
-                // details, overview, and bFastRender props.
-                let nativeOverviewIdx = -1;
-                for (let i = 0; i < children.length; i++) {
-                  const cp = children[i]?.props?.children?.props || {};
-                  if (cp.details && cp.overview && cp.bFastRender !== undefined) {
-                    nativeOverviewIdx = i;
-                    break;
-                  }
-                }
+                const nativeOverviewIdx = findNativeOverviewIndex(children);
 
                 const rommPlaySection = createElement(RomMPlaySection, {
                   key: "romm-play-section",
