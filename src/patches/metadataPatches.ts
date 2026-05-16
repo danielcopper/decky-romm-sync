@@ -118,6 +118,22 @@ export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updat
   return true;
 }
 
+type PlaytimeItem = { appId: number; totalSeconds: number };
+
+/**
+ * Attempt one pass of playtime writes. Returns items whose appStore overview
+ * wasn't available yet, so the caller can retry them after a delay.
+ */
+function tryWritePlaytime(items: PlaytimeItem[]): PlaytimeItem[] {
+  const notWritten: PlaytimeItem[] = [];
+  for (const item of items) {
+    if (!updatePlaytimeDisplay(item.appId, item.totalSeconds, false)) {
+      notWritten.push(item);
+    }
+  }
+  return notWritten;
+}
+
 /**
  * Apply playtime data for all known apps from the bulk playtime map.
  * Retries apps whose appStore overview isn't available yet (Steam may
@@ -135,7 +151,7 @@ export async function applyAllPlaytime(
   }
 
   // Build list of {appId, totalSeconds} to apply
-  let pending: { appId: number; totalSeconds: number }[] = [];
+  let pending: PlaytimeItem[] = [];
   for (const [romIdStr, entry] of Object.entries(playtimeMap)) {
     const appId = romIdToAppId[romIdStr];
     if (appId && entry.total_seconds > 0) {
@@ -154,13 +170,7 @@ export async function applyAllPlaytime(
       await new Promise((r) => setTimeout(r, delays[attempt]));
     }
 
-    const failed: typeof pending = [];
-    for (const item of pending) {
-      if (!updatePlaytimeDisplay(item.appId, item.totalSeconds, false)) {
-        failed.push(item);
-      }
-    }
-    pending = failed;
+    pending = tryWritePlaytime(pending);
 
     if (pending.length > 0 && attempt < delays.length - 1) {
       debugLog(`applyAllPlaytime: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`);
