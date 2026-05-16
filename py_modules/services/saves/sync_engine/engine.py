@@ -1070,16 +1070,20 @@ class SyncEngine:
                     )
                     return {"success": True, "action": "use_server"}
 
-                # keep_local
+                # keep_local — resolve on-disk name via the same canonical
+                # ``<rom_name>.<server.file_extension>`` rule use_server uses.
+                # The frontend-supplied ``filename`` is kept for logging only;
+                # using it as the on-disk path would let an extension drift
+                # between the two resolution paths produce divergent states.
                 await self._loop.run_in_executor(
                     None,
                     self._resolve_conflict_keep_local,
                     rom_id,
                     rom_id_str,
-                    filename,
                     server,
                     saves_dir,
                     system,
+                    info["rom_name"],
                 )
                 self._logger.info(
                     "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
@@ -1115,15 +1119,26 @@ class SyncEngine:
         self,
         rom_id: int,
         rom_id_str: str,
-        filename: str,
         server: dict,
         saves_dir: str,
         system: str,
+        rom_name: str,
     ) -> None:
         """Push the local file to *server* (PUT). Adopt-without-upload when the
         local content already matches the server's content hash.
+
+        The on-disk name is resolved from the server save's ``file_extension``
+        via :func:`_local_save_target` — the same canonical
+        ``<rom_name>.<server.file_extension>`` rule ``_resolve_conflict_use_server``
+        and every other download path uses. This keeps the two resolve paths
+        symmetric: the state key and on-disk path are identical regardless of
+        which side the user picked. If the local file is not at the canonical
+        path (e.g. ``Mario.sav`` locally but the server save has
+        ``file_extension=srm``), :class:`FileNotFoundError` is raised — we
+        never silently rename across extensions.
         """
-        local_path = os.path.join(saves_dir, filename)
+        target = _local_save_target(server, rom_name)
+        local_path = os.path.join(saves_dir, target)
         if not self._save_file.is_file(local_path):
             raise FileNotFoundError(f"Local save not found: {local_path}")
         local_hash = self._save_file.checksum_md5(local_path)
@@ -1135,10 +1150,10 @@ class SyncEngine:
         if server_hash and local_hash == server_hash:
             # Hashes match — adopt server's id without re-uploading.
             self._log_debug(
-                f"keep_local: hash matches server, adopting without upload (rom={rom_id} filename={filename})"
+                f"keep_local: hash matches server, adopting without upload (rom={rom_id} filename={target})"
             )
             rom_state = self._state_svc.ensure_rom_state(rom_id_str)
-            file_state = rom_state.files.setdefault(filename, FileSyncState())
+            file_state = rom_state.files.setdefault(target, FileSyncState())
             file_state.tracked_save_id = server.get("id")
             file_state.last_sync_hash = local_hash
             file_state.last_sync_at = self._clock.now().isoformat()
@@ -1150,5 +1165,5 @@ class SyncEngine:
             return
 
         # Upload local content as a PUT against the existing server save.
-        self._do_upload_save(rom_id, local_path, filename, rom_id_str, system, server)
+        self._do_upload_save(rom_id, local_path, target, rom_id_str, system, server)
         self._state_svc.save_state()

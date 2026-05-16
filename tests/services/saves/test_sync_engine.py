@@ -1833,3 +1833,128 @@ class TestResolveSyncConflict:
 
         assert result["success"] is False
         assert "no server save" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_resolve_filename_symmetry_keep_local_uses_canonical_target(self, tmp_path):
+        """keep_local and use_server must resolve the on-disk path the same way.
+
+        Both branches must derive ``<rom_name>.<server.file_extension>`` from
+        the server save, ignoring the frontend-supplied ``filename`` for I/O.
+        Otherwise an extension drift between the frontend label and the
+        canonical name produces divergent disk and state outcomes for the
+        same conflict.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # Canonical local save: pokemon.srm (matches server.file_extension).
+        canonical_path = _create_save(tmp_path, content=b"local-progress")
+        canonical_hash = _file_md5(str(canonical_path))
+
+        # Server save advertises file_extension=srm; frontend will send a
+        # mismatched filename (pokemon.sav). Server hash differs so the
+        # adopt-without-upload short-circuit doesn't fire.
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        ss["file_extension"] = "srm"
+        other = tmp_path / "server-bytes.bin"
+        other.write_bytes(b"server-flavor")
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(other)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.sav",  # diverges from server canonical
+            action="keep_local",
+        )
+
+        assert result["success"] is True
+        # Canonical local file remained — no rename, no orphan at the
+        # frontend-supplied name.
+        assert canonical_path.read_bytes() == b"local-progress"
+        assert not (tmp_path / "saves" / "gba" / "pokemon.sav").exists()
+        # Upload PUT used the canonical filename, not the user-supplied one.
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        upload_path = upload_calls[0][1][1]
+        assert os.path.basename(upload_path) == "pokemon.srm"
+        # State keyed by canonical filename — never by the frontend label.
+        files_state = svc._save_sync_state.saves["42"].files
+        assert "pokemon.srm" in files_state
+        assert "pokemon.sav" not in files_state
+        assert files_state["pokemon.srm"].last_sync_hash == canonical_hash
+
+    @pytest.mark.asyncio
+    async def test_resolve_filename_symmetry_use_server_keys_state_on_canonical(self, tmp_path):
+        """use_server with a mismatched frontend filename still writes at the canonical path.
+
+        Pairs with ``test_resolve_filename_symmetry_keep_local_uses_canonical_target``
+        to assert both branches converge on the same end state regardless of
+        the frontend label.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"local-stale")
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        ss["file_extension"] = "srm"
+        server_bytes = tmp_path / "server-content.bin"
+        server_bytes.write_bytes(b"server-truth")
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(server_bytes)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.sav",  # frontend label diverges from canonical
+            action="use_server",
+        )
+
+        assert result["success"] is True
+        # Download landed at the canonical path, not the frontend label.
+        canonical_path = tmp_path / "saves" / "gba" / "pokemon.srm"
+        assert canonical_path.read_bytes() == b"server-truth"
+        assert not (tmp_path / "saves" / "gba" / "pokemon.sav").exists()
+        files_state = svc._save_sync_state.saves["42"].files
+        assert "pokemon.srm" in files_state
+        assert "pokemon.sav" not in files_state
+        assert files_state["pokemon.srm"].tracked_save_id == 100
+
+    @pytest.mark.asyncio
+    async def test_resolve_keep_local_raises_when_canonical_path_missing(self, tmp_path):
+        """If the local file is not at the canonical path, keep_local raises.
+
+        Defensive companion to the symmetry fix: we never silently rename
+        across extensions to satisfy a frontend label. A file named
+        ``pokemon.sav`` on disk while the server save's canonical target is
+        ``pokemon.srm`` must surface as ``FileNotFoundError`` so the user
+        can rectify the mismatch instead of having two divergent files
+        appear from a successful-looking resolve.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # Local file only at the non-canonical path.
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        (saves_dir / "pokemon.sav").write_bytes(b"local-noncanonical")
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        ss["file_extension"] = "srm"
+        fake.saves[100] = ss
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.sav",
+            action="keep_local",
+        )
+
+        assert result["success"] is False
+        assert "not found" in result["message"].lower()
+        # No upload was attempted.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
