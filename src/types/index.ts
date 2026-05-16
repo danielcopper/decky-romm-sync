@@ -11,6 +11,8 @@ export type RommErrorCode =
   | "config_error"
   | "disk_error"
   | "api_error"
+  | "stale_conflict"
+  | "stale_preview"
   | "unknown_error";
 
 export interface RomMPlatform {

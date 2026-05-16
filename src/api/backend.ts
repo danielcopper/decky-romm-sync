@@ -153,7 +153,7 @@ export const syncRomSaves = callable<[number], { success: boolean; message: stri
 export const syncAllSaves = callable<[], { success: boolean; message: string; synced: number; conflicts: number }>("sync_all_saves");
 export const resolveSyncConflict = callable<
   [number, string, number, "keep_local" | "use_server"],
-  { success: boolean; message?: string; error_code?: string; action?: "keep_local" | "use_server" }
+  { success: boolean; message?: string; error_code?: "stale_conflict"; action?: "keep_local" | "use_server" }
 >("resolve_sync_conflict");
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
 export const recordSessionEnd = callable<[number], { success: boolean; duration_sec?: number; total_seconds?: number; session_count?: number; message?: string }>("record_session_end");
