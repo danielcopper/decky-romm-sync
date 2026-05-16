@@ -26,7 +26,7 @@ if TYPE_CHECKING:
         DownloadQueueAdapter,
         EventEmitter,
         RetroDeckPaths,
-        RommApiProtocol,
+        RommRomReader,
         Sleeper,
         StatePersister,
         SystemResolver,
@@ -46,7 +46,7 @@ class DownloadServiceConfig:
     aware callbacks DownloadService needs at construction time.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommRomReader
     state: dict
     download_files: DownloadFileAdapter
     download_queue: DownloadQueueAdapter

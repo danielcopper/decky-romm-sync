@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         DebugLogger,
         PendingSyncReader,
-        RommApiProtocol,
+        RommRomReader,
         SettingsPersister,
         SgdbArtworkCache,
         StatePersister,
@@ -51,7 +51,7 @@ class SteamGridServiceConfig:
     """
 
     sgdb_api: SteamGridDbApi
-    romm_api: RommApiProtocol
+    romm_api: RommRomReader
     steam_config: SteamConfigAdapter
     sgdb_artwork_cache: SgdbArtworkCache
     state: dict

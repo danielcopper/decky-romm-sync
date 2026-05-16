@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-    from services.protocols import CoverArtFileStore, PendingSyncReader, RommApiProtocol, SteamConfigAdapter
+    from services.protocols import CoverArtFileStore, PendingSyncReader, RommRomReader, SteamConfigAdapter
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class ArtworkServiceConfig:
     the in-flight sync's pending cover paths.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommRomReader
     steam_config: SteamConfigAdapter
     cover_art_file_store: CoverArtFileStore
     state: dict
