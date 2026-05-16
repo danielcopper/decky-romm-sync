@@ -690,6 +690,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_rom_by_steam_app_id",
     "get_download_queue",
     "get_installed_rom",
+    "evaluate_launch",
     # Firmware / BIOS read-only checks.
     "get_firmware_status",
     "check_platform_bios",
@@ -859,6 +860,7 @@ class TestMainStartupOrdering:
             "core_service": MagicMock(),
             "connection_service": MagicMock(),
             "startup_healing_service": startup_healing_service,
+            "launch_gate_service": MagicMock(),
         }
 
         bootstrapped_adapters = {

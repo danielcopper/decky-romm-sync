@@ -421,6 +421,13 @@ export interface RomLookupResult {
   installed: InstalledRom | null;
 }
 
+export interface LaunchVerdict {
+  action: "allow" | "block";
+  reason: "not_installed" | "save_conflict" | null;
+  toast_title: string | null;
+  toast_body: string | null;
+}
+
 export interface DownloadProgressEvent {
   rom_id: number;
   rom_name: string;

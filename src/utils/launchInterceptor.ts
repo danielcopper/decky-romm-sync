@@ -7,10 +7,9 @@
 
 import { toaster } from "@decky/api";
 import { isRomMAppId } from "../patches/gameDetailPatch";
-import { getInstalledRom, getSaveStatus, refreshMigrationState, logInfo, logError } from "../api/backend";
+import { evaluateLaunch, refreshMigrationState, logInfo, logError } from "../api/backend";
 import { getMigrationState, setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
-import { hasAnySaveConflict } from "./saveStatus";
 
 let gameActionHook: { unregister: () => void } | null = null;
 
@@ -24,7 +23,8 @@ export function registerLaunchInterceptor(): void {
 
       // Block launch if a RetroDECK migration is pending. Backend also blocks
       // via @migration_blocked, but cancelling the Steam action here prevents
-      // Steam from even trying to start the game.
+      // Steam from even trying to start the game. Synchronous in-memory check
+      // so it stays on the frontend.
       if (getMigrationState().pending) {
         SteamClient.Apps.CancelGameAction(gameActionId);
         toaster.toast({
@@ -46,42 +46,19 @@ export function registerLaunchInterceptor(): void {
         })
         .catch((e) => logError(`Pre-launch migration refresh failed: ${e}`));
 
-      // Check if ROM is installed
+      // Single round-trip — backend composes the rom-lookup + installed-check
+      // + save-status read and returns a typed verdict.
       try {
-        // We need the rom_id — look it up from registry
-        // The getRomBySteamAppId call is heavier but necessary for accurate check
-        const { getRomBySteamAppId } = await import("../api/backend");
-        const rom = await getRomBySteamAppId(appId);
-        if (!rom) return; // Not a RomM game, let it pass
-
-        const installed = await getInstalledRom(rom.rom_id);
-        if (!installed) {
+        const verdict = await evaluateLaunch(appId);
+        if (verdict.action === "block") {
           SteamClient.Apps.CancelGameAction(gameActionId);
-          toaster.toast({
-            title: "RomM Sync",
-            body: "ROM not downloaded. Open the game page to download it first.",
-          });
-          return;
-        }
-
-        // Block launch when a save conflict is pending — the user must
-        // resolve it from the game page before playing.
-        try {
-          const saveStatus = await getSaveStatus(rom.rom_id);
-          if (hasAnySaveConflict(saveStatus)) {
-            SteamClient.Apps.CancelGameAction(gameActionId);
-            toaster.toast({
-              title: "RomM Save Sync",
-              body: "Save conflict detected — open game page to resolve before playing",
-            });
-            return;
+          if (verdict.toast_title && verdict.toast_body) {
+            toaster.toast({ title: verdict.toast_title, body: verdict.toast_body });
           }
-        } catch {
-          // Non-critical — let the game launch if we can't check conflicts
         }
       } catch (e) {
         logError(`Launch interceptor error: ${e}`);
-        // On error, don't block the launch
+        // On error, don't block the launch.
       }
     },
   );

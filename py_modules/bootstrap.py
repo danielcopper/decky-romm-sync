@@ -52,6 +52,7 @@ from services.cores import CoreService, CoreServiceConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
+from services.launch_gate import LaunchGateService, LaunchGateServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
@@ -574,6 +575,15 @@ def wire_services(cfg: WiringConfig) -> dict:
         ),
     )
 
+    launch_gate_service = LaunchGateService(
+        config=LaunchGateServiceConfig(
+            rom_lookup=sync_service,
+            installed_checker=download_service,
+            save_status_reader=save_sync_service,
+            logger=cfg.runtime.logger,
+        ),
+    )
+
     return {
         "save_sync_service": save_sync_service,
         "playtime_service": playtime_service,
@@ -592,4 +602,5 @@ def wire_services(cfg: WiringConfig) -> dict:
         "core_service": core_service,
         "connection_service": connection_service,
         "startup_healing_service": startup_healing_service,
+        "launch_gate_service": launch_gate_service,
     }

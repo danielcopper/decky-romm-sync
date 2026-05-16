@@ -107,6 +107,7 @@ modules =
     services.downloads
     services.firmware
     services.game_detail
+    services.launch_gate
     services.library
     services.metadata
     services.migration

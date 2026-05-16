@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from dataclasses import asdict
 
 plugin_dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(plugin_dir, "py_modules"))
@@ -153,6 +154,7 @@ class Plugin:
         self._core_service = services["core_service"]
         self._connection_service = services["connection_service"]
         self._startup_healing_service = services["startup_healing_service"]
+        self._launch_gate_service = services["launch_gate_service"]
 
         # ── 5. Startup healing ──────────────────────────────────────────────
         self._save_sync_service.init_state()
@@ -366,6 +368,10 @@ class Plugin:
 
     async def get_rom_by_steam_app_id(self, app_id):
         return self._sync_service.get_rom_by_steam_app_id(app_id)
+
+    async def evaluate_launch(self, steam_app_id):
+        verdict = await self._launch_gate_service.evaluate(int(steam_app_id))
+        return asdict(verdict)
 
     # ── Download delegation to DownloadService ──────────────
 

@@ -74,3 +74,39 @@ class ArtworkRemover(Protocol):
     """
 
     def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None: ...
+
+
+class LaunchGateRomLookup(Protocol):
+    """Steam app id → RomM ROM resolution consumed by LaunchGateService.
+
+    The composition root satisfies this with ``LibraryService``'s
+    registry-backed lookup. Returns ``None`` when the Steam app id
+    does not correspond to a tracked RomM ROM — that's the signal the
+    gate uses to allow the launch through unmodified.
+    """
+
+    def get_rom_by_steam_app_id(self, app_id: int) -> dict | None: ...
+
+
+class LaunchGateInstalledChecker(Protocol):
+    """ROM-installed lookup consumed by LaunchGateService.
+
+    The composition root satisfies this with ``DownloadService``'s
+    ``get_installed_rom``. Returns the installed-ROM metadata dict
+    when the ROM has been downloaded, ``None`` otherwise. The gate
+    treats any falsy return as "not installed".
+    """
+
+    def get_installed_rom(self, rom_id: int) -> dict | None: ...
+
+
+class LaunchGateSaveStatusReader(Protocol):
+    """Save-status read consumed by LaunchGateService.
+
+    The composition root satisfies this with ``SaveService``'s
+    ``get_save_status``. The gate only consults the returned
+    ``conflicts`` array — any non-empty value blocks the launch with
+    a save-conflict verdict.
+    """
+
+    async def get_save_status(self, rom_id: int) -> dict: ...
