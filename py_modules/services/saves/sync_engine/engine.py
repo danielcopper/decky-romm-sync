@@ -1201,4 +1201,3 @@ class SyncEngine:
 
         # Upload local content as a PUT against the existing server save.
         self._do_upload_save(rom_id, local_path, target, rom_id_str, system, server)
-        self._state_svc.save_state()
