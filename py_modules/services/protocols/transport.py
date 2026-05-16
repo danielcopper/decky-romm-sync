@@ -85,6 +85,65 @@ class RommFirmwareApi(Protocol):
         ...
 
 
+class RommDeviceApi(Protocol):
+    """RomM device registration / sync API surface."""
+
+    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
+        """Register this client as a sync device on the RomM server.
+
+        Returns device dict with id, name, created_at.
+        """
+        ...
+
+    def list_devices(self) -> list[dict]:
+        """List all devices registered with the RomM server for the current user.
+
+        Returns a list of device dicts from /api/devices.
+        """
+        ...
+
+    def update_device(self, device_id: str, **fields) -> dict:
+        """Update a registered device's metadata on the RomM server.
+
+        Currently the plugin only sends ``client_version`` via the reconciliation
+        loop; the server accepts additional fields per its OpenAPI schema (name,
+        platform, client, ip_address, mac_address, hostname, sync_enabled) but
+        they are not exercised by this plugin.
+        """
+        ...
+
+
+class RommVersion(Protocol):
+    """RomM server identity & health-check surface."""
+
+    def set_version(self, version: str | None) -> None:
+        """Store the detected RomM server version string.
+
+        Passing ``None`` clears the cached version (used when the server
+        becomes unreachable and the cached version should no longer be
+        trusted).
+        """
+        ...
+
+    def get_version(self) -> str | None:
+        """Return the detected RomM server version string, or ``None`` if unset."""
+        ...
+
+    def heartbeat(self) -> dict:
+        """Check server connectivity and retrieve version info.
+
+        Returns the raw heartbeat response dict from /api/heartbeat.
+        """
+        ...
+
+    def get_current_user(self) -> dict:
+        """Fetch the currently authenticated user profile.
+
+        Returns user dict from /api/users/me.
+        """
+        ...
+
+
 class RommApiProtocol(Protocol):
     """Domain-oriented interface for all RomM server operations.
 

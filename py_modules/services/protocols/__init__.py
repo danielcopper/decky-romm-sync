@@ -67,9 +67,11 @@ from services.protocols.persistence import (
 )
 from services.protocols.transport import (
     RommApiProtocol,
+    RommDeviceApi,
     RommFirmwareApi,
     RommPlatformReader,
     RommPlaytimeApi,
+    RommVersion,
     SteamConfigAdapter,
     SteamGridDbApi,
 )
@@ -102,9 +104,11 @@ __all__ = [
     "RetryStrategy",
     "RomFileAdapter",
     "RommApiProtocol",
+    "RommDeviceApi",
     "RommFirmwareApi",
     "RommPlatformReader",
     "RommPlaytimeApi",
+    "RommVersion",
     "SaveFileAdapter",
     "SaveSyncStatePersister",
     "SettingsPersister",
