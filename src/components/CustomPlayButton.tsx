@@ -254,6 +254,117 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
     return () => clearTimeout(timer);
   }, [state]);
 
+  // Offline confirm: skip sync attempt, ask user to launch with local saves.
+  // Returns true when launch should proceed, false to bail back to "play".
+  const confirmOfflineLaunch = async (): Promise<boolean> => {
+    return showLaunchConfirmation(
+      "RomM Offline",
+      "Can't sync saves — RomM server is unreachable. Launch with local saves? Saves will sync after exit when the server is back, but may produce conflicts.",
+    );
+  };
+
+  // Save-slot tracking gate. Auto-configures the default slot for scenarios
+  // where no server saves exist; otherwise toasts + switches to the saves tab
+  // and tells the caller to bail. Returns "proceed" | "abort".
+  const ensureTrackingConfigured = async (rid: number): Promise<"proceed" | "abort"> => {
+    const trackingResult = await isSaveTrackingConfigured(rid).catch(() => ({ configured: true }));
+    if (trackingResult.configured) return "proceed";
+    try {
+      const setupInfo = await getSaveSetupInfo(rid);
+      if (!setupInfo.has_local_saves && setupInfo.server_slots.length === 0) {
+        // No saves anywhere — auto-configure with default, proceed
+        await confirmSlotChoice(rid, setupInfo.default_slot, null);
+        return "proceed";
+      }
+      if (setupInfo.has_local_saves && setupInfo.server_slots.length === 0) {
+        // Scenario B: local saves, no server — auto-configure
+        await confirmSlotChoice(rid, setupInfo.default_slot, null);
+        return "proceed";
+      }
+      // Server has saves — user must configure in saves tab
+      toaster.toast({
+        title: "RomM Save Sync",
+        body: "Configure save sync in the Saves tab first",
+      });
+      // Switch to saves tab
+      globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+      return "abort";
+    } catch {
+      // If check fails, proceed with launch anyway
+      return "proceed";
+    }
+  };
+
+  // Detects emulator core change since last launch; if changed, surfaces the
+  // core-change confirm modal. Returns true to proceed, false to bail.
+  const confirmCoreChangeIfNeeded = async (rid: number): Promise<boolean> => {
+    const coreCheck = await checkCoreChange(rid).catch((): { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string } => ({ changed: false }));
+    if (!coreCheck.changed) return true;
+    return showCoreChangeModal(
+      coreCheck.old_label ?? coreCheck.old_core ?? "Unknown",
+      coreCheck.new_label ?? coreCheck.new_core ?? "Unknown",
+    );
+  };
+
+  // Sync-error confirmation: ask the user whether to launch despite a failed
+  // pre-launch sync. Centralises the toast strings so timeout vs result-errors
+  // share copy.
+  const confirmFallbackLaunch = async (): Promise<boolean> => {
+    return showLaunchConfirmation(
+      "Save Sync Unavailable",
+      "Couldn't sync saves with RomM server. Launch with local saves?",
+    );
+  };
+
+  // Runs preLaunchSync with the 15s timeout, walks conflicts, and posts the
+  // success toast on a non-empty sync. Returns:
+  //   "proceed" — launch may continue
+  //   "conflict" — user cancelled a conflict modal; button state set to "conflict"
+  //   "abort" — user cancelled the fallback launch confirm; caller bails to "play"
+  const runPreLaunchSync = async (rid: number): Promise<"proceed" | "conflict" | "abort"> => {
+    setState("syncing");
+    try {
+      const result = await Promise.race([
+        preLaunchSync(rid),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
+      ]);
+
+      debugLog(`CustomPlayButton: preLaunchSync result: synced=${result.synced} conflicts=${result.conflicts?.length ?? 0} success=${result.success}`);
+
+      if (result.conflicts && result.conflicts.length > 0) {
+        const conflictResult = await handleConflicts(result.conflicts);
+        if (conflictResult === "cancel") {
+          setState("conflict");
+          return "conflict";
+        }
+        // Conflicts resolved — notify sibling components to refresh
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: rid } }));
+      }
+
+      if (!result.success && result.errors && result.errors.length > 0) {
+        debugLog(`CustomPlayButton: pre-launch sync errors: ${result.errors.join(", ")}`);
+        const proceed = await confirmFallbackLaunch();
+        return proceed ? "proceed" : "abort";
+      }
+      if (result.synced && result.synced > 0) {
+        toaster.toast({ title: "RomM Save Sync", body: "Saves synced with RomM" });
+      }
+      return "proceed";
+    } catch (e) {
+      debugLog(`CustomPlayButton: pre-launch sync failed: ${e}`);
+      const proceed = await confirmFallbackLaunch();
+      return proceed ? "proceed" : "abort";
+    }
+  };
+
+  // Final launch step — set state and hand off to Steam.
+  const dispatchLaunch = (gameId: string) => {
+    setState("launching");
+    SteamClient.Apps.RunGame(gameId, "", -1, 100);
+  };
+
+  // Coordinator: runs each pre-launch gate in sequence, bailing on the first
+  // cancel. All branch-specific UI lives in the helpers above.
   const handlePlay = async () => {
     if (state === "syncing" || state === "launching") return; // debounce
     const overview = appStore.GetAppOverviewByAppID(appId);
@@ -264,104 +375,36 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
     if (romId) {
       if (getRommConnectionState() === "offline") {
         // RomM offline — warn user, skip sync attempt entirely
-        const proceed = await showLaunchConfirmation(
-          "RomM Offline",
-          "Can't sync saves — RomM server is unreachable. Launch with local saves? Saves will sync after exit when the server is back, but may produce conflicts.",
-        );
+        const proceed = await confirmOfflineLaunch();
         if (!proceed) {
           setState("play");
           return;
         }
       } else {
         // Check save slot tracking is configured
-        const trackingResult = await isSaveTrackingConfigured(romId).catch(() => ({ configured: true }));
-        if (!trackingResult.configured) {
-          // Check if server has saves — if not, auto-configure
-          try {
-            const setupInfo = await getSaveSetupInfo(romId);
-            if (!setupInfo.has_local_saves && setupInfo.server_slots.length === 0) {
-              // No saves anywhere — auto-configure with default, proceed
-              await confirmSlotChoice(romId, setupInfo.default_slot, null);
-            } else if (setupInfo.has_local_saves && setupInfo.server_slots.length === 0) {
-              // Scenario B: local saves, no server — auto-configure
-              await confirmSlotChoice(romId, setupInfo.default_slot, null);
-            } else {
-              // Server has saves — user must configure in saves tab
-              toaster.toast({
-                title: "RomM Save Sync",
-                body: "Configure save sync in the Saves tab first",
-              });
-              // Switch to saves tab
-              globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
-              setState("play");
-              return;
-            }
-          } catch {
-            // If check fails, proceed with launch anyway
-          }
+        const trackingOutcome = await ensureTrackingConfigured(romId);
+        if (trackingOutcome === "abort") {
+          setState("play");
+          return;
         }
 
         // Check for core change before syncing
-        const coreCheck = await checkCoreChange(romId).catch((): { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string } => ({ changed: false }));
-        if (coreCheck.changed) {
-          const proceed = await showCoreChangeModal(
-            coreCheck.old_label ?? coreCheck.old_core ?? "Unknown",
-            coreCheck.new_label ?? coreCheck.new_core ?? "Unknown",
-          );
-          if (!proceed) {
-            setState("play");
-            return;
-          }
+        const coreOk = await confirmCoreChangeIfNeeded(romId);
+        if (!coreOk) {
+          setState("play");
+          return;
         }
 
-        setState("syncing");
-        try {
-          const result = await Promise.race([
-            preLaunchSync(romId),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
-          ]);
-
-          debugLog(`CustomPlayButton: preLaunchSync result: synced=${result.synced} conflicts=${result.conflicts?.length ?? 0} success=${result.success}`);
-
-          if (result.conflicts && result.conflicts.length > 0) {
-            const conflictResult = await handleConflicts(result.conflicts);
-            if (conflictResult === "cancel") {
-              setState("conflict");
-              return;
-            }
-            // Conflicts resolved — notify sibling components to refresh
-            globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-          }
-
-          if (!result.success && result.errors && result.errors.length > 0) {
-            debugLog(`CustomPlayButton: pre-launch sync errors: ${result.errors.join(", ")}`);
-            const proceed = await showLaunchConfirmation(
-              "Save Sync Unavailable",
-              "Couldn't sync saves with RomM server. Launch with local saves?",
-            );
-            if (!proceed) {
-              setState("play");
-              return;
-            }
-          } else if (result.synced && result.synced > 0) {
-            toaster.toast({ title: "RomM Save Sync", body: "Saves synced with RomM" });
-          }
-        } catch (e) {
-          debugLog(`CustomPlayButton: pre-launch sync failed: ${e}`);
-          const proceed = await showLaunchConfirmation(
-            "Save Sync Unavailable",
-            "Couldn't sync saves with RomM server. Launch with local saves?",
-          );
-          if (!proceed) {
-            setState("play");
-            return;
-          }
+        const syncOutcome = await runPreLaunchSync(romId);
+        if (syncOutcome === "conflict") return; // state already set to "conflict"
+        if (syncOutcome === "abort") {
+          setState("play");
+          return;
         }
       }
     }
 
-    setState("launching");
-    SteamClient.Apps.RunGame(gameId, "", -1, 100);
+    dispatchLaunch(gameId);
   };
 
   const handleResolveConflict = async () => {
