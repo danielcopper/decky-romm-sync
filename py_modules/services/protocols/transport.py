@@ -202,11 +202,7 @@ class RommSaveApi(Protocol):
         device_id: str | None = None,
         slot: str | None = None,
     ) -> list[dict]:
-        """List saves for a ROM.
-
-        Pass device_id to populate device_syncs in response,
-        and slot to filter by save slot.
-        """
+        """Return saves for ``rom_id``; ``device_id`` enriches with device_syncs and ``slot`` filters."""
         ...
 
     def upload_save(
@@ -220,12 +216,7 @@ class RommSaveApi(Protocol):
         slot: str | None = None,
         overwrite: bool = False,
     ) -> dict:
-        """Upload or update a save file.
-
-        Pass device_id for sync tracking, slot for slot assignment,
-        and overwrite=True to force-upload over conflicts.
-        Raises RommConflictError on 409 when overwrite=False and conflict detected.
-        """
+        """Upload (or replace) a save; raises ``RommConflictError`` on 409 unless ``overwrite=True``."""
         ...
 
     def download_save_content(
@@ -236,47 +227,27 @@ class RommSaveApi(Protocol):
         device_id: str | None = None,
         optimistic: bool = True,
     ) -> None:
-        """Download save content with optional device sync tracking.
-
-        When device_id is set, optimistic=True auto-marks device as synced;
-        optimistic=False requires a manual confirm_download() call.
-        """
+        """Stream save content; ``optimistic=False`` with ``device_id`` defers the sync ack to ``confirm_download``."""
         ...
 
     def confirm_download(self, save_id: int, device_id: str) -> dict:
-        """Manually confirm a save download for device sync tracking.
-
-        Only needed when download_save_content() was called with optimistic=False.
-        """
+        """Acknowledge a deferred-sync save download (paired with ``optimistic=False``)."""
         ...
 
     def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
-        """Fetch grouped save summary for a ROM with slot breakdown.
-
-        Uses /api/saves/summary — returns structured response grouped by slot.
-        Pass device_id to include device sync status per save.
-        """
+        """Return ``/api/saves/summary`` grouped by slot; ``device_id`` includes per-device sync status."""
         ...
 
     def download_save(self, save_id: int, dest_path: str) -> None:
-        """Download a save file to a local path.
-
-        Downloads directly via /api/saves/{save_id}/content.
-        """
+        """Stream a single save file to ``dest_path`` via ``/api/saves/{save_id}/content``."""
         ...
 
     def get_save_metadata(self, save_id: int) -> dict:
-        """Fetch metadata for a single save.
-
-        Returns save dict from /api/saves/{save_id}.
-        """
+        """Return save metadata for ``save_id``."""
         ...
 
     def delete_server_saves(self, save_ids: list[int]) -> dict:
-        """Delete saves from the RomM server by ID.
-
-        Endpoint: POST /api/saves/delete with body {"saves": [id1, id2, ...]}.
-        """
+        """Delete the given save ids via ``POST /api/saves/delete``."""
         ...
 
 
