@@ -221,7 +221,12 @@ class SyncEngine:
         return "default"
 
     def _promote_local_slot_to_server(self, rom_id_str: str, slot: str) -> None:
-        """Mark *slot* as having a server copy after a successful upload of a local-only slot."""
+        """Mark *slot* as having a server copy after a successful upload of a local-only slot.
+
+        Pure in-memory mutation. The caller (:meth:`_do_upload_save`) owns the
+        single persistence point so every upload outcome lands on disk exactly
+        once, regardless of which branch of this method (promote / no-op) fired.
+        """
         rom_state = self._state_svc.state.saves.get(rom_id_str)
         if not rom_state:
             return
@@ -229,7 +234,6 @@ class SyncEngine:
         if slot_entry and slot_entry.get("source") == "local":
             slot_entry["source"] = "server"
             slot_entry["count"] = 1
-            self._state_svc.save_state()
 
     def _confirm_upload_sync(self, upload_id: int | None, device_id: str | None) -> None:
         """Ack the uploaded save on the server's DeviceSaveSync row (non-fatal)."""
@@ -281,6 +285,11 @@ class SyncEngine:
         if slot:
             self._promote_local_slot_to_server(rom_id_str, slot)
 
+        # Single persistence point for every upload outcome — covers the
+        # file-level sync state written by ``_update_file_sync_state`` plus the
+        # in-memory mutations from ``_record_own_upload`` / ``_promote_local_slot_to_server``.
+        self._state_svc.save_state()
+
         self._confirm_upload_sync(result.get("id"), device_id)
 
         self._log_debug(f"Uploaded save: {filename} for rom {rom_id_str} (emulator={emulator})")
@@ -292,6 +301,10 @@ class SyncEngine:
         POST = brand-new save; PUT updates an existing tracked save without
         changing ownership. Assumes POST is not upsert-by-filename on the
         server — if RomM ever changes that, revisit this tracker.
+
+        Pure in-memory mutation. The caller (:meth:`_do_upload_save`) owns the
+        single persistence point so every upload outcome lands on disk exactly
+        once, regardless of POST vs PUT.
         """
         if new_id is None:
             return
@@ -301,7 +314,6 @@ class SyncEngine:
         if new_id in rom_state.own_upload_ids:
             return
         rom_state.own_upload_ids.append(new_id)
-        self._state_svc.save_state()
 
     def _handle_unexpected_error(
         self,

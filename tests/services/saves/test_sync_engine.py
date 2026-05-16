@@ -1374,6 +1374,61 @@ class TestPromoteLocalSlotPersistsState:
         assert reloaded["count"] == 1
 
 
+class TestDoUploadSaveFileStatePersistence:
+    """Regression for #409.
+
+    The PUT branch with a slot already marked ``source='server'`` is a no-op
+    for slot promotion. Without an unconditional persist at the end of
+    ``_do_upload_save``, the per-file ``last_sync_hash`` / ``tracked_save_id``
+    written by ``_update_file_sync_state`` never reaches disk on that path —
+    so after a plugin restart the next sync re-detects drift and re-uploads
+    the same content. This test asserts the upload outcome is persisted
+    regardless of which slot-promotion branch fired.
+    """
+
+    def test_put_path_persists_file_sync_state_when_slot_already_server(self, tmp_path):
+        """PUT with slot.source='server' (no promotion) still persists file sync state."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="dev-1")
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"freshly-edited save")
+        expected_hash = _file_md5(str(save_path))
+
+        # Pre-existing tracked server save → upload_save called with save_id=100 (PUT path).
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        server_save = fake.saves[100]
+
+        # Slot already known-server: _promote_local_slot_to_server is a no-op
+        # on this branch, so the file-state writes have no incidental persist
+        # to ride on. File state holds a stale baseline hash to make the
+        # regression visible — after the upload, the on-disk hash must be the
+        # current local hash (not the stale one).
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "stale-pre-upload"}},
+                "system": "gba",
+                "active_slot": "default",
+                "slots": {"default": {"source": "server", "count": 1}},
+            }
+        )
+
+        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba", server_save=server_save)
+
+        # In-memory state captured the fresh hash.
+        in_mem_file = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert in_mem_file.last_sync_hash == expected_hash
+        assert in_mem_file.tracked_save_id == 100
+
+        # A fresh service reading from the same on-disk state must see the
+        # fresh hash — without it, the next sync re-detects drift and uploads
+        # the same content again (#409 leak).
+        reloaded_svc, _ = make_service(tmp_path)
+        reloaded_svc.load_state()
+        reloaded_file = reloaded_svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert reloaded_file.last_sync_hash == expected_hash
+        assert reloaded_file.tracked_save_id == 100
+
+
 class TestSyncRomSavesDispatch:
     def test_sync_rom_saves_skip_when_synced(self, tmp_path):
         """is_current=true + matching hash + tracked → Skip, no I/O."""
