@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         FirmwareCachePersister,
         FirmwareFileAdapter,
         RetroDeckPaths,
-        RommApiProtocol,
+        RommFirmwareApi,
         StatePersister,
     )
 
@@ -43,7 +43,7 @@ class FirmwareServiceConfig:
     limit.
     """
 
-    romm_api: RommApiProtocol
+    romm_api: RommFirmwareApi
     state: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger

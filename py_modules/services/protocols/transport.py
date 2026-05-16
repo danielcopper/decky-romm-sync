@@ -60,6 +60,31 @@ class RommPlaytimeApi(Protocol):
         ...
 
 
+class RommFirmwareApi(Protocol):
+    """RomM firmware/BIOS API surface."""
+
+    def list_firmware(self) -> list[dict]:
+        """Fetch all available firmware/BIOS files from the server.
+
+        Returns a list of firmware dicts from /api/firmware.
+        """
+        ...
+
+    def get_firmware(self, firmware_id: int) -> dict:
+        """Fetch metadata for a single firmware file.
+
+        Returns firmware dict from /api/firmware/{firmware_id}.
+        """
+        ...
+
+    def download_firmware(self, firmware_id: int, filename: str, dest: str) -> None:
+        """Download a firmware/BIOS file to a local path.
+
+        Streams /api/firmware/{firmware_id}/content/{filename} to dest.
+        """
+        ...
+
+
 class RommApiProtocol(Protocol):
     """Domain-oriented interface for all RomM server operations.
 
