@@ -247,6 +247,88 @@ function refreshAchievementsInBackground(
   }).catch((e) => debugLog(`Background achievement progress fetch error: ${e}`));
 }
 
+/** Cache-first initial render. Resolves the cached game detail for this appId,
+ *  pushes it into InfoState, and fires the background refresh tasks (active
+ *  slot, artwork, metadata, achievements, BIOS) whose results are merged in
+ *  later. Module-scope so the FC body stays focused on rendering. */
+async function loadCached(
+  appId: number,
+  cancelled: () => boolean,
+  romIdRef: React.MutableRefObject<number | null>,
+  setter: React.Dispatch<React.SetStateAction<InfoState>>,
+) {
+  try {
+    const cached = await getCachedGameDetail(appId);
+    if (cancelled() || !cached.found) return;
+
+    const romId = cached.rom_id!;
+    romIdRef.current = romId;
+
+    // Process save sync from backend-computed display fields
+    let saveSyncStatus: "synced" | "conflict" | "none" | null = null;
+    let saveSyncLabel = "";
+    if (cached.save_sync_enabled && cached.save_sync_display) {
+      saveSyncStatus = cached.save_sync_display.status;
+      saveSyncLabel = resolveSaveSyncLabel(cached.save_sync_display);
+    }
+
+    if (cancelled()) return;
+    setter((prev) => ({
+      ...prev,
+      romId,
+      romName: cached.rom_name || "",
+      platformSlug: cached.platform_slug || "",
+      romFile: cached.rom_file || "",
+      saveSyncEnabled: cached.save_sync_enabled ?? false,
+      saveSyncStatus,
+      saveSyncLabel,
+      raId: cached.ra_id ?? null,
+      achievementEarned: cached.achievement_summary?.earned ?? 0,
+      achievementTotal: cached.achievement_summary?.total ?? 0,
+    }));
+
+    // Background: fetch active_slot from save status (not in cached data)
+    if (cached.save_sync_enabled) {
+      refreshActiveSlotInBackground(romId, cancelled, setter);
+    }
+
+    // Auto-apply SGDB artwork on first visit (fire-and-forget)
+    // Only mark as applied after success so transient failures allow retry on next visit
+    if (!artworkApplied.has(appId)) {
+      applyArtwork(romId, appId)
+        .then(() => { artworkApplied.add(appId); })
+        .catch((e) => debugLog(`Auto-artwork error: ${e}`));
+    }
+
+    const staleFields = cached.stale_fields ?? [];
+
+    // Background: fetch metadata if stale
+    if (romId && staleFields.includes("metadata")) {
+      getRomMetadata(romId).catch((e) => debugLog(`Background metadata fetch error: ${e}`));
+    }
+
+    // Achievements: render from cache, background refresh if stale
+    if (cached.ra_id && staleFields.includes("achievements")) {
+      refreshAchievementsInBackground(romId, cancelled, setter);
+    }
+
+    // BIOS: render from cache first, background refresh if stale
+    const cachedBios = cached.bios_status;
+    if (cachedBios) {
+      setter((prev) => ({
+        ...prev,
+        ...extractBiosInfo(cachedBios as BiosStatus, cached.bios_level ?? null, cached.bios_label ?? null),
+      }));
+    }
+
+    if (staleFields.includes("bios")) {
+      refreshBiosInBackground(romId, cancelled(), setter);
+    }
+  } catch (e) {
+    debugLog(`RomMPlaySection: loadCached error: ${e}`);
+  }
+}
+
 export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
@@ -287,131 +369,48 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
   useEffect(() => {
     let cancelled = false;
 
-    async function loadCached() {
-      try {
-        const cached = await getCachedGameDetail(appId);
-        if (cancelled || !cached.found) return;
+    loadCached(appId, () => cancelled, romIdRef, setInfo);
 
-        const romId = cached.rom_id!;
-        romIdRef.current = romId;
-
-        // Process save sync from backend-computed display fields
-        let saveSyncStatus: "synced" | "conflict" | "none" | null = null;
-        let saveSyncLabel = "";
-        if (cached.save_sync_enabled && cached.save_sync_display) {
-          saveSyncStatus = cached.save_sync_display.status;
-          saveSyncLabel = resolveSaveSyncLabel(cached.save_sync_display);
-        }
-
-        if (cancelled) return;
-        setInfo((prev) => ({
-          ...prev,
-          romId,
-          romName: cached.rom_name || "",
-          platformSlug: cached.platform_slug || "",
-          romFile: cached.rom_file || "",
-          saveSyncEnabled: cached.save_sync_enabled ?? false,
-          saveSyncStatus,
-          saveSyncLabel,
-          raId: cached.ra_id ?? null,
-          achievementEarned: cached.achievement_summary?.earned ?? 0,
-          achievementTotal: cached.achievement_summary?.total ?? 0,
-        }));
-
-        // Background: fetch active_slot from save status (not in cached data)
-        if (cached.save_sync_enabled) {
-          refreshActiveSlotInBackground(romId, () => cancelled, setInfo);
-        }
-
-        // Auto-apply SGDB artwork on first visit (fire-and-forget)
-        // Only mark as applied after success so transient failures allow retry on next visit
-        if (!artworkApplied.has(appId)) {
-          applyArtwork(romId, appId)
-            .then(() => { artworkApplied.add(appId); })
-            .catch((e) => debugLog(`Auto-artwork error: ${e}`));
-        }
-
-        const staleFields = cached.stale_fields ?? [];
-
-        // Background: fetch metadata if stale
-        if (romId && staleFields.includes("metadata")) {
-          getRomMetadata(romId).catch((e) => debugLog(`Background metadata fetch error: ${e}`));
-        }
-
-        // Achievements: render from cache, background refresh if stale
-        if (cached.ra_id && staleFields.includes("achievements")) {
-          refreshAchievementsInBackground(romId, () => cancelled, setInfo);
-        }
-
-        // BIOS: render from cache first, background refresh if stale
-        const cachedBios = cached.bios_status;
-        if (cachedBios) {
-          const biosPartial = extractBiosInfo(
-            cachedBios as BiosStatus,
-            cached.bios_level ?? null,
-            cached.bios_label ?? "",
-          );
-          setInfo((prev) => ({ ...prev, ...biosPartial }));
-        }
-
-        if (staleFields.includes("bios")) {
-          refreshBiosInBackground(romId, cancelled, setInfo);
-        }
-      } catch (e) {
-        debugLog(`RomMPlaySection: loadCached error: ${e}`);
-      }
-    }
-
-    loadCached();
-
-    // Listen for conflict resolution / save sync changes from sibling components
-    const onDataChanged = async (e: Event) => {
-      try {
-      const detail = (e as CustomEvent).detail;
-
-      // Handle save sync settings toggle (show/hide save sync info item)
-      if (detail?.type === "save_sync_settings") {
-        const enabled = detail.save_sync_enabled as boolean;
-        if (enabled) {
-          const rid = romIdRef.current;
-          if (rid) {
-            const saveStatus = await getSaveStatus(rid).catch((): SaveStatus | null => null);
-            const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
-            setInfo((prev) => ({ ...prev, saveSyncEnabled: true, saveSyncStatus: ss, saveSyncLabel: sl }));
-          } else {
-            setInfo((prev) => ({ ...prev, saveSyncEnabled: true }));
-          }
-        } else {
-          setInfo((prev) => ({ ...prev, saveSyncEnabled: false, saveSyncStatus: null, saveSyncLabel: "" }));
-        }
-        return;
-      }
-
-      // Handle core changed (from QAM BiosManager or other source)
-      if (detail?.type === "core_changed") {
+    // Per-event-type handlers — each owns one branch of the data-changed dispatch.
+    // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
+    const handleSaveSyncSettingsChange = async (detail: any) => {
+      const enabled = detail.save_sync_enabled as boolean;
+      if (enabled) {
         const rid = romIdRef.current;
-        if (!rid) return;
-        const result = await getBiosStatus(rid);
-        if (cancelled) return;
-        const b = result.bios_status;
-        if (b) {
-          const activeCoreLabel = b.active_core_label ?? null;
-          const availableCores = b.available_cores ?? [];
-          const defaultCore = availableCores.find((c) => c.is_default);
-          const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
-          setInfo((prev) => ({
-            ...prev,
-            activeCoreLabel,
-            activeCoreIsDefault,
-            availableCores,
-            biosStatus: result.bios_level,
-            biosLabel: result.bios_label ?? "",
-          }));
+        if (rid) {
+          const saveStatus = await getSaveStatus(rid).catch((): SaveStatus | null => null);
+          const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
+          setInfo((prev) => ({ ...prev, saveSyncEnabled: true, saveSyncStatus: ss, saveSyncLabel: sl }));
+        } else {
+          setInfo((prev) => ({ ...prev, saveSyncEnabled: true }));
         }
-        return;
+      } else {
+        setInfo((prev) => ({ ...prev, saveSyncEnabled: false, saveSyncStatus: null, saveSyncLabel: "" }));
       }
+    };
 
-      if (detail?.type !== "save_sync") return;
+    const handleCoreChange = async () => {
+      const rid = romIdRef.current;
+      if (!rid) return;
+      const result = await getBiosStatus(rid);
+      if (cancelled) return;
+      const b = result.bios_status;
+      if (!b) return;
+      const activeCoreLabel = b.active_core_label ?? null;
+      const availableCores = b.available_cores ?? [];
+      const defaultCore = availableCores.find((c) => c.is_default);
+      const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
+      setInfo((prev) => ({
+        ...prev,
+        activeCoreLabel,
+        activeCoreIsDefault,
+        availableCores,
+        biosStatus: result.bios_level,
+        biosLabel: result.bios_label ?? "",
+      }));
+    };
+
+    const handleSaveSyncChange = async (detail: any) => {
       const romId = romIdRef.current ?? detail.rom_id;
       if (!romId) return;
       // If event specifies a rom_id, skip if it's not for this game
@@ -419,6 +418,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       const saveStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romId).catch((): SaveStatus | null => null);
       const { status: saveSyncStatus, label: saveSyncLabel } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
       setInfo((prev) => ({ ...prev, saveSyncStatus, saveSyncLabel, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
+    };
+
+    const onDataChanged = async (e: Event) => {
+      try {
+        const detail = (e as CustomEvent).detail;
+        switch (detail?.type) {
+          case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
+          case "core_changed": await handleCoreChange(); break;
+          case "save_sync": await handleSaveSyncChange(detail); break;
+        }
       } catch (err) {
         debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
       }
