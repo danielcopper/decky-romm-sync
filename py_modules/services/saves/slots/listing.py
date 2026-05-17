@@ -67,8 +67,10 @@ class SlotListing:
             active_slot = rom_state.active_slot
             persisted_slots = rom_state.slots
 
-        # Fetch server slots
-        server_slots_list: list[dict] = []
+        # Fetch server slots. On failure we MUST NOT persist a merged map —
+        # an empty server_slots_list would drop every persisted server slot
+        # except the active one and the user would see their slot inventory
+        # vanish on a transient network blip.
         try:
             summary = await self._loop.run_in_executor(
                 None,
@@ -76,9 +78,15 @@ class SlotListing:
                     lambda: self._romm_api.get_save_summary(rom_id, device_id=device_id),
                 ),
             )
-            server_slots_list = summary.get("slots", [])
         except Exception as e:
             self._log_debug(f"Failed to fetch save slots for rom {rom_id}: {e}")
+            return {
+                "success": False,
+                "slots": [],
+                "active_slot": active_slot,
+                "error": str(e),
+            }
+        server_slots_list: list[dict] = summary.get("slots", [])
 
         # Merge: update persisted slots with server data, promote local→server
         merged: dict[str, dict] = {}

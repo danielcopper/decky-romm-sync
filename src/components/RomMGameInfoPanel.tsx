@@ -101,6 +101,10 @@ function refreshSlotState(
     .catch(() => {});
   getSaveSlots(romId)
     .then((slotResult) => {
+      // On API failure the backend returns success:false with empty slots so it
+      // doesn't clobber persisted state — skip the UI update to preserve the
+      // last-known good slot list rather than blank it on a transient blip.
+      if (!slotResult.success) return;
       setter((prev) => {
         const newSlot = slotResult.active_slot === undefined ? prev.activeSlot : slotResult.active_slot;
         return {
@@ -492,6 +496,15 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         if (!state.romId) return;
         const result = await getSaveSlots(state.romId);
         if (cancelled) return;
+        // On API failure the backend returns success:false with empty slots so
+        // it doesn't clobber persisted state — keep the previous UI list and
+        // allow another load attempt rather than wiping the panel.
+        if (!result.success) {
+          debugLog(`Failed to load save slots: ${result.error ?? "unknown"}`);
+          slotsLoadedRef.current = false;
+          setState((prev) => ({ ...prev, slotsLoading: false }));
+          return;
+        }
         setState((prev) => ({
           ...prev,
           activeSlot: result.active_slot === undefined ? prev.activeSlot : result.active_slot,

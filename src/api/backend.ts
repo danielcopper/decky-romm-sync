@@ -161,7 +161,7 @@ export const resolveSyncConflict = callable<
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");
 export const updateSaveSyncSettings = callable<[SaveSyncSettings], { success: boolean }>("update_save_sync_settings");
-export const getSaveSlots = callable<[number], { success: boolean; slots: SaveSlotSummary[]; active_slot: string }>("get_save_slots");
+export const getSaveSlots = callable<[number], { success: boolean; slots: SaveSlotSummary[]; active_slot: string; error?: string }>("get_save_slots");
 export const getSlotSaves = callable<[number, string], SlotSavesResponse>("get_slot_saves");
 export const switchSlot = callable<[number, string], SwitchSlotResponse>("switch_slot");
 

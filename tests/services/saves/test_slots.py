@@ -86,6 +86,81 @@ class TestSaveSlots:
         result = await svc.get_save_slots(123)
         assert result["success"] is False
 
+    @pytest.mark.asyncio
+    async def test_get_save_slots_preserves_map_on_api_failure(self, tmp_path):
+        """API failure must NOT rewrite the persisted slot map.
+
+        Regression for #625: a single transient ``get_save_summary`` error used
+        to drop every persisted server slot except the active one, then persist
+        the depleted map. The user would see slots vanish from the UI even
+        though they were still on the server.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
+
+        # Seed persisted state with the active slot + two more server slots
+        # that would be dropped by the merge if the failure path persisted.
+        original_slots = {
+            "default": {"source": "server", "count": 1, "latest_updated_at": "2026-04-17T10:00:00"},
+            "save1": {"source": "server", "count": 3, "latest_updated_at": "2026-04-16T09:00:00"},
+            "save2": {"source": "server", "count": 2, "latest_updated_at": "2026-04-15T08:00:00"},
+        }
+        svc._save_sync_state.saves["123"] = RomSaveState(
+            active_slot="default",
+            slot_confirmed=True,
+            slots=dict(original_slots),
+        )
+        svc.save_state()  # baseline the on-disk state for the post-call check
+        state_path = tmp_path / "save_sync_state.json"
+        baseline = state_path.read_text()
+
+        fake.fail_on_next(OSError("connection refused"))
+
+        result = await svc.get_save_slots(123)
+
+        # Response indicates failure with the carried-over active slot.
+        assert result["success"] is False
+        assert result["slots"] == []
+        assert result["active_slot"] == "default"
+        assert "connection refused" in result["error"]
+        # In-memory slot map is untouched (no merge / overwrite happened).
+        assert svc._save_sync_state.saves["123"].slots == original_slots
+        # On-disk state is unchanged — no save_state() call after the failure.
+        assert state_path.read_text() == baseline
+
+    @pytest.mark.asyncio
+    async def test_get_save_slots_empty_server_response_persists(self, tmp_path):
+        """A genuine empty server response is success and persists correctly.
+
+        Distinguishes the new failure path from the case where the server
+        legitimately returns no slots — that's still ``success: True`` and the
+        merged map (which keeps the active slot) is written back to disk.
+        """
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        svc._save_sync_state.server_device_id = "dev-1"
+        # Active slot persists through the merge (kept even when server is empty).
+        svc._save_sync_state.saves["123"] = RomSaveState(
+            active_slot="default",
+            slot_confirmed=True,
+            slots={"default": {"source": "server", "count": 1, "latest_updated_at": None}},
+        )
+
+        # No fake.saves entries → genuine empty server response.
+        result = await svc.get_save_slots(123)
+
+        assert result["success"] is True
+        # Active slot retained by the merge even though server returned nothing.
+        slot_names = [s["slot"] for s in result["slots"]]
+        assert slot_names == ["default"]
+        # State persisted: reload from disk and confirm the slots map matches.
+        state_path = tmp_path / "save_sync_state.json"
+        persisted = json.loads(state_path.read_text())
+        assert "default" in persisted["saves"]["123"]["slots"]
+
     def test_set_active_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._save_sync_state.settings.save_sync_enabled = True
