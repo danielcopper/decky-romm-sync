@@ -18,7 +18,7 @@ def _make_sd(
     igdb_id=None,
     sgdb_id=None,
 ):
-    """Build a shortcut_data dict matching _fetch_and_prepare output."""
+    """Build a shortcut_data dict matching prefetch_all_units output."""
     return {
         "rom_id": rom_id,
         "name": name,

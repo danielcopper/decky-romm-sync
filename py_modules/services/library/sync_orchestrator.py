@@ -386,9 +386,8 @@ class SyncOrchestrator:
         # final phase. ``synced_rom_ids`` is shared with collection units
         # for dedup. ``all_rom_id_to_app_id`` aggregates every unit's
         # frontend-reported mapping for stale detection. ``collection_
-        # memberships`` and ``platform_rom_ids`` mirror the values
-        # ``_fetch_and_prepare`` produces in the monolithic path so the
-        # reporter's ``_build_collection_app_ids`` can run unchanged.
+        # memberships`` and ``platform_rom_ids`` feed the reporter's
+        # ``_build_collection_app_ids`` once every unit has been applied.
         synced_rom_ids: set[int] = set()
         all_rom_id_to_app_id: dict[str, int] = {}
         collection_memberships: dict[str, list[int]] = {}

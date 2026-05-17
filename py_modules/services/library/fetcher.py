@@ -341,109 +341,6 @@ class LibraryFetcher:
         if self._sync_state.sync_state == SyncState.CANCELLING:
             raise asyncio.CancelledError(_SYNC_CANCELLED)
 
-    def _build_shortcuts_data(self, all_roms):
-        """Build shortcut data list from ROM list."""
-        return build_shortcuts_data(all_roms, self._plugin_dir)
-
-    async def _fetch_single_collection_roms(
-        self, collection: dict, all_seen: set[int], collection_only_roms: list[dict]
-    ) -> list[int]:
-        """Fetch ROMs for a single collection, deduplicating against all_seen.
-
-        Mutates all_seen and collection_only_roms in place.
-        Returns the list of all rom_ids belonging to this collection.
-        """
-        cid = str(collection.get("id", ""))
-        is_virtual = collection.get("is_virtual", False)
-        coll_rom_ids: list[int] = []
-
-        offset = 0
-        limit = 50
-        while True:
-            self._check_cancelling()
-            if is_virtual:
-                page = await self._loop.run_in_executor(
-                    None, self._romm_api.list_roms_by_virtual_collection, cid, limit, offset
-                )
-            else:
-                page = await self._loop.run_in_executor(
-                    None, self._romm_api.list_roms_by_collection, collection["id"], limit, offset
-                )
-
-            items = page.get("items", [])
-            for rom in items:
-                rid = rom["id"]
-                coll_rom_ids.append(rid)
-                if rid not in all_seen:
-                    all_seen.add(rid)
-                    rom["platform_name"] = rom.get("platform_name", rom.get("platform_display_name", "Unknown"))
-                    rom["platform_slug"] = rom.get("platform_slug", rom.get("platform_fs_slug", ""))
-                    rom.pop("files", None)
-                    collection_only_roms.append(rom)
-
-            if len(items) < limit:
-                break
-            offset += limit
-
-        return coll_rom_ids
-
-    async def _fetch_collection_roms(self, seen_rom_ids: set[int]) -> tuple[list[dict], dict[str, list[int]]]:
-        """Fetch ROMs from enabled collections, deduplicating against seen_rom_ids.
-
-        Returns (collection_only_roms, collection_memberships).
-        collection_only_roms: ROMs not already fetched via platforms
-        collection_memberships: {collection_name: [all rom_ids in collection]}
-        """
-        collection_only_roms: list[dict] = []
-        collection_memberships: dict[str, list[int]] = {}
-
-        enabled_collections = self._settings.get("enabled_collections", {})
-        enabled_ids = {k for k, v in enabled_collections.items() if v}
-        self._log_debug(f"Collection sync: {len(enabled_ids)} enabled: {enabled_ids}")
-        if not enabled_ids:
-            return collection_only_roms, collection_memberships
-
-        try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
-            franchise_collections: list[dict] = []
-            try:
-                franchise_collections = await self._loop.run_in_executor(
-                    None, self._romm_api.list_virtual_collections, "franchise"
-                )
-            except Exception as e:
-                self._logger.warning(f"Failed to fetch franchise collections: {e}")
-
-            self._log_debug(
-                f"Collection metadata: {len(user_collections)} user, {len(franchise_collections)} franchise"
-            )
-            all_seen = set(seen_rom_ids)  # Copy so we don't mutate caller's set
-
-            for c in user_collections + franchise_collections:
-                cid = str(c.get("id", ""))
-                if cid not in enabled_ids:
-                    self._log_debug(f"  Skipping collection '{c.get('name', cid)}' (id={cid}, not enabled)")
-                    continue
-
-                coll_name = c.get("name", cid)
-                is_virtual = c.get("is_virtual", False)
-                self._log_debug(f"  Fetching collection '{coll_name}' (id={cid}, virtual={is_virtual})")
-
-                coll_rom_ids = await self._fetch_single_collection_roms(c, all_seen, collection_only_roms)
-
-                if coll_rom_ids:
-                    collection_memberships[coll_name] = coll_rom_ids
-                    self._log_debug(f"  Collection '{coll_name}': {len(coll_rom_ids)} ROMs")
-
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch collection ROMs: {e}")
-
-        if collection_only_roms:
-            self._logger.info(
-                f"Fetched {len(collection_only_roms)} additional ROMs from {len(collection_memberships)} collections"
-            )
-
-        return collection_only_roms, collection_memberships
-
     # ── Per-unit work queue ──────────────────────────────────────
 
     async def build_work_queue(self) -> list[WorkUnit]:
@@ -677,15 +574,13 @@ class LibraryFetcher:
 
         Used by the unified preview path so ``sync_apply_delta`` can
         dispatch the per-unit pipeline against cached unit data without
-        re-fetching from RomM on the apply step. Mirrors the data shape
-        the legacy ``_fetch_and_prepare`` produced for the monolithic
-        preview path: the aggregated ROM list, shortcut data, full
-        platform list (kept for downstream callers that count
-        platforms), per-collection memberships, and the set of rom_ids
-        seen via platform units (used for the platform-collection diff
-        gate in the summary). Caches metadata at the end through the
-        injected ``MetadataExtractor`` so a mid-flight crash leaves the
-        ROM metadata stamped on disk.
+        re-fetching from RomM on the apply step. Returns the aggregated
+        ROM list, shortcut data, full platform list (kept for downstream
+        callers that count platforms), per-collection memberships, and
+        the set of rom_ids seen via platform units (used for the
+        platform-collection diff gate in the summary). Caches metadata
+        at the end through the injected ``MetadataExtractor`` so a
+        mid-flight crash leaves the ROM metadata stamped on disk.
         """
         await self._emit_progress("platforms", message="Fetching platforms...")
         work_queue = await self.build_work_queue()
@@ -743,10 +638,8 @@ class LibraryFetcher:
     def cache_metadata_for_unit(self, unit_roms: list[dict]) -> None:
         """Stamp the metadata cache for one unit's ROMs and flush.
 
-        Mirrors the cache-and-flush step ``_fetch_and_prepare`` runs
-        once at the end of a monolithic sync. Per-unit pipelines call
-        this after each unit so a mid-sync crash leaves cached
-        metadata for every unit that completed.
+        Called by the per-unit pipeline after each unit so a mid-sync
+        crash leaves cached metadata for every unit that completed.
         """
         if self._metadata_service is None or not unit_roms:
             return
@@ -755,63 +648,3 @@ class LibraryFetcher:
             self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
             self._metadata_service.mark_metadata_dirty()
         self._metadata_service.flush_metadata_if_dirty()
-
-    async def _fetch_and_prepare(self):
-        """Fetch platforms + ROMs + collection ROMs, prepare shortcut data.
-
-        Returns (all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids)
-        or raises on cancel/error.
-        Artwork download is deferred to the apply phase.
-        Uses updated_after on subsequent syncs to skip unchanged platforms.
-        Emits sync_progress events throughout.
-        """
-
-        # Phase 1: Fetch platforms
-        await self._emit_progress("platforms", message="Fetching platforms...")
-        platforms = await self._fetch_enabled_platforms()
-        self._check_cancelling()
-
-        # Phase 2: Fetch ROMs per platform (incremental if possible)
-        await self._emit_progress("roms", message="Fetching ROMs...")
-        last_sync = self._state.get("last_sync")
-        registry = self._state.get("shortcut_registry", {})
-
-        all_roms: list[dict] = []
-        total_platforms = len(platforms)
-        for pi, platform in enumerate(platforms, 1):
-            self._check_cancelling()
-            platform_name = platform.get("name", platform.get("display_name", "Unknown"))
-            platform_slug = platform.get("slug", "")
-
-            skipped = await self._try_incremental_skip(
-                platform, registry, last_sync, platform_name, platform_slug, all_roms, pi, total_platforms
-            )
-            if not skipped:
-                await self._full_fetch_platform_roms(
-                    platform["id"], platform_name, platform_slug, all_roms, pi, total_platforms
-                )
-
-        self._check_cancelling()
-        self._logger.info(f"Fetched {len(all_roms)} ROMs from {len(platforms)} platforms")
-
-        # Record which rom_ids came from platforms
-        platform_rom_ids: set[int] = {r["id"] for r in all_roms}
-
-        # Phase 3: Fetch collection ROMs (adds ROMs not already in all_roms)
-        collection_only_roms, collection_memberships = await self._fetch_collection_roms(platform_rom_ids)
-        all_roms.extend(collection_only_roms)
-
-        # Phase 4: Prepare shortcut data
-        shortcuts_data = self._build_shortcuts_data(all_roms)
-        self._check_cancelling()
-
-        # Cache metadata from sync response
-        if self._metadata_service is not None:
-            for rom in all_roms:
-                rom_id_str = str(rom["id"])
-                self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
-                self._metadata_service.mark_metadata_dirty()
-            self._metadata_service.flush_metadata_if_dirty()
-        self._log_debug(f"Metadata cached for {len(all_roms)} ROMs")
-
-        return all_roms, shortcuts_data, platforms, collection_memberships, platform_rom_ids

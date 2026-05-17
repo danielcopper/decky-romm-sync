@@ -15,7 +15,6 @@ from tests.services.library._helpers import (
     _make_loop_raising,
     _make_loop_with_executor,
     _make_registry_entry,
-    _page,
 )
 
 
@@ -925,8 +924,7 @@ class TestReportRemovalSteamInputCleanup:
 class TestCollectionSyncEdgeCases:
     """Edge-case tests for the merged platform + collection sync engine.
 
-    Tests exercise classify_roms() and _report_sync_results_io() directly,
-    and use _fetch_collection_roms() for collection-fetch scenarios.
+    Tests exercise classify_roms() and _report_sync_results_io() directly.
     """
 
     # ------------------------------------------------------------------
@@ -1043,68 +1041,6 @@ class TestCollectionSyncEdgeCases:
 
         assert 1 in unchanged_ids, "ROM A should stay alive via RPG collection"
         assert len(stale) == 0
-
-    # ------------------------------------------------------------------
-    # Scenario 4: Collection-only game (no platform enabled)
-    # ------------------------------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_sc4_collection_only_rom_is_synced_without_platform(self, plugin):
-        """ROM A is synced via collection fetch when its platform is not enabled."""
-        svc = plugin._sync_service
-        svc._settings["enabled_platforms"] = {}  # No platforms enabled
-        svc._settings["enabled_collections"] = {"10": True}
-
-        # API mocks: no enabled platforms → no platform ROMs
-        # list_collections → one collection; list_roms_by_collection → ROM A
-        rom_a = {
-            "id": 1,
-            "name": "ROM A",
-            "fs_name": "ROM A.zip",
-            "platform_name": "Game Boy Advance",
-            "platform_slug": "gba",
-        }
-        user_collections = [{"id": 10, "name": "Favorites", "is_virtual": False}]
-        franchise_collections: list = []
-
-        mock_loop = MagicMock()
-        call_num = 0
-
-        async def _executor(_exec, fn, *args):
-            nonlocal call_num
-            call_num += 1
-            if call_num == 1:
-                # list_platforms → empty (but this is called by _fetch_enabled_platforms)
-                return []
-            if call_num == 2:
-                # list_collections inside _fetch_collection_roms
-                return user_collections
-            if call_num == 3:
-                # list_virtual_collections (franchise)
-                return franchise_collections
-            # list_roms_by_collection for collection id=10
-            return _page([rom_a])
-
-        mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        svc._loop = mock_loop
-
-        # _fetch_and_prepare drives the whole flow
-        (
-            all_roms,
-            shortcuts_data,
-            _platforms,
-            collection_memberships,
-            platform_rom_ids,
-        ) = await svc._fetcher._fetch_and_prepare()
-
-        assert len(all_roms) == 1
-        assert all_roms[0]["id"] == 1
-        assert len(shortcuts_data) == 1
-        assert shortcuts_data[0]["rom_id"] == 1
-        # ROM A came from collection, not platform
-        assert 1 not in platform_rom_ids
-        assert "Favorites" in collection_memberships
-        assert 1 in collection_memberships["Favorites"]
 
     # ------------------------------------------------------------------
     # Scenario 5: collection_create_platform_groups = False (default)
@@ -1228,66 +1164,6 @@ class TestCollectionSyncEdgeCases:
     # Scenario 7: Deduplication — ROM in both platform and collection
     # ------------------------------------------------------------------
 
-    @pytest.mark.asyncio
-    async def test_sc7_rom_in_platform_and_collection_appears_once(self, plugin):
-        """ROM A fetched from GBA platform is not duplicated when Favorites collection also has it."""
-        svc = plugin._sync_service
-        svc._settings["enabled_platforms"] = {"5": True}
-        svc._settings["enabled_collections"] = {"10": True}
-
-        rom_a = {
-            "id": 1,
-            "name": "ROM A",
-            "fs_name": "ROM A.zip",
-            "platform_name": "Game Boy Advance",
-            "platform_slug": "gba",
-        }
-        platform = {"id": 5, "name": "Game Boy Advance", "slug": "gba", "rom_count": 1}
-        user_collections = [{"id": 10, "name": "Favorites", "is_virtual": False}]
-
-        mock_loop = MagicMock()
-        call_num = 0
-
-        async def _executor(_exec, fn, *args):
-            nonlocal call_num
-            call_num += 1
-            if call_num == 1:
-                # list_platforms
-                return [platform]
-            if call_num == 2:
-                # list_roms for GBA (paginated)
-                return _page([rom_a])
-            if call_num == 3:
-                # list_collections inside _fetch_collection_roms
-                return user_collections
-            if call_num == 4:
-                # list_virtual_collections (franchise)
-                return []
-            # list_roms_by_collection for Favorites — ROM A already seen
-            return _page([rom_a])
-
-        mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        svc._loop = mock_loop
-
-        (
-            _all_roms,
-            shortcuts_data,
-            _platforms,
-            collection_memberships,
-            platform_rom_ids,
-        ) = await svc._fetcher._fetch_and_prepare()
-
-        # ROM A should appear exactly once despite being in both platform and collection
-        rom_ids_in_shortcuts = [sd["rom_id"] for sd in shortcuts_data]
-        assert rom_ids_in_shortcuts.count(1) == 1, "ROM A must not be duplicated"
-
-        # ROM A is in platform_rom_ids (fetched from platform)
-        assert 1 in platform_rom_ids
-
-        # ROM A must be in the Favorites collection membership
-        assert "Favorites" in collection_memberships
-        assert 1 in collection_memberships["Favorites"]
-
     def test_sc7_rom_appears_in_both_platform_and_collection_app_ids(self, plugin):
         """ROM A (in both GBA platform and Favorites collection) appears in both platform_app_ids
         and romm_collection_app_ids after _report_sync_results_io."""
@@ -1337,93 +1213,6 @@ class TestCollectionSyncEdgeCases:
         assert len(new) == 0
         assert len(changed) == 0
         assert len(unchanged_ids) == 0
-
-    # ------------------------------------------------------------------
-    # Scenario 9: Empty collection
-    # ------------------------------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_sc9_empty_collection_does_not_error(self, plugin):
-        """An enabled collection with no ROMs causes no errors and returns empty results."""
-        svc = plugin._sync_service
-        svc._settings["enabled_collections"] = {"10": True}
-
-        user_collections = [{"id": 10, "name": "Empty", "is_virtual": False}]
-
-        mock_loop = MagicMock()
-        call_num = 0
-
-        async def _executor(_exec, fn, *args):
-            nonlocal call_num
-            call_num += 1
-            if call_num == 1:
-                return user_collections
-            if call_num == 2:
-                return []  # no franchise collections
-            # list_roms_by_collection returns an empty page
-            return _page([])
-
-        mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        svc._loop = mock_loop
-
-        roms, memberships = await svc._fetcher._fetch_collection_roms(set())
-
-        assert roms == []
-        # Empty collection produces no membership entry (no rom_ids collected)
-        assert "Empty" not in memberships
-
-    # ------------------------------------------------------------------
-    # Scenario 10: Collection API failure is non-fatal
-    # ------------------------------------------------------------------
-
-    @pytest.mark.asyncio
-    async def test_sc10_collection_api_failure_does_not_crash_sync(self, plugin):
-        """When the collection API fails, sync continues with platform ROMs only."""
-        svc = plugin._sync_service
-        svc._settings["enabled_platforms"] = {"5": True}
-        svc._settings["enabled_collections"] = {"10": True}
-
-        rom_a = {
-            "id": 1,
-            "name": "ROM A",
-            "fs_name": "ROM A.zip",
-            "platform_name": "Game Boy Advance",
-            "platform_slug": "gba",
-        }
-        platform = {"id": 5, "name": "Game Boy Advance", "slug": "gba", "rom_count": 1}
-
-        mock_loop = MagicMock()
-        call_num = 0
-
-        async def _executor(_exec, fn, *args):
-            nonlocal call_num
-            call_num += 1
-            if call_num == 1:
-                # list_platforms
-                return [platform]
-            if call_num == 2:
-                # list_roms for GBA
-                return _page([rom_a])
-            # All subsequent calls (list_collections, etc.) raise
-            raise Exception("Collection API unavailable")
-
-        mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        svc._loop = mock_loop
-
-        # Should not raise; collection errors are caught and logged as warnings
-        (
-            all_roms,
-            _shortcuts_data,
-            _platforms,
-            collection_memberships,
-            _platform_rom_ids,
-        ) = await svc._fetcher._fetch_and_prepare()
-
-        # Platform ROM was still fetched
-        assert len(all_roms) == 1
-        assert all_roms[0]["id"] == 1
-        # No collection memberships because the fetch failed
-        assert collection_memberships == {}
 
     # ------------------------------------------------------------------
     # Additional edge cases for _report_sync_results_io

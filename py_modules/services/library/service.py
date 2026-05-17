@@ -91,7 +91,7 @@ class LibraryService:
         self._box = LibrarySyncStateBox()
 
         # Sub-service: fetcher. Constructed first because the orchestrator
-        # holds a reference to it for the _fetch_and_prepare driver. The
+        # holds a reference to it for the per-unit fetch pipeline. The
         # progress-emit proxy late-binds to ``self._orchestrator`` so it
         # can be threaded into the fetcher's config before the
         # orchestrator exists.
