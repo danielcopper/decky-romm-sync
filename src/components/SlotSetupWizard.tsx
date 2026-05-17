@@ -2,7 +2,7 @@ import { useState, useEffect, FC, createElement, ChangeEvent } from "react";
 import { DialogButton, ConfirmModal, TextField, showModal } from "@decky/ui";
 import { getSaveSetupInfo, confirmSlotChoice, logError } from "../api/backend";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
-import { SERVER_UNREACHABLE_WIZARD_MESSAGE } from "../utils/saveSetup";
+import { applyWizardInitialSetupResult, applyWizardRetrySetupResult } from "../utils/saveSetup";
 import type { SaveSetupInfo } from "../types";
 
 interface SlotSetupWizardProps {
@@ -77,33 +77,16 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       try {
         const result = await getSaveSetupInfo(romId);
         if (cancelled) return;
-
-        if (result.recommended_action === "server_unreachable") {
-          // Hold the wizard — auto-confirming default with an unknown server
-          // state could overwrite real server saves the user already had on
-          // first post-confirmation sync. Surface the error so the user can
-          // retry once the server is reachable.
-          setError(SERVER_UNREACHABLE_WIZARD_MESSAGE);
-          return;
-        }
-
-        if (result.recommended_action === "auto_confirm_default") {
-          setConfirming(true);
-          try {
-            await confirmSlotChoice(romId, result.default_slot, null);
-            if (!cancelled) onComplete();
-          } catch (e) {
-            if (!cancelled) {
-              setError(`Auto-setup failed: ${e}`);
-              logError(`SlotSetupWizard auto-confirm failed: ${e}`);
-              setConfirming(false);
-              setInfo(result);
-            }
-          }
-          return;
-        }
-
-        setInfo(result);
+        await applyWizardInitialSetupResult(result, {
+          romId,
+          confirmSlotChoice,
+          setError,
+          setConfirming,
+          setInfo,
+          logError,
+          onComplete,
+          isCancelled: () => cancelled,
+        });
       } catch (e) {
         if (!cancelled) {
           setError(`Failed to load save setup info: ${e}`);
@@ -161,15 +144,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             setError(null);
             setLoading(true);
             getSaveSetupInfo(romId).then(
-              (result) => {
-                if (result.recommended_action === "server_unreachable") {
-                  setError(SERVER_UNREACHABLE_WIZARD_MESSAGE);
-                  setLoading(false);
-                  return;
-                }
-                setInfo(result);
-                setLoading(false);
-              },
+              (result) => applyWizardRetrySetupResult(result, { setError, setLoading, setInfo }),
               (e) => { setError(`Failed: ${e}`); setLoading(false); },
             );
           }}
