@@ -27,7 +27,7 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
     );
     for (const { appId, launchOptions } of entries) {
       if (launchOptions?.includes(ROMM_MARKER)) {
-        const match = launchOptions.match(/romm:(\d+)/);
+        const match = /romm:(\d+)/.exec(launchOptions);
         if (match) {
           result.set(Number(match[1]), appId);
         }

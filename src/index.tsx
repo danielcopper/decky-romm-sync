@@ -114,8 +114,8 @@ export default definePlugin(() => {
     registerMetadataPatches(cache, appIdMap);
 
     for (const appIdStr of Object.keys(appIdMap)) {
-      const appId = parseInt(appIdStr, 10);
-      if (!isNaN(appId)) {
+      const appId = Number.parseInt(appIdStr, 10);
+      if (!Number.isNaN(appId)) {
         registerRomMAppId(appId);
       }
     }

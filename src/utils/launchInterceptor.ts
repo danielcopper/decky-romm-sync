@@ -18,8 +18,8 @@ export function registerLaunchInterceptor(): void {
     async (gameActionId: number, appIdStr: string, action: string, _launchSource: number) => {
       if (action !== "LaunchApp") return;
 
-      const appId = parseInt(appIdStr, 10);
-      if (isNaN(appId) || !isRomMAppId(appId)) return;
+      const appId = Number.parseInt(appIdStr, 10);
+      if (Number.isNaN(appId) || !isRomMAppId(appId)) return;
 
       // Block launch if a RetroDECK migration is pending. Backend also blocks
       // via @migration_blocked, but cancelling the Steam action here prevents

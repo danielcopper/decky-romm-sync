@@ -631,11 +631,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     if (meta.average_rating != null && meta.average_rating > 0) {
       gameInfoChildren.push(infoRow("rating", "Rating", `${Math.round(meta.average_rating)}%`));
     }
-  } else {
+  } else if (state.platformName) {
     // No metadata — still show platform
-    if (state.platformName) {
-      gameInfoChildren.push(infoRow("platform", "Platform", state.platformName));
-    }
+    gameInfoChildren.push(infoRow("platform", "Platform", state.platformName));
   }
 
   const gameInfoContent = gameInfoChildren.length > 0
