@@ -8,6 +8,7 @@ overrides:
   minimatch@>=9.0.0 <9.0.7: 9.0.7
   minimatch@>=3.0.0 <3.1.4: 3.1.4
   rollup@>=4.0.0 <4.59.0: 4.59.0
+  picomatch@<2.3.2: '>=2.3.2'
 
 importers:
 
@@ -546,10 +547,6 @@ packages:
     resolution: {integrity: sha512-gDKb8aZMDeD/tZWs9P6+q0J9Mwkdl6xMV8TjnGP3qJVJ06bdMgkbBlLU8IdfOsIsFz2BW1rNVT3XuNEl8zPAvw==}
     engines: {node: '>=8'}
 
-  picomatch@2.3.1:
-    resolution: {integrity: sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA==}
-    engines: {node: '>=8.6'}
-
   picomatch@4.0.3:
     resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
     engines: {node: '>=12'}
@@ -1068,7 +1065,7 @@ snapshots:
   micromatch@4.0.8:
     dependencies:
       braces: 3.0.3
-      picomatch: 2.3.1
+      picomatch: 4.0.3
 
   minimatch@3.1.4:
     dependencies:
@@ -1102,8 +1099,6 @@ snapshots:
       minipass: 7.1.2
 
   path-type@4.0.0: {}
-
-  picomatch@2.3.1: {}
 
   picomatch@4.0.3: {}
 
