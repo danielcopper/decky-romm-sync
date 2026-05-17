@@ -1,8 +1,5 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
-  - name: RomM Documentation
-    url: https://docs.romm.app
-    about: Check the RomM docs for server setup and API questions
-  - name: Decky Loader
-    url: https://decky.xyz
-    about: For Decky Loader issues (not plugin-specific)
+  - name: Wiki
+    url: https://github.com/danielcopper/decky-romm-sync/wiki
+    about: Architecture, file structure, and feature documentation

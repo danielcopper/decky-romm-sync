@@ -1,67 +1,13 @@
-name: Bug Report
-description: Report a bug or unexpected behavior
+name: Bug report
+description: Report a bug in the plugin
+title: "bug: "
 labels: ["bug"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Thanks for reporting! Please fill out the details below so we can reproduce and fix the issue.
-
-  - type: input
-    id: version
-    attributes:
-      label: Plugin version
-      description: Which version of decky-romm-sync are you running?
-      placeholder: "e.g. 0.12.0"
-    validations:
-      required: true
-
-  - type: input
-    id: romm-version
-    attributes:
-      label: RomM server version
-      description: Which version of RomM is your server running?
-      placeholder: "e.g. 4.8.1 or 4.9.0"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: device
-    attributes:
-      label: Device
-      options:
-        - Steam Deck (LCD)
-        - Steam Deck (OLED)
-        - Linux Desktop
-        - Other
-    validations:
-      required: true
-
-  - type: dropdown
-    id: emulator
-    attributes:
-      label: Emulator platform
-      options:
-        - RetroDECK
-        - EmuDeck
-        - Standalone RetroArch
-        - Other / N/A
-    validations:
-      required: true
-
   - type: textarea
-    id: description
+    id: repro
     attributes:
-      label: What happened?
-      description: Describe the bug clearly. What did you expect vs. what actually happened?
-    validations:
-      required: true
-
-  - type: textarea
-    id: steps
-    attributes:
-      label: Steps to reproduce
-      description: How can we reproduce this?
+      label: Repro steps
+      description: Numbered steps that reproduce the bug from a known-good state.
       placeholder: |
         1. Open QAM > Decky > RomM Sync
         2. Click "Sync Library"
@@ -70,16 +16,54 @@ body:
       required: true
 
   - type: textarea
-    id: logs
+    id: expected
     attributes:
-      label: Logs
-      description: |
-        Paste relevant logs from Decky's log viewer or `~/homebrew/logs/decky-romm-sync/`.
-        Set log level to "debug" in plugin settings to get detailed output.
-      render: text
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
 
   - type: textarea
-    id: context
+    id: actual
     attributes:
-      label: Additional context
-      description: Screenshots, platform details, ROM info, anything else that might help.
+      label: Actual behavior
+      description: What actually happened. Include error messages verbatim.
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Shown in the QAM panel header, or read from plugin.json.
+      placeholder: "0.5.4"
+    validations:
+      required: true
+
+  - type: input
+    id: retrodeck-version
+    attributes:
+      label: RetroDECK version
+      description: Shown in the RetroDECK Configurator, or read from the Flatpak metadata.
+      placeholder: "0.9.0b"
+    validations:
+      required: true
+
+  - type: input
+    id: decky-version
+    attributes:
+      label: Decky Loader version
+      description: Shown in the Decky settings panel.
+      placeholder: "3.0.5"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: |
+        Optional. Plugin logs live at `~/homebrew/logs/decky-romm-sync/`. Set log level to "debug" in plugin settings for full output. Decky Loader logs are in `~/homebrew/services/PluginLoader/`.
+      render: text
+    validations:
+      required: false

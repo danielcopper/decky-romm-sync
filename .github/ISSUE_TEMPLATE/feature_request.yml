@@ -1,18 +1,13 @@
-name: Feature Request
+name: Feature request
 description: Suggest a new feature or improvement
+title: "feat: "
 labels: ["enhancement"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Have an idea for decky-romm-sync? Describe it below!
-
   - type: textarea
     id: problem
     attributes:
-      label: Problem or motivation
-      description: What problem does this solve? Why do you want this?
-      placeholder: "I'm always frustrated when..."
+      label: Problem
+      description: What's missing today? What pain are you running into?
     validations:
       required: true
 
@@ -20,7 +15,7 @@ body:
     id: solution
     attributes:
       label: Proposed solution
-      description: How do you imagine this working?
+      description: How should the plugin behave? Sketch the UX or the API surface.
     validations:
       required: true
 
@@ -28,21 +23,6 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Any workarounds or alternative approaches you've thought of?
-
-  - type: dropdown
-    id: area
-    attributes:
-      label: Area
-      options:
-        - Sync / Library
-        - Downloads
-        - Save Sync
-        - BIOS / Firmware
-        - Artwork
-        - Game Detail Page
-        - Settings / UI
-        - Achievements
-        - Other
+      description: Workarounds you tried, other designs you weighed, or reasons the obvious solution doesn't fit.
     validations:
-      required: true
+      required: false
