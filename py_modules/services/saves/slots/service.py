@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.emulator_tag import build_emulator_tag
@@ -29,39 +30,51 @@ if TYPE_CHECKING:
 _NO_MIGRATION = object()  # sentinel: no slot migration requested
 
 
+@dataclass(frozen=True)
+class SlotsServiceConfig:
+    """Frozen wiring bundle handed to ``SlotsService.__init__``.
+
+    Holds the main plugin state dict, the peer save sub-services
+    (state, sync_engine, status, rom_info), the Protocol-typed RomM
+    adapter and retry strategy, runtime infrastructure (loop, logger,
+    clock), the Protocol-typed filesystem adapter, the ``DebugLogger``
+    seam, and the ES-DE core resolver used during slot migration to
+    build the emulator tag for re-upload.
+    """
+
+    state: dict
+    state_svc: StateService
+    sync_engine: SyncEngine
+    status_service: StatusService
+    rom_info: RomInfoService
+    romm_api: RommSaveApi
+    retry: RetryStrategy
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    clock: Clock
+    save_file: SaveFileAdapter
+    log_debug: DebugLogger
+    get_active_core: CoreResolverFn
+
+
 class SlotsService:
     """Slot lifecycle: list, set-active, switch, migrate, delete, first-sync wizard."""
 
-    def __init__(
-        self,
-        *,
-        state: dict,
-        state_svc: StateService,
-        sync_engine: SyncEngine,
-        status_service: StatusService,
-        rom_info: RomInfoService,
-        romm_api: RommSaveApi,
-        retry: RetryStrategy,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        clock: Clock,
-        save_file: SaveFileAdapter,
-        log_debug: DebugLogger,
-        get_active_core: CoreResolverFn,
-    ) -> None:
-        self._state = state
-        self._state_svc = state_svc
-        self._sync_engine = sync_engine
-        self._status_service = status_service
-        self._rom_info = rom_info
-        self._romm_api = romm_api
-        self._retry = retry
-        self._loop = loop
-        self._logger = logger
-        self._clock = clock
-        self._save_file = save_file
-        self._log_debug = log_debug
-        self._get_active_core = get_active_core
+    def __init__(self, *, config: SlotsServiceConfig) -> None:
+        self._config = config
+        self._state = config.state
+        self._state_svc = config.state_svc
+        self._sync_engine = config.sync_engine
+        self._status_service = config.status_service
+        self._rom_info = config.rom_info
+        self._romm_api = config.romm_api
+        self._retry = config.retry
+        self._loop = config.loop
+        self._logger = config.logger
+        self._clock = config.clock
+        self._save_file = config.save_file
+        self._log_debug = config.log_debug
+        self._get_active_core = config.get_active_core
 
     # ------------------------------------------------------------------
     # Slot listing

@@ -13,6 +13,7 @@ layout while a migration is in flight (#238).
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.save_extensions import get_save_extensions
@@ -29,25 +30,36 @@ if TYPE_CHECKING:
     )
 
 
+@dataclass(frozen=True)
+class RomInfoServiceConfig:
+    """Frozen wiring bundle handed to ``RomInfoService.__init__``.
+
+    Holds the main plugin state dict (for ``installed_roms`` reads and
+    save-sort state), the Protocol-typed filesystem adapter, the
+    RetroDECK runtime-path accessor, the ES-DE core resolver, the
+    optional RetroArch core-name provider, and the standard-library
+    logger.
+    """
+
+    state: dict
+    save_file: SaveFileAdapter
+    retrodeck_paths: RetroDeckPaths
+    get_active_core: CoreResolverFn
+    get_core_name: CoreNameProviderFn | None
+    logger: logging.Logger
+
+
 class RomInfoService:
     """Resolves per-ROM save paths and discovers local save files on disk."""
 
-    def __init__(
-        self,
-        *,
-        state: dict,
-        save_file: SaveFileAdapter,
-        retrodeck_paths: RetroDeckPaths,
-        get_active_core: CoreResolverFn,
-        get_core_name: CoreNameProviderFn | None,
-        logger: logging.Logger,
-    ) -> None:
-        self._state = state
-        self._save_file = save_file
-        self._retrodeck_paths = retrodeck_paths
-        self._get_active_core = get_active_core
-        self._get_core_name = get_core_name
-        self._logger = logger
+    def __init__(self, *, config: RomInfoServiceConfig) -> None:
+        self._config = config
+        self._state = config.state
+        self._save_file = config.save_file
+        self._retrodeck_paths = config.retrodeck_paths
+        self._get_active_core = config.get_active_core
+        self._get_core_name = config.get_core_name
+        self._logger = config.logger
 
     def get_rom_save_info(self, rom_id: int) -> dict | None:
         """Get save-related info for an installed ROM.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from models.saves import SaveConflict
@@ -33,35 +33,47 @@ if TYPE_CHECKING:
     from services.saves.sync_engine import MatrixOutcome, SyncEngine
 
 
+@dataclass(frozen=True)
+class StatusServiceConfig:
+    """Frozen wiring bundle handed to ``StatusService.__init__``.
+
+    Holds the main plugin state dict, the peer save sub-services
+    (state, sync_engine, rom_info), the Protocol-typed RomM adapter
+    and retry strategy, the plugin event loop, the standard-library
+    logger, the ``DebugLogger`` seam, the ES-DE core resolver, and
+    the optional event emitter used to push background status updates
+    to the frontend.
+    """
+
+    state: dict
+    state_svc: StateService
+    sync_engine: SyncEngine
+    rom_info: RomInfoService
+    romm_api: RommSaveApi
+    retry: RetryStrategy
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    log_debug: DebugLogger
+    get_active_core: CoreResolverFn
+    emit: EventEmitter | None
+
+
 class StatusService:
     """Read-only matrix-driven status reporting for the SAVES tab."""
 
-    def __init__(
-        self,
-        *,
-        state: dict,
-        state_svc: StateService,
-        sync_engine: SyncEngine,
-        rom_info: RomInfoService,
-        romm_api: RommSaveApi,
-        retry: RetryStrategy,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        log_debug: DebugLogger,
-        get_active_core: CoreResolverFn,
-        emit: EventEmitter | None,
-    ) -> None:
-        self._state = state
-        self._state_svc = state_svc
-        self._sync_engine = sync_engine
-        self._rom_info = rom_info
-        self._romm_api = romm_api
-        self._retry = retry
-        self._loop = loop
-        self._logger = logger
-        self._log_debug = log_debug
-        self._get_active_core = get_active_core
-        self._emit = emit
+    def __init__(self, *, config: StatusServiceConfig) -> None:
+        self._config = config
+        self._state = config.state
+        self._state_svc = config.state_svc
+        self._sync_engine = config.sync_engine
+        self._rom_info = config.rom_info
+        self._romm_api = config.romm_api
+        self._retry = config.retry
+        self._loop = config.loop
+        self._logger = config.logger
+        self._log_debug = config.log_debug
+        self._get_active_core = config.get_active_core
+        self._emit = config.emit
 
     def _status_entry_from_outcome(
         self,

@@ -10,6 +10,7 @@ never opens the JSON file directly.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.save_state import (
@@ -25,21 +26,30 @@ if TYPE_CHECKING:
     from services.protocols import SaveSyncStatePersister
 
 
+@dataclass(frozen=True)
+class StateServiceConfig:
+    """Frozen wiring bundle handed to ``StateService.__init__``.
+
+    Holds the live :class:`SaveSyncState` aggregate, the main plugin
+    state dict (used for orphan-pruning against the shortcut registry),
+    the Protocol-typed persister, and the standard-library logger.
+    """
+
+    save_sync_state: SaveSyncState
+    state: dict
+    persister: SaveSyncStatePersister
+    logger: logging.Logger
+
+
 class StateService:
     """Owns the live ``SaveSyncState`` aggregate and its persistence."""
 
-    def __init__(
-        self,
-        *,
-        save_sync_state: SaveSyncState,
-        state: dict,
-        persister: SaveSyncStatePersister,
-        logger: logging.Logger,
-    ) -> None:
-        self._save_sync_state = save_sync_state
-        self._state = state
-        self._persister = persister
-        self._logger = logger
+    def __init__(self, *, config: StateServiceConfig) -> None:
+        self._config = config
+        self._save_sync_state = config.save_sync_state
+        self._state = config.state
+        self._persister = config.persister
+        self._logger = config.logger
 
     @property
     def state(self) -> SaveSyncState:

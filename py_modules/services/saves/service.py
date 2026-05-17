@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from domain.save_state import SaveSyncState
 from services.saves._config import SaveServiceConfig
-from services.saves.rom_info import RomInfoService
-from services.saves.slots import SlotsService
+from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
+from services.saves.slots import SlotsService, SlotsServiceConfig
 from services.saves.slots.service import _NO_MIGRATION
-from services.saves.state import StateService
-from services.saves.status import StatusService
-from services.saves.sync_engine import SyncEngine
-from services.saves.versions import VersionsService
+from services.saves.state import StateService, StateServiceConfig
+from services.saves.status import StatusService, StatusServiceConfig
+from services.saves.sync_engine import SyncEngine, SyncEngineConfig
+from services.saves.versions import VersionsService, VersionsServiceConfig
 
 
 class SaveService:
@@ -37,80 +37,92 @@ class SaveService:
         self._save_file = config.save_file
 
         self._state_svc = StateService(
-            save_sync_state=config.save_sync_state,
-            state=config.state,
-            persister=config.save_sync_state_persister,
-            logger=config.logger,
+            config=StateServiceConfig(
+                save_sync_state=config.save_sync_state,
+                state=config.state,
+                persister=config.save_sync_state_persister,
+                logger=config.logger,
+            ),
         )
         # Convenience alias — both names reference the same aggregate.
         self._save_sync_state = self._state_svc.state
 
         self._rom_info = RomInfoService(
-            state=config.state,
-            save_file=config.save_file,
-            retrodeck_paths=config.retrodeck_paths,
-            get_active_core=config.get_active_core,
-            get_core_name=config.get_core_name,
-            logger=config.logger,
+            config=RomInfoServiceConfig(
+                state=config.state,
+                save_file=config.save_file,
+                retrodeck_paths=config.retrodeck_paths,
+                get_active_core=config.get_active_core,
+                get_core_name=config.get_core_name,
+                logger=config.logger,
+            ),
         )
 
         self._sync_engine = SyncEngine(
-            state=config.state,
-            state_svc=self._state_svc,
-            rom_info=self._rom_info,
-            romm_api=config.romm_api,
-            retry=config.retry,
-            loop=config.loop,
-            logger=config.logger,
-            clock=config.clock,
-            save_file=config.save_file,
-            log_debug=config.log_debug,
-            get_active_core=config.get_active_core,
-            hostname_provider=config.hostname_provider,
-            plugin_version=config.plugin_version,
-            detect_sort_change=config.detect_sort_change,
-            is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,
+            config=SyncEngineConfig(
+                state=config.state,
+                state_svc=self._state_svc,
+                rom_info=self._rom_info,
+                romm_api=config.romm_api,
+                retry=config.retry,
+                loop=config.loop,
+                logger=config.logger,
+                clock=config.clock,
+                save_file=config.save_file,
+                log_debug=config.log_debug,
+                get_active_core=config.get_active_core,
+                hostname_provider=config.hostname_provider,
+                plugin_version=config.plugin_version,
+                detect_sort_change=config.detect_sort_change,
+                is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,
+            ),
         )
 
         self._status = StatusService(
-            state=config.state,
-            state_svc=self._state_svc,
-            sync_engine=self._sync_engine,
-            rom_info=self._rom_info,
-            romm_api=config.romm_api,
-            retry=config.retry,
-            loop=config.loop,
-            logger=config.logger,
-            log_debug=config.log_debug,
-            get_active_core=config.get_active_core,
-            emit=config.emit,
+            config=StatusServiceConfig(
+                state=config.state,
+                state_svc=self._state_svc,
+                sync_engine=self._sync_engine,
+                rom_info=self._rom_info,
+                romm_api=config.romm_api,
+                retry=config.retry,
+                loop=config.loop,
+                logger=config.logger,
+                log_debug=config.log_debug,
+                get_active_core=config.get_active_core,
+                emit=config.emit,
+            ),
         )
 
         self._versions = VersionsService(
-            state_svc=self._state_svc,
-            sync_engine=self._sync_engine,
-            rom_info=self._rom_info,
-            romm_api=config.romm_api,
-            retry=config.retry,
-            loop=config.loop,
-            logger=config.logger,
-            log_debug=config.log_debug,
+            config=VersionsServiceConfig(
+                state_svc=self._state_svc,
+                sync_engine=self._sync_engine,
+                rom_info=self._rom_info,
+                romm_api=config.romm_api,
+                retry=config.retry,
+                loop=config.loop,
+                logger=config.logger,
+                log_debug=config.log_debug,
+            ),
         )
 
         self._slots = SlotsService(
-            state=config.state,
-            state_svc=self._state_svc,
-            sync_engine=self._sync_engine,
-            status_service=self._status,
-            rom_info=self._rom_info,
-            romm_api=config.romm_api,
-            retry=config.retry,
-            loop=config.loop,
-            logger=config.logger,
-            clock=config.clock,
-            save_file=config.save_file,
-            log_debug=config.log_debug,
-            get_active_core=config.get_active_core,
+            config=SlotsServiceConfig(
+                state=config.state,
+                state_svc=self._state_svc,
+                sync_engine=self._sync_engine,
+                status_service=self._status,
+                rom_info=self._rom_info,
+                romm_api=config.romm_api,
+                retry=config.retry,
+                loop=config.loop,
+                logger=config.logger,
+                clock=config.clock,
+                save_file=config.save_file,
+                log_debug=config.log_debug,
+                get_active_core=config.get_active_core,
+            ),
         )
 
     # ------------------------------------------------------------------

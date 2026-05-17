@@ -5,6 +5,6 @@ one or more ROMs lives here. Mutations belong in SyncEngine; storage
 in StateService.
 """
 
-from services.saves.status.service import StatusService
+from services.saves.status.service import StatusService, StatusServiceConfig
 
-__all__ = ["StatusService"]
+__all__ = ["StatusService", "StatusServiceConfig"]

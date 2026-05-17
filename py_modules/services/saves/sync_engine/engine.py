@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from models.saves import SaveConflict
@@ -43,80 +43,94 @@ if TYPE_CHECKING:
     from services.saves.state import StateService
 
 
-__all__ = ["MatrixOutcome", "SyncEngine"]
+__all__ = ["MatrixOutcome", "SyncEngine", "SyncEngineConfig"]
+
+
+@dataclass(frozen=True)
+class SyncEngineConfig:
+    """Frozen wiring bundle handed to ``SyncEngine.__init__``.
+
+    Holds the main plugin state dict, the peer save sub-services
+    (state, rom_info), the Protocol-typed RomM adapter and retry
+    strategy, runtime infrastructure (loop, logger, clock), the
+    Protocol-typed filesystem adapter, the ``DebugLogger`` seam, the
+    ES-DE core resolver, the hostname provider used for device
+    registration, the plugin version string passed to the server on
+    register/update, and the optional sort-change and migration-pending
+    callbacks SyncEngine consults at the entry of every public flow.
+    """
+
+    state: dict
+    state_svc: StateService
+    rom_info: RomInfoService
+    romm_api: RommSyncApi
+    retry: RetryStrategy
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    clock: Clock
+    save_file: SaveFileAdapter
+    log_debug: DebugLogger
+    get_active_core: CoreResolverFn
+    hostname_provider: HostnameProvider
+    plugin_version: str
+    detect_sort_change: Callable[[], None] | None
+    is_retrodeck_migration_pending: Callable[[], bool] | None
 
 
 class SyncEngine:
     """Newest-wins matrix executor, sync orchestration callables, and rom-level lock dispatch."""
 
-    def __init__(
-        self,
-        *,
-        state: dict,
-        state_svc: StateService,
-        rom_info: RomInfoService,
-        romm_api: RommSyncApi,
-        retry: RetryStrategy,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        clock: Clock,
-        save_file: SaveFileAdapter,
-        log_debug: DebugLogger,
-        get_active_core: CoreResolverFn,
-        hostname_provider: HostnameProvider,
-        plugin_version: str,
-        detect_sort_change: Callable[[], None] | None,
-        is_retrodeck_migration_pending: Callable[[], bool] | None,
-    ) -> None:
-        self._state = state
-        self._state_svc = state_svc
-        self._rom_info = rom_info
-        self._romm_api = romm_api
-        self._retry = retry
-        self._loop = loop
-        self._logger = logger
-        self._clock = clock
-        self._save_file = save_file
-        self._log_debug = log_debug
-        self._get_active_core = get_active_core
-        self._hostname_provider = hostname_provider
-        self._plugin_version = plugin_version
-        self._detect_sort_change = detect_sort_change
-        self._is_retrodeck_migration_pending = is_retrodeck_migration_pending
+    def __init__(self, *, config: SyncEngineConfig) -> None:
+        self._config = config
+        self._state = config.state
+        self._state_svc = config.state_svc
+        self._rom_info = config.rom_info
+        self._romm_api = config.romm_api
+        self._retry = config.retry
+        self._loop = config.loop
+        self._logger = config.logger
+        self._clock = config.clock
+        self._save_file = config.save_file
+        self._log_debug = config.log_debug
+        self._get_active_core = config.get_active_core
+        self._hostname_provider = config.hostname_provider
+        self._plugin_version = config.plugin_version
+        self._detect_sort_change = config.detect_sort_change
+        self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
         # Per-rom lock dict — serializes concurrent sync operations on the
         # same rom_id (pre_launch_sync, post_exit_sync, manual sync, resolve).
         self._rom_sync_locks: dict[int, asyncio.Lock] = {}
 
         self._matrix = MatrixExecutor(
-            state=state,
-            state_svc=state_svc,
-            rom_info=rom_info,
-            romm_api=romm_api,
-            retry=retry,
-            logger=logger,
-            clock=clock,
-            save_file=save_file,
-            log_debug=log_debug,
-            get_active_core=get_active_core,
+            state=config.state,
+            state_svc=config.state_svc,
+            rom_info=config.rom_info,
+            romm_api=config.romm_api,
+            retry=config.retry,
+            logger=config.logger,
+            clock=config.clock,
+            save_file=config.save_file,
+            log_debug=config.log_debug,
+            get_active_core=config.get_active_core,
         )
         self._devices = DeviceRegistry(
-            state_svc=state_svc,
-            romm_api=romm_api,
-            retry=retry,
-            logger=logger,
-            log_debug=log_debug,
-            plugin_version=plugin_version,
+            state_svc=config.state_svc,
+            romm_api=config.romm_api,
+            retry=config.retry,
+            logger=config.logger,
+            log_debug=config.log_debug,
+            plugin_version=config.plugin_version,
         )
         self._rollback = RollbackOrchestrator(
-            state_svc=state_svc,
-            rom_info=rom_info,
-            romm_api=romm_api,
+            state_svc=config.state_svc,
+            rom_info=config.rom_info,
+            romm_api=config.romm_api,
             matrix=self._matrix,
-            retry=retry,
-            clock=clock,
-            save_file=save_file,
-            logger=logger,
-            log_debug=log_debug,
+            retry=config.retry,
+            clock=config.clock,
+            save_file=config.save_file,
+            logger=config.logger,
+            log_debug=config.log_debug,
         )
 
     def _rom_lock(self, rom_id: int) -> asyncio.Lock:

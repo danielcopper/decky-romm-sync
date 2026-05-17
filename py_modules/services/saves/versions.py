@@ -11,7 +11,7 @@ resolution, status reporting) belong in SyncEngine or StatusService.
 from __future__ import annotations
 
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from services.saves._helpers import _local_save_target
@@ -27,6 +27,26 @@ if TYPE_CHECKING:
     from services.saves.sync_engine import SyncEngine
 
 
+@dataclass(frozen=True)
+class VersionsServiceConfig:
+    """Frozen wiring bundle handed to ``VersionsService.__init__``.
+
+    Holds the peer save sub-services consumed during rollback
+    orchestration (state, sync_engine, rom_info), the Protocol-typed
+    RomM adapter and retry strategy, the plugin event loop, the
+    standard-library logger, and the ``DebugLogger`` seam.
+    """
+
+    state_svc: StateService
+    sync_engine: SyncEngine
+    rom_info: RomInfoService
+    romm_api: RommSaveApi
+    retry: RetryStrategy
+    loop: asyncio.AbstractEventLoop
+    logger: logging.Logger
+    log_debug: DebugLogger
+
+
 class VersionsService:
     """Save version history reads and rollback orchestration.
 
@@ -34,26 +54,16 @@ class VersionsService:
     writes — those go through SyncEngine / LocalSavesAdapter.
     """
 
-    def __init__(
-        self,
-        *,
-        state_svc: StateService,
-        sync_engine: SyncEngine,
-        rom_info: RomInfoService,
-        romm_api: RommSaveApi,
-        retry: RetryStrategy,
-        loop: asyncio.AbstractEventLoop,
-        logger: logging.Logger,
-        log_debug: DebugLogger,
-    ) -> None:
-        self._state_svc = state_svc
-        self._sync_engine = sync_engine
-        self._rom_info = rom_info
-        self._romm_api = romm_api
-        self._retry = retry
-        self._loop = loop
-        self._logger = logger
-        self._log_debug = log_debug
+    def __init__(self, *, config: VersionsServiceConfig) -> None:
+        self._config = config
+        self._state_svc = config.state_svc
+        self._sync_engine = config.sync_engine
+        self._rom_info = config.rom_info
+        self._romm_api = config.romm_api
+        self._retry = config.retry
+        self._loop = config.loop
+        self._logger = config.logger
+        self._log_debug = config.log_debug
 
     # ------------------------------------------------------------------
     # Version History API

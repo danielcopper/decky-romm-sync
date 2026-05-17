@@ -5,7 +5,7 @@ import logging
 from conftest import FakeSaveSyncStatePersister
 
 from domain.save_state import FileSyncState, PlaytimeEntry, RomSaveState
-from services.saves.state import StateService
+from services.saves.state import StateService, StateServiceConfig
 
 
 def _make_state_svc(
@@ -16,10 +16,12 @@ def _make_state_svc(
     p = persister or FakeSaveSyncStatePersister()
     return (
         StateService(
-            save_sync_state=save_sync_state,
-            state=state,
-            persister=p,
-            logger=logging.getLogger("test"),
+            config=StateServiceConfig(
+                save_sync_state=save_sync_state,
+                state=state,
+                persister=p,
+                logger=logging.getLogger("test"),
+            ),
         ),
         p,
     )

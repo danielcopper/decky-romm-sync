@@ -6,6 +6,6 @@ executor and I/O orchestrators belong in SyncEngine; status
 reporting in StatusService; persistence in StateService.
 """
 
-from services.saves.slots.service import SlotsService
+from services.saves.slots.service import SlotsService, SlotsServiceConfig
 
-__all__ = ["SlotsService"]
+__all__ = ["SlotsService", "SlotsServiceConfig"]
