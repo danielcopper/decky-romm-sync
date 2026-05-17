@@ -1,0 +1,86 @@
+# Path-to-label mapping for actions/labeler@v5.
+#
+# Labels listed here MUST exist in the repo (see `gh label list`). The action
+# silently no-ops on unknown labels in some versions, but we keep the file
+# tight: only labels we actually use today.
+
+area:ui:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/**'
+
+area:saves:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/services/saves/**'
+          - 'py_modules/adapters/save_file.py'
+          - 'py_modules/domain/save_attribution.py'
+          - 'py_modules/domain/save_extensions.py'
+          - 'py_modules/domain/save_path.py'
+          - 'py_modules/domain/save_state.py'
+          - 'py_modules/domain/save_status.py'
+          - 'tests/services/saves/**'
+
+area:sync:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/services/library/**'
+          - 'py_modules/services/migration.py'
+          - 'py_modules/adapters/migration_file.py'
+          - 'py_modules/domain/sync_action.py'
+          - 'py_modules/domain/sync_diff.py'
+          - 'py_modules/domain/sync_state.py'
+
+area:downloads:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/services/downloads.py'
+          - 'py_modules/adapters/download_file.py'
+          - 'py_modules/adapters/download_queue.py'
+
+area:firmware:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/services/firmware.py'
+          - 'py_modules/adapters/firmware_file.py'
+          - 'py_modules/domain/firmware_paths.py'
+          - 'py_modules/domain/bios.py'
+
+area:artwork:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/services/steamgrid.py'
+          - 'py_modules/services/artwork.py'
+          - 'py_modules/adapters/cover_art_file_store.py'
+          - 'py_modules/adapters/sgdb_artwork_cache.py'
+          - 'py_modules/adapters/steamgriddb.py'
+          - 'py_modules/domain/artwork_paths.py'
+          - 'py_modules/domain/sgdb_artwork.py'
+
+area:achievements:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/services/achievements.py'
+          - 'py_modules/domain/achievements.py'
+
+area:playtime:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/services/playtime.py'
+          - 'py_modules/services/session_lifecycle.py'
+
+area:architecture:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'py_modules/bootstrap.py'
+          - 'py_modules/services/protocols/**'
+          - 'py_modules/domain/**'
+          - 'py_modules/lib/**'
+          - 'CLAUDE.md'
+
+area:ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - 'sonar-project.properties'
+          - 'scripts/**'
