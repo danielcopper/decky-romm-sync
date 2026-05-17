@@ -67,7 +67,6 @@ async function handleGameStart(appId: number): Promise<void> {
   logInfo(`Session start: romId=${romId}, appId=${appId}`);
   activeRomId = romId;
   sessionStartTime = Date.now();
-  totalPausedMs = 0;
 
   // Record session start for playtime tracking
   try {
@@ -87,7 +86,6 @@ async function handleGameStop(): Promise<void> {
   // Clear active session immediately to avoid double-processing
   activeRomId = null;
   sessionStartTime = null;
-  totalPausedMs = 0;
 
   try {
     const result = await finalizeGameSession(romId);
@@ -141,7 +139,6 @@ function handleSuspend(): void {
 function handleResume(): void {
   if (activeRomId && suspendedAt) {
     const pauseDuration = Date.now() - suspendedAt;
-    totalPausedMs += pauseDuration;
     logInfo(`Device resumed, paused for ${Math.round(pauseDuration / 1000)}s`);
     suspendedAt = null;
   }
@@ -213,7 +210,6 @@ export function destroySessionManager(): void {
   activeRomId = null;
   sessionStartTime = null;
   suspendedAt = null;
-  totalPausedMs = 0;
   lifecycleChain = Promise.resolve();
 
   logInfo("Session manager destroyed");
