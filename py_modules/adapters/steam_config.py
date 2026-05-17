@@ -6,11 +6,9 @@ Steam ``userdata`` directory (resolved from ``DECKY_USER_HOME``).
 
 from __future__ import annotations
 
-import binascii
 import contextlib
 import logging
 import os
-import struct
 
 import vdf
 
@@ -58,22 +56,6 @@ class SteamConfigAdapter:
         grid = os.path.join(user_dir, "config", "grid")
         os.makedirs(grid, exist_ok=True)
         return grid
-
-    # -- Shortcut ID generation -----------------------------------------------
-
-    @staticmethod
-    def generate_app_id(exe: str, appname: str) -> int:
-        """Generate Steam shortcut app ID (signed int32). Deprecated."""
-        key = exe + appname
-        crc = binascii.crc32(key.encode("utf-8")) & 0xFFFFFFFF
-        return struct.unpack("i", struct.pack("I", crc | 0x80000000))[0]
-
-    @staticmethod
-    def generate_artwork_id(exe: str, appname: str) -> int:
-        """Generate unsigned artwork ID for grid filenames."""
-        key = exe + appname
-        crc = binascii.crc32(key.encode("utf-8")) & 0xFFFFFFFF
-        return crc | 0x80000000
 
     # -- VDF read/write (deprecated — frontend uses SteamClient API) ----------
 

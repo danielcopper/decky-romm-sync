@@ -9,7 +9,6 @@ import pytest
 from adapters.persistence import (
     PersistenceAdapter,
 )
-from adapters.steam_config import SteamConfigAdapter
 from domain.preview_delta import PreviewDelta
 from domain.sync_state import SyncState
 
@@ -53,29 +52,6 @@ class TestShortcutDataFormat:
         start_dir = os.path.join(decky.DECKY_PLUGIN_DIR, "bin")
 
         assert start_dir == os.path.dirname(exe), f"start_dir ({start_dir}) should be parent of exe ({exe})"
-
-    def test_artwork_id_generation_consistency(self, plugin):
-        """Artwork ID must be deterministic for the same exe+name pair."""
-
-        exe = "/home/deck/homebrew/plugins/decky-romm-sync/bin/romm-launcher"
-        name = "Test Game"
-
-        id1 = SteamConfigAdapter.generate_artwork_id(exe, name)
-        id2 = SteamConfigAdapter.generate_artwork_id(exe, name)
-
-        assert id1 == id2, "Artwork ID should be deterministic"
-        assert isinstance(id1, int), "Artwork ID should be an integer"
-        assert id1 > 0, "Artwork ID should be positive (unsigned)"
-
-    def test_artwork_id_differs_per_game(self, plugin):
-        """Different game names should produce different artwork IDs."""
-
-        exe = "/home/deck/homebrew/plugins/decky-romm-sync/bin/romm-launcher"
-
-        id_a = SteamConfigAdapter.generate_artwork_id(exe, "Game A")
-        id_b = SteamConfigAdapter.generate_artwork_id(exe, "Game B")
-
-        assert id_a != id_b, "Different games should have different artwork IDs"
 
 
 class TestSyncPreview:
