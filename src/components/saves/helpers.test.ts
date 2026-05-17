@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  computeSyncSummary,
   displaySlot,
   formatBytes,
   formatRelativeTime,
@@ -9,7 +10,7 @@ import {
   slotDeleteFailureToast,
   statusLabel,
 } from "./helpers";
-import type { DeviceSyncInfo } from "../../types";
+import type { DeviceSyncInfo, SaveStatus, SyncConflict } from "../../types";
 import type { SlotDeleteInfo } from "../../api/backend";
 
 describe("displaySlot", () => {
@@ -195,6 +196,14 @@ describe("statusLabel", () => {
     expect(statusLabel("conflict", null)).toEqual({ color: "#d94126", label: "Conflict" });
   });
 
+  it("returns grey 'Status unknown' for status 'unknown'", () => {
+    expect(statusLabel("unknown", null)).toEqual({ color: "#8f98a0", label: "Status unknown" });
+  });
+
+  it("returns grey 'Status unknown' for status 'unknown' even when lastSyncAt is set", () => {
+    expect(statusLabel("unknown", "2025-06-15T10:00:00Z")).toEqual({ color: "#8f98a0", label: "Status unknown" });
+  });
+
   it("defaults to green 'Synced' when status is unknown but lastSyncAt is set", () => {
     expect(statusLabel("weird", "2025-06-15T10:00:00Z")).toEqual({ color: "#5ba32b", label: "Synced" });
   });
@@ -256,5 +265,192 @@ describe("slotDeleteFailureToast", () => {
   it("falls back to a generic message when no message and no special reason", () => {
     const info: SlotDeleteInfo = { success: false };
     expect(slotDeleteFailureToast(info)).toBe("Cannot delete this slot");
+  });
+});
+
+describe("computeSyncSummary", () => {
+  const makeStatus = (overrides: Partial<SaveStatus> = {}): SaveStatus => ({
+    rom_id: 1,
+    files: [],
+    playtime: {
+      total_seconds: 0,
+      session_count: 0,
+      last_session_start: null,
+      last_session_duration_sec: null,
+    },
+    device_id: "dev",
+    last_sync_check_at: null,
+    ...overrides,
+  });
+
+  it("returns null text for inactive slot", () => {
+    expect(computeSyncSummary(false, makeStatus(), [])).toEqual({
+      syncSummaryText: null,
+      syncSummaryColor: "#8f98a0",
+    });
+  });
+
+  it("returns null text when saveStatus is null", () => {
+    expect(computeSyncSummary(true, null, [])).toEqual({
+      syncSummaryText: null,
+      syncSummaryColor: "#8f98a0",
+    });
+  });
+
+  it("short-circuits to 'Server unreachable' when server_query_failed is true", () => {
+    const status = makeStatus({
+      server_query_failed: true,
+      files: [
+        {
+          filename: "save.srm",
+          local_path: "/local/save.srm",
+          local_hash: "abc",
+          local_mtime: "2025-06-15T10:00:00Z",
+          local_size: 100,
+          server_save_id: null,
+          server_file_name: null,
+          server_emulator: null,
+          server_updated_at: null,
+          server_size: null,
+          last_sync_at: null,
+          status: "unknown",
+        },
+      ],
+    });
+    expect(computeSyncSummary(true, status, [])).toEqual({
+      syncSummaryText: "Server unreachable",
+      syncSummaryColor: "#8f98a0",
+    });
+  });
+
+  it("server_query_failed wins over conflicts", () => {
+    const status = makeStatus({ server_query_failed: true });
+    const conflicts: SyncConflict[] = [
+      {
+        type: "sync_conflict",
+        rom_id: 1,
+        filename: "save.srm",
+        server_save_id: 1,
+        server_updated_at: "2025-06-15T10:00:00Z",
+        server_size: 100,
+        local_path: null,
+        local_hash: null,
+        local_mtime: null,
+        local_size: null,
+        created_at: "2025-06-15T10:00:00Z",
+      },
+    ];
+    expect(computeSyncSummary(true, status, conflicts)).toEqual({
+      syncSummaryText: "Server unreachable",
+      syncSummaryColor: "#8f98a0",
+    });
+  });
+
+  it("returns 'Conflict detected' (red) when conflicts present", () => {
+    const status = makeStatus({ files: [] });
+    const conflicts: SyncConflict[] = [
+      {
+        type: "sync_conflict",
+        rom_id: 1,
+        filename: "save.srm",
+        server_save_id: 1,
+        server_updated_at: "2025-06-15T10:00:00Z",
+        server_size: 100,
+        local_path: null,
+        local_hash: null,
+        local_mtime: null,
+        local_size: null,
+        created_at: "2025-06-15T10:00:00Z",
+      },
+    ];
+    expect(computeSyncSummary(true, status, conflicts)).toEqual({
+      syncSummaryText: "Conflict detected",
+      syncSummaryColor: "#d94126",
+    });
+  });
+
+  it("returns 'No saves found' when fileCount is 0 and no conflicts", () => {
+    expect(computeSyncSummary(true, makeStatus(), [])).toEqual({
+      syncSummaryText: "No saves found",
+      syncSummaryColor: "#8f98a0",
+    });
+  });
+
+  it("returns 'Not synced' when files exist but last_sync_check_at is null", () => {
+    const status = makeStatus({
+      files: [
+        {
+          filename: "save.srm",
+          local_path: "/local/save.srm",
+          local_hash: "abc",
+          local_mtime: "2025-06-15T10:00:00Z",
+          local_size: 100,
+          server_save_id: null,
+          server_file_name: null,
+          server_emulator: null,
+          server_updated_at: null,
+          server_size: null,
+          last_sync_at: null,
+          status: "upload",
+        },
+      ],
+    });
+    expect(computeSyncSummary(true, status, [])).toEqual({
+      syncSummaryText: "Not synced",
+      syncSummaryColor: "#8f98a0",
+    });
+  });
+
+  it("returns 'Synced just now' when relative time is 'just now'", () => {
+    const nowIso = new Date().toISOString();
+    const status = makeStatus({
+      last_sync_check_at: nowIso,
+      files: [
+        {
+          filename: "save.srm",
+          local_path: "/local/save.srm",
+          local_hash: "abc",
+          local_mtime: nowIso,
+          local_size: 100,
+          server_save_id: null,
+          server_file_name: null,
+          server_emulator: null,
+          server_updated_at: null,
+          server_size: null,
+          last_sync_at: null,
+          status: "synced",
+        },
+      ],
+    });
+    expect(computeSyncSummary(true, status, [])).toEqual({
+      syncSummaryText: "Synced just now",
+      syncSummaryColor: "#5ba32b",
+    });
+  });
+
+  it("returns 'Synced <rel>' with relative time when last_sync_check_at is older", () => {
+    const oldIso = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30 min ago
+    const status = makeStatus({
+      last_sync_check_at: oldIso,
+      files: [
+        {
+          filename: "save.srm",
+          local_path: "/local/save.srm",
+          local_hash: "abc",
+          local_mtime: oldIso,
+          local_size: 100,
+          server_save_id: null,
+          server_file_name: null,
+          server_emulator: null,
+          server_updated_at: null,
+          server_size: null,
+          last_sync_at: null,
+          status: "synced",
+        },
+      ],
+    });
+    const result = computeSyncSummary(true, status, []);
+    expect(result.syncSummaryColor).toBe("#5ba32b");
+    expect(result.syncSummaryText).toMatch(/^Synced \d+m ago$/);
   });
 });

@@ -4,8 +4,10 @@
  * belongs here; rendering helpers live alongside their components.
  */
 
-import type { DeviceSyncInfo } from "../../types";
+import type { DeviceSyncInfo, SaveStatus, SyncConflict } from "../../types";
 import type { SlotDeleteInfo } from "../../api/backend";
+
+const MUTED_COLOR = "#8f98a0";
 
 /** Display a slot name, using "(no slot)" for null/empty values */
 export function displaySlot(slot: string | null | undefined): string {
@@ -117,4 +119,35 @@ export function statusLabel(status: string, lastSyncAt: string | null): { color:
       if (lastSyncAt) return { color: "#5ba32b", label: "Synced" };
       return { color: "#8f98a0", label: "Not synced" };
   }
+}
+
+/**
+ * Build the active slot's sync-summary header line.
+ *
+ * Returns the empty (null) state for inactive slots or missing status. When
+ * the backend signals `server_query_failed`, short-circuits with a neutral
+ * "Server unreachable" instead of running the matrix-derived classification
+ * (which would otherwise read an empty server list as "ready to upload").
+ */
+export function computeSyncSummary(
+  isActive: boolean,
+  saveStatus: SaveStatus | null,
+  conflicts: SyncConflict[],
+): { syncSummaryText: string | null; syncSummaryColor: string } {
+  if (!isActive || !saveStatus) return { syncSummaryText: null, syncSummaryColor: MUTED_COLOR };
+
+  if (saveStatus.server_query_failed) {
+    return { syncSummaryText: "Server unreachable", syncSummaryColor: MUTED_COLOR };
+  }
+
+  const hasConflict = conflicts.length > 0;
+  const fileCount = saveStatus.files?.length ?? 0;
+
+  if (hasConflict) return { syncSummaryText: "Conflict detected", syncSummaryColor: "#d94126" };
+  if (fileCount > 0 && saveStatus.last_sync_check_at) {
+    const rel = formatRelativeTime(saveStatus.last_sync_check_at);
+    return { syncSummaryText: rel === "just now" ? "Synced just now" : `Synced ${rel}`, syncSummaryColor: "#5ba32b" };
+  }
+  if (fileCount > 0) return { syncSummaryText: "Not synced", syncSummaryColor: MUTED_COLOR };
+  return { syncSummaryText: "No saves found", syncSummaryColor: MUTED_COLOR };
 }

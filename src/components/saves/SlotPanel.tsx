@@ -11,38 +11,12 @@ import { getSlotSaves, switchSlot, debugLog, getSlotDeleteInfo, deleteSlot } fro
 import type { SlotDeleteInfo } from "../../api/backend";
 import type { SaveStatus, SyncConflict, SaveSlotSummary, SlotSaveFile, SwitchSlotResponse } from "../../types";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
-import { displaySlot, formatRelativeTime, slotDeleteFailureToast } from "./helpers";
+import { computeSyncSummary, displaySlot, slotDeleteFailureToast } from "./helpers";
 import { renderSaveFileRow } from "./SaveFileRow";
 import { renderServerSaveRow } from "./ServerSaveRow";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 
 const MUTED_COLOR = "#8f98a0";
-
-function computeSyncSummary(
-  isActive: boolean,
-  saveStatus: SaveStatus | null,
-  conflicts: SyncConflict[],
-): { syncSummaryText: string | null; syncSummaryColor: string } {
-  if (!isActive || !saveStatus) return { syncSummaryText: null, syncSummaryColor: MUTED_COLOR };
-
-  // Backend signals it could not reach the server — suppress the matrix-derived
-  // "Synced" / "Not synced" labels (they would reflect an empty server list, not
-  // reality) and render a neutral "Server unreachable" instead.
-  if (saveStatus.server_query_failed) {
-    return { syncSummaryText: "Server unreachable", syncSummaryColor: MUTED_COLOR };
-  }
-
-  const hasConflict = conflicts.length > 0;
-  const fileCount = saveStatus.files?.length ?? 0;
-
-  if (hasConflict) return { syncSummaryText: "Conflict detected", syncSummaryColor: "#d94126" };
-  if (fileCount > 0 && saveStatus.last_sync_check_at) {
-    const rel = formatRelativeTime(saveStatus.last_sync_check_at);
-    return { syncSummaryText: rel === "just now" ? "Synced just now" : `Synced ${rel}`, syncSummaryColor: "#5ba32b" };
-  }
-  if (fileCount > 0) return { syncSummaryText: "Not synced", syncSummaryColor: MUTED_COLOR };
-  return { syncSummaryText: "No saves found", syncSummaryColor: MUTED_COLOR };
-}
 
 function renderActiveSlotBody(
   saveStatus: SaveStatus | null,
