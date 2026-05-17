@@ -278,8 +278,8 @@ class RomFileAdapter(Protocol):
 
     Owns the raw POSIX calls RomRemovalService uses when physically
     removing an installed ROM (single file or multi-file ROM directory).
-    Path-safety checks remain a domain concern (``domain.path_safety``);
-    this Protocol exposes only the I/O seams.
+    Path-safety checks live in ``lib.path_safety``; this Protocol
+    exposes only the I/O seams.
 
     Implementations are synchronous — services that call from an async
     context offload via ``loop.run_in_executor``.

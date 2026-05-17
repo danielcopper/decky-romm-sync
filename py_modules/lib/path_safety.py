@@ -1,9 +1,11 @@
-"""Pure path containment predicates for guarding destructive filesystem ops.
+"""Path containment predicates for guarding destructive filesystem ops.
 
 Stateless safety checks that answer "is path X safely inside configured
-root Y?" using only path algebra (``realpath``/``relpath``/``split``) —
-no filesystem reads, no clocks, no service collaborators. The source of
-the configured root (e.g. the ``RetroDeckPaths`` Protocol) stays in
+root Y?". Uses ``os.path.realpath`` to resolve symlinks before comparing,
+so callers cannot escape the configured root via a symlink — which means
+this is not pure compute (``realpath`` is an ``lstat`` syscall) and
+belongs in ``lib/`` rather than ``domain/``. The source of the
+configured root (e.g. the ``RetroDeckPaths`` Protocol) stays in
 ``services/``; this module only consumes the resolved string.
 """
 

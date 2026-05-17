@@ -1,8 +1,8 @@
-"""Tests for domain.path_safety — pure path containment predicates."""
+"""Tests for lib.path_safety — path containment predicates with realpath resolution."""
 
 import os
 
-from domain.path_safety import is_safe_rom_path
+from lib.path_safety import is_safe_rom_path
 
 
 class TestIsSafeRomPath:

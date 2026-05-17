@@ -58,7 +58,7 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 
 - `[CP]` Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes. (Canonical dependency inversion.)
 - `[CP]` No raw I/O.
-  - `[ours]` Concrete allow/deny list: forbidden in `services/`: `os.*` (except pure path algebra: `realpath`, `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`. (Our enforcement surface; CP says "no I/O" without spelling out the call list.)
+  - `[ours]` Concrete allow/deny list: forbidden in `services/`: `os.*` (except pure path algebra: `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`. (Our enforcement surface; CP says "no I/O" without spelling out the call list.)
 - `[CP]` No clocks or randomness — inject side-effecting deps via abstractions.
   - `[ours]` Specific Protocols: `Clock` / `UuidGen` / `Sleeper`. `time.time()` / `time.monotonic()` / `datetime.now()` / `uuid.uuid4()` / `asyncio.sleep()` / `random.*` banned at the call site.
 - `[CP]` No service-to-service concrete imports — services are independent. Cross-service deps are Protocol-typed.

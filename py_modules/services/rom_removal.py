@@ -6,8 +6,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from domain.path_safety import is_safe_rom_path
 from domain.save_state import SaveSyncState
+from lib.path_safety import is_safe_rom_path
 
 if TYPE_CHECKING:
     import logging
