@@ -4,7 +4,7 @@ import { resolveSyncConflict, logError } from "../api/backend";
 import type { SyncConflict } from "../types";
 import { formatTimestamp } from "../utils/formatters";
 
-export type SyncConflictAction = "keep_local" | "use_server";
+type SyncConflictAction = "keep_local" | "use_server";
 export type SyncConflictResolution = SyncConflictAction | "cancel";
 
 interface SyncConflictModalProps {
@@ -33,7 +33,7 @@ function formatBytes(bytes: number | null): string {
  * If `onResolve` throws, the parent should set `errorMessage` and keep the modal
  * mounted so the user can retry. Buttons are disabled while `isLoading` is true.
  */
-export const SyncConflictModal: FC<SyncConflictModalProps> = ({
+const SyncConflictModal: FC<SyncConflictModalProps> = ({
   conflict,
   onResolve,
   onCancel,

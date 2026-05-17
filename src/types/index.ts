@@ -145,7 +145,7 @@ export interface SyncApplyData {
   total_steps?: number;
 }
 
-export interface SyncPlanUnit {
+interface SyncPlanUnit {
   type: "platform" | "collection";
   id: number | string;
   name: string;
@@ -177,7 +177,7 @@ export interface SyncCollectionsData {
   romm_collection_app_ids: Record<string, number[]>;
 }
 
-export interface FirmwareFile {
+interface FirmwareFile {
   id: number;
   file_name: string;
   size: number;
@@ -189,7 +189,7 @@ export interface FirmwareFile {
   classification: "required" | "optional" | "unknown";
 }
 
-export interface FirmwarePlatform {
+interface FirmwarePlatform {
   platform_slug: string;
   files: FirmwareFile[];
 }
@@ -308,7 +308,7 @@ export interface SaveFileStatus {
   uploaded_by_us?: boolean | null;
 }
 
-export interface PlaytimeEntry {
+interface PlaytimeEntry {
   total_seconds: number;
   session_count: number;
   last_session_start: string | null;
@@ -366,7 +366,7 @@ export interface SwitchSlotResponse {
   save_status?: SaveStatus;
 }
 
-export interface SaveSetupSlotInfo {
+interface SaveSetupSlotInfo {
   slot: string | null;
   saves: Array<{
     id: number;

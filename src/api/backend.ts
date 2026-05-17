@@ -213,7 +213,7 @@ export interface MigrationStatus {
   saves_count?: number;
 }
 
-export interface ConflictDetail {
+interface ConflictDetail {
   filename: string;
   old_path: string;
   old_size: number;
@@ -254,7 +254,7 @@ export const refreshMigrationState = callable<[], { retrodeck: MigrationStatus; 
 // End-of-session orchestration — collapses recordSessionEnd + syncAchievementsAfterSession
 // + postExitSync + refreshMigrationState into a single backend round-trip.
 // See SessionLifecycleService in py_modules/services/session_lifecycle.py.
-export interface SessionFinalizeSyncResult {
+interface SessionFinalizeSyncResult {
   offline: boolean;
   success: boolean;
   synced: number | null;
@@ -264,7 +264,7 @@ export interface SessionFinalizeSyncResult {
   conflicts_toast: string | null;
 }
 
-export interface SessionFinalizeMigration {
+interface SessionFinalizeMigration {
   retrodeck: MigrationStatus;
   save_sort: SaveSortMigrationStatus;
 }
