@@ -121,6 +121,7 @@ class Plugin:
                     clock=adapters["clock"],
                     uuid_gen=adapters["uuid_gen"],
                     sleeper=adapters["sleeper"],
+                    hostname_provider=adapters["hostname_provider"],
                 ),
                 callbacks=CallbackBundle(
                     retrodeck_paths=self._retrodeck_paths,

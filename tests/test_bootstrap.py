@@ -20,6 +20,7 @@ from conftest import (
     FakeDownloadQueueAdapter,
     FakeFirmwareCachePersister,
     FakeFirmwareFileAdapter,
+    FakeHostnameProvider,
     FakeMigrationFileAdapter,
     FakePathProbe,
     FakeRetroDeckPaths,
@@ -176,6 +177,7 @@ class TestWireServices:
             "clock": FakeClock(),
             "uuid_gen": FakeUuidGen(),
             "sleeper": FakeSleeper(),
+            "hostname_provider": FakeHostnameProvider(),
             "min_required_version": (4, 8, 1),
             "retrodeck_paths": FakeRetroDeckPaths(
                 saves=str(tmp_path / "saves"),
@@ -229,6 +231,7 @@ class TestWireServices:
                 clock=deps["clock"],
                 uuid_gen=deps["uuid_gen"],
                 sleeper=deps["sleeper"],
+                hostname_provider=deps["hostname_provider"],
             ),
             callbacks=CallbackBundle(
                 retrodeck_paths=deps["retrodeck_paths"],

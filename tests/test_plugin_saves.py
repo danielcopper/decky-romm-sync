@@ -2,12 +2,12 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import FakeRetroDeckPaths, _make_retry, _make_testable_plugin
+from conftest import FakeHostnameProvider, FakeRetroDeckPaths, _make_retry, _make_testable_plugin
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
@@ -100,6 +100,7 @@ def plugin(tmp_path):
                 roms=str(tmp_path / "retrodeck" / "roms"),
             ),
             get_active_core=lambda system_name, rom_filename=None: (None, None),
+            hostname_provider=FakeHostnameProvider(),
             log_debug=p._log_debug,
         ),
     )
@@ -224,8 +225,9 @@ class TestDeviceRegistration:
     @pytest.mark.asyncio
     async def test_sets_hostname_as_device_name(self, plugin):
         """Device name is set to the local hostname."""
-        with patch("socket.gethostname", return_value="steamdeck"):
-            result = await plugin.ensure_device_registered()
+        plugin._save_sync_service._sync_engine._hostname_provider = FakeHostnameProvider(hostname="steamdeck")
+
+        result = await plugin.ensure_device_registered()
 
         assert result["device_name"] == "steamdeck"
         assert plugin._save_sync_state.device_name == "steamdeck"

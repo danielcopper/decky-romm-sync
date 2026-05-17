@@ -24,6 +24,19 @@ class DebugLogger(Protocol):
     def __call__(self, msg: str) -> None: ...
 
 
+class HostnameProvider(Protocol):
+    """Local device hostname source.
+
+    Services consume this Protocol instead of ``socket.gethostname``
+    directly so device registration stays free of raw syscalls and tests
+    can pin the hostname without monkey-patching :mod:`socket`.
+    """
+
+    def get(self) -> str:
+        """Return the local device hostname."""
+        ...
+
+
 class PathExistsProbe(Protocol):
     """Generic filesystem existence probe.
 

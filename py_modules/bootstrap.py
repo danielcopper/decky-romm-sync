@@ -20,6 +20,7 @@ from adapters.download_file import DownloadFileAdapter as DownloadFileAdapterImp
 from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapterImpl
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
 from adapters.firmware_file import FirmwareFileAdapter as FirmwareFileAdapterImpl
+from adapters.hostname import HostnameAdapter
 from adapters.migration_file import MigrationFileAdapter as MigrationFileAdapterImpl
 from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import (
@@ -69,6 +70,7 @@ from services.protocols import (
     FirmwareCachePersister,
     FirmwareFileAdapter,
     GamelistXmlEditorProtocol,
+    HostnameProvider,
     MetadataCachePersister,
     MigrationFileAdapter,
     PathExistsProbe,
@@ -145,6 +147,7 @@ class RuntimeBundle:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
+    hostname_provider: HostnameProvider
 
 
 @dataclass(frozen=True)
@@ -256,6 +259,7 @@ def bootstrap(
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
+    hostname_provider = HostnameAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
 
     return {
@@ -287,6 +291,7 @@ def bootstrap(
         "clock": clock,
         "uuid_gen": uuid_gen,
         "sleeper": sleeper,
+        "hostname_provider": hostname_provider,
         "debug_logger": debug_logger,
         "core_resolver": core_resolver,
         "gamelist_editor": gamelist_editor,
@@ -359,6 +364,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         clock=cfg.runtime.clock,
         retrodeck_paths=cfg.callbacks.retrodeck_paths,
         get_active_core=cfg.callbacks.core_info_provider.get_active_core,
+        hostname_provider=cfg.runtime.hostname_provider,
         log_debug=cfg.callbacks.log_debug,
         get_core_name=cfg.callbacks.get_core_name,
         plugin_version=_read_plugin_version(cfg.runtime.plugin_dir),

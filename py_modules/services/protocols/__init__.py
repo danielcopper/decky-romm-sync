@@ -53,6 +53,7 @@ from services.protocols.infra import (
     DebugLogger,
     DownloadQueueCleanup,
     EventEmitter,
+    HostnameProvider,
     PathExistsProbe,
     PendingSyncReader,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "FirmwareCachePersister",
     "FirmwareFileAdapter",
     "GamelistXmlEditorProtocol",
+    "HostnameProvider",
     "LaunchGateInstalledChecker",
     "LaunchGateRomLookup",
     "LaunchGateSaveStatusReader",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import socket
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -35,6 +34,7 @@ if TYPE_CHECKING:
         Clock,
         CoreResolverFn,
         DebugLogger,
+        HostnameProvider,
         RetryStrategy,
         RommSyncApi,
         SaveFileAdapter,
@@ -80,6 +80,7 @@ class SyncEngine:
         save_file: SaveFileAdapter,
         log_debug: DebugLogger,
         get_active_core: CoreResolverFn,
+        hostname_provider: HostnameProvider,
         plugin_version: str,
         detect_sort_change: Callable[[], None] | None,
         is_retrodeck_migration_pending: Callable[[], bool] | None,
@@ -95,6 +96,7 @@ class SyncEngine:
         self._save_file = save_file
         self._log_debug = log_debug
         self._get_active_core = get_active_core
+        self._hostname_provider = hostname_provider
         self._plugin_version = plugin_version
         self._detect_sort_change = detect_sort_change
         self._is_retrodeck_migration_pending = is_retrodeck_migration_pending
@@ -706,7 +708,7 @@ class SyncEngine:
                 "server_device_id": has_server_id,
             }
 
-        hostname = socket.gethostname()
+        hostname = self._hostname_provider.get()
 
         try:
             result = await self._loop.run_in_executor(

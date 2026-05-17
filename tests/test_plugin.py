@@ -910,6 +910,7 @@ class TestMainStartupOrdering:
             "clock": MagicMock(),
             "uuid_gen": MagicMock(),
             "sleeper": MagicMock(),
+            "hostname_provider": MagicMock(),
             "debug_logger": MagicMock(),
             "core_resolver": MagicMock(),
             "gamelist_editor": MagicMock(),

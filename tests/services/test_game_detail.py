@@ -9,6 +9,7 @@ import pytest
 from conftest import (
     FakeCoreInfoProvider,
     FakeFirmwareCachePersister,
+    FakeHostnameProvider,
     FakeRetroDeckPaths,
     _make_retry,
     _make_testable_plugin,
@@ -103,6 +104,7 @@ def plugin(tmp_path):
                 roms=str(tmp_path / "retrodeck" / "roms"),
             ),
             get_active_core=lambda system_name, rom_filename=None: (None, None),
+            hostname_provider=FakeHostnameProvider(),
             log_debug=p._log_debug,
         ),
     )

@@ -66,6 +66,7 @@ class SaveService:
             save_file=config.save_file,
             log_debug=config.log_debug,
             get_active_core=config.get_active_core,
+            hostname_provider=config.hostname_provider,
             plugin_version=config.plugin_version,
             detect_sort_change=config.detect_sort_change,
             is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,

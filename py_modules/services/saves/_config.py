@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         CoreResolverFn,
         DebugLogger,
         EventEmitter,
+        HostnameProvider,
         RetroDeckPaths,
         RetryStrategy,
         RommSyncApi,
@@ -78,6 +79,10 @@ class SaveServiceConfig:
         Returns ``(core_so, label)`` tuple; either may be None if
         unresolved. This is an ES-DE question (``which core runs this
         ROM?``).
+    hostname_provider:
+        ``HostnameProvider`` Protocol seam — supplies the local device
+        hostname used as the registered device name during initial
+        server-side device registration.
     get_core_name:
         Callable returning the RetroArch canonical ``corename`` field
         from a core's ``.info`` file for a given ``core_so`` (e.g.
@@ -132,6 +137,7 @@ class SaveServiceConfig:
     clock: Clock
     retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
+    hostname_provider: HostnameProvider
     log_debug: DebugLogger
     get_core_name: CoreNameProviderFn | None = None
     plugin_version: str = "0.0.0"
