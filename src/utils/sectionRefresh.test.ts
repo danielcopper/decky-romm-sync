@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Dispatch, SetStateAction } from "react";
 import {
   refreshActiveSlotInBackground,
   refreshBiosInBackground,
@@ -38,7 +39,7 @@ describe("refreshActiveSlotInBackground", () => {
     } as unknown as Awaited<ReturnType<typeof backend.getSaveStatus>>);
 
     const setter = vi.fn<(updater: (prev: ActiveSlotState) => ActiveSlotState) => void>();
-    refreshActiveSlotInBackground(1, () => false, setter);
+    refreshActiveSlotInBackground(1, () => false, setter as unknown as Dispatch<SetStateAction<ActiveSlotState>>);
     await flushMicrotasks();
 
     expect(setter).toHaveBeenCalledOnce();
@@ -75,7 +76,7 @@ describe("refreshActiveSlotInBackground", () => {
     } as unknown as Awaited<ReturnType<typeof backend.getSaveStatus>>);
 
     const setter = vi.fn<(updater: (prev: ActiveSlotState) => ActiveSlotState) => void>();
-    refreshActiveSlotInBackground(1, () => false, setter);
+    refreshActiveSlotInBackground(1, () => false, setter as unknown as Dispatch<SetStateAction<ActiveSlotState>>);
     await flushMicrotasks();
 
     const updater = setter.mock.calls[0][0];
@@ -102,7 +103,7 @@ describe("refreshBiosInBackground", () => {
     } as unknown as Awaited<ReturnType<typeof backend.getBiosStatus>>);
 
     const setter = vi.fn<(updater: (prev: BiosState) => BiosState) => void>();
-    refreshBiosInBackground(1, false, setter);
+    refreshBiosInBackground(1, false, setter as unknown as Dispatch<SetStateAction<BiosState>>);
     await flushMicrotasks();
 
     expect(setter).toHaveBeenCalledOnce();
@@ -164,7 +165,7 @@ describe("refreshAchievementsInBackground", () => {
     } as unknown as Awaited<ReturnType<typeof backend.getAchievementProgress>>);
 
     const setter = vi.fn<(updater: (prev: AchievementState) => AchievementState) => void>();
-    refreshAchievementsInBackground(1, () => false, setter);
+    refreshAchievementsInBackground(1, () => false, setter as unknown as Dispatch<SetStateAction<AchievementState>>);
     await flushMicrotasks();
 
     expect(setter).toHaveBeenCalledOnce();

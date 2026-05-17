@@ -113,7 +113,7 @@ describe("extractBiosInfo", () => {
   });
 
   it("marks activeCoreIsDefault=true when no active core is set", () => {
-    const bios = { ...baseBios, active_core_label: null } as BiosStatus;
+    const bios = { ...baseBios, active_core_label: null } as unknown as BiosStatus;
     const result = extractBiosInfo(bios, "ok", "BIOS OK");
     expect(result.activeCoreIsDefault).toBe(true);
     expect(result.activeCoreLabel).toBeNull();
