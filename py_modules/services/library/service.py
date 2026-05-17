@@ -18,6 +18,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from lib.late_binding import LateBinding
 from services.library._state import LibrarySyncStateBox
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
@@ -112,12 +113,19 @@ class LibraryService:
             )
         )
 
+        # The orchestrator dispatches the per-unit pipeline's finalize
+        # step (sync_collections + sync_complete) through the reporter,
+        # but the reporter doesn't exist yet at this point in __init__.
+        # Thread the forward reference through a LateBinding rather than
+        # writing to a sub-service private after the fact.
+        reporter_binding: LateBinding[SyncReporter] = LateBinding("reporter")
         self._orchestrator = SyncOrchestrator(
             config=SyncOrchestratorConfig(
                 state=config.state,
                 settings=config.settings,
                 loop=config.loop,
                 logger=config.logger,
+                plugin_dir=config.plugin_dir,
                 emit=config.emit,
                 clock=config.clock,
                 uuid_gen=config.uuid_gen,
@@ -125,6 +133,7 @@ class LibraryService:
                 state_persister=config.state_persister,
                 sync_state_box=self._box,
                 fetcher=self._fetcher,
+                reporter=reporter_binding,
                 metadata_service=config.metadata_service,
                 artwork=config.artwork,
             )
@@ -145,11 +154,7 @@ class LibraryService:
                 artwork=config.artwork,
             )
         )
-        # Late-bound: the orchestrator dispatches the per-unit pipeline's
-        # finalize step (sync_collections + sync_complete) through the
-        # reporter so the registry-driven collection-mapping path is
-        # shared with the monolithic ``report_sync_results`` flow.
-        self._orchestrator._reporter = self._reporter
+        reporter_binding.set(lambda: self._reporter)
 
     async def _emit_progress_proxy(self, phase, **kwargs):
         """Late-bound proxy to the orchestrator's _emit_progress.

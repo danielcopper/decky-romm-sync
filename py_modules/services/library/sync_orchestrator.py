@@ -28,6 +28,7 @@ from domain.sync_diff import (
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 from lib.errors import classify_error
+from lib.late_binding import LateBinding
 from services.library._state import LibrarySyncStateBox, PrefetchedUnit
 
 if TYPE_CHECKING:
@@ -68,18 +69,23 @@ class SyncOrchestratorConfig:
     Holds the live state dict (read for the existing-registry stale
     diff), runtime infrastructure (loop, logger), event emitter, the
     Clock/UuidGen/Sleeper test seams, state-persistence callback, the
-    shared :class:`LibrarySyncStateBox`, and three peer references the
+    plugin-dir reference for shortcut data construction, the shared
+    :class:`LibrarySyncStateBox`, and three peer references the
     orchestrator drives at runtime: the :class:`LibraryFetcher` it
     delegates prefetching and per-unit fetches to, an optional
     :class:`ArtworkManager` for the apply-phase artwork download, and
     an optional :class:`MetadataExtractor` it asks to flush its dirty
-    metadata cache during the sync ``finally``.
+    metadata cache during the sync ``finally``. The ``reporter`` field
+    is a :class:`LateBinding` because :class:`LibraryService` constructs
+    the orchestrator before the reporter exists; the façade plugs the
+    reader in via ``set()`` once the reporter is built.
     """
 
     state: dict
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
+    plugin_dir: str
     emit: EventEmitter
     clock: Clock
     uuid_gen: UuidGen
@@ -87,15 +93,9 @@ class SyncOrchestratorConfig:
     state_persister: StatePersister
     sync_state_box: LibrarySyncStateBox
     fetcher: LibraryFetcher
+    reporter: LateBinding[SyncReporter]
     metadata_service: MetadataExtractor | None = None
     artwork: ArtworkManager | None = None
-    # Late-bound reporter reference — the per-unit pipeline emits its
-    # final ``sync_complete`` / ``sync_collections`` through the reporter
-    # so the same registry-driven collection-mapping code path is reused.
-    # Optional because the orchestrator is constructed before the
-    # reporter exists in :class:`LibraryService`; the façade injects the
-    # binding immediately after the reporter is built.
-    reporter: SyncReporter | None = None
 
 
 class SyncOrchestrator:
@@ -106,6 +106,7 @@ class SyncOrchestrator:
         self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
+        self._plugin_dir = config.plugin_dir
         self._emit = config.emit
         self._clock = config.clock
         self._uuid_gen = config.uuid_gen
@@ -478,7 +479,7 @@ class SyncOrchestrator:
         # When ``prefetched`` is set the preview path already stamped
         # the metadata cache for every ROM in the run; skip the
         # redundant re-stamp.
-        shortcuts_data = build_shortcuts_data(unit_roms, self._fetcher._plugin_dir)
+        shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir)
         if prefetched is None:
             self._fetcher.cache_metadata_for_unit(unit_roms)
 
@@ -633,13 +634,12 @@ class SyncOrchestrator:
             stale_rom_ids = []
         await self._emit("sync_stale", {"remove_rom_ids": stale_rom_ids})
 
-        if self._reporter is not None:
-            await self._reporter.finalize_per_unit_run(
-                pending_collection_memberships=collection_memberships,
-                pending_platform_rom_ids=platform_rom_ids,
-                total_games=total_games_applied,
-                cancelled=cancelled,
-            )
+        await self._reporter.get().finalize_per_unit_run(
+            pending_collection_memberships=collection_memberships,
+            pending_platform_rom_ids=platform_rom_ids,
+            total_games=total_games_applied,
+            cancelled=cancelled,
+        )
 
     # ── Artwork delegation ───────────────────────────────────────
 
