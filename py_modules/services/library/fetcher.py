@@ -316,9 +316,13 @@ class LibraryFetcher:
                     limit,
                     offset,
                 )
-            except Exception as e:
-                self._logger.error(f"Failed to fetch ROMs for platform {platform_name}: {e}")
-                break
+            except Exception:
+                # Re-raise so the orchestrator aborts before the stale-cleanup
+                # pass runs against a partial list. Swallowing here would
+                # cause every ROM not yet paginated to be classified as
+                # "stale" and removed from Steam.
+                self._logger.exception(f"Failed to fetch ROMs for platform {platform_name}")
+                raise
 
             rom_list = roms.get("items", []) if isinstance(roms, dict) else roms
             for rom in rom_list:
@@ -498,9 +502,13 @@ class LibraryFetcher:
                     limit,
                     offset,
                 )
-            except Exception as e:
-                self._logger.error(f"Failed to fetch ROMs for platform {platform_name}: {e}")
-                break
+            except Exception:
+                # Re-raise so the orchestrator aborts before the stale-cleanup
+                # pass runs against a partial list. Swallowing here would
+                # cause every ROM not yet paginated to be classified as
+                # "stale" and removed from Steam.
+                self._logger.exception(f"Failed to fetch ROMs for platform {platform_name}")
+                raise
 
             rom_list = page.get("items", []) if isinstance(page, dict) else page
             for rom in rom_list:

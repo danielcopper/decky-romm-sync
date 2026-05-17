@@ -1231,6 +1231,66 @@ class TestDoSyncPerUnitErrors:
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
     @pytest.mark.asyncio
+    async def test_pagination_failure_does_not_emit_partial_stale_removal(self, plugin):
+        """#630 safety invariant: a fetch_platform_unit failure must NOT trigger
+        the stale-cleanup pass with a partial ROM set.
+
+        Before the fix, ``fetch_platform_unit`` swallowed pagination exceptions
+        and returned ``([], False)``. The orchestrator then ran ``_finalize_per_unit``
+        with ``synced_rom_ids == set()`` and the registry's full ROM list was
+        emitted via ``sync_stale``, which the frontend turned into a wholesale
+        Steam shortcut deletion.
+
+        Now that the fetcher re-raises, the exception hits the outer ``except``
+        in ``_do_sync_per_unit`` BEFORE ``_finalize_per_unit`` runs, so no
+        ``sync_stale`` event is ever emitted.
+        """
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        # Existing registry the frontend would happily delete from if the
+        # orchestrator ever emitted a partial sync_stale.
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "Game A", "platform_name": "N64", "app_id": 1000},
+            "20": {"name": "Game B", "platform_name": "N64", "app_id": 2000},
+            "30": {"name": "Game C", "platform_name": "N64", "app_id": 3000},
+        }
+
+        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        # Mid-pagination failure — the bug scenario from #630.
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(side_effect=RuntimeError("HTTP 500 on page 2"))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+        # Drain any pending tasks scheduled by the outer handler.
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        # The load-bearing assertion: sync_stale must never have been emitted.
+        stale_events = [c for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        assert stale_events == [], (
+            f"Pagination failure leaked a partial sync_stale event: {stale_events}. "
+            "This is the #630 wipe-the-library bug."
+        )
+        # And the registry is untouched — the orchestrator never reaches the
+        # reporter's finalize path when the fetcher raises.
+        assert set(plugin._state["shortcut_registry"].keys()) == {"10", "20", "30"}
+        # The error path was taken instead.
+        error_events = [
+            c
+            for c in decky.emit.call_args_list
+            if c.args and c.args[0] == "sync_progress" and c.args[1].get("phase") == "error"
+        ]
+        assert len(error_events) >= 1
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+
+    @pytest.mark.asyncio
     async def test_cancelling_state_before_first_unit_skips_processing(self, plugin):
         """If state is CANCELLING when the unit loop starts, no units run (lines 462-464)."""
         import decky

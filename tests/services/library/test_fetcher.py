@@ -281,17 +281,35 @@ class TestFullFetchPlatformRoms:
         assert len(all_roms) == 51
 
     @pytest.mark.asyncio
-    async def test_handles_api_error(self, plugin):
+    async def test_raises_on_api_error_to_protect_stale_cleanup(self, plugin):
+        """Pagination failure must propagate — silently returning a partial list
+        would cause the orchestrator's stale-cleanup pass to wipe every ROM the
+        truncated fetch missed. See #630."""
         from unittest.mock import AsyncMock, MagicMock
 
         mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(side_effect=Exception("Server error"))
+        mock_loop.run_in_executor = AsyncMock(side_effect=RuntimeError("Server error"))
         plugin._sync_service._loop = mock_loop
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         all_roms = []
-        await plugin._sync_service._fetcher._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
-        assert len(all_roms) == 0  # gracefully handles error
+        with pytest.raises(RuntimeError, match="Server error"):
+            await plugin._sync_service._fetcher._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
+
+    @pytest.mark.asyncio
+    async def test_raises_on_second_page_failure(self, plugin):
+        """Page 1 OK + page 2 raises must propagate — partial accumulation is unsafe."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        page1 = {"items": [{"id": i, "name": f"G{i}"} for i in range(50)]}
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=[page1, RuntimeError("page 2 boom")])
+        plugin._sync_service._loop = mock_loop
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        all_roms = []
+        with pytest.raises(RuntimeError, match="page 2 boom"):
+            await plugin._sync_service._fetcher._full_fetch_platform_roms(1, "N64", "n64", all_roms, 1, 1)
 
     @pytest.mark.asyncio
     async def test_cancelling_during_fetch(self, plugin):
@@ -601,8 +619,13 @@ class TestFetchPlatformUnit:
             await plugin._sync_service._fetcher.fetch_platform_unit(unit)
 
     @pytest.mark.asyncio
-    async def test_breaks_pagination_on_page_exception(self, plugin):
-        """Lines 501-503: per-page exception logs error and breaks the pagination loop."""
+    async def test_first_page_exception_propagates(self, plugin):
+        """A page-fetch failure must raise so the orchestrator aborts before stale-cleanup.
+
+        Previous behaviour swallowed the exception and returned ``([], False)``
+        — which classified every existing ROM as stale and wiped the Steam
+        shortcut library. See #630.
+        """
         from domain.work_unit import WorkUnit
 
         # No prior sync => incremental skip returns None and we fall through to pagination.
@@ -614,10 +637,26 @@ class TestFetchPlatformUnit:
         plugin._sync_service._loop = mock_loop
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=10)
-        unit_roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+        with pytest.raises(RuntimeError, match="page boom"):
+            await plugin._sync_service._fetcher.fetch_platform_unit(unit)
 
-        assert unit_roms == []
-        assert skipped is False
+    @pytest.mark.asyncio
+    async def test_second_page_exception_propagates(self, plugin):
+        """Page 1 OK + page 2 raises must propagate so partial accumulation never
+        reaches the stale-cleanup pass. See #630."""
+        from domain.work_unit import WorkUnit
+
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
+
+        page1 = {"items": [{"id": i, "name": f"G{i}"} for i in range(50)]}
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=[page1, RuntimeError("page 2 boom")])
+        plugin._sync_service._loop = mock_loop
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=200)
+        with pytest.raises(RuntimeError, match="page 2 boom"):
+            await plugin._sync_service._fetcher.fetch_platform_unit(unit)
 
     @pytest.mark.asyncio
     async def test_paginates_across_multiple_pages(self, plugin):
