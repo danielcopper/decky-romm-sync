@@ -38,8 +38,6 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 9
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -51,9 +49,14 @@ jobs:
           chmod +x /tmp/decky-cli/decky
           echo "/tmp/decky-cli" >> $GITHUB_PATH
 
-      - name: Build plugin
+      - name: Build frontend (no source maps in release zip)
         run: |
-          sudo $(which decky) plugin build -b -o /tmp/output -s directory $GITHUB_WORKSPACE
+          pnpm build
+          rm -f dist/*.map
+
+      - name: Package plugin
+        run: |
+          sudo $(which decky) plugin build -o /tmp/output -s directory $GITHUB_WORKSPACE
           sudo chown -R $(whoami) .
 
       - name: Determine tag name
