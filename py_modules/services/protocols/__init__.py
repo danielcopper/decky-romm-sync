@@ -71,6 +71,7 @@ from services.protocols.paths import (
 from services.protocols.persistence import (
     FirmwareCachePersister,
     MetadataCachePersister,
+    PluginMetadataReader,
     SaveSyncStatePersister,
     SettingsPersister,
     StatePersister,
@@ -118,6 +119,7 @@ __all__ = [
     "MigrationFileAdapter",
     "PathExistsProbe",
     "PendingSyncReader",
+    "PluginMetadataReader",
     "RetroArchConfigReader",
     "RetroArchCoreInfoReader",
     "RetroArchSaveSortingProvider",

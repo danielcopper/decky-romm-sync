@@ -31,6 +31,7 @@ from adapters.persistence import (
     SettingsPersisterAdapter,
     StatePersisterAdapter,
 )
+from adapters.plugin_metadata import PluginMetadataAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
@@ -298,18 +299,6 @@ def bootstrap(
     }
 
 
-def _read_plugin_version(plugin_dir: str) -> str:
-    """Read plugin version from package.json."""
-    import json
-    import os
-
-    try:
-        with open(os.path.join(plugin_dir, "package.json")) as f:
-            return json.load(f).get("version", "0.0.0")
-    except (OSError, json.JSONDecodeError):
-        return "0.0.0"
-
-
 def wire_services(cfg: WiringConfig) -> dict:
     """Create service instances after plugin state is initialised.
 
@@ -329,6 +318,8 @@ def wire_services(cfg: WiringConfig) -> dict:
     # the NameError a bare forward-ref lambda would produce.
     bios_files_index_binding: LateBinding[dict] = LateBinding("bios_files_index")
     pending_sync_binding: LateBinding[dict] = LateBinding("pending_sync")
+
+    plugin_metadata = PluginMetadataAdapter()
 
     # MigrationService is constructed before SaveService so that
     # save_sync_service can receive a bound reference to
@@ -366,7 +357,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         hostname_provider=cfg.runtime.hostname_provider,
         log_debug=cfg.callbacks.log_debug,
         get_core_name=cfg.callbacks.get_core_name,
-        plugin_version=_read_plugin_version(cfg.runtime.plugin_dir),
+        plugin_version=plugin_metadata.read_version(cfg.runtime.plugin_dir),
         emit=cfg.runtime.emit,
         # SaveService must observe fresh sort state before computing saves_dir (#238).
         detect_sort_change=migration_service.detect_save_sort_change,
