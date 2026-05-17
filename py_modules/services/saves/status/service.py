@@ -4,8 +4,6 @@ import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from models.saves import SaveConflict
-
 from domain.emulator_tag import detect_core_change
 from domain.save_attribution import compute_uploaded_by_us
 from domain.save_status import compute_save_sync_display
@@ -177,7 +175,7 @@ class StatusService:
         own_upload_ids: list[int] | None = save_state.own_upload_ids if save_state else None
 
         file_statuses: list[dict] = []
-        conflicts: list[SaveConflict | dict] = []
+        conflicts: list[dict] = []
 
         if info is not None:
             local_outcome, server_only_outcomes = self._partition_outcomes(rom_id, rom_id_str, server_in_slot, info)

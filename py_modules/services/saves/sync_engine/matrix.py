@@ -17,8 +17,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from models.saves import SaveConflict
-
 from domain.emulator_tag import build_emulator_tag
 from domain.save_state import FileSyncState, RomSaveState
 from domain.sync_action import (
@@ -436,7 +434,7 @@ class MatrixExecutor:
         system: str,
         server_saves: list[dict],
         errors: list[str],
-        conflicts: list[SaveConflict | dict],
+        conflicts: list[dict],
     ) -> bool:
         """Execute one ``SyncAction`` outcome. Returns True if a transfer happened.
 
@@ -578,7 +576,7 @@ class MatrixExecutor:
                 server_candidates=group,
             )
 
-    def sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
+    def sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[dict]]:
         """Sync saves for a single ROM.
 
         Drives :meth:`iter_matrix_outcomes` and dispatches each emitted
@@ -616,7 +614,7 @@ class MatrixExecutor:
         )
 
         errors: list[str] = []
-        conflicts: list[SaveConflict | dict] = []
+        conflicts: list[dict] = []
         synced = 0
 
         pending_migration = self._rom_info.is_save_sort_changed()

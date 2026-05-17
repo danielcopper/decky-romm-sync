@@ -19,8 +19,6 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from models.saves import SaveConflict
-
 from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
 from services.saves.sync_engine.devices import DeviceRegistry
 from services.saves.sync_engine.matrix import MatrixExecutor, MatrixOutcome
@@ -147,7 +145,7 @@ class SyncEngine:
     # `self._sync_rom_saves`.
     # ------------------------------------------------------------------
 
-    def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[SaveConflict | dict]]:
+    def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[dict]]:
         """Sync saves for a single ROM (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.sync_rom_saves(rom_id)
 
@@ -440,7 +438,7 @@ class SyncEngine:
 
         total_synced = 0
         total_errors: list[str] = []
-        all_conflicts: list[SaveConflict | dict] = []
+        all_conflicts: list[dict] = []
         rom_count = 0
 
         # Only iterate installed ROMs — non-installed ROMs have no save files
