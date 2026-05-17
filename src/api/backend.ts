@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, RomLookupResult, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse, LaunchVerdict } from "../types";
+import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse, LaunchVerdict } from "../types";
 
 export interface BackendResult {
   success: boolean;
@@ -59,7 +59,6 @@ export const getWhitelistSettings = callable<[], WhitelistSettings>("get_whiteli
 export const updateWhitelistSettings = callable<[string[], string[]], { success: boolean; message?: string }>("update_whitelist_settings");
 
 export const testConnection = callable<[], BackendResult>("test_connection");
-export const getRommVersion = callable<[], { version: string | null }>("get_romm_version");
 export const startSync = callable<[], BackendResult>("start_sync");
 export const cancelSync = callable<[], BackendResult>("cancel_sync");
 export const syncHeartbeat = callable<[], { success: boolean }>("sync_heartbeat");
@@ -72,7 +71,6 @@ export const startDownload = callable<[number], BackendResult>("start_download")
 export const cancelDownload = callable<[number], BackendResult>("cancel_download");
 export const getDownloadQueue = callable<[], { downloads: DownloadItem[] }>("get_download_queue");
 export const getInstalledRom = callable<[number], InstalledRom | null>("get_installed_rom");
-export const getRomBySteamAppId = callable<[number], RomLookupResult | null>("get_rom_by_steam_app_id");
 export const evaluateLaunch = callable<[number], LaunchVerdict>("evaluate_launch");
 export const removeRom = callable<[number], BackendResult>("remove_rom");
 export const getPlatforms = callable<[], { success: boolean; platforms: PlatformSyncSetting[] }>("get_platforms");
@@ -96,7 +94,6 @@ export const verifySgdbApiKey = callable<[string], { success: boolean; message: 
 export const saveSteamInputSetting = callable<[string], { success: boolean }>("save_steam_input_setting");
 export const applySteamInputSetting = callable<[], { success: boolean; message: string }>("apply_steam_input_setting");
 export const getFirmwareStatus = callable<[], FirmwareStatus>("get_firmware_status");
-export const downloadFirmware = callable<[number], FirmwareDownloadResult>("download_firmware");
 export const downloadAllFirmware = callable<[string], FirmwareDownloadResult>("download_all_firmware");
 export const downloadRequiredFirmware = callable<[string], FirmwareDownloadResult>("download_required_firmware");
 export const checkPlatformBios = callable<[string], BiosStatus>("check_platform_bios");
@@ -108,7 +105,6 @@ export const getBiosStatus = callable<
     bios_label: string | null;
   }
 >("get_bios_status");
-export const getAvailableCores = callable<[string], { cores: AvailableCore[]; active_core: string | null; active_core_label: string | null }>("get_available_cores");
 export const setSystemCore = callable<[string, string], { success: boolean; message?: string; bios_status?: BiosStatus }>("set_system_core");
 export const setGameCore = callable<[string, string, string], { success: boolean; message?: string; bios_status?: BiosStatus }>("set_game_core");
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
@@ -156,7 +152,6 @@ export interface ListDevicesResponse {
 export const listDevices = callable<[], ListDevicesResponse>("list_devices");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
 export const preLaunchSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[] }>("pre_launch_sync");
-export const postExitSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[]; offline?: boolean }>("post_exit_sync");
 export const syncRomSaves = callable<[number], { success: boolean; message: string; synced: number; errors?: string[] }>("sync_rom_saves");
 export const syncAllSaves = callable<[], { success: boolean; message: string; synced: number; conflicts: number }>("sync_all_saves");
 export const resolveSyncConflict = callable<
@@ -164,7 +159,6 @@ export const resolveSyncConflict = callable<
   { success: boolean; message?: string; error_code?: "stale_conflict"; action?: "keep_local" | "use_server" }
 >("resolve_sync_conflict");
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
-export const recordSessionEnd = callable<[number], { success: boolean; duration_sec?: number; total_seconds?: number; session_count?: number; message?: string }>("record_session_end");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");
 export const updateSaveSyncSettings = callable<[SaveSyncSettings], { success: boolean }>("update_save_sync_settings");
 export const getSaveSlots = callable<[number], { success: boolean; slots: SaveSlotSummary[]; active_slot: string }>("get_save_slots");
@@ -311,4 +305,3 @@ export const savesRollbackToVersion = callable<[number, string, number], Rollbac
 // Achievements callables
 export const getAchievements = callable<[number], AchievementList>("get_achievements");
 export const getAchievementProgress = callable<[number], AchievementProgress>("get_achievement_progress");
-export const syncAchievementsAfterSession = callable<[number], AchievementProgress>("sync_achievements_after_session");

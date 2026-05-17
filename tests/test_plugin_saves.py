@@ -312,7 +312,7 @@ class TestPostExitSync:
         """Returns early when sync_after_exit is false."""
         plugin._save_sync_state.settings.sync_after_exit = False
 
-        result = await plugin.post_exit_sync(42)
+        result = await plugin._save_sync_service.post_exit_sync(42)
 
         assert result["synced"] == 0
         assert "disabled" in result["message"].lower()
@@ -367,7 +367,7 @@ class TestPostExitSync:
         prev_save_path = tmp_path / "retrodeck" / "saves" / "gba" / "pokemon.srm"
         assert not prev_save_path.exists()
 
-        result = await plugin.post_exit_sync(42)
+        result = await plugin._save_sync_service.post_exit_sync(42)
 
         assert result["success"] is True
         # No download happened (Rule 2 skipped server_only).
@@ -467,7 +467,7 @@ class TestPostExitSync:
         prev_save_path = tmp_path / "retrodeck" / "saves" / "gba" / "pokemon.srm"
         assert not prev_save_path.exists()
 
-        result = await plugin.post_exit_sync(42)
+        result = await plugin._save_sync_service.post_exit_sync(42)
 
         assert result["success"] is True
 
@@ -527,7 +527,7 @@ class TestPlaytimeTracking:
             last_session_start=start_time.isoformat(),
         )
 
-        result = await plugin.record_session_end(42)
+        result = await plugin._playtime_service.record_session_end(42)
 
         assert result["success"] is True
         assert result["duration_sec"] >= 590  # ~600s minus execution time
@@ -543,7 +543,7 @@ class TestPlaytimeTracking:
             last_session_start=start_time.isoformat(),
         )
 
-        await plugin.record_session_end(42)
+        await plugin._playtime_service.record_session_end(42)
 
         total = plugin._save_sync_state.playtime["42"].total_seconds
         assert total >= 1290  # 1000 + ~300
@@ -557,14 +557,14 @@ class TestPlaytimeTracking:
             last_session_start=start_time.isoformat(),
         )
 
-        result = await plugin.record_session_end(42)
+        result = await plugin._playtime_service.record_session_end(42)
 
         assert result["session_count"] == 6
 
     @pytest.mark.asyncio
     async def test_end_without_start(self, plugin):
         """record_session_end without active session returns failure."""
-        result = await plugin.record_session_end(42)
+        result = await plugin._playtime_service.record_session_end(42)
 
         assert result["success"] is False
 
@@ -576,7 +576,7 @@ class TestPlaytimeTracking:
             last_session_start=start_time.isoformat(),
         )
 
-        await plugin.record_session_end(42)
+        await plugin._playtime_service.record_session_end(42)
 
         assert plugin._save_sync_state.playtime["42"].last_session_start is None
 
@@ -599,7 +599,7 @@ class TestPlaytimeTracking:
             ).items()
         }
 
-        result = await plugin.record_session_end(42)
+        result = await plugin._playtime_service.record_session_end(42)
 
         assert result["duration_sec"] <= 86400  # 24h max
 
@@ -794,7 +794,7 @@ class TestSaveSyncFeatureFlag:
     async def test_post_exit_sync_disabled(self, plugin):
         """post_exit_sync skips when save sync disabled."""
         plugin._save_sync_state.settings.save_sync_enabled = False
-        result = await plugin.post_exit_sync(42)
+        result = await plugin._save_sync_service.post_exit_sync(42)
         assert result["success"] is True
         assert result["synced"] == 0
         assert "disabled" in result["message"].lower()

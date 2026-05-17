@@ -876,20 +876,6 @@ class TestVersionDetection:
         plugin._romm_api.set_version.assert_called_with(None)
 
     @pytest.mark.asyncio
-    async def test_get_romm_version_returns_cached(self, plugin):
-        """get_romm_version returns the last detected version."""
-        plugin._romm_api.get_version.return_value = "4.8.1"
-        result = await plugin.get_romm_version()
-        assert result == {"version": "4.8.1"}
-
-    @pytest.mark.asyncio
-    async def test_get_romm_version_returns_none_before_connect(self, plugin):
-        """get_romm_version returns None before any connection."""
-        plugin._romm_api.get_version.return_value = None
-        result = await plugin.get_romm_version()
-        assert result == {"version": None}
-
-    @pytest.mark.asyncio
     async def test_timeout_error(self, plugin):
         """Returns timeout_error on request timeout."""
         import asyncio

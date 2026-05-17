@@ -49,7 +49,6 @@ def plugin():
     p._playtime_service = MagicMock()
     p._launch_gate_service = MagicMock()
     p._session_lifecycle_service = MagicMock()
-    p._romm_api = MagicMock()
     return p
 
 
@@ -144,13 +143,6 @@ class TestConnectionCallableDelegation:
         plugin._connection_service.test_connection.assert_awaited_once_with()
         assert result == {"success": True}
 
-    @pytest.mark.asyncio
-    async def test_get_romm_version_delegates(self, plugin):
-        plugin._romm_api.get_version.return_value = "4.8.1"
-        result = await plugin.get_romm_version()
-        plugin._romm_api.get_version.assert_called_once_with()
-        assert result == {"version": "4.8.1"}
-
 
 # ── Migration callables ────────────────────────────────────────────────
 
@@ -204,13 +196,6 @@ class TestMigrationCallableDelegation:
 
 class TestCoreCallableDelegation:
     @pytest.mark.asyncio
-    async def test_get_available_cores_delegates(self, plugin):
-        plugin._core_service.get_available_cores = AsyncMock(return_value=["core_a"])
-        result = await plugin.get_available_cores("snes")
-        plugin._core_service.get_available_cores.assert_awaited_once_with("snes")
-        assert result == ["core_a"]
-
-    @pytest.mark.asyncio
     async def test_set_system_core_delegates(self, plugin):
         plugin._core_service.set_system_core = AsyncMock(return_value={"success": True})
         result = await plugin.set_system_core("snes", "core_a")
@@ -232,13 +217,6 @@ class TestFirmwareCallableDelegation:
         result = await plugin.get_firmware_status()
         plugin._firmware_service.get_firmware_status.assert_awaited_once_with()
         assert result == {"items": []}
-
-    @pytest.mark.asyncio
-    async def test_download_firmware_delegates(self, plugin):
-        plugin._firmware_service.download_firmware = AsyncMock(return_value={"success": True})
-        result = await plugin.download_firmware(42)
-        plugin._firmware_service.download_firmware.assert_awaited_once_with(42)
-        assert result == {"success": True}
 
     @pytest.mark.asyncio
     async def test_download_all_firmware_delegates(self, plugin):
@@ -394,13 +372,6 @@ class TestLibrarySyncCallableDelegation:
         result = await plugin.get_sync_stats()
         plugin._sync_service.get_sync_stats.assert_called_once_with()
         assert result == {"roms": 5}
-
-    @pytest.mark.asyncio
-    async def test_get_rom_by_steam_app_id_delegates(self, plugin):
-        plugin._sync_service.get_rom_by_steam_app_id.return_value = {"id": 42}
-        result = await plugin.get_rom_by_steam_app_id(12345)
-        plugin._sync_service.get_rom_by_steam_app_id.assert_called_once_with(12345)
-        assert result == {"id": 42}
 
 
 class TestShortcutRemovalCallableDelegation:
@@ -684,13 +655,6 @@ class TestAchievementsCallableDelegation:
         plugin._achievements_service.get_achievement_progress.assert_awaited_once_with(42)
         assert result == {"completed": 0}
 
-    @pytest.mark.asyncio
-    async def test_sync_achievements_after_session_delegates(self, plugin):
-        plugin._achievements_service.sync_achievements_after_session = AsyncMock(return_value={"synced": True})
-        result = await plugin.sync_achievements_after_session(42)
-        plugin._achievements_service.sync_achievements_after_session.assert_awaited_once_with(42)
-        assert result == {"synced": True}
-
 
 class TestGameDetailCallableDelegation:
     @pytest.mark.asyncio
@@ -739,12 +703,6 @@ class TestCallableErrorPropagation:
         plugin._migration_service.migrate_retrodeck_files = AsyncMock(side_effect=OSError("io"))
         with pytest.raises(OSError, match="io"):
             await plugin.migrate_retrodeck_files()
-
-    @pytest.mark.asyncio
-    async def test_get_available_cores_propagates(self, plugin):
-        plugin._core_service.get_available_cores = AsyncMock(side_effect=RuntimeError("boom"))
-        with pytest.raises(RuntimeError, match="boom"):
-            await plugin.get_available_cores("snes")
 
     @pytest.mark.asyncio
     async def test_get_firmware_status_propagates(self, plugin):

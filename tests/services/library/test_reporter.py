@@ -203,7 +203,7 @@ class TestGetRomBySteamAppId:
             "rom_id": 42,
             "file_path": "/roms/n64/zelda.z64",
         }
-        result = await plugin.get_rom_by_steam_app_id(100001)
+        result = plugin._sync_service.get_rom_by_steam_app_id(100001)
         assert result is not None
         assert result["rom_id"] == 42
         assert result["name"] == "Zelda"
@@ -211,7 +211,7 @@ class TestGetRomBySteamAppId:
 
     @pytest.mark.asyncio
     async def test_returns_none_for_unknown(self, plugin):
-        result = await plugin.get_rom_by_steam_app_id(999999)
+        result = plugin._sync_service.get_rom_by_steam_app_id(999999)
         assert result is None
 
 

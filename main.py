@@ -214,10 +214,6 @@ class Plugin:
     async def test_connection(self):
         return await self._connection_service.test_connection()
 
-    async def get_romm_version(self):
-        """Return cached RomM version (detected on last test_connection or device probe)."""
-        return {"version": self._romm_api.get_version()}
-
     async def save_settings(self, romm_url, romm_user, romm_pass, allow_insecure_ssl=None):
         return self._settings_service.save_settings(romm_url, romm_user, romm_pass, allow_insecure_ssl)
 
@@ -251,9 +247,6 @@ class Plugin:
     async def get_cached_game_detail(self, app_id):
         return self._game_detail_service.get_cached_game_detail(app_id)
 
-    async def get_available_cores(self, platform_slug):
-        return await self._core_service.get_available_cores(platform_slug)
-
     @migration_blocked
     async def set_system_core(self, platform_slug, core_label):
         return await self._core_service.set_system_core(platform_slug, core_label)
@@ -266,10 +259,6 @@ class Plugin:
 
     async def get_firmware_status(self):
         return await self._firmware_service.get_firmware_status()
-
-    @migration_blocked
-    async def download_firmware(self, firmware_id):
-        return await self._firmware_service.download_firmware(firmware_id)
 
     @migration_blocked
     async def download_all_firmware(self, platform_slug):
@@ -370,9 +359,6 @@ class Plugin:
     async def get_sync_stats(self):
         return self._sync_service.get_sync_stats()
 
-    async def get_rom_by_steam_app_id(self, app_id):
-        return self._sync_service.get_rom_by_steam_app_id(app_id)
-
     async def evaluate_launch(self, steam_app_id):
         verdict = await self._launch_gate_service.evaluate(int(steam_app_id))
         return asdict(verdict)
@@ -425,10 +411,6 @@ class Plugin:
     @migration_blocked
     async def pre_launch_sync(self, rom_id):
         return await self._save_sync_service.pre_launch_sync(rom_id)
-
-    @migration_blocked
-    async def post_exit_sync(self, rom_id):
-        return await self._save_sync_service.post_exit_sync(rom_id)
 
     @migration_blocked
     async def sync_rom_saves(self, rom_id):
@@ -494,9 +476,6 @@ class Plugin:
     async def record_session_start(self, rom_id):
         return self._playtime_service.record_session_start(rom_id)
 
-    async def record_session_end(self, rom_id):
-        return await self._playtime_service.record_session_end(rom_id)
-
     async def get_server_playtime(self, rom_id):
         return await self._playtime_service.get_server_playtime(rom_id)
 
@@ -535,6 +514,3 @@ class Plugin:
 
     async def get_achievement_progress(self, rom_id):
         return await self._achievements_service.get_achievement_progress(rom_id)
-
-    async def sync_achievements_after_session(self, rom_id):
-        return await self._achievements_service.sync_achievements_after_session(rom_id)
