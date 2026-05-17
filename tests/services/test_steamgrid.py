@@ -821,3 +821,293 @@ class TestDebugLoggerProtocolSeam:
             "SGDB debug must NOT leak to logger.info — the injected "
             f"DebugLogger is the only sink. Observed leaks: {sgdb_info_calls}"
         )
+
+
+class TestGetSgdbGameId:
+    """SGDB IGDB-lookup error paths in ``_get_sgdb_game_id``.
+
+    Covers the response-shape branches and the ``except Exception`` net
+    that protects the artwork pipeline from a transient SGDB outage.
+    """
+
+    def test_returns_id_on_success(self, plugin):
+        plugin._sgdb_service._sgdb_api.request.return_value = {
+            "success": True,
+            "data": {"id": 9999},
+        }
+
+        result = plugin._sgdb_service._get_sgdb_game_id(1234)
+
+        assert result == 9999
+        plugin._sgdb_service._sgdb_api.request.assert_called_once_with("/games/igdb/1234")
+
+    def test_returns_none_when_success_false(self, plugin):
+        """SGDB body with success=False (e.g. unknown IGDB id) → None."""
+        plugin._sgdb_service._sgdb_api.request.return_value = {
+            "success": False,
+            "data": {"id": 9999},
+        }
+
+        assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
+
+    def test_returns_none_when_data_missing(self, plugin):
+        """SGDB body lacking ``data`` (malformed) → None."""
+        plugin._sgdb_service._sgdb_api.request.return_value = {"success": True}
+
+        assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
+
+    def test_returns_none_when_response_is_none(self, plugin):
+        """Adapter returns ``None`` (e.g. empty body) → None."""
+        plugin._sgdb_service._sgdb_api.request.return_value = None
+
+        assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
+
+    def test_sgdb_api_error_swallowed(self, plugin):
+        """``SgdbApiError`` (4xx/5xx) is logged and swallowed → None."""
+        plugin._sgdb_service._sgdb_api.request.side_effect = SgdbApiError(503, "Service Unavailable")
+
+        assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
+
+    def test_network_error_swallowed(self, plugin):
+        """Connection-level errors are logged and swallowed → None."""
+        plugin._sgdb_service._sgdb_api.request.side_effect = ConnectionError("connection refused")
+
+        assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
+
+
+class TestDownloadSgdbArtwork:
+    """SGDB artwork-download error paths in ``_download_sgdb_artwork``.
+
+    Covers the unsupported-asset-type early exit, the cache-hit short
+    circuit, every malformed-response branch (success=False, data
+    missing, body None), the image-download failure return, and the
+    ``except Exception`` net.
+    """
+
+    def test_unsupported_asset_type_returns_none(self, plugin):
+        """Unknown asset type → early ``None`` (no SGDB request issued)."""
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "no-such-asset-type")
+
+        assert result is None
+        plugin._sgdb_service._sgdb_api.request.assert_not_called()
+
+    def test_cache_hit_short_circuits(self, plugin, sgdb_artwork_cache):
+        """Pre-existing cache file → return cached path, no network call."""
+        cached = _cached_path(sgdb_artwork_cache, 42, "hero")
+        sgdb_artwork_cache.files[cached] = b"already cached"
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result == cached
+        plugin._sgdb_service._sgdb_api.request.assert_not_called()
+
+    def test_success_false_returns_none(self, plugin):
+        """SGDB body with ``success=False`` → None."""
+        plugin._sgdb_service._sgdb_api.request.return_value = {
+            "success": False,
+            "data": [{"url": "https://example.com/hero.png"}],
+        }
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result is None
+        plugin._sgdb_service._sgdb_api.download_image.assert_not_called()
+
+    def test_empty_data_returns_none(self, plugin):
+        """SGDB body with empty ``data`` list → None (falsy short-circuit)."""
+        plugin._sgdb_service._sgdb_api.request.return_value = {"success": True, "data": []}
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result is None
+        plugin._sgdb_service._sgdb_api.download_image.assert_not_called()
+
+    def test_none_response_returns_none(self, plugin):
+        """Adapter returns ``None`` → None (no image download)."""
+        plugin._sgdb_service._sgdb_api.request.return_value = None
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result is None
+        plugin._sgdb_service._sgdb_api.download_image.assert_not_called()
+
+    def test_download_image_failure_returns_none(self, plugin):
+        """``download_image`` returns False (e.g. 5xx on CDN) → None."""
+        plugin._sgdb_service._sgdb_api.request.return_value = {
+            "success": True,
+            "data": [{"url": "https://example.com/hero.png"}],
+        }
+        plugin._sgdb_service._sgdb_api.download_image.return_value = False
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result is None
+
+    def test_sgdb_api_error_swallowed(self, plugin):
+        """``SgdbApiError`` raised by ``request`` is logged and swallowed."""
+        plugin._sgdb_service._sgdb_api.request.side_effect = SgdbApiError(500, "Internal Server Error")
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result is None
+
+    def test_malformed_data_key_error_swallowed(self, plugin):
+        """Missing ``url`` in data entry → ``KeyError`` is logged and swallowed."""
+        plugin._sgdb_service._sgdb_api.request.return_value = {
+            "success": True,
+            "data": [{"id": 1}],  # no 'url' key
+        }
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result is None
+
+    def test_network_error_during_download_swallowed(self, plugin):
+        """Connection-level error from ``download_image`` is swallowed."""
+        plugin._sgdb_service._sgdb_api.request.return_value = {
+            "success": True,
+            "data": [{"url": "https://example.com/hero.png"}],
+        }
+        plugin._sgdb_service._sgdb_api.download_image.side_effect = ConnectionError("connection refused")
+
+        result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
+
+        assert result is None
+
+
+class TestReadFileAsBase64:
+    """``_read_file_as_base64`` exception branch.
+
+    The happy path is already exercised by ``TestGetSgdbArtworkBase64``;
+    this class pins the ``except Exception`` net that turns a cache-read
+    failure (corrupt file, permissions error, vanished file) into a
+    ``None`` return instead of bubbling the exception to the frontend.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_read_fails(self, plugin, sgdb_artwork_cache):
+        """``read_bytes`` raising → ``None`` (frontend sees no artwork)."""
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        def raising_read(_path: str) -> bytes:
+            raise OSError("permission denied")
+
+        sgdb_artwork_cache.read_bytes = raising_read  # type: ignore[method-assign]
+
+        result = await plugin._sgdb_service._read_file_as_base64("/runtime/artwork/42_hero.png")
+
+        assert result is None
+
+
+class TestSaveSgdbApiKey:
+    """``save_sgdb_api_key`` happy / masked / empty paths.
+
+    The callable stores a real key and ignores the masked sentinel (set
+    by the frontend modal when the user leaves the input untouched) and
+    the empty string (no input given).
+    """
+
+    def test_stores_real_key(self, plugin):
+        """Real key → persisted to settings and ``save_settings`` invoked."""
+        persister = FakeSettingsPersister()
+        plugin._sgdb_service._settings_persister = persister
+
+        result = plugin._sgdb_service.save_sgdb_api_key("real-api-key-123")
+
+        assert result == {"success": True, "message": "SteamGridDB API key saved"}
+        assert plugin.settings["steamgriddb_api_key"] == "real-api-key-123"
+        assert persister.save_count == 1
+
+    def test_ignores_masked_sentinel(self, plugin):
+        """Masked value ``••••`` → no settings mutation, no persister call."""
+        plugin.settings["steamgriddb_api_key"] = "existing-key"
+        persister = FakeSettingsPersister()
+        plugin._sgdb_service._settings_persister = persister
+
+        result = plugin._sgdb_service.save_sgdb_api_key("••••")
+
+        assert result == {"success": True, "message": "SteamGridDB API key saved"}
+        assert plugin.settings["steamgriddb_api_key"] == "existing-key"
+        assert persister.save_count == 0
+
+    def test_ignores_empty_string(self, plugin):
+        """Empty input → no settings mutation, no persister call."""
+        persister = FakeSettingsPersister()
+        plugin._sgdb_service._settings_persister = persister
+
+        result = plugin._sgdb_service.save_sgdb_api_key("")
+
+        assert result == {"success": True, "message": "SteamGridDB API key saved"}
+        assert "steamgriddb_api_key" not in plugin.settings
+        assert persister.save_count == 0
+
+
+class TestPruneOrphanedArtworkCacheEdgeCases:
+    """Edge-case branches in ``prune_orphaned_artwork_cache``.
+
+    Complements ``TestPruneOrphanedArtworkCache`` by covering the OSError
+    branch for ``.tmp`` removal and filename shapes that have no rom_id
+    prefix.
+    """
+
+    def test_tmp_remove_oserror_logged_not_crash(self, plugin, sgdb_artwork_cache):
+        """OSError when removing a stale ``.tmp`` file is logged, not raised."""
+        tmp_path = _cached_path(sgdb_artwork_cache, 42, "hero") + ".tmp"
+        sgdb_artwork_cache.files[tmp_path] = b"tmp data"
+
+        plugin._state["shortcut_registry"] = {"42": {"app_id": 1}}
+
+        def raising_remove(_path: str) -> None:
+            raise OSError("permission denied")
+
+        sgdb_artwork_cache.remove = raising_remove  # type: ignore[method-assign]
+
+        # Should not crash
+        plugin._sgdb_service.prune_orphaned_artwork_cache()
+
+        # File still present (remove was patched to fail)
+        assert tmp_path in sgdb_artwork_cache.files
+
+
+class TestSaveIconVdfFailure:
+    """``_save_icon_to_grid`` VDF-update failure path.
+
+    The icon write is the primary success criterion: if the VDF read or
+    write fails after a successful PNG write, the function logs but
+    still returns True (icon-on-disk is the source of truth; the VDF
+    field is a best-effort optimisation).
+    """
+
+    def test_vdf_read_failure_still_returns_true(self, plugin, tmp_path):
+        """OSError on ``read_shortcuts`` → icon saved, function returns True."""
+
+        def fake_write_icon(app_id, _bytes):
+            return os.path.join(str(tmp_path), f"{app_id}_icon.png")
+
+        def raising_read():
+            raise OSError("vdf corrupted")
+
+        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
+        plugin._steam_config.read_shortcuts = raising_read  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = lambda _data: None  # type: ignore[method-assign]
+
+        result = plugin._sgdb_service._save_icon_to_grid(12345, b"icon data")
+
+        assert result is True
+
+    def test_vdf_write_failure_still_returns_true(self, plugin, tmp_path):
+        """OSError on ``write_shortcuts`` → icon saved, function returns True."""
+
+        def fake_write_icon(app_id, _bytes):
+            return os.path.join(str(tmp_path), f"{app_id}_icon.png")
+
+        def raising_write(_data):
+            raise OSError("disk full")
+
+        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
+        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = raising_write  # type: ignore[method-assign]
+
+        result = plugin._sgdb_service._save_icon_to_grid(12345, b"icon data")
+
+        assert result is True
