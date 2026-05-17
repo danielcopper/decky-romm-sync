@@ -569,6 +569,7 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(#617): debounce or defer initial loads
     refreshPlatforms();
     loadNonSteamApps();
     getWhitelistSettings().then((s) => {

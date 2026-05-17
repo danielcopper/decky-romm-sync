@@ -860,6 +860,7 @@ const SlotPanel: FC<SlotPanelProps> = ({
   if (expanded) {
     bodyChildren = isActive
       ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored)
+      // eslint-disable-next-line react-hooks/refs -- TODO(#617): refactor sub-panel as component during #613 SavesTab decomposition
       : renderInactiveSlotBody({ loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting });
   }
 
@@ -1079,6 +1080,7 @@ export const SavesTab: FC<SavesTabProps> = ({
 
     // New Slot button + error feedback
     createElement("div", { key: "new-slot-area", style: { marginTop: "10px" } },
+      // eslint-disable-next-line react-hooks/refs -- TODO(#617): drop DialogButton-as-any cast, type properly during #613
       createElement(DialogButton as any, {
         key: "new-slot-btn",
         style: {

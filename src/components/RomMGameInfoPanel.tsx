@@ -884,7 +884,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       const makeHcSparkles = (seed: number) => {
         // Simple deterministic pseudo-random from seed
         const rng = (i: number) => {
-          let x = Math.sin(seed * 9301 + i * 4973) * 49297;
+          const x = Math.sin(seed * 9301 + i * 4973) * 49297;
           return x - Math.floor(x);
         };
         // 4 sparkles, positions along edges/corners with some spread outside

@@ -149,6 +149,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   useEffect(() => {
     if (activeTab === "bios" && !biosLoaded.current) {
       biosLoaded.current = true;
+      // eslint-disable-next-line react-hooks/immutability -- TODO(#617): hoist refreshBios as function decl or move call after definition
       refreshBios();
     }
   }, [activeTab]);

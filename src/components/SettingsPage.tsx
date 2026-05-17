@@ -166,6 +166,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
               }
             })
             .catch(() => {});
+          // eslint-disable-next-line react-hooks/immutability -- TODO(#617): hoist loadDevices to function decl during #615 decomposition
           loadDevices();
         }
       })

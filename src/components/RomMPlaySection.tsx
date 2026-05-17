@@ -694,6 +694,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           }));
         }
         // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)
+        // eslint-disable-next-line react-hooks/immutability -- TODO(#617): replace mutable cache with a setState-backed cache
         delete (_cachedGameDetailCache as Record<number, unknown>)[appId];
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: info.platformSlug } }));
       } else {

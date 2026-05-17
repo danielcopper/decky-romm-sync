@@ -18,7 +18,7 @@ import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 
-declare var Router: {
+declare let Router: {
   MainRunningApp: { appid: number; display_name: string } | null;
 };
 
@@ -28,7 +28,6 @@ const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 let activeRomId: number | null = null;
 let sessionStartTime: number | null = null;
 let suspendedAt: number | null = null;
-let totalPausedMs = 0;
 
 // Serialization chain — ensures lifecycle events don't interleave
 let lifecycleChain: Promise<void> = Promise.resolve();

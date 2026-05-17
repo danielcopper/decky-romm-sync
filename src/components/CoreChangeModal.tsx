@@ -45,7 +45,7 @@ const CoreChangeModalContent: FC<CoreChangeModalProps> = ({ oldLabel, newLabel, 
           </div>
           <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)", lineHeight: "1.4" }}>
             Some emulator cores use incompatible save formats. Continuing may
-            overwrite your existing saves with data the previous core can't read.
+            overwrite your existing saves with data the previous core can&apos;t read.
           </div>
         </div>
 

@@ -192,6 +192,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // Check if a sync is already in progress (handles QAM close/reopen)
     const progress = getSyncProgress();
     if (progress.running) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(#617): re-mount sync state recovery to avoid cascading renders
       setSyncing(true);
       setLoading(true);
       setSyncProgress(progress);
