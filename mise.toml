@@ -8,7 +8,7 @@ _.python.venv = { path = ".venv", create = true }
 
 [tasks.setup]
 description = "Install JS and Python dependencies"
-run = ["pnpm install", "pip install pytest pytest-asyncio pytest-cov import-linter ruff basedpyright", "git config core.hooksPath .githooks"]
+run = ["pnpm install", "pip install -r requirements-dev.txt", "git config core.hooksPath .githooks"]
 
 [tasks.build]
 description = "Build frontend"

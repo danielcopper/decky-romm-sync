@@ -18,9 +18,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Install Python test dependencies
-        run: pip install pytest pytest-asyncio pytest-cov
+        run: pip install -r requirements-dev.txt
 
       - name: Run tests with coverage
         run: python -m pytest tests/ -q --cov=py_modules --cov=main --cov-report=xml --cov-branch
@@ -36,13 +38,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -58,9 +62,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Install lint dependencies
-        run: pip install import-linter ruff basedpyright
+        run: pip install -r requirements-dev.txt
 
       - name: Ruff check
         run: ruff check .
