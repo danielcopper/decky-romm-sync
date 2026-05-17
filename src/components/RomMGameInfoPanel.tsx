@@ -333,7 +333,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         setState((prev) => ({ ...prev, installed: false, installedRom: null }));
       }
     };
-    window.addEventListener("romm_rom_uninstalled", onUninstall);
+    globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
@@ -408,19 +408,19 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`);
       }
     };
-    window.addEventListener("romm_data_changed", onDataChanged);
+    globalThis.addEventListener("romm_data_changed", onDataChanged);
 
     const onTabSwitch = (e: Event) => {
       const tab = (e as CustomEvent).detail?.tab;
       if (tab) setState((prev) => ({ ...prev, activeTab: tab }));
     };
-    window.addEventListener("romm_tab_switch", onTabSwitch);
+    globalThis.addEventListener("romm_tab_switch", onTabSwitch);
 
     return () => {
       cancelled = true;
-      window.removeEventListener("romm_rom_uninstalled", onUninstall);
-      window.removeEventListener("romm_data_changed", onDataChanged);
-      window.removeEventListener("romm_tab_switch", onTabSwitch);
+      globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
+      globalThis.removeEventListener("romm_data_changed", onDataChanged);
+      globalThis.removeEventListener("romm_tab_switch", onTabSwitch);
     };
   }, [appId]);
 

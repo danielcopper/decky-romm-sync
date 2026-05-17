@@ -10,7 +10,7 @@ let registeredAppIds: Set<number> = new Set();
  * Wrap MobX state mutations so Steam's observable stores allow changes.
  */
 function stateTransaction<T>(block: () => T): T {
-  const globals = (window as any).__mobxGlobals;
+  const globals = (globalThis as any).__mobxGlobals;
   if (!globals) return block();
   const prev = globals.allowStateChanges;
   globals.allowStateChanges = true;

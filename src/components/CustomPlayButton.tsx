@@ -206,7 +206,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
       setState((prev) => prev === "uninstalling" ? prev : "download");
       setActionPending(false);
     };
-    window.addEventListener("romm_rom_uninstalled", onUninstall);
+    globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
 
     // Listen for save sync updates (e.g. background check found a conflict)
     const onDataChanged = (e: Event) => {
@@ -221,20 +221,20 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
         });
       }
     };
-    window.addEventListener("romm_data_changed", onDataChanged);
+    globalThis.addEventListener("romm_data_changed", onDataChanged);
 
     const onConnectionChanged = (e: Event) => {
       const connState = (e as CustomEvent).detail?.state;
       setIsOffline(connState === "offline");
     };
-    window.addEventListener("romm_connection_changed", onConnectionChanged);
+    globalThis.addEventListener("romm_connection_changed", onConnectionChanged);
 
     return () => {
       removeEventListener("download_progress", progressListener);
       removeEventListener("download_complete", completeListener);
-      window.removeEventListener("romm_rom_uninstalled", onUninstall);
-      window.removeEventListener("romm_data_changed", onDataChanged);
-      window.removeEventListener("romm_connection_changed", onConnectionChanged);
+      globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
+      globalThis.removeEventListener("romm_data_changed", onDataChanged);
+      globalThis.removeEventListener("romm_connection_changed", onConnectionChanged);
     };
   }, []);
 

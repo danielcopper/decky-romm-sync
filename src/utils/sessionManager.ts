@@ -109,7 +109,7 @@ async function handleGameStop(): Promise<void> {
     // Save-sync event dispatch — fires for offline OR success (pre-PR parity:
     // offline branch dispatched, success branch dispatched, failure did not).
     if (result.sync.offline || result.sync.success) {
-      window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
+      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
     }
 
     // Additive conflicts toast — backend renders the count string.

@@ -141,7 +141,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
           try {
             const result = await deletePlatformSaves(p.slug);
             setActionStatus(result.message);
-            window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
+            globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
           } catch {
             setActionStatus("Failed to delete saves");
           }

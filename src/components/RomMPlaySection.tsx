@@ -432,11 +432,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
       }
     };
-    window.addEventListener("romm_data_changed", onDataChanged);
+    globalThis.addEventListener("romm_data_changed", onDataChanged);
 
     return () => {
       cancelled = true;
-      window.removeEventListener("romm_data_changed", onDataChanged);
+      globalThis.removeEventListener("romm_data_changed", onDataChanged);
     };
   }, [appId]);
 
@@ -540,7 +540,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
     try {
       await getRomMetadata(info.romId);
       toaster.toast({ title: "RomM Sync", body: "Metadata refreshed" });
-      window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: info.romId } }));
+      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: info.romId } }));
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Failed to refresh metadata" });
     } finally {
@@ -566,7 +566,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         }
         if (c > 0) label += `, ${c} conflict(s) need resolution`;
         toaster.toast({ title: "RomM Sync", body: `Saves synced (${label})` });
-        window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: info.romId } }));
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: info.romId } }));
         // Refresh save sync status — last_sync_check_at was just set by the backend
         setInfo((prev) => ({ ...prev, saveSyncStatus: "synced" as const, saveSyncLabel: "Just now" }));
       } else {
@@ -586,7 +586,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
       const result = await downloadAllFirmware(info.platformSlug);
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `BIOS downloaded (${result.downloaded ?? 0} files)` });
-        window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: info.platformSlug } }));
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: info.platformSlug } }));
         // Refresh BIOS status — getBiosStatus ships pre-computed level/label so we don't re-derive.
         if (info.romId) {
           const refreshed = await getBiosStatus(info.romId).catch(() => ({
@@ -618,7 +618,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
     try {
       const result = await removeRom(info.romId);
       if (result.success) {
-        window.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: info.romId } }));
+        globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: info.romId } }));
         toaster.toast({ title: "RomM Sync", body: `${info.romName || "ROM"} uninstalled` });
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Uninstall failed" });
@@ -647,7 +647,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
               toaster.toast({ title: "RomM Sync", body: result.message });
               // Directly update PlaySection status — no local saves remain
               setInfo((prev) => ({ ...prev, saveSyncStatus: "none" as const, saveSyncLabel: "No saves" }));
-              window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
+              globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
             } else {
               toaster.toast({ title: "RomM Sync", body: result.message || "Failed to delete saves" });
             }
@@ -694,7 +694,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         }
         // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)
         delete (_cachedGameDetailCache as Record<number, unknown>)[appId];
-        window.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: info.platformSlug } }));
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: info.platformSlug } }));
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
       }
@@ -831,7 +831,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         key: "achievements",
         className: "romm-info-item romm-cheevo-badge",
         onClick: () => {
-          window.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
         },
       },
         createElement("div", { className: "romm-info-header" }, "ACHIEVEMENTS"),
@@ -874,7 +874,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         key: "bios",
         className: "romm-info-item",
         onClick: () => {
-          window.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         },
         style: { cursor: "pointer" },
       },
