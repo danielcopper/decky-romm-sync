@@ -349,23 +349,27 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
     const handleSaveSyncSettingsChange = async (detail: any) => {
       const enabled = detail.save_sync_enabled;
-      if (enabled) {
-        const updatedStatus = await getSaveStatus(romIdRef.current!).catch((): SaveStatus | null => null);
-        const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
-        setState((prev) => ({
-          ...prev,
-          saveSyncEnabled: true,
-          saveStatus: updatedStatus,
-          conflicts,
-        }));
-      } else {
+      if (!enabled) {
         setState((prev) => ({ ...prev, saveSyncEnabled: false }));
+        return;
       }
+      const romId = romIdRef.current;
+      if (!romId) return;
+      const updatedStatus = await getSaveStatus(romId).catch((): SaveStatus | null => null);
+      const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
+      setState((prev) => ({
+        ...prev,
+        saveSyncEnabled: true,
+        saveStatus: updatedStatus,
+        conflicts,
+      }));
     };
 
     const handleSaveSyncChange = async (detail: any) => {
       if (detail.rom_id && detail.rom_id !== romIdRef.current) return;
-      const updatedStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romIdRef.current!).catch((): SaveStatus | null => null);
+      const romId = romIdRef.current;
+      if (!romId) return;
+      const updatedStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romId).catch((): SaveStatus | null => null);
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
       setState((prev) => ({
         ...prev,
@@ -373,7 +377,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
         conflicts,
       }));
       // Also re-check slot configuration + refresh slot data
-      refreshSlotState(romIdRef.current!, setState);
+      refreshSlotState(romId, setState);
     };
 
     const handleBiosChange = async (detail: any) => {
@@ -399,7 +403,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
     const handleMetadataChange = async (detail: any) => {
       if (detail.rom_id !== romIdRef.current) return;
-      const meta = await getRomMetadata(romIdRef.current!).catch((): RomMetadata | null => null);
+      const romId = romIdRef.current;
+      if (!romId) return;
+      const meta = await getRomMetadata(romId).catch((): RomMetadata | null => null);
       setState((prev) => ({ ...prev, metadata: meta }));
     };
 
@@ -442,14 +448,15 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     if (achievementsLoadedRef.current) return;
     achievementsLoadedRef.current = true;
 
+    const romId: number = state.romId;
     let cancelled = false;
     setState((prev) => ({ ...prev, achievementsLoading: true }));
 
     async function loadAchievements() {
       try {
         const [listResult, progressResult] = await Promise.all([
-          getAchievements(state.romId!),
-          getAchievementProgress(state.romId!),
+          getAchievements(romId),
+          getAchievementProgress(romId),
         ]);
         if (cancelled) return;
         setState((prev) => ({
@@ -573,6 +580,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     return null;
   }
 
+  const romId = state.romId;
   const meta = state.metadata;
 
   // --- Game Info section ---
@@ -1079,7 +1087,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
       } as any);
     } else {
       activeTabContent = createElement(SavesTab, {
-        romId: state.romId!,
+        romId,
         saveStatus: state.saveStatus,
         conflicts: state.conflicts,
         activeSlot: state.activeSlot,

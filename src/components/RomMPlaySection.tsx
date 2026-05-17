@@ -27,6 +27,7 @@ import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icon
 import { CustomPlayButton } from "./CustomPlayButton";
 import { hasAnySaveConflict } from "../utils/saveStatus";
 import { scrollToTop } from "../utils/scrollHelpers";
+import { getEventTarget } from "../utils/events";
 import {
   getCachedGameDetail,
   _cachedGameDetailCache,
@@ -723,7 +724,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
           }, `${c.label}${c.is_default ? " (default)" : ""}${info.activeCoreLabel === c.label ? " \u2713" : ""}`);
         }),
       ),
-      (e.currentTarget ?? e.target) as HTMLElement,
+      getEventTarget(e),
     );
   };
 
@@ -738,7 +739,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         createElement(MenuItem, { key: "delete-saves", tone: "destructive", onClick: handleDeleteSaves }, "Delete Local Saves"),
         createElement(MenuItem, { key: "uninstall", tone: "destructive", onClick: handleUninstall }, "Uninstall"),
       ),
-      (e.currentTarget ?? e.target) as HTMLElement,
+      getEventTarget(e),
     );
   };
 
@@ -749,7 +750,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
           SteamClient.Apps.OpenAppSettingsDialog(appId, "general");
         } }, "Properties"),
       ),
-      (e.currentTarget ?? e.target) as HTMLElement,
+      getEventTarget(e),
     );
   };
 

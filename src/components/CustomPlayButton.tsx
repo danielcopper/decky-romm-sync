@@ -38,6 +38,7 @@ import {
 } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
+import { getEventTarget } from "../utils/events";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { showSyncConflictModal } from "./SyncConflictModal";
 import type { DownloadProgressEvent, DownloadCompleteEvent, SyncConflict } from "../types";
@@ -475,7 +476,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
           Uninstall
         </MenuItem>
       </Menu>,
-      e.currentTarget as EventTarget,
+      getEventTarget(e),
     );
   };
 
