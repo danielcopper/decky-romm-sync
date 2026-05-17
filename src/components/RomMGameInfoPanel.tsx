@@ -40,6 +40,7 @@ import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, SyncConflict, A
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
+import { applyLoadSlotsResult, applyRefreshSlotResult } from "../utils/slotState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedCard } from "./MigrationBlockedCard";
 
@@ -100,20 +101,7 @@ function refreshSlotState(
     .then((result) => setter((prev) => ({ ...prev, slotConfirmed: result.configured })))
     .catch(() => {});
   getSaveSlots(romId)
-    .then((slotResult) => {
-      // On API failure the backend returns success:false with empty slots so it
-      // doesn't clobber persisted state — skip the UI update to preserve the
-      // last-known good slot list rather than blank it on a transient blip.
-      if (!slotResult.success) return;
-      setter((prev) => {
-        const newSlot = slotResult.active_slot === undefined ? prev.activeSlot : slotResult.active_slot;
-        return {
-          ...prev,
-          availableSlots: slotResult.slots || [],
-          activeSlot: newSlot,
-        };
-      });
-    })
+    .then((slotResult) => applyRefreshSlotResult<PanelState>(slotResult, setter))
     .catch(() => {});
 }
 
@@ -496,21 +484,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         if (!state.romId) return;
         const result = await getSaveSlots(state.romId);
         if (cancelled) return;
-        // On API failure the backend returns success:false with empty slots so
-        // it doesn't clobber persisted state — keep the previous UI list and
-        // allow another load attempt rather than wiping the panel.
-        if (!result.success) {
-          debugLog(`Failed to load save slots: ${result.error ?? "unknown"}`);
-          slotsLoadedRef.current = false;
-          setState((prev) => ({ ...prev, slotsLoading: false }));
-          return;
-        }
-        setState((prev) => ({
-          ...prev,
-          activeSlot: result.active_slot === undefined ? prev.activeSlot : result.active_slot,
-          availableSlots: result.slots || [],
-          slotsLoading: false,
-        }));
+        applyLoadSlotsResult<PanelState>(result, setState, slotsLoadedRef, debugLog);
       } catch (e) {
         debugLog(`Failed to load save slots: ${e}`);
         if (!cancelled) {
