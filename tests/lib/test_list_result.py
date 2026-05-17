@@ -1,4 +1,4 @@
-"""Tests for the ListResult discriminated helper."""
+"""Tests for the ListResult typed-subtype union helper."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from lib.list_result import ErrorCode, ListResult
+from lib.list_result import ErrorCode, FailedListResult, ListResult, OkListResult
 
 
 class TestErrorCode:
@@ -24,41 +24,34 @@ class TestErrorCode:
         assert ErrorCode.UNKNOWN.value == "unknown"
 
 
-class TestListResultOk:
-    """ListResult.ok wraps a list and signals success."""
+class TestOkListResult:
+    """OkListResult wraps the fetched list — success branch of the union."""
 
     def test_with_populated_list(self):
-        result: ListResult[int] = ListResult.ok([1, 2, 3])
+        result = OkListResult(items=[1, 2, 3])
         assert result.items == [1, 2, 3]
-        assert result.error is None
-        assert result.error_message is None
 
     def test_with_empty_list_is_success_not_failure(self):
         """Empty list is "server answered, nothing matched" — still success."""
-        result: ListResult[str] = ListResult.ok([])
+        result: OkListResult[str] = OkListResult(items=[])
         assert result.items == []
-        assert result.error is None
-        assert result.error_message is None
 
     def test_with_dict_items(self):
         items = [{"id": 1, "name": "Mario"}, {"id": 2, "name": "Luigi"}]
-        result: ListResult[dict[str, object]] = ListResult.ok(items)
+        result = OkListResult(items=items)
         assert result.items == items
-        assert result.error is None
 
 
-class TestListResultFailed:
-    """ListResult.failed wraps an error code and optional message."""
+class TestFailedListResult:
+    """FailedListResult carries an error code and optional message."""
 
     def test_with_code_and_message(self):
-        result: ListResult[int] = ListResult.failed(ErrorCode.SERVER_UNREACHABLE, "connection refused")
-        assert result.items is None
+        result = FailedListResult(error=ErrorCode.SERVER_UNREACHABLE, error_message="connection refused")
         assert result.error is ErrorCode.SERVER_UNREACHABLE
         assert result.error_message == "connection refused"
 
     def test_with_code_only(self):
-        result: ListResult[int] = ListResult.failed(ErrorCode.AUTH_FAILED)
-        assert result.items is None
+        result = FailedListResult(error=ErrorCode.AUTH_FAILED)
         assert result.error is ErrorCode.AUTH_FAILED
         assert result.error_message is None
 
@@ -67,82 +60,118 @@ class TestListResultFailed:
         [ErrorCode.SERVER_UNREACHABLE, ErrorCode.AUTH_FAILED, ErrorCode.UNKNOWN],
     )
     def test_each_error_code(self, code):
-        result: ListResult[int] = ListResult.failed(code, "boom")
+        result = FailedListResult(error=code, error_message="boom")
         assert result.error is code
         assert result.error_message == "boom"
 
 
-class TestDiscriminatorInvariant:
-    """Exactly one of items/error must be set — both or neither is a bug."""
+class TestEquality:
+    """Frozen dataclasses get value-based equality for free."""
 
-    def test_both_none_raises(self):
-        with pytest.raises(ValueError, match="exactly one of"):
-            ListResult[int]()
+    def test_two_ok_with_same_items_are_equal(self):
+        assert OkListResult(items=[1, 2]) == OkListResult(items=[1, 2])
 
-    def test_both_set_raises(self):
-        with pytest.raises(ValueError, match="exactly one of"):
-            ListResult[int](items=[1], error=ErrorCode.UNKNOWN)
+    def test_two_ok_with_different_items_are_not_equal(self):
+        assert OkListResult(items=[1, 2]) != OkListResult(items=[1, 3])
 
-    def test_both_set_with_empty_list_still_raises(self):
-        """Empty list is still "items is set"; it should not be treated as missing."""
-        with pytest.raises(ValueError, match="exactly one of"):
-            ListResult[int](items=[], error=ErrorCode.UNKNOWN)
+    def test_two_failed_with_same_code_are_equal(self):
+        assert FailedListResult(error=ErrorCode.UNKNOWN) == FailedListResult(error=ErrorCode.UNKNOWN)
 
-    def test_error_message_without_error_raises(self):
-        with pytest.raises(ValueError, match="error_message must be None"):
-            ListResult[int](items=[1], error=None, error_message="should not be set")
+    def test_two_failed_with_same_code_and_message_are_equal(self):
+        left = FailedListResult(error=ErrorCode.AUTH_FAILED, error_message="bad password")
+        right = FailedListResult(error=ErrorCode.AUTH_FAILED, error_message="bad password")
+        assert left == right
+
+    def test_failed_and_ok_are_never_equal(self):
+        assert OkListResult(items=[]) != FailedListResult(error=ErrorCode.UNKNOWN)
 
 
 class TestImmutability:
     """frozen=True locks fields after construction."""
 
-    def test_cannot_reassign_items(self):
-        result: ListResult[int] = ListResult.ok([1])
+    def test_cannot_reassign_ok_items(self):
+        result = OkListResult(items=[1])
         with pytest.raises(FrozenInstanceError):
             result.items = [2]  # type: ignore[misc]
 
-    def test_cannot_reassign_error(self):
-        result: ListResult[int] = ListResult.failed(ErrorCode.UNKNOWN)
+    def test_cannot_reassign_failed_error(self):
+        result = FailedListResult(error=ErrorCode.UNKNOWN)
         with pytest.raises(FrozenInstanceError):
             result.error = ErrorCode.AUTH_FAILED  # type: ignore[misc]
 
+    def test_cannot_reassign_failed_message(self):
+        result = FailedListResult(error=ErrorCode.UNKNOWN, error_message="x")
+        with pytest.raises(FrozenInstanceError):
+            result.error_message = "y"  # type: ignore[misc]
 
-class TestConsumerPattern:
-    """The documented `error is None` + `assert items is not None` flow.
 
-    basedpyright in basic mode does not co-narrow two independent
-    ``Optional`` fields, so the project consumer pattern pairs the
-    discriminator check with one explicit assertion before reading items.
-    These tests exercise that exact shape so any future refactor that
-    breaks it (e.g. splitting into typed subtypes) is forced to update the
-    consumer expectations here too.
+class TestIsinstanceNarrowing:
+    """isinstance(r, FailedListResult) narrows BOTH branches under basic mode.
+
+    The success branch must reach ``.items`` without an extra assertion —
+    that is the contract that motivates the typed-subtype shape over a
+    single dataclass with two Optional fields.
     """
 
-    def test_success_branch_can_iterate_items(self):
-        result: ListResult[int] = ListResult.ok([10, 20, 30])
-        if result.error is None:
-            assert result.items is not None
-            total = sum(result.items)
-        else:
+    def test_success_branch_iterates_items_without_assert(self):
+        result: ListResult[int] = OkListResult(items=[10, 20, 30])
+        # SIM108: deliberately block-style — the point of this test is that
+        # the `else` branch narrows to OkListResult and `result.items` is
+        # reachable without an assert. A ternary would hide the narrowing.
+        if isinstance(result, FailedListResult):  # noqa: SIM108
             total = -1
+        else:
+            total = sum(result.items)
         assert total == 60
 
     def test_failure_branch_routes_on_code(self):
-        result: ListResult[int] = ListResult.failed(ErrorCode.AUTH_FAILED, "bad password")
-        if result.error is None:
-            outcome = "ok"
-        elif result.error is ErrorCode.AUTH_FAILED:
-            outcome = "reauth"
+        result: ListResult[int] = FailedListResult(error=ErrorCode.AUTH_FAILED, error_message="bad password")
+        if isinstance(result, FailedListResult):
+            outcome = "reauth" if result.error is ErrorCode.AUTH_FAILED else "other"
         else:
-            outcome = "other"
+            outcome = "ok"
         assert outcome == "reauth"
 
     def test_consumer_transforming_items(self):
-        """Realistic consumer pattern — read items only on success."""
-        result: ListResult[str] = ListResult.ok(["a", "b", "c"])
+        """Realistic consumer pattern — read items only on success, no assert."""
+        result: ListResult[str] = OkListResult(items=["a", "b", "c"])
         collected: list[str] = []
-        if result.error is None:
-            assert result.items is not None
+        if isinstance(result, FailedListResult):
+            pass
+        else:
             for item in result.items:
                 collected.append(item.upper())
         assert collected == ["A", "B", "C"]
+
+
+class TestMatchNarrowing:
+    """``match`` statement narrows the union cleanly too."""
+
+    def test_match_success_branch(self):
+        result: ListResult[int] = OkListResult(items=[1, 2, 3])
+        match result:
+            case OkListResult(items=items):
+                total = sum(items)
+            case FailedListResult():
+                total = -1
+        assert total == 6
+
+    def test_match_failure_branch(self):
+        result: ListResult[int] = FailedListResult(error=ErrorCode.SERVER_UNREACHABLE)
+        match result:
+            case OkListResult():
+                outcome = "ok"
+            case FailedListResult(error=ErrorCode.SERVER_UNREACHABLE):
+                outcome = "retry"
+            case FailedListResult():
+                outcome = "other"
+        assert outcome == "retry"
+
+    def test_match_empty_ok(self):
+        result: ListResult[str] = OkListResult(items=[])
+        match result:
+            case OkListResult(items=items):
+                count = len(items)
+            case FailedListResult():
+                count = -1
+        assert count == 0
