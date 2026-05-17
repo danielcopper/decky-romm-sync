@@ -395,6 +395,15 @@ class DownloadService:
             self._download_queue[rom_id]["error"] = str(e)
             self._cleanup_partial_download(target_path, rom_detail.get("has_multiple_files", False), file_name)
             self._logger.error(f"Download failed for {rom_name}: {e}")
+            await self._emit(
+                "download_failed",
+                {
+                    "rom_id": rom_id,
+                    "rom_name": rom_name,
+                    "platform_name": platform_name,
+                    "error_message": str(e),
+                },
+            )
 
         finally:
             self._download_tasks.pop(rom_id, None)

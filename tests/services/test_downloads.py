@@ -1437,6 +1437,63 @@ class TestDoDownloadZipFailure:
         assert not os.path.exists(target_path + ".zip.tmp")
 
 
+class TestDoDownloadFailureEmit:
+    """Tests for _do_download — ``download_failed`` event emission."""
+
+    @pytest.mark.asyncio
+    async def test_failure_emits_download_failed(self, plugin, tmp_path):
+        from unittest.mock import patch
+
+        import decky
+
+        plugin._download_service._runtime_dir = str(tmp_path)
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        def fake_download(_rom_id, _filename, _dest, _progress_callback=None):
+            raise OSError("simulated network drop")
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+
+        # download_failed event emitted with the expected payload shape
+        emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "download_failed"]
+        assert len(emit_calls) == 1
+        payload = emit_calls[0][0][1]
+        assert payload["rom_id"] == 42
+        assert payload["rom_name"] == "Zelda"
+        assert payload["platform_name"] == "Nintendo 64"
+        assert payload["error_message"] == "simulated network drop"
+        # No download_complete in the failure path
+        assert not [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
+        # Queue status reflects the failure
+        assert plugin._download_service._download_queue[42]["status"] == "failed"
+        assert plugin._download_service._download_queue[42]["error"] == "simulated network drop"
+
+
 class TestStartDownloadReDownload:
     """Test start_download allows re-download after completion."""
 

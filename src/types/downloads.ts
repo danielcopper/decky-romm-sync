@@ -32,3 +32,10 @@ export interface DownloadCompleteEvent {
   platform_name: string;
   file_path: string;
 }
+
+export interface DownloadFailedEvent {
+  rom_id: number;
+  rom_name: string;
+  platform_name: string;
+  error_message: string;
+}

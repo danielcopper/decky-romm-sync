@@ -4,6 +4,7 @@
  * Updated by:
  *   - download_progress events from the backend (persistent listener in index.tsx)
  *   - download_complete events from the backend (persistent listener in index.tsx)
+ *   - download_failed events from the backend (persistent listener in index.tsx)
  *
  * Read by:
  *   - DownloadQueue.tsx via a cheap setInterval (no callable round-trips)

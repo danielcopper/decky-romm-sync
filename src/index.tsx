@@ -25,7 +25,7 @@ import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import { findOutermostScrollParent, findScrollParent } from "./utils/scrollHelpers";
-import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, SaveStatus, SyncPlanData, SyncStaleData, SyncCollectionsData } from "./types";
+import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent, SaveStatus, SyncPlanData, SyncStaleData, SyncCollectionsData } from "./types";
 import { removeShortcut } from "./utils/steamShortcuts";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads";
@@ -384,6 +384,28 @@ export default definePlugin(() => {
     }
   );
 
+  const downloadFailedListener = addEventListener<[DownloadFailedEvent]>(
+    "download_failed",
+    (data: DownloadFailedEvent) => {
+      const prev = getDownloadState().find((d) => d.rom_id === data.rom_id);
+      updateDownload({
+        rom_id: data.rom_id,
+        rom_name: data.rom_name,
+        platform_name: data.platform_name,
+        file_name: prev?.file_name ?? "",
+        status: "failed",
+        progress: prev?.progress ?? 0,
+        bytes_downloaded: prev?.bytes_downloaded ?? 0,
+        total_bytes: prev?.total_bytes ?? 0,
+        error: data.error_message,
+      });
+      toaster.toast({
+        title: "RomM Sync",
+        body: `Download failed: ${data.rom_name} — ${data.error_message}`,
+      });
+    }
+  );
+
   const pathChangedListener = addEventListener<[{ old_path: string; new_path: string; cleared?: boolean }]>(
     "retrodeck_path_changed",
     (data) => {
@@ -438,6 +460,7 @@ export default definePlugin(() => {
       removeEventListener("sync_progress", syncProgressListener);
       removeEventListener("download_progress", downloadProgressListener);
       removeEventListener("download_complete", downloadCompleteListener);
+      removeEventListener("download_failed", downloadFailedListener);
       removeEventListener("retrodeck_path_changed", pathChangedListener);
       removeEventListener("save_sort_changed", saveSortChangedListener);
       removeEventListener("save_status_updated", saveStatusListener);
