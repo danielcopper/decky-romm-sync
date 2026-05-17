@@ -42,11 +42,21 @@ import {
   deleteLocalSaves,
   saveShortcutIcon,
   setGameCore,
-  getAchievementProgress,
   debugLog,
 } from "../api/backend";
-import type { AvailableCore, BiosStatus, SaveStatus, SaveSyncDisplay } from "../types";
-import { formatTimeAgo } from "../utils/formatters";
+import type { AvailableCore, BiosStatus, SaveStatus } from "../types";
+import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
+import {
+  applySaveSyncDisplay,
+  extractBiosInfo,
+  resolveSaveSyncLabel,
+  timeoutMs,
+} from "../utils/playSection";
+import {
+  refreshAchievementsInBackground,
+  refreshActiveSlotInBackground,
+  refreshBiosInBackground,
+} from "../utils/sectionRefresh";
 
 /** Track which appIds have had auto-artwork applied this session */
 const artworkApplied = new Set<number>();
@@ -116,137 +126,9 @@ interface InfoState {
   achievementTotal: number;
 }
 
-/** Format a Unix timestamp (seconds) as a human-readable date string */
-function formatLastPlayed(timestamp: number): string {
-  if (!timestamp || timestamp <= 0) return "Never";
-  const date = new Date(timestamp * 1000);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return `${diffDays} days ago`;
-
-  // Format as "24. Jan." style
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const day = date.getDate();
-  const month = months[date.getMonth()];
-  const year = date.getFullYear();
-  if (year === now.getFullYear()) return `${day}. ${month}.`;
-  return `${day}. ${month}. ${year}`;
-}
-
-/** Format minutes of playtime into a readable string */
-function formatPlaytime(minutes: number): string {
-  if (!minutes || minutes <= 0) return "None";
-  if (minutes < 60) return `${minutes} Min`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMin = minutes % 60;
-  if (remainingMin === 0) return hours === 1 ? "1 Hour" : `${hours} Hours`;
-  return `${hours}h ${remainingMin}m`;
-}
-
-/** Resolve the human-readable save-sync label from the backend's typed display payload.
- *  Backend ships a static `label` for every case except `synced + has-recent-check`,
- *  where it leaves `label` null and passes `last_sync_check_at` through for time-ago
- *  formatting at render time. */
-function resolveSaveSyncLabel(display: SaveSyncDisplay): string {
-  if (display.label !== null) return display.label;
-  if (display.last_sync_check_at) {
-    return formatTimeAgo(display.last_sync_check_at) ?? "Not synced";
-  }
-  return "Not synced";
-}
-
-/** Apply a typed SaveSyncDisplay to InfoState, deriving the rendered label. */
-function applySaveSyncDisplay(
-  display: SaveSyncDisplay | undefined,
-  saveStatus: SaveStatus | null,
-): { status: "synced" | "conflict" | "none"; label: string } {
-  if (display) {
-    return { status: display.status, label: resolveSaveSyncLabel(display) };
-  }
-  // Defensive fallback: a SaveStatus payload missing the pre-computed field.
-  // Should not occur in current callers; keep behaviour conservative.
-  if (hasAnySaveConflict(saveStatus)) return { status: "conflict", label: "Conflict" };
-  return { status: "none", label: "No saves" };
-}
-
 import { setRommConnectionState, setVersionError } from "../utils/connectionState";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
-
-/** Extract BIOS fields from a bios_status response into an InfoState partial.
- *  `bios_level` and `bios_label` are pre-computed by the backend so the frontend
- *  never re-derives them. */
-function extractBiosInfo(
-  b: BiosStatus,
-  level: "ok" | "partial" | "missing" | null,
-  label: string | null,
-): Partial<InfoState> {
-  const activeCoreLabel = b.active_core_label ?? null;
-  const availableCores = b.available_cores ?? [];
-  const defaultCore = availableCores.find((c) => c.is_default);
-  const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
-  return {
-    biosNeeded: true,
-    biosStatus: level,
-    biosLabel: label ?? "",
-    activeCoreLabel,
-    activeCoreIsDefault,
-    availableCores,
-  };
-}
-
-/** Promise that rejects after `ms` milliseconds — used with Promise.race for timeouts. */
-function timeoutMs(ms: number): Promise<never> {
-  return new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
-}
-
-/** Fire-and-forget active-slot fetch — kept at module scope to avoid nesting. */
-function refreshActiveSlotInBackground(
-  romId: number,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<InfoState>>,
-) {
-  getSaveStatus(romId).then((saveStatus) => {
-    if (!cancelled() && saveStatus && "active_slot" in saveStatus) {
-      setter((prev) => ({ ...prev, activeSlot: saveStatus.active_slot ?? null }));
-    }
-  }).catch(() => {});
-}
-
-/** Fire-and-forget BIOS refresh — kept at module scope to avoid nesting. */
-function refreshBiosInBackground(
-  romId: number,
-  cancelled: boolean,
-  setter: React.Dispatch<React.SetStateAction<InfoState>>,
-) {
-  getBiosStatus(romId).then((result) => {
-    const b = result.bios_status;
-    if (!cancelled && b) {
-      setter((prev) => ({ ...prev, ...extractBiosInfo(b as BiosStatus, result.bios_level, result.bios_label) }));
-    }
-  }).catch((e) => debugLog(`Background BIOS status fetch error: ${e}`));
-}
-
-/** Fire-and-forget achievement progress refresh — kept at module scope to avoid nesting. */
-function refreshAchievementsInBackground(
-  romId: number,
-  cancelled: () => boolean,
-  setter: React.Dispatch<React.SetStateAction<InfoState>>,
-) {
-  getAchievementProgress(romId).then((result) => {
-    if (!cancelled() && result.success) {
-      setter((prev) => ({
-        ...prev,
-        achievementEarned: result.earned,
-        achievementTotal: result.total,
-      }));
-    }
-  }).catch((e) => debugLog(`Background achievement progress fetch error: ${e}`));
-}
 
 /** Cache-first initial render. Resolves the cached game detail for this appId,
  *  pushes it into InfoState, and fires the background refresh tasks (active
