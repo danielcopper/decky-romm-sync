@@ -38,3 +38,6 @@ log.txt
 .worktrees/
 .coverage
 coverage.xml
+
+# Frontend test coverage
+coverage/

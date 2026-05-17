@@ -46,4 +46,16 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off",
     },
   },
+  {
+    // Vitest globals (describe/it/expect/vi/...) are injected at runtime via
+    // vitest.config.ts `globals: true` + tsconfig "types": ["vitest/globals"].
+    files: ["src/**/*.{test,spec}.{ts,tsx}", "src/test-setup.ts"],
+    languageOptions: {
+      globals: { ...globals.vitest },
+    },
+    rules: {
+      // Anonymous mock components are fine — they don't appear in real render trees.
+      "react/display-name": "off",
+    },
+  },
 );

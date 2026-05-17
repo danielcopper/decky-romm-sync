@@ -19,6 +19,14 @@ depends = ["setup"]
 description = "Run Python tests"
 run = "python -m pytest tests/ -q"
 
+[tasks."test:frontend"]
+description = "Run frontend tests"
+run = "pnpm test"
+
+[tasks."test:frontend:coverage"]
+description = "Run frontend tests with coverage report"
+run = "pnpm test:coverage"
+
 [tasks.lint]
 description = "Check Cosmic Python architecture rules (layer imports + forbidden service calls)"
 run = [
