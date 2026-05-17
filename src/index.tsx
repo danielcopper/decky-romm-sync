@@ -11,7 +11,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { LibraryPage } from "./components/LibraryPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
-import { initSyncManager, initUnitSyncManager } from "./utils/syncManager";
+import { initUnitSyncManager } from "./utils/syncManager";
 import { setSyncProgress } from "./utils/syncProgress";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
@@ -300,7 +300,6 @@ export default definePlugin(() => {
     [{ platform_app_ids: Record<string, number[]>; romm_collection_app_ids?: Record<string, number[]>; total_games: number }]
   >("sync_complete", onSyncComplete);
 
-  const syncApplyListener = initSyncManager();
   const syncApplyUnitListener = initUnitSyncManager();
 
   // Per-unit pipeline: planning + stale + collections events.
@@ -432,7 +431,6 @@ export default definePlugin(() => {
       unregisterGameDetailPatch();
       unregisterMetadataPatches();
       removeEventListener("sync_complete", syncCompleteListener);
-      removeEventListener("sync_apply", syncApplyListener);
       removeEventListener("sync_apply_unit", syncApplyUnitListener);
       removeEventListener("sync_plan", syncPlanListener);
       removeEventListener("sync_stale", syncStaleListener);

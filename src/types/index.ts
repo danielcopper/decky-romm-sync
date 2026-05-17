@@ -133,18 +133,6 @@ export interface SyncPreview {
   blocked_by_migration?: boolean;
 }
 
-export interface SyncChangedItem extends SyncAddItem {
-  existing_app_id: number;
-}
-
-export interface SyncApplyData {
-  shortcuts: SyncAddItem[];
-  changed_shortcuts?: SyncChangedItem[];
-  remove_rom_ids: number[];
-  next_step?: number;
-  total_steps?: number;
-}
-
 interface SyncPlanUnit {
   type: "platform" | "collection";
   id: number | string;

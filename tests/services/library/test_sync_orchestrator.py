@@ -365,8 +365,6 @@ class TestSyncApplyDelta:
             await asyncio.sleep(0)
 
         assert result["success"] is True
-        # No monolithic sync_apply emission — the per-unit pipeline drives apply now.
-        assert not any(c[0][0] == "sync_apply" for c in decky.emit.call_args_list)
         # Per-unit dispatch was kicked off with the prefetched queue.
         do_sync.assert_called_once()
         prefetched_arg = do_sync.call_args.kwargs.get("prefetched") or do_sync.call_args.args[0]
@@ -1319,8 +1317,6 @@ class TestSyncApplyDeltaUnifiedDispatch:
             await asyncio.sleep(0)
 
         assert result["success"] is True
-        # No monolithic sync_apply emission — only the per-unit event.
-        assert not any(c[0][0] == "sync_apply" for c in decky.emit.call_args_list)
         unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
         assert len(unit_events) == 1
         assert unit_events[0]["unit_name"] == "N64"
