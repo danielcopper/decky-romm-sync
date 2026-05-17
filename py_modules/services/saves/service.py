@@ -269,7 +269,7 @@ class SaveService:
     # Versions (delegated to VersionsService)
     # ------------------------------------------------------------------
 
-    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
+    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> dict:
         """List server-side versions of *filename* in the active slot."""
         return await self._versions.list_file_versions(rom_id, slot, filename)
 

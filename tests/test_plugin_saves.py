@@ -1062,8 +1062,9 @@ class TestSavesVersionHistoryCallables:
 
         result = await plugin.saves_list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 1
-        assert result[0]["id"] == 50
+        assert result["status"] == "ok"
+        assert len(result["versions"]) == 1
+        assert result["versions"][0]["id"] == 50
 
     @pytest.mark.asyncio
     async def test_saves_rollback_to_version_happy_path(self, plugin, tmp_path):

@@ -59,7 +59,8 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        ids_in_order = [v["id"] for v in result]
+        assert result["status"] == "ok"
+        ids_in_order = [v["id"] for v in result["versions"]]
         assert ids_in_order == [60, 50]  # newest first; tracked id=100 excluded
 
     @pytest.mark.asyncio
@@ -92,8 +93,9 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 1
-        assert result[0]["id"] == 50
+        assert result["status"] == "ok"
+        assert len(result["versions"]) == 1
+        assert result["versions"][0]["id"] == 50
 
     @pytest.mark.asyncio
     async def test_sorted_newest_first(self, tmp_path):
@@ -107,9 +109,11 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 2
-        assert result[0]["id"] == 50  # newer of the two old versions first
-        assert result[1]["id"] == 30
+        assert result["status"] == "ok"
+        versions = result["versions"]
+        assert len(versions) == 2
+        assert versions[0]["id"] == 50  # newer of the two old versions first
+        assert versions[1]["id"] == 30
 
     @pytest.mark.asyncio
     async def test_empty_when_no_older_versions(self, tmp_path):
@@ -121,7 +125,7 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert result == []
+        assert result == {"status": "ok", "versions": []}
 
     @pytest.mark.asyncio
     async def test_no_tracked_save_returns_every_save_in_slot(self, tmp_path):
@@ -135,18 +139,28 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert {v["id"] for v in result} == {100, 50}
+        assert result["status"] == "ok"
+        assert {v["id"] for v in result["versions"]} == {100, 50}
 
     @pytest.mark.asyncio
-    async def test_api_error_returns_empty(self, tmp_path):
-        """Returns empty list when the server call fails."""
+    async def test_api_error_returns_server_unreachable(self, tmp_path):
+        """Server failure returns a distinct ``server_unreachable`` status.
+
+        Critical: do NOT return a bare empty list — the frontend would
+        render that as "no older versions" when actually the server is
+        unreachable. The discriminated status lets the UI show a retry
+        affordance instead.
+        """
         svc, fake = make_service(tmp_path)
 
-        fake.fail_on_next(Exception("network error"))
+        fake.fail_on_next(OSError("network error"))
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert result == []
+        assert result["status"] == "server_unreachable"
+        assert "network" in result["error"].lower()
+        # Must NOT be the same shape as the happy-path empty case.
+        assert result != {"status": "ok", "versions": []}
 
     @pytest.mark.asyncio
     async def test_result_shape(self, tmp_path):
@@ -172,8 +186,10 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 1
-        entry = result[0]
+        assert result["status"] == "ok"
+        versions = result["versions"]
+        assert len(versions) == 1
+        entry = versions[0]
         assert entry["id"] == 50
         assert entry["file_name"] == "pokemon [2026-03-01_10-00-00].srm"
         assert entry["emulator"] == "retroarch-mgba"
@@ -204,8 +220,10 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 2
-        by_id = {v["id"]: v for v in result}
+        assert result["status"] == "ok"
+        versions = result["versions"]
+        assert len(versions) == 2
+        by_id = {v["id"]: v for v in versions}
         assert by_id[50]["uploaded_by_us"] is True
         assert by_id[30]["uploaded_by_us"] is False
 
@@ -230,8 +248,10 @@ class TestListFileVersions:
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
-        assert len(result) == 1
-        assert result[0]["uploaded_by_us"] is None
+        assert result["status"] == "ok"
+        versions = result["versions"]
+        assert len(versions) == 1
+        assert versions[0]["uploaded_by_us"] is None
 
 
 class TestRollbackToVersion:
@@ -460,6 +480,48 @@ class TestRollbackToVersion:
 
         assert result["status"] == "preflight_failed"
         assert any("network" in err.lower() for err in result.get("errors", []))
+
+    @pytest.mark.asyncio
+    async def test_post_preflight_list_saves_failure_returns_server_unreachable(self, tmp_path):
+        """A ``list_saves`` failure AFTER a clean pre-flight returns the
+        distinct ``server_unreachable`` status, not ``not_found``.
+
+        Before #627 this case returned ``{"status": "not_found"}`` —
+        identical to the "save_id genuinely deleted" case — so the user
+        was told "this version is no longer on the server" when in fact
+        the server was unreachable. The distinct status lets the
+        frontend surface a retry affordance.
+        """
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = self._tracked_save(100)
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        # Let the pre-flight ``list_saves`` succeed, then fail on the next
+        # ``list_saves`` call — the one the post-preflight switch makes.
+        original_list = fake.list_saves
+        call_count = {"n": 0}
+
+        def fail_second_list(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                raise OSError("server unreachable after preflight")
+            return original_list(*args, **kwargs)
+
+        fake.list_saves = fail_second_list  # type: ignore[method-assign]
+
+        try:
+            result = await svc.rollback_to_version(42, "default", 50)
+        finally:
+            fake.list_saves = original_list  # type: ignore[method-assign]
+
+        assert result["status"] == "server_unreachable"
+        assert "unreachable" in result.get("error", "").lower()
+        # Critical: must NOT collide with the "genuinely deleted" case.
+        assert result["status"] != "not_found"
 
     # ------------------------------------------------------------------
     # Cross-device propagation: rollback re-PUTs target so it becomes

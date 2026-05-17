@@ -8,7 +8,7 @@ import { useState, createElement, FC } from "react";
 import { DialogButton } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { debugLog, savesListFileVersions, savesRollbackToVersion } from "../../api/backend";
-import type { SaveVersionEntry, RollbackStatus } from "../../api/backend";
+import type { SaveVersionEntry, RollbackStatus, ListFileVersionsResult } from "../../api/backend";
 import { showSyncConflictModal } from "../SyncConflictModal";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
 import { formatTimestamp } from "../../utils/formatters";
@@ -33,21 +33,34 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
   const [versions, setVersions] = useState<SaveVersionEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [restoring, setRestoring] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadVersions = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const result: ListFileVersionsResult = await savesListFileVersions(romId, slot, filename);
+      if (result.status === "ok") {
+        setVersions(result.versions);
+      } else if (result.status === "server_unreachable") {
+        debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.error}`);
+        setVersions(null);
+        setLoadError("Couldn't reach RomM. Tap retry.");
+      }
+    } catch (e) {
+      debugLog(`VersionHistoryPanel: failed to load versions for ${filename}: ${e}`);
+      setVersions(null);
+      setLoadError("Couldn't reach RomM. Tap retry.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleToggle = async () => {
     const willExpand = !expanded;
     setExpanded(willExpand);
-    if (willExpand && versions === null && !isOffline) {
-      setLoading(true);
-      try {
-        const result = await savesListFileVersions(romId, slot, filename);
-        setVersions(result);
-      } catch (e) {
-        debugLog(`VersionHistoryPanel: failed to load versions for ${filename}: ${e}`);
-        setVersions([]);
-      } finally {
-        setLoading(false);
-      }
+    if (willExpand && versions === null && loadError === null && !isOffline) {
+      await loadVersions();
     }
   };
 
@@ -84,6 +97,11 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         onRestored();
       } else if (result.status === "not_found") {
         toaster.toast({ title: "RomM Sync", body: "This version no longer exists on the server" });
+      } else if (result.status === "server_unreachable") {
+        // Distinct from ``not_found``: the version may well still exist;
+        // we just couldn't reach the server to confirm. Prompt for retry
+        // instead of telling the user the version is gone.
+        toaster.toast({ title: "RomM Sync", body: "Couldn't reach RomM. Check your connection and try again." });
       } else if (result.status === "unsupported") {
         toaster.toast({ title: "RomM Sync", body: "Version history requires RomM 4.7+" });
       }
@@ -174,6 +192,24 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
     }
     if (loading) {
       return createElement("div", { style: { fontSize: "11px", color: "#8f98a0" } }, "Loading...");
+    }
+    if (loadError !== null) {
+      // Distinct from the empty-list case: surface a retry affordance so
+      // the user isn't misled into thinking there are no versions when
+      // the server was actually unreachable.
+      return createElement("div", {
+        style: { display: "flex", alignItems: "center", gap: "8px" },
+      },
+        createElement("span", {
+          style: { fontSize: "11px", color: "#c46161", fontStyle: "italic" as const },
+        }, loadError),
+        createElement(DialogButton as any, {
+          style: { padding: "2px 8px", minWidth: "auto", fontSize: "11px", width: "auto", flexShrink: 0 },
+          noFocusRing: false,
+          onFocus: scrollFocusedToCenter,
+          onClick: () => { void loadVersions(); },
+        }, "Retry"),
+      );
     }
     if (versionCount === 0) {
       return createElement("div", {

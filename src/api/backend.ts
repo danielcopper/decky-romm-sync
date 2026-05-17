@@ -295,11 +295,16 @@ export type RollbackStatus =
   | { status: "ok" }
   | { status: "not_found" }
   | { status: "unsupported" }
+  | { status: "server_unreachable"; error: string }
   | { status: "conflict_blocked"; conflicts: SyncConflict[] }
   | { status: "preflight_failed"; errors: string[] }
   | { status: "put_failed"; error: string };
 
-export const savesListFileVersions = callable<[number, string, string], SaveVersionEntry[]>("saves_list_file_versions");
+export type ListFileVersionsResult =
+  | { status: "ok"; versions: SaveVersionEntry[] }
+  | { status: "server_unreachable"; error: string };
+
+export const savesListFileVersions = callable<[number, string, string], ListFileVersionsResult>("saves_list_file_versions");
 export const savesRollbackToVersion = callable<[number, string, number], RollbackStatus>("saves_rollback_to_version");
 
 // Achievements callables

@@ -79,7 +79,7 @@ class VersionsService:
         """
         return self._state_svc.get_file_state(rom_id_str, filename)
 
-    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> list[dict]:
+    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> dict:
         """List server-side saves in the active slot, excluding the currently-tracked one.
 
         The slot is the unit, not the filename. Saves uploaded by other
@@ -88,12 +88,19 @@ class VersionsService:
         slot, so no filename filter is applied — every save in the slot
         except the one we're currently tracking shows up here.
 
-        Sorted by ``updated_at`` descending (newest first). Each entry
-        contains: id, file_name, emulator, updated_at, file_size_bytes,
-        device_syncs, uploaded_by_us.
-
         ``filename`` is kept in the signature for compatibility with the
         callable wiring but no longer affects which versions are returned.
+
+        Returns a status dict:
+        - ``{"status": "ok", "versions": [...]}`` on success. ``versions``
+          is sorted by ``updated_at`` descending (newest first); each entry
+          contains: id, file_name, emulator, updated_at, file_size_bytes,
+          device_syncs, uploaded_by_us. ``versions`` may be empty — the
+          server answered, nothing matched.
+        - ``{"status": "server_unreachable", "error": ...}`` if the
+          ``list_saves`` call failed (network, server, auth, etc.). The
+          frontend distinguishes this from an empty list so it can show a
+          retry affordance instead of "no versions available".
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
@@ -106,8 +113,9 @@ class VersionsService:
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
                 ),
             )
-        except Exception:
-            return []
+        except Exception as e:
+            self._log_debug(f"list_file_versions: failed to list saves: {e}")
+            return {"status": "server_unreachable", "error": str(e)}
 
         file_state = self._find_file_state(rom_id_str, filename, server_saves)
         tracked_id = file_state.tracked_save_id if file_state else None
@@ -130,7 +138,7 @@ class VersionsService:
         ]
 
         versions.sort(key=lambda v: v["updated_at"], reverse=True)
-        return versions
+        return {"status": "ok", "versions": versions}
 
     def _rollback_to_version_io(
         self,
@@ -231,7 +239,13 @@ class VersionsService:
         Returns a status dict:
         - ``{"status": "ok"}`` on success.
         - ``{"status": "not_found"}`` if the ROM is not installed or the
-          chosen save id is no longer on the server.
+          chosen save id is no longer on the server (genuinely deleted —
+          the ``list_saves`` call succeeded and the id was absent).
+        - ``{"status": "server_unreachable", "error": ...}`` if the
+          post-preflight ``list_saves`` call failed (network, server,
+          auth, etc.). The frontend distinguishes this from
+          ``not_found`` so it can show a retry affordance instead of
+          "version no longer on the server".
         - ``{"status": "conflict_blocked", "conflicts": [...]}`` if the
           pre-flight surfaced a conflict on the currently-tracked save.
           The frontend resolves it via the standard conflict modal.
@@ -280,7 +294,7 @@ class VersionsService:
                 )
             except Exception as e:
                 self._log_debug(f"rollback_to_version: failed to list saves: {e}")
-                return {"status": "not_found"}
+                return {"status": "server_unreachable", "error": str(e)}
 
             result = await self._loop.run_in_executor(
                 None,
