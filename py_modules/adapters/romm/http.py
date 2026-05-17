@@ -138,9 +138,9 @@ class RommHttpAdapter:
         """Translate non-HTTP exceptions (ssl, timeout, connection) to typed errors."""
         if isinstance(exc, ssl.SSLError):
             return RommSSLError(str(exc), url=url, method=method)
-        if isinstance(exc, (socket.timeout, TimeoutError)):
+        if isinstance(exc, socket.timeout | TimeoutError):
             return RommTimeoutError(str(exc), url=url, method=method)
-        if isinstance(exc, (ConnectionError, OSError)):
+        if isinstance(exc, ConnectionError | OSError):
             return RommConnectionError(str(exc), url=url, method=method)
         return RommApiError(f"Unexpected error: {exc}", url=url, method=method)
 
@@ -152,7 +152,7 @@ class RommHttpAdapter:
         if isinstance(exc, urllib.error.URLError):
             return (
                 self._translate_unwrapped(exc.reason, url, method)
-                if isinstance(exc.reason, (ssl.SSLError, socket.timeout, TimeoutError))
+                if isinstance(exc.reason, ssl.SSLError | socket.timeout | TimeoutError)
                 else RommConnectionError(str(exc), url=url, method=method)
             )
         return self._translate_unwrapped(exc, url, method)
@@ -160,12 +160,12 @@ class RommHttpAdapter:
     @staticmethod
     def is_retryable(exc: Exception) -> bool:
         """Check if an exception is a transient error worth retrying."""
-        if isinstance(exc, (RommServerError, RommConnectionError, RommTimeoutError)):
+        if isinstance(exc, RommServerError | RommConnectionError | RommTimeoutError):
             return True
         # Backward compat for non-RomM exceptions
         if isinstance(exc, urllib.error.HTTPError):
             return exc.code >= 500
-        return isinstance(exc, (urllib.error.URLError, ConnectionError, TimeoutError, OSError))
+        return isinstance(exc, urllib.error.URLError | ConnectionError | TimeoutError | OSError)
 
     def with_retry(self, fn, *args, max_attempts: int = 3, base_delay: int = 1, **kwargs):
         """Call fn(*args, **kwargs) with exponential backoff retry.
