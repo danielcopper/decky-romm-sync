@@ -1,3 +1,12 @@
+"""Save-sync aggregate root and facade for the Decky callable surface.
+
+Composes the save-sync sub-services (state, sync_engine, status, versions,
+slots, rom_info) over the shared :class:`SaveSyncState` aggregate and
+exposes the public methods the frontend reaches through callables. Most
+methods are thin delegations; orchestration that genuinely spans multiple
+sub-services lives here, single-sub-service logic does not.
+"""
+
 from __future__ import annotations
 
 from domain.save_state import SaveSyncState

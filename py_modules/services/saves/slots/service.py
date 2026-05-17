@@ -1,3 +1,11 @@
+"""Slot lifecycle operations for save sync.
+
+Anything that creates, lists, switches, migrates, or deletes slots —
+including the first-sync setup wizard — belongs here. The newest-wins
+matrix executor lives in SyncEngine, status reporting in StatusService,
+and on-disk state persistence in StateService.
+"""
+
 from __future__ import annotations
 
 import os

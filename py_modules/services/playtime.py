@@ -13,11 +13,18 @@ from typing import TYPE_CHECKING
 
 from domain.save_state import PlaytimeEntry, SaveSyncState
 from lib.iso_time import parse_iso
-from services.protocols import Clock, DebugLogger, RetryStrategy, RommPlaytimeApi, StatePersister
 
 if TYPE_CHECKING:
     import asyncio
     import logging
+
+    from services.protocols import (
+        Clock,
+        DebugLogger,
+        RetryStrategy,
+        RommPlaytimeApi,
+        StatePersister,
+    )
 
 
 @dataclass(frozen=True)
