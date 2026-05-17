@@ -105,7 +105,7 @@ interface InfoState {
   saveSyncStatus: "synced" | "conflict" | "none" | null;
   saveSyncLabel: string;
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | null;
+  biosStatus: "ok" | "partial" | "missing" | null; // NOSONAR(typescript:S4323) — inline union inside InfoState; extracting an alias adds indirection for no reuse benefit.
   biosLabel: string;
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
@@ -330,7 +330,7 @@ async function loadCached(
   }
 }
 
-export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
+export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — React FC body; decomposed in #392. Holds Steam menu + achievements + save-sync row.
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
   const migration = useMigrationStatus();

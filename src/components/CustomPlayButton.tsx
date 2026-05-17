@@ -101,7 +101,7 @@ function showLaunchConfirmation(title: string, message: string): Promise<boolean
   });
 }
 
-export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
+export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — handlePlay gate chain; decomposed into gate-chain helpers in #389. Remaining cc is inherent to gate logic.
   const [state, setState] = useState<PlayButtonState>("loading");
   const [romId, setRomId] = useState<number | null>(null);
   const [romName, setRomName] = useState<string>("");
@@ -366,7 +366,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
 
   // Coordinator: runs each pre-launch gate in sequence, bailing on the first
   // cancel. All branch-specific UI lives in the helpers above.
-  const handlePlay = async () => {
+  const handlePlay = async () => { // NOSONAR(typescript:S3776) — gate chain coordinator; decomposed into gate helpers in #389. Remaining cc is inherent to gate logic.
     if (state === "syncing" || state === "launching") return; // debounce
     const overview = appStore.GetAppOverviewByAppID(appId);
     const gameId = overview?.GetGameID?.() ?? String(appId);

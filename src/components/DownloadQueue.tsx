@@ -33,7 +33,7 @@ function formatFinishedDescription(item: DownloadItem): string {
 }
 
 export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
-  const [downloads, setLocalDownloads] = useState<DownloadItem[]>([]);
+  const [downloads, setLocalDownloads] = useState<DownloadItem[]>([]); // NOSONAR(typescript:S6754) — setter intentionally renamed (local wrapper around global download state).
   const [cleared, setCleared] = useState<Set<number>>(new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 

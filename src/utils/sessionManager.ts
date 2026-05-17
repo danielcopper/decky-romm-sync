@@ -164,7 +164,7 @@ export async function initSessionManager(): Promise<void> {
           if (update.bRunning) {
             // Game started — wait for Router.MainRunningApp to populate
             await delay(500);
-            const running = typeof Router === "undefined" ? null : Router.MainRunningApp;
+            const running = typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
             const appId = running?.appid ?? update.unAppID;
             if (appId) {
               // Refresh map in case a sync happened since init

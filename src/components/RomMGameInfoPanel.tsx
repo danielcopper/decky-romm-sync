@@ -283,7 +283,7 @@ async function loadData(
   }
 }
 
-export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
+export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — React FC fan-out; decomposed in #387/#391/Phase 7. Further split scatters handlers.
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
 

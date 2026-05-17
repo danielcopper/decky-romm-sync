@@ -43,7 +43,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 const QAMPanel: FC = () => {
-  const [page, setPageState] = useState<Page>(currentPage);
+  const [page, setPageState] = useState<Page>(currentPage); // NOSONAR(typescript:S6754) — setter intentionally renamed; setPage wraps it below to provide custom navigation behavior.
   const rootRef = useRef<HTMLDivElement>(null);
   const setPage = (p: Page) => { currentPage = p; setPageState(p); };
 
