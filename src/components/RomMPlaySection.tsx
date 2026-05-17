@@ -815,7 +815,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
     const sparkleDelays = [0, 0.9, 0.3, 1.6, 1.1];
     const sparkleDots = hasEarned ? sparklePositions.map((pos, i) =>
       createElement("span", {
-        key: `sparkle-${i}`,
+        key: `sparkle-${pos.top}-${pos.left}`,
         className: "romm-sparkle-dot",
         style: {
           "--romm-sparkle-top": pos.top,

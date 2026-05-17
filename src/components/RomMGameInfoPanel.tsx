@@ -924,9 +924,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
           ? createElement("div", { className: "romm-cheevo-img-wrap" },
               imgEl,
               createElement("span", { className: "romm-cheevo-img-sparkles" },
-                ...makeHcSparkles(a.ra_id).map((sp, i) =>
+                ...makeHcSparkles(a.ra_id).map((sp) =>
                   createElement("span", {
-                    key: `hc-sp-${i}`,
+                    key: `hc-sp-${sp.top}-${sp.left}`,
                     className: "romm-cheevo-img-sparkle-dot",
                     style: {
                       "--romm-sparkle-top": sp.top,
