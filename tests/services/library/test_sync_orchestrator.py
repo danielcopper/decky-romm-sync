@@ -492,6 +492,19 @@ class TestSyncControl:
         assert result["success"] is False
         assert "already in progress" in result["message"]
 
+    def test_start_sync_clears_prior_prefetch_cache(self, plugin):
+        """Skip Preview ON path: any cache left from a prior preview is
+        stale and must be cleared at entry so _do_sync_per_unit refetches.
+        """
+        plugin._sync_service._box.pending_prefetched_units = [
+            _platform_prefetched(name="OLD", slug="old", roms=[{"id": 99}])
+        ]
+
+        result = plugin._sync_service.start_sync()
+
+        assert result["success"] is True
+        assert plugin._sync_service._box.pending_prefetched_units is None
+
     def test_cancel_sync_when_running(self, plugin):
         plugin._sync_service._sync_state = SyncState.RUNNING
         result = plugin._sync_service.cancel_sync()

@@ -125,6 +125,10 @@ class SyncOrchestrator:
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
+        # Skip Preview ON path: any cache left from a prior preview is
+        # stale by definition — start_sync refetches from scratch via
+        # _do_sync_per_unit's no-prefetched branch.
+        box.pending_prefetched_units = None
         self._loop.create_task(self._do_sync_per_unit())
         return {"success": True, "message": "Sync started"}
 
