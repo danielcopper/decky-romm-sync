@@ -92,18 +92,37 @@ class SetupWizard:
                 }
             )
 
-        # Server saves
-        server_saves: list[dict] = []
+        # Server saves. On failure we MUST NOT treat the empty list as
+        # "server has no saves" — that path auto-confirms the default slot
+        # and the first post-confirmation sync could clobber real server
+        # saves the user already had. Surface a distinct recommendation so
+        # the frontend can hold the wizard and offer a retry instead.
         device_id = self._state_svc.get_server_device_id()
         try:
-            server_saves = await self._loop.run_in_executor(
+            server_saves: list[dict] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
                 ),
             )
         except Exception as e:
-            self._log_debug(f"get_save_setup_info({rom_id}): failed to list saves: {e}")
+            self._logger.warning(
+                f"get_save_setup_info({rom_id}): failed to list server saves: {e}",
+            )
+            game_state = self._state_svc.state.saves.get(rom_id_str)
+            default_slot = self._state_svc.state.settings.default_slot or "default"
+            slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
+            active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
+            return {
+                "has_local_saves": len(local_files) > 0,
+                "local_files": local_file_info,
+                "server_slots": [],
+                "default_slot": default_slot,
+                "slot_confirmed": slot_confirmed,
+                "active_slot": active_slot,
+                "recommended_action": "server_unreachable",
+                "server_query_failed": True,
+            }
 
         # Group server saves by slot
         slots_map: dict[str | None, list[dict]] = {}
@@ -140,7 +159,9 @@ class SetupWizard:
 
         # Pre-computed wizard recommendation: auto-confirm the default slot only
         # when there are local saves and the server has no slots yet. Every other
-        # combination needs the wizard so the user can choose.
+        # combination needs the wizard so the user can choose. The
+        # ``server_unreachable`` branch returns early above — reaching this point
+        # means the server answered, so an empty ``server_slots`` is authoritative.
         recommended_action = (
             "auto_confirm_default" if (len(local_files) > 0 and len(server_slots) == 0) else "show_wizard"
         )
@@ -153,6 +174,7 @@ class SetupWizard:
             "slot_confirmed": slot_confirmed,
             "active_slot": active_slot,
             "recommended_action": recommended_action,
+            "server_query_failed": False,
         }
 
     async def confirm_slot_choice(

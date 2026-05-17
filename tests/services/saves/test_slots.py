@@ -346,8 +346,13 @@ class TestGetSaveSetupInfo:
         assert slot_names == {"default", "desktop"}
 
     @pytest.mark.asyncio
-    async def test_server_error_returns_empty_slots(self, tmp_path):
-        """Server API failure still returns local info with empty server_slots."""
+    async def test_server_error_recommends_server_unreachable_not_auto_confirm(self, tmp_path):
+        """Server API failure MUST NOT be misread as "server has no saves".
+
+        Regression: a transient list_saves failure used to recommend
+        auto_confirm_default whenever local saves existed, which on the
+        first post-confirmation sync could clobber real server saves.
+        """
         svc, fake = make_service(tmp_path)
         svc._save_sync_state.settings.save_sync_enabled = True
         svc._save_sync_state.device_id = "dev-1"
@@ -358,6 +363,40 @@ class TestGetSaveSetupInfo:
         result = await svc.get_save_setup_info(42)
         assert result["has_local_saves"] is True
         assert result["server_slots"] == []
+        assert result["recommended_action"] == "server_unreachable"
+        assert result["recommended_action"] != "auto_confirm_default"
+        assert result["server_query_failed"] is True
+
+    @pytest.mark.asyncio
+    async def test_server_error_with_oserror_recommends_server_unreachable(self, tmp_path):
+        """OSError (transport-layer) failure routes to server_unreachable too."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.fail_on_next(OSError("Connection refused"))
+
+        result = await svc.get_save_setup_info(42)
+        assert result["recommended_action"] == "server_unreachable"
+        assert result["server_query_failed"] is True
+
+    @pytest.mark.asyncio
+    async def test_server_error_preserves_local_info_in_response(self, tmp_path):
+        """On server failure we still surface what we know locally."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "dev-1"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.fail_on_next(RommApiError(500, "Server error"))
+
+        result = await svc.get_save_setup_info(42)
+        assert result["has_local_saves"] is True
+        assert len(result["local_files"]) == 1
+        assert result["local_files"][0]["filename"] == "pokemon.srm"
+        assert result["default_slot"] == "default"
+        assert result["slot_confirmed"] is False
 
     @pytest.mark.asyncio
     async def test_no_rom_installed(self, tmp_path):
@@ -382,6 +421,8 @@ class TestGetSaveSetupInfo:
         assert result["has_local_saves"] is True
         assert result["server_slots"] == []
         assert result["recommended_action"] == "auto_confirm_default"
+        # Authoritative empty list (server answered) — NOT a hidden failure
+        assert result["server_query_failed"] is False
 
     @pytest.mark.asyncio
     async def test_get_save_setup_info_recommends_wizard_when_server_has_slots(self, tmp_path):
@@ -397,6 +438,7 @@ class TestGetSaveSetupInfo:
         assert result["has_local_saves"] is True
         assert len(result["server_slots"]) == 1
         assert result["recommended_action"] == "show_wizard"
+        assert result["server_query_failed"] is False
 
     @pytest.mark.asyncio
     async def test_get_save_setup_info_recommends_wizard_when_no_local_saves(self, tmp_path):
@@ -411,6 +453,7 @@ class TestGetSaveSetupInfo:
         result = await svc.get_save_setup_info(42)
         assert result["has_local_saves"] is False
         assert result["recommended_action"] == "show_wizard"
+        assert result["server_query_failed"] is False
 
 
 class TestConfirmSlotChoice:

@@ -135,5 +135,12 @@ export interface SaveSetupInfo {
   default_slot: string;
   slot_confirmed: boolean;
   active_slot: string | null;
-  recommended_action: "auto_confirm_default" | "show_wizard";
+  // "server_unreachable" means the server-saves fetch failed — the wizard MUST
+  // hold and offer a retry instead of treating the empty server_slots as
+  // authoritative (auto-confirming default would clobber real server saves on
+  // first sync). See backend `get_save_setup_info`.
+  recommended_action: "auto_confirm_default" | "show_wizard" | "server_unreachable";
+  // Mirrors recommended_action === "server_unreachable" — explicit flag for
+  // call sites that route on the boolean rather than the enum.
+  server_query_failed?: boolean;
 }
