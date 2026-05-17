@@ -434,7 +434,244 @@ class TestPrefetchAllUnits:
         metadata_service.mark_metadata_dirty.assert_called_once()
         metadata_service.flush_metadata_if_dirty.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_collection_with_empty_rom_ids_skips_membership(self, plugin):
+        """Collection returning an empty member-id list is not added to memberships."""
+        from domain.work_unit import WorkUnit
 
-# ---------------------------------------------------------------------------
-# TestCollectionSyncEdgeCases
-# ---------------------------------------------------------------------------
+        queue = [WorkUnit(type="collection", id="9", name="EmptyColl", slug="", rom_count=0)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+
+        async def fake_collection(_unit, _synced):
+            return [], []
+
+        plugin._sync_service._fetcher.fetch_collection_unit = fake_collection
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        prefetched, all_roms, _shortcuts, memberships, _pids = await plugin._sync_service._fetcher.prefetch_all_units()
+
+        # Branch 613->615: empty all_collection_rom_ids must NOT create a membership entry.
+        assert memberships == {}
+        assert all_roms == []
+        assert prefetched[0].all_collection_rom_ids == []
+
+    @pytest.mark.asyncio
+    async def test_skips_metadata_block_when_no_metadata_service(self, plugin):
+        """Branch 628->634: when metadata_service is None, the cache-stamping loop is skipped."""
+        from domain.work_unit import WorkUnit
+
+        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64"}], False),
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        plugin._sync_service._fetcher._metadata_service = None
+        # Tracking dict to confirm the metadata_cache was NOT touched.
+        plugin._sync_service._fetcher._metadata_cache = {}
+
+        prefetched, all_roms, *_ = await plugin._sync_service._fetcher.prefetch_all_units()
+
+        assert len(all_roms) == 1
+        assert prefetched[0].unit.name == "N64"
+        # No metadata service => metadata_cache stays empty.
+        assert plugin._sync_service._fetcher._metadata_cache == {}
+
+
+class TestBuildWorkQueueErrorPaths:
+    """Tests for build_work_queue() collection-list failure / filter branches."""
+
+    @pytest.mark.asyncio
+    async def test_user_collection_list_failure_continues_with_empty(self, plugin):
+        """Lines 375-377: user-collection fetch raises => warning logged, treated as empty."""
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"42": True}
+
+        async def fake_run_in_executor(_executor, fn, *args):
+            if fn is plugin._romm_api.list_platforms:
+                return []
+            if fn is plugin._romm_api.list_collections:
+                raise RuntimeError("user collections boom")
+            if fn is plugin._romm_api.list_virtual_collections:
+                return [
+                    {"id": "42", "name": "Faves", "slug": "faves", "rom_count": 3, "is_virtual": True},
+                ]
+            raise AssertionError(f"unexpected call: {fn}")
+
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=fake_run_in_executor)
+        plugin._sync_service._loop = mock_loop
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        # User-collections branch swallowed the failure; franchise collection still listed.
+        assert [u.name for u in units] == ["Faves"]
+
+    @pytest.mark.asyncio
+    async def test_franchise_collection_list_failure_continues_with_empty(self, plugin):
+        """Lines 382-384: franchise-collection fetch raises => warning logged, treated as empty."""
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"7": True}
+
+        async def fake_run_in_executor(_executor, fn, *args):
+            if fn is plugin._romm_api.list_platforms:
+                return []
+            if fn is plugin._romm_api.list_collections:
+                return [{"id": "7", "name": "Faves", "slug": "faves", "rom_count": 4}]
+            if fn is plugin._romm_api.list_virtual_collections:
+                raise RuntimeError("franchise collections boom")
+            raise AssertionError(f"unexpected call: {fn}")
+
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=fake_run_in_executor)
+        plugin._sync_service._loop = mock_loop
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        # User collection survives; franchise branch swallowed the failure.
+        assert [u.name for u in units] == ["Faves"]
+
+    @pytest.mark.asyncio
+    async def test_skips_disabled_user_and_franchise_collections(self, plugin):
+        """Lines 389 + 403: collections returned by the API but not in enabled_ids are filtered out."""
+        plugin.settings["enabled_platforms"] = {}
+        # Only the "1" user collection and "100" franchise collection are enabled.
+        plugin.settings["enabled_collections"] = {"1": True, "100": True}
+
+        async def fake_run_in_executor(_executor, fn, *args):
+            if fn is plugin._romm_api.list_platforms:
+                return []
+            if fn is plugin._romm_api.list_collections:
+                return [
+                    {"id": "1", "name": "Enabled User", "slug": "eu", "rom_count": 1},
+                    {"id": "2", "name": "Disabled User", "slug": "du", "rom_count": 1},
+                ]
+            if fn is plugin._romm_api.list_virtual_collections:
+                return [
+                    {"id": "100", "name": "Enabled Franchise", "slug": "ef", "rom_count": 1, "is_virtual": True},
+                    {"id": "200", "name": "Disabled Franchise", "slug": "df", "rom_count": 1, "is_virtual": True},
+                ]
+            raise AssertionError(f"unexpected call: {fn}")
+
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=fake_run_in_executor)
+        plugin._sync_service._loop = mock_loop
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        # Only enabled collections survive the cid-not-in-enabled_ids skip.
+        assert [u.name for u in units] == ["Enabled User", "Enabled Franchise"]
+
+
+class TestTryUnitIncrementalSkip:
+    """Tests for _try_unit_incremental_skip() exception fallback."""
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_delta_api_exception(self, plugin):
+        """Lines 447-451: delta-fetch raises => warning logged, returns None to force full fetch."""
+        from domain.work_unit import WorkUnit
+
+        plugin._state["shortcut_registry"] = {
+            "1": {"name": "Game A", "platform_name": "N64"},
+        }
+        plugin._state["last_sync"] = "2025-01-01T00:00:00"
+
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=RuntimeError("delta boom"))
+        plugin._sync_service._loop = mock_loop
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        # Falls back to "force full fetch" sentinel.
+        assert result is None
+
+
+class TestFetchPlatformUnit:
+    """Tests for fetch_platform_unit() — wrong-type guard, error break, multi-page pagination."""
+
+    @pytest.mark.asyncio
+    async def test_raises_on_non_platform_unit(self, plugin):
+        """Line 478: fetch_platform_unit must reject collection units."""
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="collection", id="1", name="Coll", slug="", rom_count=0)
+        with pytest.raises(ValueError, match="non-platform unit"):
+            await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+
+    @pytest.mark.asyncio
+    async def test_breaks_pagination_on_page_exception(self, plugin):
+        """Lines 501-503: per-page exception logs error and breaks the pagination loop."""
+        from domain.work_unit import WorkUnit
+
+        # No prior sync => incremental skip returns None and we fall through to pagination.
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
+
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=RuntimeError("page boom"))
+        plugin._sync_service._loop = mock_loop
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=10)
+        unit_roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+
+        assert unit_roms == []
+        assert skipped is False
+
+    @pytest.mark.asyncio
+    async def test_paginates_across_multiple_pages(self, plugin):
+        """Line 514: a full first page must trigger offset += limit and a second fetch."""
+        from domain.work_unit import WorkUnit
+
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
+
+        page1 = {"items": [{"id": i, "name": f"G{i}"} for i in range(50)]}
+        page2 = {"items": [{"id": 100, "name": "G100"}]}
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=[page1, page2])
+        plugin._sync_service._loop = mock_loop
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=51)
+        unit_roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+
+        assert skipped is False
+        assert len(unit_roms) == 51
+        assert {r["platform_name"] for r in unit_roms} == {"N64"}
+
+
+class TestFetchCollectionUnit:
+    """Tests for fetch_collection_unit() — wrong-type guard, multi-page pagination."""
+
+    @pytest.mark.asyncio
+    async def test_raises_on_non_collection_unit(self, plugin):
+        """Line 534: fetch_collection_unit must reject platform units."""
+        from domain.work_unit import WorkUnit
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=0)
+        with pytest.raises(ValueError, match="non-collection unit"):
+            await plugin._sync_service._fetcher.fetch_collection_unit(unit, set())
+
+    @pytest.mark.asyncio
+    async def test_paginates_across_multiple_pages(self, plugin):
+        """Line 566: a full first page must trigger offset += limit and a second fetch."""
+        from domain.work_unit import WorkUnit
+
+        page1 = {
+            "items": [{"id": i, "name": f"G{i}", "platform_name": "N64", "platform_slug": "n64"} for i in range(50)],
+        }
+        page2 = {
+            "items": [{"id": 999, "name": "G999", "platform_name": "N64", "platform_slug": "n64"}],
+        }
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = AsyncMock(side_effect=[page1, page2])
+        plugin._sync_service._loop = mock_loop
+
+        unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=51, is_virtual=False)
+        synced: set[int] = set()
+        new_roms, all_collection_rom_ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+
+        assert len(new_roms) == 51
+        assert len(all_collection_rom_ids) == 51
+        assert 999 in synced
