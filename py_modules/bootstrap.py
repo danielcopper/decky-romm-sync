@@ -356,7 +356,6 @@ def wire_services(cfg: WiringConfig) -> dict:
         settings=cfg.stores.settings,
         state=cfg.stores.state,
         save_sync_state=cfg.stores.save_sync_state,
-        runtime_dir=cfg.runtime.runtime_dir,
         save_sync_state_persister=cfg.callbacks.save_sync_state_persister,
         save_file=cfg.adapters.save_file,
         loop=cfg.runtime.loop,

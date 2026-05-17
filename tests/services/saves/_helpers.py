@@ -41,7 +41,6 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         settings={"log_level": "debug"},
         state={"shortcut_registry": {}, "installed_roms": {}},
         save_sync_state=SaveService.make_default_state(),
-        runtime_dir=str(tmp_path),
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
         save_file=save_file,
         loop=asyncio.get_event_loop(),

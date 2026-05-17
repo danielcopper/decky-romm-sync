@@ -52,10 +52,6 @@ class SaveServiceConfig:
         Caller should pre-populate via :meth:`SaveService.load_state`
         after construction; the aggregate ships with defaults out of
         the box.
-    runtime_dir:
-        Absolute path to the plugin runtime directory. Consumed by
-        SaveService for ad-hoc runtime files; ``save_sync_state.json``
-        persistence routes through ``save_sync_state_persister``.
     save_sync_state_persister:
         Protocol-typed I/O wrapper for ``save_sync_state.json``. The
         ``StateService`` uses ``.save(data)`` / ``.load() -> dict | None``
@@ -129,7 +125,6 @@ class SaveServiceConfig:
     settings: dict
     state: dict
     save_sync_state: SaveSyncState
-    runtime_dir: str
     save_sync_state_persister: SaveSyncStatePersister
     save_file: SaveFileAdapter
     loop: asyncio.AbstractEventLoop
