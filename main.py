@@ -18,10 +18,12 @@ from bootstrap import (
     wire_services,
 )
 
-from adapters.retroarch_config import RetroArchConfigAdapter
-from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from lib.migration_gate import migration_blocked
-from services.protocols import RetroDeckPaths
+from services.protocols import (
+    RetroArchConfigReader,
+    RetroArchCoreInfoReader,
+    RetroDeckPaths,
+)
 
 
 class Plugin:
@@ -80,8 +82,8 @@ class Plugin:
         self._steam_config = adapters["steam_config"]
         self._sgdb_adapter = adapters["sgdb_adapter"]
         self._retrodeck_paths: RetroDeckPaths = adapters["retrodeck_paths"]
-        self._retroarch_config: RetroArchConfigAdapter = adapters["retroarch_config"]
-        self._retroarch_core_info: RetroArchCoreInfoAdapter = adapters["retroarch_core_info"]
+        self._retroarch_config: RetroArchConfigReader = adapters["retroarch_config"]
+        self._retroarch_core_info: RetroArchCoreInfoReader = adapters["retroarch_core_info"]
         self._debug_logger = adapters["debug_logger"]
 
         # ── 4. Wire services ────────────────────────────────────────────────

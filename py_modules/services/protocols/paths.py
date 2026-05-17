@@ -107,3 +107,29 @@ class CoreNameProviderFn(Protocol):
     """
 
     def __call__(self, core_so: str) -> str | None: ...
+
+
+class RetroArchConfigReader(Protocol):
+    """Object seam for ``retroarch.cfg`` reads.
+
+    Held by ``main.py`` to bind ``get_retroarch_save_sorting`` as a
+    callable forwarded into service wiring. Distinct from
+    :class:`RetroArchSaveSortingProvider` (the call-shaped Protocol for
+    the bound method itself) — that one is what services receive; this
+    one is what ``main.py`` holds.
+    """
+
+    def get_retroarch_save_sorting(self) -> tuple[bool, bool]: ...
+
+
+class RetroArchCoreInfoReader(Protocol):
+    """Object seam for RetroArch per-core ``.info`` reads.
+
+    Held by ``main.py`` to bind ``get_corename`` as a callable
+    forwarded into service wiring. Distinct from
+    :class:`CoreNameProviderFn` (the call-shaped Protocol for the
+    bound method itself) — that one is what services receive; this
+    one is what ``main.py`` holds.
+    """
+
+    def get_corename(self, core_so: str) -> str | None: ...
