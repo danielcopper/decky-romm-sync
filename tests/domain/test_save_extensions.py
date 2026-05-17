@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from domain.save_extensions import get_all_known_extensions, get_save_extensions
+from domain.save_extensions import get_save_extensions
 
 _DEFAULTS = (".srm", ".rtc", ".sav")
 
@@ -59,29 +59,3 @@ class TestGetSaveExtensionsWithOverride:
         with patch("domain.save_extensions._PLATFORM_OVERRIDES", {"test": custom}):
             result = get_save_extensions("test")
             assert result == custom
-
-
-class TestGetAllKnownExtensions:
-    """get_all_known_extensions covers defaults and all override extensions."""
-
-    def test_contains_default_extensions(self):
-        result = get_all_known_extensions()
-        assert ".srm" in result
-        assert ".rtc" in result
-        assert ".sav" in result
-
-    def test_contains_override_extensions(self):
-        """Real overrides (nds, segacd) are included."""
-        result = get_all_known_extensions()
-        assert ".dsv" in result
-        assert ".brm" in result
-
-    def test_returns_tuple(self):
-        assert isinstance(get_all_known_extensions(), tuple)
-
-    def test_no_duplicates(self):
-        """Extensions shared between defaults and overrides appear only once."""
-        result = get_all_known_extensions()
-        assert result.count(".srm") == 1
-        assert result.count(".rtc") == 1
-        assert result.count(".sav") == 1

@@ -39,22 +39,3 @@ def get_save_extensions(platform_slug: str | None = None) -> tuple[str, ...]:
     if platform_slug is not None and platform_slug in _PLATFORM_OVERRIDES:
         return _PLATFORM_OVERRIDES[platform_slug]
     return _DEFAULT_EXTENSIONS
-
-
-def get_all_known_extensions() -> tuple[str, ...]:
-    """Return all unique extensions across defaults and all platform overrides.
-
-    Useful for broad file discovery or migration tooling.
-    """
-    seen: set[str] = set()
-    result: list[str] = []
-    for ext in _DEFAULT_EXTENSIONS:
-        if ext not in seen:
-            seen.add(ext)
-            result.append(ext)
-    for exts in _PLATFORM_OVERRIDES.values():
-        for ext in exts:
-            if ext not in seen:
-                seen.add(ext)
-                result.append(ext)
-    return tuple(result)

@@ -9,9 +9,7 @@ import pytest
 from domain.save_path import (
     LocalSaveTarget,
     compute_local_save_target,
-    detect_path_change,
     resolve_save_dir,
-    resolve_save_filename,
     sanitize_save_filename,
 )
 
@@ -155,55 +153,6 @@ class TestResolveSaveDir:
         )
         # dirname of the full path is /other/location/roms/gba → basename is gba
         assert result == "/saves/gba"
-
-
-# ---------------------------------------------------------------------------
-# resolve_save_filename
-# ---------------------------------------------------------------------------
-
-
-class TestResolveSaveFilename:
-    def test_basic_rom_path(self) -> None:
-        """gba/Pokemon.gba → Pokemon.srm"""
-        assert resolve_save_filename("gba/Pokemon.gba") == "Pokemon.srm"
-
-    def test_default_extension_is_srm(self) -> None:
-        assert resolve_save_filename("snes/Zelda.sfc") == "Zelda.srm"
-
-    def test_custom_extension(self) -> None:
-        assert resolve_save_filename("gba/Game.gba", ext=".sav") == "Game.sav"
-
-    def test_spaces_in_name(self) -> None:
-        assert resolve_save_filename("psx/Crash Bandicoot (USA).bin") == "Crash Bandicoot (USA).srm"
-
-    def test_m3u_strips_m3u_extension(self) -> None:
-        """m3u playlists: strip .m3u, keep base name"""
-        assert resolve_save_filename("psx/Game (USA)/Game (USA).m3u") == "Game (USA).srm"
-
-    def test_rom_without_subdir(self) -> None:
-        """ROM path with no directory component"""
-        assert resolve_save_filename("Game.gba") == "Game.srm"
-
-
-# ---------------------------------------------------------------------------
-# detect_path_change
-# ---------------------------------------------------------------------------
-
-
-class TestDetectPathChange:
-    def test_same_path_returns_false(self) -> None:
-        assert detect_path_change("/saves/gba", "/saves/gba") is False
-
-    def test_different_path_returns_true(self) -> None:
-        assert detect_path_change("/saves/gba", "/saves/Game (USA)") is True
-
-    def test_none_stored_returns_true(self) -> None:
-        """First sync — no stored path yet → treat as changed."""
-        assert detect_path_change(None, "/saves/gba") is True
-
-    def test_trailing_slash_difference(self) -> None:
-        """Paths with vs without trailing slash are different strings."""
-        assert detect_path_change("/saves/gba/", "/saves/gba") is True
 
 
 # ---------------------------------------------------------------------------

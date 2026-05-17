@@ -78,17 +78,6 @@ def resolve_save_dir(
     return os.path.join(*parts)
 
 
-def resolve_save_filename(rom_path: str, ext: str = ".srm") -> str:
-    """Derive the save filename from a ROM path.
-
-    Takes the ROM's basename, strips extension, appends save extension.
-    E.g. "gba/Pokemon.gba" -> "Pokemon.srm"
-    """
-    basename = os.path.basename(rom_path)
-    name, _ = os.path.splitext(basename)
-    return name + ext
-
-
 def sanitize_save_filename(name: str) -> str:
     """Reduce *name* to a safe filename component for joining onto ``saves_dir``.
 
@@ -158,16 +147,3 @@ def compute_local_save_target(server_save: dict, rom_name: str) -> LocalSaveTarg
     if sanitized != target:
         return LocalSaveTarget(sanitized, sanitized_from=target)
     return LocalSaveTarget(sanitized)
-
-
-def detect_path_change(stored_path: str | None, resolved_path: str) -> bool:
-    """Detect if the save path has changed since last sync.
-
-    Useful for warning users when RetroArch settings change (e.g.
-    sort_by_content toggled) which would move where saves are expected.
-
-    Returns True if paths differ (or stored_path is None -- first sync).
-    """
-    if stored_path is None:
-        return True
-    return stored_path != resolved_path
