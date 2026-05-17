@@ -374,10 +374,6 @@ class SaveFileAdapter(Protocol):
         """Return the contents of *path* as raw bytes."""
         ...
 
-    def write_bytes(self, path: str, data: bytes) -> None:
-        """Write *data* to *path*, overwriting any existing contents."""
-        ...
-
 
 class SgdbArtworkCache(Protocol):
     """Filesystem seam for the SteamGridDB artwork cache directory.
@@ -416,12 +412,4 @@ class SgdbArtworkCache(Protocol):
 
     def read_bytes(self, path: str) -> bytes:
         """Return the contents of *path* as raw bytes."""
-        ...
-
-    def write_bytes_atomic(self, path: str, data: bytes) -> None:
-        """Atomically write *data* to *path*.
-
-        Writes to a temp file beside *path* and ``os.replace``s it to the
-        final destination. The temp file is removed on any failure.
-        """
         ...

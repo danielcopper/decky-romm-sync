@@ -242,10 +242,6 @@ class RommSaveApi(Protocol):
         """Stream a single save file to ``dest_path`` via ``/api/saves/{save_id}/content``."""
         ...
 
-    def get_save_metadata(self, save_id: int) -> dict:
-        """Return save metadata for ``save_id``."""
-        ...
-
     def delete_server_saves(self, save_ids: list[int]) -> dict:
         """Delete the given save ids via ``POST /api/saves/delete``."""
         ...

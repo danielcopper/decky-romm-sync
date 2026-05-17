@@ -821,34 +821,3 @@ class TestDebugLoggerProtocolSeam:
             "SGDB debug must NOT leak to logger.info — the injected "
             f"DebugLogger is the only sink. Observed leaks: {sgdb_info_calls}"
         )
-
-
-class TestFakeSgdbArtworkCacheAtomicWrite:
-    """Unit tests for the in-memory fake's ``write_bytes_atomic`` round-trip.
-
-    Verifies the fake models the real adapter's ``path.tmp`` -> ``os.replace``
-    sequence so service-layer tests can exercise atomic-write failure paths
-    through the same Protocol seam.
-    """
-
-    def test_happy_path_writes_final_and_clears_tmp(self):
-        cache = FakeSgdbArtworkCache()
-        dest = os.path.join(cache.cache_dir(), "42_hero.png")
-
-        cache.write_bytes_atomic(dest, b"payload")
-
-        assert cache.files[dest] == b"payload"
-        assert (dest + ".tmp") not in cache.files
-        assert cache.tmp_files == set()
-
-    def test_failure_cleans_tmp_and_raises(self):
-        cache = FakeSgdbArtworkCache()
-        cache.fail_on_atomic_write = True
-        dest = os.path.join(cache.cache_dir(), "42_hero.png")
-
-        with pytest.raises(OSError, match="simulated atomic-write failure"):
-            cache.write_bytes_atomic(dest, b"payload")
-
-        assert dest not in cache.files
-        assert (dest + ".tmp") not in cache.files
-        assert cache.tmp_files == set()

@@ -571,15 +571,6 @@ class TestConfirmDownload:
             api.confirm_download(99, "device-abc")
 
 
-class TestGetSaveMetadata:
-    def test_calls_save_by_id(self):
-        api, client = _make_api()
-        client.request.return_value = {"id": 42, "file_name": "save.srm"}
-        result = api.get_save_metadata(42)
-        client.request.assert_called_once_with("/api/saves/42")
-        assert result["file_name"] == "save.srm"
-
-
 class TestGetSaveSummary:
     def test_without_device_id(self):
         api, client = _make_api()

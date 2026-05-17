@@ -168,9 +168,6 @@ class RommApiAdapter:
             {"device_id": device_id},
         )
 
-    def get_save_metadata(self, save_id: int) -> dict:
-        return self._client.request(f"/api/saves/{save_id}")
-
     def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
         query = f"/api/saves/summary?rom_id={rom_id}"
         if device_id is not None:

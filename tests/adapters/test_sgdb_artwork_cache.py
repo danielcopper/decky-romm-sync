@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
 
 import pytest
 
@@ -106,47 +105,3 @@ class TestReadBytes:
     def test_missing_raises(self, cache, tmp_path):
         with pytest.raises(FileNotFoundError):
             cache.read_bytes(str(tmp_path / "missing.png"))
-
-
-class TestWriteBytesAtomic:
-    def test_writes_data(self, cache, tmp_path):
-        dest = tmp_path / "icon.png"
-        cache.write_bytes_atomic(str(dest), b"icon-payload")
-        assert dest.read_bytes() == b"icon-payload"
-
-    def test_no_tmp_left_after_success(self, cache, tmp_path):
-        dest = tmp_path / "icon.png"
-        cache.write_bytes_atomic(str(dest), b"data")
-        assert not (tmp_path / "icon.png.tmp").exists()
-
-    def test_overwrites_existing(self, cache, tmp_path):
-        dest = tmp_path / "icon.png"
-        dest.write_bytes(b"old")
-        cache.write_bytes_atomic(str(dest), b"new")
-        assert dest.read_bytes() == b"new"
-
-    def test_cleans_tmp_on_failure(self, cache, tmp_path):
-        dest = tmp_path / "icon.png"
-        # Make os.replace fail; the tmp file should be removed and the
-        # exception propagated to the caller.
-        with (
-            patch("adapters.sgdb_artwork_cache.os.replace", side_effect=OSError("boom")),
-            pytest.raises(OSError, match="boom"),
-        ):
-            cache.write_bytes_atomic(str(dest), b"data")
-        assert not (tmp_path / "icon.png.tmp").exists()
-        assert not dest.exists()
-
-    def test_cleans_tmp_when_open_fails(self, cache, tmp_path):
-        dest = tmp_path / "icon.png"
-        # Simulate write-side failure after tmp was opened — ensure that
-        # if a tmp file lingers, the cleanup still suppresses
-        # FileNotFoundError gracefully.
-        with (
-            patch("builtins.open", side_effect=OSError("disk full")),
-            pytest.raises(OSError, match="disk full"),
-        ):
-            cache.write_bytes_atomic(str(dest), b"data")
-        # tmp may or may not exist depending on how open() failed; what
-        # matters is cleanup didn't itself raise.
-        assert not dest.exists()

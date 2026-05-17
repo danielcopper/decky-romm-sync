@@ -241,14 +241,6 @@ class FakeSgdbArtworkCache:
     the loose "directory exists when it contains files" semantics tests
     need.
 
-    ``write_bytes_atomic`` models the real adapter's tmp-file +
-    ``os.replace`` round-trip: the data lands at ``path + ".tmp"``
-    first, then renames to ``path`` on success. Set
-    ``fail_on_atomic_write`` to make the rename step raise — the
-    tmp file is cleaned up before the exception propagates, mirroring
-    the adapter's behaviour. ``tmp_files`` exposes the set of
-    in-flight tmp paths for tests that need to assert on them.
-
     Tests can pre-populate ``files`` directly to stage cached artwork.
     ``isdir_paths`` can be set explicitly when a test needs to model an
     empty cache directory.
@@ -259,8 +251,6 @@ class FakeSgdbArtworkCache:
         self.files: dict[str, bytes] = dict(files) if files else {}
         self.isdir_paths: set[str] | None = None
         self.cache_dir_call_count = 0
-        self.fail_on_atomic_write: bool = False
-        self.tmp_files: set[str] = set()
 
     def cache_dir(self) -> str:
         self.cache_dir_call_count += 1
@@ -290,17 +280,6 @@ class FakeSgdbArtworkCache:
         if path not in self.files:
             raise FileNotFoundError(path)
         return self.files[path]
-
-    def write_bytes_atomic(self, path: str, data: bytes) -> None:
-        tmp_path = path + ".tmp"
-        self.tmp_files.add(tmp_path)
-        self.files[tmp_path] = data
-        if self.fail_on_atomic_write:
-            self.files.pop(tmp_path, None)
-            self.tmp_files.discard(tmp_path)
-            raise OSError("simulated atomic-write failure")
-        self.files[path] = self.files.pop(tmp_path)
-        self.tmp_files.discard(tmp_path)
 
 
 class FakeDownloadFileAdapter:
@@ -835,10 +814,6 @@ class FakeSaveFileAdapter:
         if path not in self.files:
             raise FileNotFoundError(path)
         return self.files[path]
-
-    def write_bytes(self, path: str, data: bytes) -> None:
-        self.files[path] = data
-        self._ensure_mtime(path)
 
 
 class FakePathProbe:

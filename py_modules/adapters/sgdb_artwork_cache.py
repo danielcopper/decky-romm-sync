@@ -51,19 +51,3 @@ class SgdbArtworkCacheAdapter:
     def read_bytes(self, path: str) -> bytes:
         """Return the contents of *path* as raw bytes."""
         return pathlib.Path(path).read_bytes()
-
-    def write_bytes_atomic(self, path: str, data: bytes) -> None:
-        """Write *data* to *path* via a temp file + ``os.replace`` swap.
-
-        On failure the temp file is removed and the exception re-raised so
-        callers can decide how to react.
-        """
-        tmp_path = path + ".tmp"
-        try:
-            with open(tmp_path, "wb") as f:
-                f.write(data)
-            os.replace(tmp_path, path)
-        except Exception:
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(tmp_path)
-            raise

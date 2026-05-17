@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -81,7 +82,7 @@ class FakeSaveApi:
         return len(data)
 
     def _materialize_download(self, save_id: int, dest_path: str) -> None:
-        """Write the staged bytes for *save_id* to *dest_path* via the adapter.
+        """Write the staged bytes for *save_id* to *dest_path*.
 
         Resolution order:
         1. ``_save_content[save_id]`` — bytes captured at upload or staged
@@ -98,7 +99,7 @@ class FakeSaveApi:
             data = self.save_file.read_bytes(self.uploaded_files[save_id])
         else:
             data = b"\x00" * 1024
-        self.save_file.write_bytes(dest_path, data)
+        pathlib.Path(dest_path).write_bytes(data)
 
     # ------------------------------------------------------------------
     # Unimplemented RomM API methods (use MagicMock for these)
@@ -338,13 +339,6 @@ class FakeSaveApi:
 
         self.downloaded_files[save_id] = dest_path
         self._materialize_download(save_id, dest_path)
-
-    def get_save_metadata(self, save_id: int) -> dict:
-        self.call_log.append(("get_save_metadata", (save_id,), {}))
-        self._check_fail()
-        if save_id in self.saves:
-            return dict(self.saves[save_id])
-        return {"id": save_id, "download_path": f"/saves/unknown_{save_id}"}
 
     def get_rom_with_notes(self, rom_id: int) -> dict:
         self.call_log.append(("get_rom_with_notes", (rom_id,), {}))
