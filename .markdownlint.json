@@ -1,9 +1,4 @@
 {
   "first-line-heading": false,
-  "line-length": {
-    "line_length": 120,
-    "tables": false,
-    "code_blocks": false,
-    "headings": false
-  }
+  "MD013": false
 }

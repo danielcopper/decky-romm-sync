@@ -72,6 +72,7 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 **Domain**: `[CP]` Pure compute only. No I/O, no state mutation, no service or adapter imports. Functions take inputs, return outputs. Anything stateless and I/O-free that's currently in a service belongs here. (Canonical domain-model purity.)
 
 **Bootstrap (`bootstrap.py`)**: `[CP]` The composition root — the only place where concrete adapters meet services. (Canonical CP composition root.)
+
 - `[ours]` `WiringConfig` holds the wiring; protocols come in, services come out. Adapter instantiation never happens in `main.py` — if a service needs a Protocol-wrapped persister, the wrapper adapter is built in `bootstrap()` and passed through `CallbackBundle`. (Our concrete shape for the composition root.)
 
 **Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`) and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter instantiation and service wiring. The split is binding — no callables in `bootstrap.py`, no service wiring in `main.py`. Both files grow with the surface they describe (callables for `main.py`, services for `bootstrap.py`); this is unavoidable density, not god-class. Split `bootstrap.py` into `bootstrap/{adapters,services}.py` only when it exceeds ~700 LOC. (Decky-plugin-specific; not a CP concept.)
@@ -163,6 +164,7 @@ Avoid all of: "mechanical extraction from X", "during the transition", "moved fr
 ## Testing
 
 Every backend feature or callable where testing makes sense MUST have unit tests. Cover:
+
 - **Happy path**: Normal successful operation
 - **Bad path**: Invalid input, missing data, API errors, network failures
 - **Edge cases**: Empty strings, None values, masked values ("••••"), boundary conditions

@@ -34,7 +34,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: "24"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -69,6 +69,23 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke-test release zip
+        run: |
+          BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
+          echo "Checking $BUILT_ZIP for required entries..."
+          for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/romm-launcher; do
+            if ! unzip -l "$BUILT_ZIP" | grep -qE "/$required\b"; then
+              echo "ERROR: release zip is missing $required"
+              unzip -l "$BUILT_ZIP"
+              exit 1
+            fi
+          done
+          if unzip -l "$BUILT_ZIP" | grep -qE '\.map\b'; then
+            echo "ERROR: release zip contains source maps — should have been stripped"
+            exit 1
+          fi
+          echo "Smoke test passed."
 
       - name: Upload release asset
         env:

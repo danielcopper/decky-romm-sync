@@ -26,11 +26,13 @@ You should receive a response within 7 days.
 ## Scope
 
 This plugin handles:
+
 - **RomM server credentials** (URL, username, password) stored in Decky's settings directory
 - **SteamGridDB API keys** stored in the same settings file
 - **HTTP requests** to self-hosted RomM servers (optionally with SSL verification disabled for self-signed certificates)
 
 ### Known security considerations
+
 - Settings files are stored with `0600` permissions (owner-only read/write)
 - Credentials are never logged — masked in all log output
 - The `allow_insecure_ssl` option disables certificate verification for self-hosted servers with self-signed certificates. This is an opt-in user setting with a warning in the UI.
