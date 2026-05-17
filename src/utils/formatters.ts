@@ -47,6 +47,16 @@ export function formatTimestamp(iso: string | null): string {
 }
 
 /**
+ * Format the status line for the "Uninstall All Installed ROMs" action.
+ * Always shows the count of removed ROMs; appends an "(N errors)" suffix when
+ * the backend reported any per-ROM failures.
+ */
+export function formatUninstallStatus(removedCount: number, errorCount: number): string {
+  const baseMsg = `Removed ${removedCount} ROMs`;
+  return errorCount > 0 ? `${baseMsg} (${errorCount} errors)` : baseMsg;
+}
+
+/**
  * Format an ISO-8601 timestamp as a coarse "Xm ago" label, recomputed at call time.
  * Mirrors what the backend used to emit but stays fresh between fetches —
  * the backend now ships only the raw ISO timestamp.

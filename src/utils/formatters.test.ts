@@ -4,6 +4,7 @@ import {
   formatPlaytime,
   formatTimestamp,
   formatTimeAgo,
+  formatUninstallStatus,
 } from "./formatters";
 
 describe("formatTimestamp", () => {
@@ -114,5 +115,29 @@ describe("formatPlaytime", () => {
 
   it("returns 'Nh Mm' for non-whole hours", () => {
     expect(formatPlaytime(125)).toBe("2h 5m");
+  });
+});
+
+describe("formatUninstallStatus", () => {
+  it("omits the suffix when there are no errors", () => {
+    expect(formatUninstallStatus(5, 0)).toBe("Removed 5 ROMs");
+  });
+
+  it("appends '(N errors)' when errors are present", () => {
+    expect(formatUninstallStatus(5, 2)).toBe("Removed 5 ROMs (2 errors)");
+  });
+
+  it("handles the all-failed case (zero removed, errors present)", () => {
+    expect(formatUninstallStatus(0, 3)).toBe("Removed 0 ROMs (3 errors)");
+  });
+
+  it("handles the empty edge case (zero removed, zero errors)", () => {
+    expect(formatUninstallStatus(0, 0)).toBe("Removed 0 ROMs");
+  });
+
+  it("renders a single error without pluralizing (suffix stays '(1 errors)')", () => {
+    // The label intentionally keeps the simple plural form; documenting that
+    // here so a future change is a conscious decision, not a drift.
+    expect(formatUninstallStatus(1, 1)).toBe("Removed 1 ROMs (1 errors)");
   });
 });
