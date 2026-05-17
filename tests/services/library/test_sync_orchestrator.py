@@ -155,7 +155,6 @@ class TestSyncPreview:
         assert plugin._sync_service._pending_delta is not None
         assert plugin._sync_service._pending_delta.preview_id == result["preview_id"]
         assert plugin._sync_service._pending_delta.created_at == plugin._sync_service._clock.time()
-        assert len(plugin._sync_service._pending_delta.new) == 1
         assert plugin._sync_service._pending_delta.platforms_count == 1
         assert plugin._sync_service._pending_delta.total_roms == 1
         # The unified path caches the prefetched units so apply can
@@ -237,39 +236,8 @@ class TestSyncApplyDelta:
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id=preview_id,
             created_at=plugin._sync_service._clock.time(),
-            new=[
-                {
-                    "rom_id": 3,
-                    "name": "Game C",
-                    "platform_name": "N64",
-                    "platform_slug": "n64",
-                    "fs_name": "c.z64",
-                    "cover_path": "",
-                },
-            ],
-            changed=[
-                {
-                    "rom_id": 2,
-                    "name": "New B",
-                    "existing_app_id": 1002,
-                    "platform_name": "N64",
-                    "platform_slug": "n64",
-                    "fs_name": "b.z64",
-                    "cover_path": "",
-                },
-            ],
-            unchanged_ids=[1],
-            remove_rom_ids=[99],
-            all_shortcuts={
-                1: {"rom_id": 1, "name": "Game A", "platform_name": "N64"},
-                2: {"rom_id": 2, "name": "New B", "platform_name": "N64"},
-                3: {"rom_id": 3, "name": "Game C", "platform_name": "N64"},
-            },
-            delta_roms=[],
             platforms_count=1,
             total_roms=3,
-            collection_memberships={},
-            platform_rom_ids=set(),
         )
         if with_prefetch:
             plugin._sync_service._box.pending_prefetched_units = [
@@ -448,16 +416,8 @@ class TestSyncCancelPreview:
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id="some-id",
             created_at=plugin._sync_service._clock.time(),
-            new=[],
-            changed=[],
-            unchanged_ids=[],
-            remove_rom_ids=[],
-            all_shortcuts={},
-            delta_roms=[],
             platforms_count=0,
             total_roms=0,
-            collection_memberships={},
-            platform_rom_ids=set(),
         )
         plugin._sync_service._box.pending_prefetched_units = [
             _platform_prefetched(name="X", slug="x", roms=[{"id": 1}])
@@ -1127,16 +1087,8 @@ class TestSyncApplyDeltaUnifiedDispatch:
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id="art-preview",
             created_at=plugin._sync_service._clock.time(),
-            new=[{"rom_id": 10, "name": "Game X", "platform_name": "N64"}],
-            changed=[],
-            unchanged_ids=[],
-            remove_rom_ids=[],
-            all_shortcuts={10: {"rom_id": 10, "name": "Game X", "platform_name": "N64"}},
-            delta_roms=roms,
             platforms_count=1,
             total_roms=1,
-            collection_memberships={},
-            platform_rom_ids={10},
         )
         plugin._sync_service._box.pending_prefetched_units = [
             _platform_prefetched(name="N64", slug="n64", roms=roms, skipped=False)
@@ -1177,16 +1129,8 @@ class TestSyncApplyDeltaUnifiedDispatch:
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id="skip-preview",
             created_at=plugin._sync_service._clock.time(),
-            new=[],
-            changed=[],
-            unchanged_ids=[10],
-            remove_rom_ids=[],
-            all_shortcuts={10: {"rom_id": 10, "name": "A", "platform_name": "N64"}},
-            delta_roms=[],
             platforms_count=1,
             total_roms=1,
-            collection_memberships={},
-            platform_rom_ids={10},
         )
         plugin._sync_service._box.pending_prefetched_units = [
             _platform_prefetched(name="N64", slug="n64", roms=roms, skipped=True)

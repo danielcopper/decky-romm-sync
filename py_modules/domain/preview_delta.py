@@ -17,21 +17,13 @@ class PreviewDelta:
     ``preview_id`` ties the snapshot to the frontend's apply call; mismatched
     ids cause the apply to be rejected as stale. ``created_at`` is the wall
     clock at preview time so apply can reject snapshots older than the TTL.
-    All other fields are the classified-ROM buckets, the full shortcut map
-    (used by downstream artwork and result reporting), the ROM payloads
-    needed for artwork download, and the collection/platform context that
-    feeds the result-aggregation step.
+    ``platforms_count`` and ``total_roms`` are persisted into ``sync_stats``
+    on apply so ``get_sync_stats`` and the stale-removal pass see the
+    apply's intended counts. The per-unit pipeline gets ROM data from
+    :class:`PrefetchedUnit` on the state box, not from this snapshot.
     """
 
     preview_id: str
     created_at: float
-    new: list[dict]
-    changed: list[dict]
-    unchanged_ids: list[int]
-    remove_rom_ids: list[int]
-    all_shortcuts: dict[int, dict]
-    delta_roms: list[dict]
     platforms_count: int
     total_roms: int
-    collection_memberships: dict[str, list[int]]
-    platform_rom_ids: set[int]

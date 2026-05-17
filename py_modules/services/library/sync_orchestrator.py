@@ -179,26 +179,13 @@ class SyncOrchestrator:
                 platform_names,
             )
 
-            # Build rom lookup for artwork download during apply
-            roms_by_id = {r["id"]: r for r in all_roms}
-            delta_rom_ids = {sd["rom_id"] for sd in new + changed}
-            delta_roms = [roms_by_id[rid] for rid in delta_rom_ids if rid in roms_by_id]
-
             preview_id = self._uuid_gen.uuid4()
             platforms_count = sum(1 for u in prefetched if u.unit.type == "platform")
             box.pending_delta = PreviewDelta(
                 preview_id=preview_id,
                 created_at=self._clock.time(),
-                new=new,
-                changed=changed,
-                unchanged_ids=unchanged_ids,
-                remove_rom_ids=stale,
-                all_shortcuts={sd["rom_id"]: sd for sd in shortcuts_data},
-                delta_roms=delta_roms,
                 platforms_count=platforms_count,
                 total_roms=len(all_roms),
-                collection_memberships=collection_memberships,
-                platform_rom_ids=platform_rom_ids,
             )
             box.pending_prefetched_units = prefetched
 
