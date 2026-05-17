@@ -11,8 +11,38 @@ from adapters.persistence import (
 )
 from domain.preview_delta import PreviewDelta
 from domain.sync_state import SyncState
+from domain.work_unit import WorkUnit
+from services.library._state import PrefetchedUnit
 
 # conftest.py patches decky before this import
+
+
+def _prefetch_result(
+    *,
+    prefetched=None,
+    all_roms=None,
+    shortcuts_data=None,
+    collection_memberships=None,
+    platform_rom_ids=None,
+):
+    """Build the 5-tuple returned by ``LibraryFetcher.prefetch_all_units``."""
+    return (
+        prefetched or [],
+        all_roms or [],
+        shortcuts_data or [],
+        collection_memberships or {},
+        platform_rom_ids if platform_rom_ids is not None else set(),
+    )
+
+
+def _platform_prefetched(name="N64", slug="n64", roms=None, skipped=True):
+    """Helper to build a single platform PrefetchedUnit for preview tests."""
+    roms = roms or []
+    return PrefetchedUnit(
+        unit=WorkUnit(type="platform", id=1, name=name, slug=slug, rom_count=len(roms)),
+        roms=roms,
+        skipped=skipped,
+    )
 
 
 class TestShortcutDataFormat:
@@ -65,16 +95,21 @@ class TestSyncPreview:
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
 
-        # Mock _fetch_and_prepare to return known data
-        platforms = [{"name": "N64", "slug": "n64"}]
+        # Mock prefetch_all_units to return known data
         all_roms = [{"id": 1}, {"id": 2}, {"id": 3}]
         shortcuts_data = [
             {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
             {"rom_id": 2, "name": "Game B", "platform_name": "N64", "platform_slug": "n64", "fs_name": "b.z64"},
             {"rom_id": 3, "name": "Game C", "platform_name": "N64", "platform_slug": "n64", "fs_name": "c.z64"},
         ]
-        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
-            return_value=(all_roms, shortcuts_data, platforms, {}, set())
+        prefetched = [_platform_prefetched(name="N64", slug="n64", roms=all_roms)]
+        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
+            return_value=_prefetch_result(
+                prefetched=prefetched,
+                all_roms=all_roms,
+                shortcuts_data=shortcuts_data,
+                platform_rom_ids={1, 2, 3},
+            )
         )
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
@@ -101,13 +136,18 @@ class TestSyncPreview:
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
 
-        platforms = [{"name": "N64", "slug": "n64"}]
         all_roms = [{"id": 1}]
         shortcuts_data = [
             {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
         ]
-        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
-            return_value=(all_roms, shortcuts_data, platforms, {}, set())
+        prefetched = [_platform_prefetched(name="N64", slug="n64", roms=all_roms)]
+        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
+            return_value=_prefetch_result(
+                prefetched=prefetched,
+                all_roms=all_roms,
+                shortcuts_data=shortcuts_data,
+                platform_rom_ids={1},
+            )
         )
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
@@ -118,6 +158,10 @@ class TestSyncPreview:
         assert len(plugin._sync_service._pending_delta.new) == 1
         assert plugin._sync_service._pending_delta.platforms_count == 1
         assert plugin._sync_service._pending_delta.total_roms == 1
+        # The unified path caches the prefetched units so apply can
+        # dispatch the per-unit pipeline without refetching.
+        assert plugin._sync_service._box.pending_prefetched_units is not None
+        assert len(plugin._sync_service._box.pending_prefetched_units) == 1
 
     @pytest.mark.asyncio
     async def test_returns_error_when_sync_running(self, plugin):
@@ -134,24 +178,61 @@ class TestSyncPreview:
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
 
-        platforms = [{"name": "N64"}]
         all_roms = [{"id": 1}]
         shortcuts_data = [
             {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
         ]
-        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(
-            return_value=(all_roms, shortcuts_data, platforms, {}, set())
+        prefetched = [_platform_prefetched(name="N64", slug="n64", roms=all_roms)]
+        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
+            return_value=_prefetch_result(
+                prefetched=prefetched,
+                all_roms=all_roms,
+                shortcuts_data=shortcuts_data,
+                platform_rom_ids={1},
+            )
         )
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         await plugin.sync_preview()
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
+    @pytest.mark.asyncio
+    async def test_new_preview_clears_prior_prefetch_cache(self, plugin):
+        """A fresh ``sync_preview`` invalidates any cached prefetched units."""
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+
+        # Seed a stale cache as if a previous preview ran.
+        plugin._sync_service._box.pending_prefetched_units = [
+            _platform_prefetched(name="OLD", slug="old", roms=[{"id": 99}])
+        ]
+
+        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
+            return_value=_prefetch_result(
+                prefetched=[_platform_prefetched(name="N64", slug="n64", roms=[{"id": 1}])],
+                all_roms=[{"id": 1}],
+                shortcuts_data=[
+                    {"rom_id": 1, "name": "A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
+                ],
+                platform_rom_ids={1},
+            )
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        await plugin.sync_preview()
+
+        # New preview replaced the stale cache.
+        units = plugin._sync_service._box.pending_prefetched_units
+        assert units is not None
+        assert [u.unit.name for u in units] == ["N64"]
+
 
 class TestSyncApplyDelta:
     """Tests for sync_apply_delta()."""
 
-    def _setup_pending_delta(self, plugin, preview_id="test-preview-123"):
+    def _setup_pending_delta(self, plugin, preview_id="test-preview-123", *, with_prefetch=True):
         """Helper to populate _pending_delta with valid data."""
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id=preview_id,
@@ -190,6 +271,19 @@ class TestSyncApplyDelta:
             collection_memberships={},
             platform_rom_ids=set(),
         )
+        if with_prefetch:
+            plugin._sync_service._box.pending_prefetched_units = [
+                _platform_prefetched(
+                    name="N64",
+                    slug="n64",
+                    roms=[
+                        {"id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64"},
+                        {"id": 2, "name": "New B", "platform_name": "N64", "platform_slug": "n64"},
+                        {"id": 3, "name": "Game C", "platform_name": "N64", "platform_slug": "n64"},
+                    ],
+                    skipped=True,
+                )
+            ]
 
     @pytest.mark.asyncio
     async def test_rejects_wrong_preview_id(self, plugin):
@@ -222,8 +316,10 @@ class TestSyncApplyDelta:
         assert result["success"] is False
         assert result["error_code"] == "stale_preview"
         assert "30 minutes" in result["message"]
-        # Stale delta is cleared so a repeat apply can't pick it up.
+        # Stale delta + prefetch cache are cleared so a repeat apply
+        # can't pick them up.
         assert plugin._sync_service._pending_delta is None
+        assert plugin._sync_service._box.pending_prefetched_units is None
 
     @pytest.mark.asyncio
     async def test_accepts_when_preview_just_under_max_age(self, plugin, tmp_path):
@@ -239,6 +335,7 @@ class TestSyncApplyDelta:
         }
         self._setup_pending_delta(plugin, "preview-xyz")
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
         # Just under the 30-minute window.
         plugin._sync_service._clock.advance(1799)
 
@@ -247,51 +344,56 @@ class TestSyncApplyDelta:
         assert result["success"] is True
 
     @pytest.mark.asyncio
-    async def test_emits_sync_apply_with_delta(self, plugin, tmp_path):
-
+    async def test_dispatches_per_unit_with_cached_queue(self, plugin, tmp_path):
+        """Apply hands the prefetched cache to ``_do_sync_per_unit`` and clears the box cache."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        # Set up registry for unchanged rom
         plugin._state["shortcut_registry"] = {
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        do_sync = AsyncMock()
+        plugin._sync_service._orchestrator._do_sync_per_unit = do_sync
 
         result = await plugin.sync_apply_delta("test-preview-123")
-        assert result["success"] is True
+        # Drain the create_task'd dispatch.
+        for _ in range(3):
+            await asyncio.sleep(0)
 
-        # Check decky.emit was called with sync_apply
-        emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_apply"]
-        assert len(emit_calls) == 1
-        payload = emit_calls[0][0][1]
-        assert len(payload["shortcuts"]) == 1  # new
-        assert len(payload["changed_shortcuts"]) == 1  # changed
-        assert payload["remove_rom_ids"] == [99]
+        assert result["success"] is True
+        # No monolithic sync_apply emission — the per-unit pipeline drives apply now.
+        assert not any(c[0][0] == "sync_apply" for c in decky.emit.call_args_list)
+        # Per-unit dispatch was kicked off with the prefetched queue.
+        do_sync.assert_called_once()
+        prefetched_arg = do_sync.call_args.kwargs.get("prefetched") or do_sync.call_args.args[0]
+        assert prefetched_arg is not None
+        assert [pu.unit.name for pu in prefetched_arg] == ["N64"]
+        # Apply takes the cache out of the box so a concurrent error path can't double-consume.
+        assert plugin._sync_service._box.pending_prefetched_units is None
 
     @pytest.mark.asyncio
-    async def test_populates_pending_sync(self, plugin, tmp_path):
-
+    async def test_apply_persists_sync_stats(self, plugin, tmp_path):
+        """Apply writes the preview's platform/rom counts into ``sync_stats`` for the safety-timeout fallback."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
         plugin._state["shortcut_registry"] = {
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
-        assert 1 in plugin._sync_service._pending_sync
-        assert 2 in plugin._sync_service._pending_sync
-        assert 3 in plugin._sync_service._pending_sync
+
+        assert plugin._state["sync_stats"]["platforms"] == 1
+        assert plugin._state["sync_stats"]["roms"] == 3
 
     @pytest.mark.asyncio
     async def test_clears_pending_delta(self, plugin, tmp_path):
@@ -307,51 +409,36 @@ class TestSyncApplyDelta:
         }
         self._setup_pending_delta(plugin)
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
         assert plugin._sync_service._pending_delta is None
 
     @pytest.mark.asyncio
-    async def test_sync_apply_does_not_include_collection_data(self, plugin, tmp_path):
-
+    async def test_apply_without_prefetch_logs_warning_and_falls_back(self, plugin, tmp_path):
+        """Cache missing at apply (e.g. server restart) → log warning + dispatch without cache."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
-            "5": {"app_id": 1005, "name": "Game E", "platform_name": "SNES"},
-        }
-        # Include both rom 1 and 5 as unchanged
-        plugin._sync_service._pending_delta = PreviewDelta(
-            preview_id="test-preview-123",
-            created_at=plugin._sync_service._clock.time(),
-            new=[],
-            changed=[],
-            unchanged_ids=[1, 5],
-            remove_rom_ids=[],
-            all_shortcuts={
-                1: {"rom_id": 1, "name": "Game A", "platform_name": "N64"},
-                5: {"rom_id": 5, "name": "Game E", "platform_name": "SNES"},
-            },
-            delta_roms=[],
-            platforms_count=2,
-            total_roms=2,
-            collection_memberships={},
-            platform_rom_ids=set(),
-        )
+        self._setup_pending_delta(plugin, with_prefetch=False)
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        do_sync = AsyncMock()
+        plugin._sync_service._orchestrator._do_sync_per_unit = do_sync
 
-        await plugin.sync_apply_delta("test-preview-123")
+        result = await plugin.sync_apply_delta("test-preview-123")
+        for _ in range(3):
+            await asyncio.sleep(0)
 
-        emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_apply"]
-        assert len(emit_calls) == 1
-        # Platform collection data is no longer in sync_apply — it's built in report_sync_results
-        # and sent via sync_complete instead.
-        assert "collection_platform_app_ids" not in emit_calls[0][0][1]
-        assert "platform_eligible_rom_ids" not in emit_calls[0][0][1]
+        assert result["success"] is True
+        do_sync.assert_called_once()
+        if do_sync.call_args.kwargs:
+            prefetched_arg = do_sync.call_args.kwargs.get("prefetched")
+        else:
+            prefetched_arg = do_sync.call_args.args[0] if do_sync.call_args.args else None
+        # Fallback path: per-unit pipeline runs without cached units (does a fresh fetch).
+        assert prefetched_arg is None
 
 
 class TestSyncCancelPreview:
@@ -373,8 +460,13 @@ class TestSyncCancelPreview:
             collection_memberships={},
             platform_rom_ids=set(),
         )
+        plugin._sync_service._box.pending_prefetched_units = [
+            _platform_prefetched(name="X", slug="x", roms=[{"id": 1}])
+        ]
         result = await plugin.sync_cancel_preview()
         assert plugin._sync_service._pending_delta is None
+        # Cancelling the preview also evicts the prefetched-units cache.
+        assert plugin._sync_service._box.pending_prefetched_units is None
         assert result["success"] is True
 
     @pytest.mark.asyncio
@@ -631,18 +723,23 @@ class TestSafetyTimeoutGenerationGuard:
 
 
 class TestSyncPreviewErrorHandling:
-    """Tests for sync_preview error paths — lines 210-219."""
+    """Tests for sync_preview error paths."""
 
     @pytest.mark.asyncio
     async def test_general_exception_returns_error(self, plugin):
-
-        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(side_effect=RuntimeError("Something broke"))
+        # Seed a cache so we can verify it's cleared on error.
+        plugin._sync_service._box.pending_prefetched_units = [
+            _platform_prefetched(name="STALE", slug="stale", roms=[{"id": 1}])
+        ]
+        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(side_effect=RuntimeError("Something broke"))
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         result = await plugin._sync_service.sync_preview()
         assert result["success"] is False
         assert "error_code" in result
         assert plugin._sync_service._sync_state == SyncState.IDLE
+        # Error path evicts the prefetch cache so apply can't pick up a half-built one.
+        assert plugin._sync_service._box.pending_prefetched_units is None
 
     @pytest.mark.asyncio
     async def test_cancelled_error_reraises(self, plugin):
@@ -651,12 +748,16 @@ class TestSyncPreviewErrorHandling:
 
         decky.emit.reset_mock()
 
-        plugin._sync_service._fetcher._fetch_and_prepare = AsyncMock(side_effect=asyncio.CancelledError("cancelled"))
+        plugin._sync_service._box.pending_prefetched_units = [
+            _platform_prefetched(name="STALE", slug="stale", roms=[{"id": 1}])
+        ]
+        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(side_effect=asyncio.CancelledError("cancelled"))
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
 
         with pytest.raises(asyncio.CancelledError):
             await plugin._sync_service.sync_preview()
         assert plugin._sync_service._sync_state == SyncState.IDLE
+        assert plugin._sync_service._box.pending_prefetched_units is None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1163,137 +1264,112 @@ class TestShutdown:
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
 
 
-class TestSyncApplyDeltaArtworkStep:
-    """Tests for the artwork step in sync_apply_delta() — lines 254, 264-276.
+class TestSyncApplyDeltaUnifiedDispatch:
+    """The unified apply path drives the per-unit pipeline through ``_do_sync_per_unit``.
 
-    When delta_roms is non-empty, the orchestrator must:
-    - Include "artwork" in the step plan
-    - Emit an "applying" progress event for the artwork phase
-    - Delegate to _download_artwork and stamp cover_path on each shortcut
+    Artwork download moves into the per-unit loop (``_sync_one_unit``)
+    rather than a single bulk pre-step — verified by end-to-end tests in
+    :class:`TestDoSyncPerUnit` that follow the cached-prefetch path
+    through to ``sync_apply_unit`` emission.
     """
 
     @pytest.mark.asyncio
-    async def test_artwork_step_downloads_and_stamps_cover_paths(self, plugin, tmp_path):
+    async def test_apply_dispatches_per_unit_with_artwork_for_non_skipped_units(self, plugin, tmp_path):
+        """End-to-end: prefetched non-skipped unit triggers per-unit artwork + sync_apply_unit."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
         plugin._state["shortcut_registry"] = {}
 
+        roms = [
+            {"id": 10, "name": "Game X", "platform_name": "N64", "platform_slug": "n64", "fs_name": "x.z64"},
+        ]
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id="art-preview",
             created_at=plugin._sync_service._clock.time(),
-            new=[
-                {
-                    "rom_id": 10,
-                    "name": "Game X",
-                    "platform_name": "N64",
-                    "platform_slug": "n64",
-                    "fs_name": "x.z64",
-                    "cover_path": "",
-                },
-            ],
-            changed=[
-                {
-                    "rom_id": 11,
-                    "name": "Game Y",
-                    "existing_app_id": 2002,
-                    "platform_name": "N64",
-                    "platform_slug": "n64",
-                    "fs_name": "y.z64",
-                    "cover_path": "",
-                },
-            ],
+            new=[{"rom_id": 10, "name": "Game X", "platform_name": "N64"}],
+            changed=[],
             unchanged_ids=[],
             remove_rom_ids=[],
-            all_shortcuts={
-                10: {"rom_id": 10, "name": "Game X", "platform_name": "N64"},
-                11: {"rom_id": 11, "name": "Game Y", "platform_name": "N64"},
-            },
-            # Non-empty delta_roms triggers the artwork step (line 253-254 + 263-276).
-            delta_roms=[{"id": 10, "name": "Game X"}, {"id": 11, "name": "Game Y"}],
+            all_shortcuts={10: {"rom_id": 10, "name": "Game X", "platform_name": "N64"}},
+            delta_roms=roms,
             platforms_count=1,
-            total_roms=2,
+            total_roms=1,
             collection_memberships={},
-            platform_rom_ids=set(),
+            platform_rom_ids={10},
         )
+        plugin._sync_service._box.pending_prefetched_units = [
+            _platform_prefetched(name="N64", slug="n64", roms=roms, skipped=False)
+        ]
 
         plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(
-            return_value={10: "/grid/x.png", 11: "/grid/y.png"}
-        )
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={10: "/grid/x.png"})
+
+        async def fake_wait(_unit, event):
+            event.set()
+            return {"10": 5000}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
 
         result = await plugin.sync_apply_delta("art-preview")
+        # Drain background dispatch.
+        for _ in range(10):
+            await asyncio.sleep(0)
+
         assert result["success"] is True
-
-        # _download_artwork was invoked with the delta_roms list.
+        # No monolithic sync_apply emission — only the per-unit event.
+        assert not any(c[0][0] == "sync_apply" for c in decky.emit.call_args_list)
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        assert unit_events[0]["unit_name"] == "N64"
+        # Cover path was downloaded per-unit (not skipped) and stamped onto the unit's shortcut.
         plugin._sync_service._orchestrator._download_artwork.assert_called_once()
-        call_args = plugin._sync_service._orchestrator._download_artwork.call_args
-        assert call_args.args[0] == [{"id": 10, "name": "Game X"}, {"id": 11, "name": "Game Y"}]
-
-        # The artwork step bumped current_step to 1, so total_steps reflects artwork + shortcuts.
-        emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_apply"]
-        payload = emit_calls[0][0][1]
-        # apply_steps == ["artwork", "shortcuts"] → total_steps=2, next_step=2
-        assert payload["total_steps"] == 2
-        assert payload["next_step"] == 2
-
-        # cover_path was stamped on every new/changed shortcut via the
-        # sync_apply payload (the in-memory PreviewDelta lists are mutated
-        # in place before being emitted on line 275-276).
-        sync_apply_payload = emit_calls[0][0][1]
-        new_by_id = {sd["rom_id"]: sd for sd in sync_apply_payload["shortcuts"]}
-        changed_by_id = {sd["rom_id"]: sd for sd in sync_apply_payload["changed_shortcuts"]}
-        assert new_by_id[10]["cover_path"] == "/grid/x.png"
-        assert changed_by_id[11]["cover_path"] == "/grid/y.png"
+        assert unit_events[0]["shortcuts"][0]["cover_path"] == "/grid/x.png"
 
     @pytest.mark.asyncio
-    async def test_artwork_step_emits_applying_progress_with_step_plan(self, plugin, tmp_path):
-        """Artwork phase emits an 'applying' progress event with step=1."""
+    async def test_apply_skips_artwork_for_incremental_units(self, plugin, tmp_path):
+        """Prefetched unit marked ``skipped=True`` bypasses artwork download in the per-unit loop."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
 
+        roms = [{"id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64"}]
         plugin._sync_service._pending_delta = PreviewDelta(
-            preview_id="art-progress",
+            preview_id="skip-preview",
             created_at=plugin._sync_service._clock.time(),
-            new=[
-                {
-                    "rom_id": 20,
-                    "name": "G",
-                    "platform_name": "N64",
-                    "platform_slug": "n64",
-                    "fs_name": "g.z64",
-                    "cover_path": "",
-                },
-            ],
+            new=[],
             changed=[],
-            unchanged_ids=[],
+            unchanged_ids=[10],
             remove_rom_ids=[],
-            all_shortcuts={20: {"rom_id": 20, "name": "G", "platform_name": "N64"}},
-            delta_roms=[{"id": 20, "name": "G"}],
+            all_shortcuts={10: {"rom_id": 10, "name": "A", "platform_name": "N64"}},
+            delta_roms=[],
             platforms_count=1,
             total_roms=1,
             collection_memberships={},
-            platform_rom_ids=set(),
+            platform_rom_ids={10},
         )
+        plugin._sync_service._box.pending_prefetched_units = [
+            _platform_prefetched(name="N64", slug="n64", roms=roms, skipped=True)
+        ]
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
-        emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._emit_progress = emit_progress
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={20: "/g.png"})
+        async def fake_wait(_unit, event):
+            event.set()
+            return {}
 
-        result = await plugin.sync_apply_delta("art-progress")
-        assert result["success"] is True
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
 
-        # First _emit_progress call is the artwork "applying" message (line 265-271).
-        first_call = emit_progress.call_args_list[0]
-        assert first_call.args[0] == "applying"
-        assert first_call.kwargs["step"] == 1
-        assert "Downloading artwork" in first_call.kwargs["message"]
+        await plugin.sync_apply_delta("skip-preview")
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        # Skipped=True → artwork download was not called for the unit.
+        plugin._sync_service._orchestrator._download_artwork.assert_not_called()
 
 
 class TestDoSyncPerUnitErrors:
@@ -1535,6 +1611,136 @@ class TestSyncOneUnitCollectionAndCancel:
         assert plugin._sync_service._pending_sync == {}
         assert plugin._sync_service._box.unit_complete_event is None
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
+
+
+class TestSyncOneUnitWithPrefetched:
+    """``_sync_one_unit`` consumes pre-fetched ROMs when handed a ``PrefetchedUnit``.
+
+    The unified Skip Preview OFF apply path passes the preview's
+    cached unit data down so the per-unit driver does not call back into
+    the fetcher for the same ROMs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_platform_unit_uses_cached_roms_no_refetch(self, plugin):
+        plugin.loop = asyncio.get_event_loop()
+
+        cached_roms = [
+            {"id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+            {"id": 11, "name": "B", "platform_name": "N64", "platform_slug": "n64"},
+        ]
+        prefetched = _platform_prefetched(name="N64", slug="n64", roms=cached_roms, skipped=True)
+        # If anything calls the fetcher, the test fails — there is no live mock.
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(side_effect=AssertionError("must not refetch"))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"10": 5001, "11": 5002}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        platform_rom_ids: set[int] = set()
+        synced_rom_ids: set[int] = set()
+        applied = await plugin._sync_service._orchestrator._sync_one_unit(
+            prefetched.unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=synced_rom_ids,
+            collection_memberships={},
+            platform_rom_ids=platform_rom_ids,
+            all_rom_id_to_app_id={},
+            prefetched=prefetched,
+        )
+
+        assert applied == 2
+        # platform_rom_ids and synced_rom_ids reflect the cached ROMs even though no fetch happened.
+        assert platform_rom_ids == {10, 11}
+        assert synced_rom_ids == {10, 11}
+        plugin._sync_service._fetcher.fetch_platform_unit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_collection_unit_uses_cached_membership_no_refetch(self, plugin):
+        """Cached collection units replay their membership without refetching."""
+        from domain.work_unit import WorkUnit
+        from services.library._state import PrefetchedUnit
+
+        plugin.loop = asyncio.get_event_loop()
+        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=2)
+        cached_roms = [{"id": 30, "name": "X", "platform_name": "N64", "platform_slug": "n64"}]
+        prefetched = PrefetchedUnit(
+            unit=unit,
+            roms=cached_roms,
+            skipped=False,
+            all_collection_rom_ids=[30, 31],
+        )
+        plugin._sync_service._fetcher.fetch_collection_unit = AsyncMock(side_effect=AssertionError("must not refetch"))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"30": 9001}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        memberships: dict[str, list[int]] = {}
+        synced_rom_ids: set[int] = set()
+        applied = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=synced_rom_ids,
+            collection_memberships=memberships,
+            platform_rom_ids=set(),
+            all_rom_id_to_app_id={},
+            prefetched=prefetched,
+        )
+
+        assert applied == 1
+        # Cached membership flows through as if fetch_collection_unit had returned it.
+        assert memberships == {"Faves": [30, 31]}
+        # ROMs marked as synced so subsequent collection units can dedup.
+        assert synced_rom_ids == {30}
+        plugin._sync_service._fetcher.fetch_collection_unit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_prefetched_unit_skips_metadata_re_stamp(self, plugin):
+        """``cache_metadata_for_unit`` is not invoked when ROMs come from prefetch (already stamped)."""
+        plugin.loop = asyncio.get_event_loop()
+        prefetched = _platform_prefetched(
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64"}],
+            skipped=True,
+        )
+        cache_meta = MagicMock()
+        plugin._sync_service._fetcher.cache_metadata_for_unit = cache_meta
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"10": 5001}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            prefetched.unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+            all_rom_id_to_app_id={},
+            prefetched=prefetched,
+        )
+
+        cache_meta.assert_not_called()
 
 
 class TestWaitForUnitCompleteCancelled:

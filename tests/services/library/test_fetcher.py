@@ -497,6 +497,136 @@ class TestFetchCollectionRoms:
         assert roms[0]["id"] == 42
 
 
+class TestPrefetchAllUnits:
+    """Tests for prefetch_all_units — the Skip Preview OFF upfront fetch."""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_units(self, plugin):
+        """No enabled platforms + no enabled collections → empty prefetch + empty aggregates."""
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=[])
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        (
+            prefetched,
+            all_roms,
+            shortcuts_data,
+            memberships,
+            platform_rom_ids,
+        ) = await plugin._sync_service._fetcher.prefetch_all_units()
+
+        assert prefetched == []
+        assert all_roms == []
+        assert shortcuts_data == []
+        assert memberships == {}
+        assert platform_rom_ids == set()
+
+    @pytest.mark.asyncio
+    async def test_fetches_each_platform_unit(self, plugin):
+        """Each platform unit goes through fetch_platform_unit and aggregates into all_roms."""
+        from domain.work_unit import WorkUnit
+
+        queue = [
+            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1),
+            WorkUnit(type="platform", id=2, name="GBA", slug="gba", rom_count=1),
+        ]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+
+        async def fake_platform(unit):
+            return [
+                {
+                    "id": int(unit.id) * 10,
+                    "name": f"Game {unit.name}",
+                    "platform_name": unit.name,
+                    "platform_slug": unit.slug,
+                }
+            ], False
+
+        plugin._sync_service._fetcher.fetch_platform_unit = fake_platform
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        (
+            prefetched,
+            all_roms,
+            _shortcuts,
+            memberships,
+            platform_rom_ids,
+        ) = await plugin._sync_service._fetcher.prefetch_all_units()
+
+        assert [pu.unit.name for pu in prefetched] == ["N64", "GBA"]
+        assert {r["id"] for r in all_roms} == {10, 20}
+        assert platform_rom_ids == {10, 20}
+        assert memberships == {}
+
+    @pytest.mark.asyncio
+    async def test_fetches_collection_unit_records_membership(self, plugin):
+        """Collection units populate collection_memberships with their member ids."""
+        from domain.work_unit import WorkUnit
+
+        queue = [WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=2)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+
+        async def fake_collection(_unit, synced):
+            synced.add(101)
+            return [
+                {"id": 101, "name": "C101", "platform_name": "N64", "platform_slug": "n64"},
+            ], [101, 102]
+
+        plugin._sync_service._fetcher.fetch_collection_unit = fake_collection
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        (
+            prefetched,
+            _all,
+            _shortcuts,
+            memberships,
+            platform_rom_ids,
+        ) = await plugin._sync_service._fetcher.prefetch_all_units()
+
+        assert memberships == {"Faves": [101, 102]}
+        # Collection-only ROMs do not land in platform_rom_ids.
+        assert platform_rom_ids == set()
+        # PrefetchedUnit retains the full membership list for finalize.
+        assert prefetched[0].all_collection_rom_ids == [101, 102]
+
+    @pytest.mark.asyncio
+    async def test_preserves_skipped_flag_on_platform_unit(self, plugin):
+        """``skipped=True`` from fetch_platform_unit flows into the PrefetchedUnit."""
+        from domain.work_unit import WorkUnit
+
+        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64"}], True)
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        prefetched, *_ = await plugin._sync_service._fetcher.prefetch_all_units()
+
+        assert prefetched[0].skipped is True
+
+    @pytest.mark.asyncio
+    async def test_caches_metadata_for_every_rom(self, plugin):
+        """Aggregated ROMs run through metadata_service for the dirty-flush before returning."""
+        from domain.work_unit import WorkUnit
+
+        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 10, "name": "A", "platform_name": "N64"}], True)
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        metadata_service = MagicMock()
+        metadata_service.extract_metadata = MagicMock(return_value={"name": "A"})
+        plugin._sync_service._fetcher._metadata_service = metadata_service
+
+        await plugin._sync_service._fetcher.prefetch_all_units()
+
+        metadata_service.extract_metadata.assert_called_once()
+        metadata_service.mark_metadata_dirty.assert_called_once()
+        metadata_service.flush_metadata_if_dirty.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # TestCollectionSyncEdgeCases
 # ---------------------------------------------------------------------------

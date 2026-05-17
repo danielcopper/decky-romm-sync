@@ -20,7 +20,7 @@ from domain.shortcut_data import build_shortcuts_data
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 from lib.errors import classify_error
-from services.library._state import LibrarySyncStateBox
+from services.library._state import LibrarySyncStateBox, PrefetchedUnit
 
 if TYPE_CHECKING:
     import logging
@@ -669,6 +669,76 @@ class LibraryFetcher:
             offset += limit
 
         return new_roms, all_collection_rom_ids
+
+    async def prefetch_all_units(
+        self,
+    ) -> tuple[list[PrefetchedUnit], list[dict], list[dict], dict[str, list[int]], set[int]]:
+        """Build the work queue and fetch every unit's ROMs upfront.
+
+        Used by the unified preview path so ``sync_apply_delta`` can
+        dispatch the per-unit pipeline against cached unit data without
+        re-fetching from RomM on the apply step. Mirrors the data shape
+        the legacy ``_fetch_and_prepare`` produced for the monolithic
+        preview path: the aggregated ROM list, shortcut data, full
+        platform list (kept for downstream callers that count
+        platforms), per-collection memberships, and the set of rom_ids
+        seen via platform units (used for the platform-collection diff
+        gate in the summary). Caches metadata at the end through the
+        injected ``MetadataExtractor`` so a mid-flight crash leaves the
+        ROM metadata stamped on disk.
+        """
+        await self._emit_progress("platforms", message="Fetching platforms...")
+        work_queue = await self.build_work_queue()
+        self._check_cancelling()
+
+        prefetched: list[PrefetchedUnit] = []
+        all_roms: list[dict] = []
+        platform_rom_ids: set[int] = set()
+        collection_memberships: dict[str, list[int]] = {}
+        synced_rom_ids: set[int] = set()
+
+        total_units = len(work_queue)
+        for unit_index, unit in enumerate(work_queue, 1):
+            self._check_cancelling()
+            await self._emit_progress(
+                "roms",
+                current=len(all_roms),
+                message=f"Fetching {unit.name}... ({unit_index}/{total_units})",
+            )
+
+            if unit.type == "platform":
+                unit_roms, skipped = await self.fetch_platform_unit(unit)
+                for rom in unit_roms:
+                    platform_rom_ids.add(rom["id"])
+                    synced_rom_ids.add(rom["id"])
+                all_roms.extend(unit_roms)
+                prefetched.append(PrefetchedUnit(unit=unit, roms=unit_roms, skipped=skipped))
+            else:
+                unit_roms, all_collection_rom_ids = await self.fetch_collection_unit(unit, synced_rom_ids)
+                if all_collection_rom_ids:
+                    collection_memberships[unit.name] = all_collection_rom_ids
+                all_roms.extend(unit_roms)
+                prefetched.append(
+                    PrefetchedUnit(
+                        unit=unit,
+                        roms=unit_roms,
+                        skipped=False,
+                        all_collection_rom_ids=all_collection_rom_ids,
+                    )
+                )
+
+        shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir)
+        self._check_cancelling()
+
+        if self._metadata_service is not None:
+            for rom in all_roms:
+                rom_id_str = str(rom["id"])
+                self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
+                self._metadata_service.mark_metadata_dirty()
+            self._metadata_service.flush_metadata_if_dirty()
+        self._log_debug(f"Metadata cached for {len(all_roms)} ROMs (prefetch)")
+
+        return prefetched, all_roms, shortcuts_data, collection_memberships, platform_rom_ids
 
     def cache_metadata_for_unit(self, unit_roms: list[dict]) -> None:
         """Stamp the metadata cache for one unit's ROMs and flush.
