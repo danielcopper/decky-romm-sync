@@ -2,7 +2,7 @@
 
 import asyncio
 import os
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -1138,3 +1138,462 @@ class TestReportUnitResults:
         await plugin.report_unit_results({"10": 9001})
 
         assert save_count[0] == 1, "report_unit_results must checkpoint state to disk"
+
+
+class TestShutdown:
+    """Tests for shutdown() — lines 146-148.
+
+    Graceful shutdown flips a RUNNING sync into CANCELLING so the
+    per-unit loop drops its in-flight work on the next checkpoint.
+    """
+
+    def test_shutdown_when_running_marks_cancelling(self, plugin):
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service.shutdown()
+        assert plugin._sync_service._sync_state == SyncState.CANCELLING
+
+    def test_shutdown_when_idle_is_noop(self, plugin):
+        plugin._sync_service._sync_state = SyncState.IDLE
+        plugin._sync_service.shutdown()
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+
+    def test_shutdown_when_cancelling_is_noop(self, plugin):
+        plugin._sync_service._sync_state = SyncState.CANCELLING
+        plugin._sync_service.shutdown()
+        assert plugin._sync_service._sync_state == SyncState.CANCELLING
+
+
+class TestSyncApplyDeltaArtworkStep:
+    """Tests for the artwork step in sync_apply_delta() — lines 254, 264-276.
+
+    When delta_roms is non-empty, the orchestrator must:
+    - Include "artwork" in the step plan
+    - Emit an "applying" progress event for the artwork phase
+    - Delegate to _download_artwork and stamp cover_path on each shortcut
+    """
+
+    @pytest.mark.asyncio
+    async def test_artwork_step_downloads_and_stamps_cover_paths(self, plugin, tmp_path):
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        plugin._state["shortcut_registry"] = {}
+
+        plugin._sync_service._pending_delta = PreviewDelta(
+            preview_id="art-preview",
+            created_at=plugin._sync_service._clock.time(),
+            new=[
+                {
+                    "rom_id": 10,
+                    "name": "Game X",
+                    "platform_name": "N64",
+                    "platform_slug": "n64",
+                    "fs_name": "x.z64",
+                    "cover_path": "",
+                },
+            ],
+            changed=[
+                {
+                    "rom_id": 11,
+                    "name": "Game Y",
+                    "existing_app_id": 2002,
+                    "platform_name": "N64",
+                    "platform_slug": "n64",
+                    "fs_name": "y.z64",
+                    "cover_path": "",
+                },
+            ],
+            unchanged_ids=[],
+            remove_rom_ids=[],
+            all_shortcuts={
+                10: {"rom_id": 10, "name": "Game X", "platform_name": "N64"},
+                11: {"rom_id": 11, "name": "Game Y", "platform_name": "N64"},
+            },
+            # Non-empty delta_roms triggers the artwork step (line 253-254 + 263-276).
+            delta_roms=[{"id": 10, "name": "Game X"}, {"id": 11, "name": "Game Y"}],
+            platforms_count=1,
+            total_roms=2,
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(
+            return_value={10: "/grid/x.png", 11: "/grid/y.png"}
+        )
+
+        result = await plugin.sync_apply_delta("art-preview")
+        assert result["success"] is True
+
+        # _download_artwork was invoked with the delta_roms list.
+        plugin._sync_service._orchestrator._download_artwork.assert_called_once()
+        call_args = plugin._sync_service._orchestrator._download_artwork.call_args
+        assert call_args.args[0] == [{"id": 10, "name": "Game X"}, {"id": 11, "name": "Game Y"}]
+
+        # The artwork step bumped current_step to 1, so total_steps reflects artwork + shortcuts.
+        emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_apply"]
+        payload = emit_calls[0][0][1]
+        # apply_steps == ["artwork", "shortcuts"] → total_steps=2, next_step=2
+        assert payload["total_steps"] == 2
+        assert payload["next_step"] == 2
+
+        # cover_path was stamped on every new/changed shortcut via the
+        # sync_apply payload (the in-memory PreviewDelta lists are mutated
+        # in place before being emitted on line 275-276).
+        sync_apply_payload = emit_calls[0][0][1]
+        new_by_id = {sd["rom_id"]: sd for sd in sync_apply_payload["shortcuts"]}
+        changed_by_id = {sd["rom_id"]: sd for sd in sync_apply_payload["changed_shortcuts"]}
+        assert new_by_id[10]["cover_path"] == "/grid/x.png"
+        assert changed_by_id[11]["cover_path"] == "/grid/y.png"
+
+    @pytest.mark.asyncio
+    async def test_artwork_step_emits_applying_progress_with_step_plan(self, plugin, tmp_path):
+        """Artwork phase emits an 'applying' progress event with step=1."""
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        plugin._sync_service._pending_delta = PreviewDelta(
+            preview_id="art-progress",
+            created_at=plugin._sync_service._clock.time(),
+            new=[
+                {
+                    "rom_id": 20,
+                    "name": "G",
+                    "platform_name": "N64",
+                    "platform_slug": "n64",
+                    "fs_name": "g.z64",
+                    "cover_path": "",
+                },
+            ],
+            changed=[],
+            unchanged_ids=[],
+            remove_rom_ids=[],
+            all_shortcuts={20: {"rom_id": 20, "name": "G", "platform_name": "N64"}},
+            delta_roms=[{"id": 20, "name": "G"}],
+            platforms_count=1,
+            total_roms=1,
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = emit_progress
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={20: "/g.png"})
+
+        result = await plugin.sync_apply_delta("art-progress")
+        assert result["success"] is True
+
+        # First _emit_progress call is the artwork "applying" message (line 265-271).
+        first_call = emit_progress.call_args_list[0]
+        assert first_call.args[0] == "applying"
+        assert first_call.kwargs["step"] == 1
+        assert "Downloading artwork" in first_call.kwargs["message"]
+
+
+class TestDoSyncPerUnitErrors:
+    """Tests for error/cancel paths inside _do_sync_per_unit — lines 433-441, 489-502."""
+
+    @pytest.mark.asyncio
+    async def test_build_work_queue_cancelled_error_finishes_sync(self, plugin):
+        """CancelledError during build_work_queue triggers _finish_sync + re-raise."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(side_effect=asyncio.CancelledError())
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "sync-cancel-build"
+
+        with pytest.raises(asyncio.CancelledError):
+            await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # _finish_sync transitioned to IDLE + cleared sync id.
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+        assert plugin._sync_service._current_sync_id is None
+        progress_phases = [
+            c.args[1].get("phase") for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_progress"
+        ]
+        assert "cancelled" in progress_phases
+
+    @pytest.mark.asyncio
+    async def test_build_work_queue_general_exception_emits_error(self, plugin):
+        """A non-cancellation exception during build_work_queue is logged + surfaced."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(side_effect=RuntimeError("RomM down"))
+        emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = emit_progress
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        # Should NOT raise — outer flow swallows the exception after emitting an error.
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # error phase was emitted via _emit_progress.
+        error_calls = [c for c in emit_progress.call_args_list if c.args and c.args[0] == "error"]
+        assert len(error_calls) == 1
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+
+    @pytest.mark.asyncio
+    async def test_outer_exception_handler_emits_error_progress(self, plugin):
+        """An exception raised after build_work_queue (e.g. during a unit) hits the outer except."""
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        # Fetching the unit blows up after the queue was built — exception propagates
+        # past _sync_one_unit and hits the outer except in _do_sync_per_unit (489-502).
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(side_effect=RuntimeError("boom"))
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+        # Drain any pending tasks scheduled by the outer handler (loop.create_task).
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        # sync_progress with phase=error was scheduled.
+        error_events = [
+            c
+            for c in decky.emit.call_args_list
+            if c.args and c.args[0] == "sync_progress" and c.args[1].get("phase") == "error"
+        ]
+        assert len(error_events) >= 1
+        assert "Sync failed" in error_events[0].args[1]["message"]
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+
+    @pytest.mark.asyncio
+    async def test_cancelling_state_before_first_unit_skips_processing(self, plugin):
+        """If state is CANCELLING when the unit loop starts, no units run (lines 462-464)."""
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [
+            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1),
+            WorkUnit(type="platform", id=2, name="GBA", slug="gba", rom_count=1),
+        ]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        fetch_mock = AsyncMock()
+        plugin._sync_service._fetcher.fetch_platform_unit = fetch_mock
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._sync_state = SyncState.CANCELLING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # No units were processed because the CANCELLING check fired first.
+        fetch_mock.assert_not_called()
+        # _finalize_per_unit still ran; sync_complete is emitted with cancelled=True.
+        complete = [c for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_complete"]
+        assert len(complete) == 1
+        assert complete[0].args[1].get("cancelled") is True
+
+
+class TestSyncOneUnitCollectionAndCancel:
+    """Tests for _sync_one_unit branches — lines 535-538, 541, 557, 584-587."""
+
+    @pytest.mark.asyncio
+    async def test_collection_unit_records_membership(self, plugin):
+        """A collection unit populates collection_memberships with its rom_ids (535-538)."""
+        import decky
+
+        from domain.work_unit import WorkUnit
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+
+        queue = [WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=2, is_virtual=False)]
+        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._sync_service._fetcher.fetch_collection_unit = AsyncMock(
+            return_value=([{"id": 1, "name": "A", "platform_name": "N64"}], [1, 2])
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # sync_complete fired (collection_memberships flowed through to finalize).
+        complete = [c for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_complete"]
+        assert len(complete) == 1
+
+    @pytest.mark.asyncio
+    async def test_cancel_after_fetch_returns_zero_applied(self, plugin):
+        """CANCELLING flipped after fetch_platform_unit → unit returns 0 (line 540-541)."""
+        from domain.work_unit import WorkUnit
+
+        plugin.loop = asyncio.get_event_loop()
+
+        async def fetch_then_cancel(_unit):
+            # Flip the state mid-flight so the post-fetch guard observes CANCELLING.
+            plugin._sync_service._sync_state = SyncState.CANCELLING
+            return [{"id": 1, "name": "A", "platform_name": "N64"}], True
+
+        plugin._sync_service._fetcher.fetch_platform_unit = fetch_then_cancel
+        emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._emit_progress = emit_progress
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        applied = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+            all_rom_id_to_app_id={},
+        )
+        assert applied == 0
+
+    @pytest.mark.asyncio
+    async def test_cancel_after_artwork_returns_zero_applied(self, plugin):
+        """CANCELLING flipped after the artwork download → unit returns 0 (line 556-557)."""
+        from domain.work_unit import WorkUnit
+
+        plugin.loop = asyncio.get_event_loop()
+
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 1, "name": "A", "platform_name": "N64"}], False)
+        )
+
+        async def cancel_during_artwork(*_a, **_kw):
+            # Trigger CANCELLING in between the post-fetch check and the post-artwork check.
+            plugin._sync_service._sync_state = SyncState.CANCELLING
+            return {}
+
+        plugin._sync_service._orchestrator._download_artwork = cancel_during_artwork
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        applied = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+            all_rom_id_to_app_id={},
+        )
+        assert applied == 0
+
+    @pytest.mark.asyncio
+    async def test_wait_returning_none_clears_pending_and_cancels(self, plugin):
+        """When _wait_for_unit_complete returns None, the unit drops state + flips CANCELLING (584-587)."""
+        from domain.work_unit import WorkUnit
+
+        plugin.loop = asyncio.get_event_loop()
+
+        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
+            return_value=([{"id": 1, "name": "A", "platform_name": "N64"}], True)
+        )
+        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        # Simulate heartbeat timeout / cancel inside _wait_for_unit_complete.
+        async def wait_returns_none(_unit, _event):
+            return None
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_returns_none
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        applied = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+            all_rom_id_to_app_id={},
+        )
+        assert applied == 0
+        # pending_sync was cleared, unit event reference dropped, state flipped.
+        assert plugin._sync_service._pending_sync == {}
+        assert plugin._sync_service._box.unit_complete_event is None
+        assert plugin._sync_service._sync_state == SyncState.CANCELLING
+
+
+class TestWaitForUnitCompleteCancelled:
+    """Tests for asyncio.CancelledError in _wait_for_unit_complete — lines 617-621."""
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_during_sleep_is_logged_and_reraised(self, plugin):
+        """If the inner sleep is cancelled, log + re-raise so the outer loop sees the cancel."""
+        from domain.work_unit import WorkUnit
+
+        class _CancellingSleeper:
+            async def sleep(self, _seconds: float) -> None:
+                raise asyncio.CancelledError()
+
+        plugin._sync_service._sleeper = _CancellingSleeper()
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic()
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        event = asyncio.Event()  # never set — wait will enter the sleep path
+
+        with pytest.raises(asyncio.CancelledError):
+            await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
+
+
+class TestDownloadArtworkDelegation:
+    """Tests for _download_artwork — lines 660-669."""
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_artwork_manager(self, plugin):
+        """When _artwork is bound, the call is forwarded with progress + cancel hooks."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        fake_download = _AsyncMock(return_value={1: "/path/a.png", 2: "/path/b.png"})
+        plugin._sync_service._orchestrator._artwork = MagicMock()
+        plugin._sync_service._orchestrator._artwork.download_artwork = fake_download
+
+        roms = [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}]
+        result = await plugin._sync_service._orchestrator._download_artwork(
+            roms, progress_step=3, progress_total_steps=7
+        )
+
+        assert result == {1: "/path/a.png", 2: "/path/b.png"}
+        fake_download.assert_called_once()
+        call_kwargs = fake_download.call_args.kwargs
+        assert call_kwargs["progress_step"] == 3
+        assert call_kwargs["progress_total_steps"] == 7
+        # is_cancelling closure reflects the live sync_state.
+        is_cancelling = call_kwargs["is_cancelling"]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        assert is_cancelling() is False
+        plugin._sync_service._sync_state = SyncState.CANCELLING
+        assert is_cancelling() is True
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_artwork_manager_missing(self, plugin):
+        """No _artwork bound → return {} without raising."""
+        plugin._sync_service._orchestrator._artwork = None
+        result = await plugin._sync_service._orchestrator._download_artwork(
+            [{"id": 1}], progress_step=1, progress_total_steps=1
+        )
+        assert result == {}
