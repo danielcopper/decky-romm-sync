@@ -78,6 +78,12 @@ export interface SaveStatus {
   conflicts?: SyncConflict[];
   active_slot?: string | null;
   save_sync_display?: SaveSyncDisplay;
+  /** True when the backend's ``list_saves`` call raised before the matrix
+   *  ran. Every file row carries ``status: "unknown"`` in that case — the
+   *  empty server list would otherwise be classified as "ready to upload"
+   *  and surface a misleading uploads-pending indicator on what is in
+   *  fact a connectivity blip. */
+  server_query_failed?: boolean;
 }
 
 export interface SaveSlotSummary {

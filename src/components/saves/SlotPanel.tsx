@@ -25,6 +25,13 @@ function computeSyncSummary(
 ): { syncSummaryText: string | null; syncSummaryColor: string } {
   if (!isActive || !saveStatus) return { syncSummaryText: null, syncSummaryColor: MUTED_COLOR };
 
+  // Backend signals it could not reach the server — suppress the matrix-derived
+  // "Synced" / "Not synced" labels (they would reflect an empty server list, not
+  // reality) and render a neutral "Server unreachable" instead.
+  if (saveStatus.server_query_failed) {
+    return { syncSummaryText: "Server unreachable", syncSummaryColor: MUTED_COLOR };
+  }
+
   const hasConflict = conflicts.length > 0;
   const fileCount = saveStatus.files?.length ?? 0;
 

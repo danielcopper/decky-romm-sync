@@ -111,6 +111,8 @@ export function statusLabel(status: string, lastSyncAt: string | null): { color:
       return { color: "#1a9fff", label: "Server newer" };
     case "conflict":
       return { color: "#d94126", label: "Conflict" };
+    case "unknown":
+      return { color: "#8f98a0", label: "Status unknown" };
     default:
       if (lastSyncAt) return { color: "#5ba32b", label: "Synced" };
       return { color: "#8f98a0", label: "Not synced" };

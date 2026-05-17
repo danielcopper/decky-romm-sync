@@ -59,3 +59,19 @@ class TestComputeSaveSyncDisplay:
         files = [{"status": "synced", "local_path": "/saves/test.srm"}]
         result = compute_save_sync_display(files, "not-a-date")
         assert result == SaveSyncDisplay(status="synced", label=None, last_sync_check_at="not-a-date")
+
+    def test_server_query_failed_overrides_everything(self):
+        """server_query_failed=True collapses to 'Server unreachable' regardless of files."""
+        files = [{"status": "synced", "local_path": "/saves/test.srm"}]
+        result = compute_save_sync_display(files, "2026-01-01T00:00:00Z", server_query_failed=True)
+        assert result == SaveSyncDisplay(status="none", label="Server unreachable", last_sync_check_at=None)
+
+    def test_server_query_failed_with_empty_files(self):
+        """server_query_failed=True also wins over the empty-files branch."""
+        result = compute_save_sync_display([], None, server_query_failed=True)
+        assert result == SaveSyncDisplay(status="none", label="Server unreachable", last_sync_check_at=None)
+
+    def test_server_query_failed_default_false_preserves_legacy(self):
+        """Default value (False) preserves the pre-fix behavior."""
+        result = compute_save_sync_display(None, None)
+        assert result == SaveSyncDisplay(status="none", label="No saves", last_sync_check_at=None)

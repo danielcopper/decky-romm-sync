@@ -338,3 +338,148 @@ class TestBuildersDefensiveBranches:
         # A bare object is not Download/Conflict/Upload, so the function falls
         # through to the candidates check; an empty list returns None.
         assert _resolve_chosen_server(object(), []) is None
+
+
+class TestServerQueryFailed:
+    """``get_save_status`` must surface a connectivity-failure flag and
+    suppress the misleading "ready to upload" indicators an empty server
+    list would otherwise produce against local-only saves."""
+
+    @pytest.mark.asyncio
+    async def test_list_saves_failure_sets_flag_and_marks_status_unknown(self, tmp_path):
+        """OSError from list_saves → server_query_failed=True, file status=unknown."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.fail_on_next(OSError("connection reset"))
+
+        result = await svc.get_save_status(42)
+
+        assert result["server_query_failed"] is True
+        # A local save exists, so a row still appears — but the misleading
+        # matrix-derived "upload" verdict against an empty server list is
+        # replaced with the neutral "unknown" status.
+        assert len(result["files"]) == 1
+        file_row = result["files"][0]
+        assert file_row["status"] == "unknown"
+        assert file_row["filename"] == "pokemon.srm"
+        # Local-side fields stay intact (they come from local state, not
+        # from the failed list_saves call).
+        assert file_row["local_path"] is not None
+        assert file_row["local_hash"] is not None
+        assert file_row["local_size"] is not None
+        # Server-side attribution is nulled out — we have no server info.
+        assert file_row["server_save_id"] is None
+        assert file_row["server_file_name"] is None
+        assert file_row["server_emulator"] is None
+        assert file_row["server_updated_at"] is None
+        assert file_row["server_size"] is None
+        assert file_row["device_syncs"] == []
+        assert file_row["uploaded_by_us"] is None
+        # No conflicts can be reported when we don't actually know the
+        # server state.
+        assert result["conflicts"] == []
+        # The aggregate display collapses to a neutral "Server unreachable"
+        # label rather than the misleading "Not synced" / "Synced".
+        assert result["save_sync_display"] == {
+            "status": "none",
+            "label": "Server unreachable",
+            "last_sync_check_at": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_happy_path_flag_is_false(self, tmp_path):
+        """Successful list_saves preserves the normal flow with the flag set False."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+
+        ss = _server_save()
+        fake.saves[100] = ss
+
+        result = await svc.get_save_status(42)
+
+        assert result["server_query_failed"] is False
+        assert len(result["files"]) >= 1
+        # Real matrix verdict surfaced (not redacted).
+        assert result["files"][0]["status"] != "unknown"
+
+    @pytest.mark.asyncio
+    async def test_empty_server_response_is_not_failure(self, tmp_path):
+        """Genuine empty list (no saves on server) ≠ server_query_failed.
+
+        list_saves returns ``[]`` legitimately (no saves uploaded for this
+        ROM yet). The matrix correctly classifies the local-only file as
+        "upload" — that's the truth of the situation, not a misleading
+        artifact. The flag stays False and the display does NOT collapse
+        to "Server unreachable".
+        """
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        # No fail_on_next, no fake.saves entry → list_saves returns [].
+
+        result = await svc.get_save_status(42)
+
+        assert result["server_query_failed"] is False
+        # The matrix's "upload" verdict on a local-only file with a truly
+        # empty server is the correct answer, not a stale-cache artifact.
+        assert len(result["files"]) == 1
+        assert result["files"][0]["status"] == "upload"
+        # save_sync_display is NOT the "Server unreachable" fallback.
+        assert result["save_sync_display"]["label"] != "Server unreachable"
+
+    def test_redacted_entry_preserves_local_metadata(self, tmp_path):
+        """The bad-path redaction must not strip local-side metadata —
+        users still need to see *which* file is in the unknown state."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        ss = _server_save()
+        fake.saves[100] = ss
+
+        # Drive the IO helper directly with the failure flag so we exercise
+        # the redaction path against a "successful" matrix result.
+        result = svc._status._get_save_status_io(42, [ss], server_query_failed=True)
+
+        assert result["server_query_failed"] is True
+        assert len(result["files"]) == 1
+        row = result["files"][0]
+        assert row["status"] == "unknown"
+        assert row["filename"] == "pokemon.srm"
+        assert row["local_path"] is not None
+        assert row["local_size"] == 1024
+        assert row["server_save_id"] is None
+        assert result["conflicts"] == []
+
+
+class TestCompositeServerQueryFailedDomain:
+    """compute_save_sync_display short-circuits on server_query_failed."""
+
+    def test_failure_flag_overrides_files_and_check_timestamp(self):
+        """Even with files and a recent check, the failure flag wins."""
+        from domain.save_status import compute_save_sync_display
+
+        files = [{"filename": "pokemon.srm", "status": "synced", "local_path": "/x/pokemon.srm"}]
+        display = compute_save_sync_display(
+            files,
+            "2026-04-01T08:00:00+00:00",
+            server_query_failed=True,
+        )
+        assert display.status == "none"
+        assert display.label == "Server unreachable"
+        assert display.last_sync_check_at is None
+
+    def test_happy_path_default_kw_unchanged(self):
+        """Omitting the kw argument keeps the legacy behavior intact."""
+        from domain.save_status import compute_save_sync_display
+
+        files = [{"filename": "pokemon.srm", "status": "synced", "local_path": "/x/pokemon.srm"}]
+        display = compute_save_sync_display(files, "2026-04-01T08:00:00+00:00")
+        assert display.status == "synced"
+        assert display.label is None
+        assert display.last_sync_check_at == "2026-04-01T08:00:00+00:00"

@@ -140,7 +140,13 @@ class StatusService:
                 local_outcome = outcome
         return local_outcome, server_only_outcomes
 
-    def _get_save_status_io(self, rom_id: int, server_saves: list[dict]) -> dict:
+    def _get_save_status_io(
+        self,
+        rom_id: int,
+        server_saves: list[dict],
+        *,
+        server_query_failed: bool = False,
+    ) -> dict:
         """Sync helper for get_save_status — runs in executor.
 
         Builds the saves-tab status for one ROM as a single-entry view of
@@ -163,6 +169,15 @@ class StatusService:
         The one allowed mutation is recording an adopted baseline hash when
         the action requests it (``Skip(adopt_baseline=True)``) — pure state
         hygiene, no network traffic.
+
+        When *server_query_failed* is True the caller's ``list_saves`` call
+        raised before *server_saves* was populated. Matrix evaluation runs
+        as usual against the empty list (so local-file rows still appear
+        with paths/sizes/hashes), but each resulting status is rewritten
+        to ``"unknown"`` and server-side fields are nulled out — the empty
+        list classifies every local save as Upload, which would surface a
+        misleading "ready to upload" indicator on what is in fact a
+        connectivity blip.
         """
         rom_id_str = str(rom_id)
         info = self._rom_info.get_rom_save_info(rom_id)
@@ -191,6 +206,9 @@ class StatusService:
                     server_device_id=server_device_id,
                     own_upload_ids=own_upload_ids,
                 )
+                if server_query_failed:
+                    status_entry = _redact_server_fields(status_entry)
+                    conflict_entry = None
                 file_statuses.append(status_entry)
                 if conflict_entry is not None:
                     conflicts.append(conflict_entry)
@@ -208,7 +226,14 @@ class StatusService:
             "last_sync_check_at": last_sync_check_at,
             "conflicts": conflicts,
             "save_sort_changed": self._rom_info.is_save_sort_changed(),
-            "save_sync_display": asdict(compute_save_sync_display(file_statuses, last_sync_check_at)),
+            "save_sync_display": asdict(
+                compute_save_sync_display(
+                    file_statuses,
+                    last_sync_check_at,
+                    server_query_failed=server_query_failed,
+                )
+            ),
+            "server_query_failed": server_query_failed,
         }
 
     # ------------------------------------------------------------------
@@ -216,10 +241,18 @@ class StatusService:
     # ------------------------------------------------------------------
 
     async def get_save_status(self, rom_id: int) -> dict:
-        """Get save sync status for a ROM (local files, server saves, conflict state)."""
+        """Get save sync status for a ROM (local files, server saves, conflict state).
+
+        When the ``list_saves`` call raises (transient network blip, server
+        offline, …) the returned dict carries ``server_query_failed: True``
+        and each surfaced file is marked ``status="unknown"`` instead of
+        the matrix-derived "ready to upload" label that an empty server
+        list would otherwise produce — see ``_get_save_status_io``.
+        """
         rom_id = int(rom_id)
 
         server_saves: list[dict] = []
+        server_query_failed = False
         try:
             device_id = self._state_svc.get_server_device_id()
             server_saves = await self._loop.run_in_executor(
@@ -228,8 +261,16 @@ class StatusService:
             )
         except Exception as e:
             self._log_debug(f"Failed to fetch saves for rom {rom_id}: {e}")
+            server_query_failed = True
 
-        return await self._loop.run_in_executor(None, self._get_save_status_io, rom_id, server_saves)
+        return await self._loop.run_in_executor(
+            None,
+            lambda: self._get_save_status_io(
+                rom_id,
+                server_saves,
+                server_query_failed=server_query_failed,
+            ),
+        )
 
     async def check_save_status_background(self, rom_id: int) -> None:
         """Run full save status check in background and emit result to frontend."""
@@ -295,3 +336,27 @@ def _outcome_server_sort_key(outcome: MatrixOutcome) -> float:
         return 0.0
     newest = max(candidates, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
     return parse_iso_to_epoch(newest.get("updated_at")) or 0.0
+
+
+def _redact_server_fields(entry: dict) -> dict:
+    """Return a copy of *entry* with status="unknown" and server fields nulled out.
+
+    Used when the ``list_saves`` query failed: the matrix ran against an
+    empty server list, so any "synced"/"upload"/"download"/"conflict" verdict
+    and any server-side attribution (id, file_name, emulator, updated_at,
+    size, device_syncs, is_current, uploaded_by_us) reflects "we have no
+    server information", not the actual state of the server. The local-file
+    fields (filename, local_path, local_hash, local_mtime, local_size,
+    last_sync_at) come from local state and stay intact.
+    """
+    redacted = dict(entry)
+    redacted["status"] = "unknown"
+    redacted["server_save_id"] = None
+    redacted["server_file_name"] = None
+    redacted["server_emulator"] = None
+    redacted["server_updated_at"] = None
+    redacted["server_size"] = None
+    redacted["device_syncs"] = []
+    redacted["is_current"] = True
+    redacted["uploaded_by_us"] = None
+    return redacted

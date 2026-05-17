@@ -32,6 +32,8 @@ class SaveSyncDisplay:
 def compute_save_sync_display(
     files: list[dict] | None,
     last_sync_check_at: str | None,
+    *,
+    server_query_failed: bool = False,
 ) -> SaveSyncDisplay:
     """Compute save sync display status and label.
 
@@ -39,7 +41,16 @@ def compute_save_sync_display(
     'none'), ``label`` (static text or ``None`` when the frontend formats
     a time-ago label), and ``last_sync_check_at`` (passthrough for the
     time-ago case).
+
+    When *server_query_failed* is True the server's save list could not
+    be fetched, so the matrix verdict on each file is unreliable. The
+    display collapses to ``status="none"`` with a "Server unreachable"
+    label rather than reporting the false "synced" / "ready to upload"
+    state a stale-but-empty file list would produce.
     """
+    if server_query_failed:
+        return SaveSyncDisplay(status="none", label="Server unreachable", last_sync_check_at=None)
+
     if not files:
         return SaveSyncDisplay(status="none", label="No saves", last_sync_check_at=None)
 
