@@ -52,11 +52,6 @@ class Plugin:
         """
         self._debug_logger(msg)
 
-    # -- persistence delegates -------------------------------------------------
-
-    def _load_metadata_cache(self):
-        self._metadata_cache = self._persistence.load_metadata_cache()
-
     async def _main(self):  # Decky lifecycle — must be async
         self.loop = asyncio.get_event_loop()
 

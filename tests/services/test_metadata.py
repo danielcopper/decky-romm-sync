@@ -317,57 +317,6 @@ class TestGetAllMetadataCache:
         assert result == {}
 
 
-class TestLoadMetadataCache:
-    """Tests for _load_metadata_cache."""
-
-    def test_loads_from_disk(self, plugin, tmp_path):
-        import decky
-
-        from adapters.persistence import _METADATA_CACHE_VERSION, PersistenceAdapter
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        rom_entry = {"summary": "test", "cached_at": 100}
-        cache_data = {"version": _METADATA_CACHE_VERSION, "42": rom_entry}
-        cache_path = os.path.join(str(tmp_path), "metadata_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f)
-
-        plugin._load_metadata_cache()
-        assert plugin._metadata_cache["42"] == rom_entry
-        assert "version" in plugin._metadata_cache
-
-    def test_empty_when_file_missing(self, plugin, tmp_path):
-        import decky
-
-        from adapters.persistence import PersistenceAdapter
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._metadata_cache = {"old": "data"}
-        plugin._load_metadata_cache()
-        # Only version key should remain (no ROM entries)
-        assert "old" not in plugin._metadata_cache
-        assert plugin._metadata_cache.get("version") == 1
-
-    def test_empty_when_malformed_json(self, plugin, tmp_path):
-        import decky
-
-        from adapters.persistence import PersistenceAdapter
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        cache_path = os.path.join(str(tmp_path), "metadata_cache.json")
-        with open(cache_path, "w") as f:
-            f.write("not valid json{{{")
-
-        plugin._load_metadata_cache()
-        # Only version key should remain (no ROM entries)
-        assert "version" in plugin._metadata_cache
-        rom_keys = [k for k in plugin._metadata_cache if k != "version"]
-        assert rom_keys == []
-
-
 class TestSyncMetadataCapture:
     """Tests for metadata capture during a sync run."""
 

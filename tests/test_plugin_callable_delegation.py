@@ -759,21 +759,6 @@ class TestCallableErrorPropagation:
             await plugin.evaluate_launch(42)
 
 
-# ── _load_metadata_cache helper ────────────────────────────────────────
-
-
-class TestLoadMetadataCacheHelper:
-    """Cover the ``_load_metadata_cache`` persistence delegate (line 56)."""
-
-    def test_load_metadata_cache_pulls_from_persistence(self, plugin):
-        sentinel = {"42": {"name": "x"}}
-        plugin._persistence = MagicMock()
-        plugin._persistence.load_metadata_cache.return_value = sentinel
-        plugin._load_metadata_cache()
-        plugin._persistence.load_metadata_cache.assert_called_once_with()
-        assert plugin._metadata_cache is sentinel
-
-
 # ── _unload lifecycle hook ─────────────────────────────────────────────
 
 
