@@ -10,6 +10,11 @@ updates:
       - "area:ci"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
@@ -20,3 +25,23 @@ updates:
       - "area:ci"
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      github-actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Python (test/lint deps pinned in requirements-dev.txt)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "area:ci"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      pip-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
