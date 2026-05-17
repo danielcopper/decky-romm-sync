@@ -190,7 +190,9 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     try {
       setUninstallStatus("Uninstalling...");
       const result = await uninstallAllRoms();
-      setUninstallStatus(result.message);
+      const errorCount = result.errors.length;
+      const baseMsg = `Removed ${result.removed_count} ROMs`;
+      setUninstallStatus(errorCount > 0 ? `${baseMsg} (${errorCount} errors)` : baseMsg);
     } catch {
       setUninstallStatus("Failed to uninstall ROMs");
     }

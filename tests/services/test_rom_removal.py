@@ -373,19 +373,64 @@ class TestUninstallAllRoms:
         assert state["installed_roms"] == {}
 
     @pytest.mark.asyncio
-    async def test_message_includes_error_count(self, service, state, rom_files):
-        rom_path = f"{_ROMS_BASE}/n64/game.z64"
-        rom_files.files[rom_path] = b"\x00" * 100
-        rom_files.remove_file_failures.add(rom_path)
+    async def test_partial_failure_reports_errors_and_not_success(self, service, state, rom_files):
+        """Bad path: one of three deletions fails → ``success`` is False and ``errors`` lists the failure."""
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        file_c = f"{_ROMS_BASE}/n64/game_c.z64"
+        for p in (file_a, file_b, file_c):
+            rom_files.files[p] = b"\x00" * 100
+        rom_files.remove_file_failures.add(file_b)
 
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": rom_path, "system": "n64"},
+            "1": {"rom_id": 1, "file_path": file_a, "system": "n64"},
+            "2": {"rom_id": 2, "file_path": file_b, "system": "n64"},
+            "3": {"rom_id": 3, "file_path": file_c, "system": "n64"},
+        }
+
+        result = await service.uninstall_all_roms()
+
+        assert result["success"] is False
+        assert result["removed_count"] == 2
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["rom_id"] == "2"
+        assert "game_b.z64" in result["errors"][0]["error"]
+        # State for successful deletions is cleared; the failing entry is left
+        # in place so the user can retry.
+        assert "1" not in state["installed_roms"]
+        assert "2" in state["installed_roms"]
+        assert "3" not in state["installed_roms"]
+
+    @pytest.mark.asyncio
+    async def test_all_success_returns_empty_errors(self, service, state, rom_files):
+        """Happy path: all 3 deletions succeed → ``success`` is True and ``errors`` is empty."""
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        file_c = f"{_ROMS_BASE}/n64/game_c.z64"
+        for p in (file_a, file_b, file_c):
+            rom_files.files[p] = b"\x00" * 100
+
+        state["installed_roms"] = {
+            "1": {"rom_id": 1, "file_path": file_a, "system": "n64"},
+            "2": {"rom_id": 2, "file_path": file_b, "system": "n64"},
+            "3": {"rom_id": 3, "file_path": file_c, "system": "n64"},
         }
 
         result = await service.uninstall_all_roms()
 
         assert result["success"] is True
-        assert "errors" in result["message"]
+        assert result["removed_count"] == 3
+        assert result["errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_empty_state_returns_success_with_empty_errors(self, service, state):
+        """Edge: no installed ROMs → ``success`` is True and ``errors`` is empty."""
+        _ = state  # fixture ensures shared dict is initialized
+        result = await service.uninstall_all_roms()
+
+        assert result["success"] is True
+        assert result["removed_count"] == 0
+        assert result["errors"] == []
 
 
 class TestDownloadQueueCleanup:

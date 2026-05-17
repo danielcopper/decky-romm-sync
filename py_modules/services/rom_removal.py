@@ -108,10 +108,10 @@ class RomRemovalService:
 
         return {"success": True, "message": "ROM removed"}
 
-    def _uninstall_all_roms_io(self) -> tuple[int, list[str]]:
+    def _uninstall_all_roms_io(self) -> tuple[int, list[dict]]:
         """Sync helper for uninstall_all_roms — bulk file deletion + state update in executor."""
         count = 0
-        errors: list[str] = []
+        errors: list[dict] = []
         successfully_deleted: list[str] = []
         for rom_id_str, installed in self._state["installed_roms"].items():
             try:
@@ -119,7 +119,7 @@ class RomRemovalService:
                 count += 1
                 successfully_deleted.append(rom_id_str)
             except Exception as e:
-                errors.append(f"{rom_id_str}: {e}")
+                errors.append({"rom_id": rom_id_str, "error": str(e)})
                 self._logger.error(f"Failed to delete ROM {rom_id_str}: {e}")
 
         for rom_id_str in successfully_deleted:
@@ -137,11 +137,19 @@ class RomRemovalService:
         return count, errors
 
     async def uninstall_all_roms(self) -> dict:
-        """Remove all installed ROMs: delete files and clear state."""
+        """Remove all installed ROMs: delete files and clear state.
+
+        Returns ``success`` (True only when every per-ROM deletion
+        succeeded), ``removed_count`` (number of ROMs whose files were
+        deleted), and ``errors`` (one ``{"rom_id", "error"}`` entry per
+        failed deletion). State for partially-failed bulk runs is left
+        intact for the failing entries so the user can retry.
+        """
         count, errors = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
         if self._download_queue_cleanup is not None:
             self._download_queue_cleanup.clear()
-        msg = f"Removed {count} ROMs"
-        if errors:
-            msg += f" ({len(errors)} errors)"
-        return {"success": True, "message": msg, "removed_count": count}
+        return {
+            "success": len(errors) == 0,
+            "removed_count": count,
+            "errors": errors,
+        }
