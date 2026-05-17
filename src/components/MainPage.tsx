@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, FC } from "react";
+import { useState, useEffect, useRef, FC, ReactNode } from "react";
 import {
   PanelSection,
   PanelSectionRow,
@@ -323,6 +323,130 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     return <MigrationBlockedPage migration={migration} />;
   }
 
+  let syncBody: ReactNode;
+  if (preview) {
+    const hasChanges = preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0
+      || preview.summary.collection_diff?.has_changes
+      || preview.summary.platform_collection_diff?.has_changes;
+    syncBody = (
+      <>
+        <PanelSectionRow>
+          <Field
+            label="Preview"
+            description={formatPreviewDescription(preview.summary)}
+          />
+        </PanelSectionRow>
+        {hasChanges ? (
+          <>
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={handleApply}
+                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+                onFocus={scrollToTop}
+              >
+                Apply Sync
+              </ButtonItem>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={handleDismiss}>
+                Cancel
+              </ButtonItem>
+            </PanelSectionRow>
+          </>
+        ) : (
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={handleDismiss}
+              // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+              onFocus={scrollToTop}
+            >
+              Dismiss
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
+      </>
+    );
+  } else if (syncing) {
+    syncBody = (
+      <>
+        {syncProgress && syncProgress.step && syncProgress.totalSteps ? (
+          <PanelSectionRow>
+            <ProgressBarWithInfo
+              indeterminate={progressFraction === undefined}
+              nProgress={progressFraction}
+              sOperationText={formatProgressText(syncProgress)}
+            />
+          </PanelSectionRow>
+        ) : (
+          <PanelSectionRow>
+            <Field
+              label={
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Spinner width={16} height={16} />
+                  {syncProgress?.message || "Fetching..."}
+                </div>
+              }
+            />
+          </PanelSectionRow>
+        )}
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            onClick={handleCancel}
+            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+            onFocus={scrollToTop}
+          >
+            Cancel Sync
+          </ButtonItem>
+        </PanelSectionRow>
+      </>
+    );
+  } else {
+    syncBody = (
+      <>
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            onClick={handleSync}
+            disabled={loading || connected === false}
+            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
+            onFocus={scrollToTop}
+          >
+            Sync Library
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Skip Preview"
+            description="Apply changes immediately without preview"
+            checked={skipPreview}
+            onChange={setSkipPreview}
+          />
+        </PanelSectionRow>
+        {stats?.last_sync && (
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              description="Clear cached sync data to re-fetch all platforms"
+              onClick={async () => {
+                const result = await clearSyncCache();
+                setStatus(result.message);
+                if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+                statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
+                getSyncStats().then(setStats);
+              }}
+              disabled={loading || connected === false}
+            >
+              Force Full Sync
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
+      </>
+    );
+  }
+
   return (
     <>
       <PanelSection title="Status">
@@ -421,119 +545,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       </PanelSection>
 
       <PanelSection title="Sync">
-        {preview ? (
-          <>
-            <PanelSectionRow>
-              <Field
-                label="Preview"
-                description={formatPreviewDescription(preview.summary)}
-              />
-            </PanelSectionRow>
-            {preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 || preview.summary.collection_diff?.has_changes || preview.summary.platform_collection_diff?.has_changes ? (
-              <>
-                <PanelSectionRow>
-                  <ButtonItem
-                    layout="below"
-                    onClick={handleApply}
-                    // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-                    onFocus={scrollToTop}
-                  >
-                    Apply Sync
-                  </ButtonItem>
-                </PanelSectionRow>
-                <PanelSectionRow>
-                  <ButtonItem layout="below" onClick={handleDismiss}>
-                    Cancel
-                  </ButtonItem>
-                </PanelSectionRow>
-              </>
-            ) : (
-              <PanelSectionRow>
-                <ButtonItem
-                  layout="below"
-                  onClick={handleDismiss}
-                  // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-                  onFocus={scrollToTop}
-                >
-                  Dismiss
-                </ButtonItem>
-              </PanelSectionRow>
-            )}
-          </>
-        ) : !syncing ? (
-          <>
-            <PanelSectionRow>
-              <ButtonItem
-                layout="below"
-                onClick={handleSync}
-                disabled={loading || connected === false}
-                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-                onFocus={scrollToTop}
-              >
-                Sync Library
-              </ButtonItem>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ToggleField
-                label="Skip Preview"
-                description="Apply changes immediately without preview"
-                checked={skipPreview}
-                onChange={setSkipPreview}
-              />
-            </PanelSectionRow>
-            {stats?.last_sync && (
-              <PanelSectionRow>
-                <ButtonItem
-                  layout="below"
-                  description="Clear cached sync data to re-fetch all platforms"
-                  onClick={async () => {
-                    const result = await clearSyncCache();
-                    setStatus(result.message);
-                    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-                    statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
-                    getSyncStats().then(setStats);
-                  }}
-                  disabled={loading || connected === false}
-                >
-                  Force Full Sync
-                </ButtonItem>
-              </PanelSectionRow>
-            )}
-          </>
-        ) : (
-          <>
-            {syncProgress && syncProgress.step && syncProgress.totalSteps ? (
-              <PanelSectionRow>
-                <ProgressBarWithInfo
-                  indeterminate={progressFraction === undefined}
-                  nProgress={progressFraction}
-                  sOperationText={formatProgressText(syncProgress)}
-                />
-              </PanelSectionRow>
-            ) : (
-              <PanelSectionRow>
-                <Field
-                  label={
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <Spinner width={16} height={16} />
-                      {syncProgress?.message || "Fetching..."}
-                    </div>
-                  }
-                />
-              </PanelSectionRow>
-            )}
-            <PanelSectionRow>
-              <ButtonItem
-                layout="below"
-                onClick={handleCancel}
-                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-                onFocus={scrollToTop}
-              >
-                Cancel Sync
-              </ButtonItem>
-            </PanelSectionRow>
-          </>
-        )}
+        {syncBody}
         {status && !syncing && !preview && (
           <PanelSectionRow>
             <Field label={status} />

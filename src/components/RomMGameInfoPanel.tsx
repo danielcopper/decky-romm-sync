@@ -81,6 +81,16 @@ function formatReleaseDate(timestamp: number | null): string | null {
   return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
 }
 
+/**
+ * BIOS readiness indicator color: green when complete, amber on partial progress,
+ * red when nothing is downloaded yet.
+ */
+function pickBiosColor(done: number, total: number): string {
+  if (done >= total) return "#5ba32b";
+  if (done > 0) return "#d4a72c";
+  return "#d94126";
+}
+
 /** Refresh slot configuration and available slots — extracted to reduce nesting depth. */
 function refreshSlotState(
   romId: number,
@@ -659,12 +669,18 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     let biosColor: string;
     let biosLabel: string;
     if (reqCount != null && reqDone != null) {
-      biosColor = reqDone >= reqCount ? "#5ba32b" : reqDone > 0 ? "#d4a72c" : "#d94126";
+      biosColor = pickBiosColor(reqDone, reqCount);
       biosLabel = reqDone >= reqCount
         ? `All required ready (${localCount}/${serverCount})`
         : `${reqDone}/${reqCount} required files ready`;
     } else {
-      biosColor = bios.all_downloaded ? "#5ba32b" : localCount > 0 ? "#d4a72c" : "#d94126";
+      if (bios.all_downloaded) {
+        biosColor = "#5ba32b";
+      } else if (localCount > 0) {
+        biosColor = "#d4a72c";
+      } else {
+        biosColor = "#d94126";
+      }
       biosLabel = bios.all_downloaded
         ? `All ready (${localCount}/${serverCount})`
         : `${localCount}/${serverCount} files ready`;

@@ -23,6 +23,15 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function formatFinishedDescription(item: DownloadItem): string {
+  if (item.status === "completed") return `Completed — ${formatBytes(item.total_bytes)}`;
+  if (item.status === "failed") {
+    const detail = item.error ? `: ${item.error}` : "";
+    return `Failed${detail}`;
+  }
+  return "Cancelled";
+}
+
 export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
   const [downloads, setLocalDownloads] = useState<DownloadItem[]>([]);
   const [cleared, setCleared] = useState<Set<number>>(new Set());
@@ -159,13 +168,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
               <PanelSectionRow key={item.rom_id}>
                 <Field
                   label={item.rom_name}
-                  description={
-                    item.status === "completed"
-                      ? `Completed — ${formatBytes(item.total_bytes)}`
-                      : item.status === "failed"
-                        ? `Failed${item.error ? `: ${item.error}` : ""}`
-                        : "Cancelled"
-                  }
+                  description={formatFinishedDescription(item)}
                 />
               </PanelSectionRow>
             ))}

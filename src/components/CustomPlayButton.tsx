@@ -558,18 +558,24 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
       ? lerpColor(BLUE_LEFT, GREEN_LEFT, t)
       : "rgba(26,159,255,0.7)";
 
-    const dlLabel = downloading
-      ? formatProgress(dlProgress.bytesDownloaded, dlProgress.totalBytes)
-      : actionPending
-        ? "Starting..."
-        : "Download";
+    let dlLabel: string;
+    if (downloading) {
+      dlLabel = formatProgress(dlProgress.bytesDownloaded, dlProgress.totalBytes);
+    } else if (actionPending) {
+      dlLabel = "Starting...";
+    } else {
+      dlLabel = "Download";
+    }
 
     // Unfilled portion: darker shade of the current fill color
-    const baseBg = isOffline
-      ? "linear-gradient(to right, #6b7b8b, #5a6a7a)"
-      : downloading
-        ? `linear-gradient(to right, ${lerpColor([10, 50, 90], [5, 35, 65], t)}, ${lerpColor([5, 35, 65], [5, 50, 30], t)})`
-        : "linear-gradient(to right, #1a9fff, #0078d4)";
+    let baseBg: string;
+    if (isOffline) {
+      baseBg = "linear-gradient(to right, #6b7b8b, #5a6a7a)";
+    } else if (downloading) {
+      baseBg = `linear-gradient(to right, ${lerpColor([10, 50, 90], [5, 35, 65], t)}, ${lerpColor([5, 35, 65], [5, 50, 30], t)})`;
+    } else {
+      baseBg = "linear-gradient(to right, #1a9fff, #0078d4)";
+    }
 
     return (
       <Focusable

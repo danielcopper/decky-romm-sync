@@ -20,6 +20,17 @@ const rommAppIds = new Set<number>();
 let treeDumped = false;
 
 /**
+ * Best-effort display name for a React element's `type` field.
+ * Anonymous function components surface as "(anonymous fn)" so they remain
+ * distinguishable from the string fallback.
+ */
+function resolveTypeName(node: any): string {
+  if (typeof node?.type === "string") return node.type;
+  if (typeof node?.type === "function") return "(anonymous fn)";
+  return String(node?.type ?? "null");
+}
+
+/**
  * Recursively walk a React element tree and log each node.
  * Useful for diagnosing tree structure changes after Steam updates.
  * Runs once per appId to avoid log spam on re-renders.
@@ -32,15 +43,18 @@ function deepTreeDump(node: any, depth: number, index: number, prefix: string): 
   const typeName =
     node?.type?.name ||
     node?.type?.displayName ||
-    (typeof node?.type === "string" ? node.type : typeof node?.type === "function" ? "(anonymous fn)" : String(node?.type ?? "null"));
+    resolveTypeName(node);
   const key = node?.key ?? "null";
   const className = (node?.props?.className || "").substring(0, 60) || "(none)";
   const childrenRaw = node?.props?.children;
-  const childCount = Array.isArray(childrenRaw)
-    ? childrenRaw.length
-    : childrenRaw != null
-    ? 1
-    : 0;
+  let childCount: number;
+  if (Array.isArray(childrenRaw)) {
+    childCount = childrenRaw.length;
+  } else if (childrenRaw == null) {
+    childCount = 0;
+  } else {
+    childCount = 1;
+  }
 
   debugLog(`${prefix}${indent}[${depth}:${index}] type=${typeName} key=${key} cls=${className} children=${childCount}`);
 

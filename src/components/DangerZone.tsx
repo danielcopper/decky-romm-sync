@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, FC, createElement } from "react";
+import { useState, useEffect, useMemo, FC, ReactNode, createElement } from "react";
 import {
   PanelSection,
   PanelSectionRow,
@@ -199,6 +199,41 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     loadNonSteamApps();
   };
 
+  let platformsBody: ReactNode;
+  if (loading) {
+    platformsBody = (
+      <PanelSectionRow>
+        <Spinner />
+      </PanelSectionRow>
+    );
+  } else if (platforms.length === 0) {
+    platformsBody = (
+      <PanelSectionRow>
+        <Field label="No synced platforms" />
+      </PanelSectionRow>
+    );
+  } else {
+    platformsBody = platforms.map((p) => (
+      <PanelSectionRow key={p.slug || p.name}>
+        <ButtonItem
+          layout="below"
+          onClick={() => {
+            showModal(
+              <PlatformActionModal
+                platform={p}
+                onRemoveShortcuts={() => handleRemoveShortcuts(p)}
+                onDeleteSaves={() => handleDeleteSaves(p)}
+                onDeleteBios={() => handleDeleteBios(p)}
+              />
+            );
+          }}
+        >
+          {p.name} ({p.count})
+        </ButtonItem>
+      </PanelSectionRow>
+    ));
+  }
+
   return (
     <>
       <PanelSection title="Remove Shortcuts">
@@ -217,35 +252,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       </PanelSection>
 
       <PanelSection title="Per-Platform Actions">
-        {loading ? (
-          <PanelSectionRow>
-            <Spinner />
-          </PanelSectionRow>
-        ) : platforms.length === 0 ? (
-          <PanelSectionRow>
-            <Field label="No synced platforms" />
-          </PanelSectionRow>
-        ) : (
-          platforms.map((p) => (
-            <PanelSectionRow key={p.slug || p.name}>
-              <ButtonItem
-                layout="below"
-                onClick={() => {
-                  showModal(
-                    <PlatformActionModal
-                      platform={p}
-                      onRemoveShortcuts={() => handleRemoveShortcuts(p)}
-                      onDeleteSaves={() => handleDeleteSaves(p)}
-                      onDeleteBios={() => handleDeleteBios(p)}
-                    />
-                  );
-                }}
-              >
-                {p.name} ({p.count})
-              </ButtonItem>
-            </PanelSectionRow>
-          ))
-        )}
+        {platformsBody}
         {actionStatus && (
           <PanelSectionRow>
             <Field label={actionStatus} />
