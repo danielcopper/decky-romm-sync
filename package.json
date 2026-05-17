@@ -14,7 +14,7 @@
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
     "@decky/ui": "^4.11.0",
-    "@rollup/rollup-linux-x64-musl": "^4.59.0",
+    "@rollup/rollup-linux-x64-musl": "^4.60.4",
     "@types/react": "^19.2.14",
     "react-icons": "^5.5.0",
     "rollup": "^4.59.0",
