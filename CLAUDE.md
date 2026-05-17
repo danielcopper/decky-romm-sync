@@ -47,28 +47,36 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 
 ## Architecture — Cosmic Python rules
 
-Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pure compute) / `lib/` (cross-cutting utilities) / `models/` (data shapes). `import-linter` enforces direction.
+Cosmic Python ("Architecture Patterns with Python", Percival & Gregory) is our north star, adapted for a single-user Decky plugin domain. The rules below mix canonical CP principles with project conventions we layered on top. Each rule carries a tag:
+
+- `[CP]` — Canonical Cosmic Python. Hard rule. Breaking it is an architectural regression.
+- `[ours]` — Project convention layered on top of CP. Implements CP, not prescribed by it. Style/consistency rule — deviations should be flagged in review but are not architectural regressions; the project rule itself can be debated and softened.
+
+Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pure compute) / `lib/` (cross-cutting utilities) / `models/` (data shapes). `import-linter` enforces direction. `[CP]`
 
 **Services**:
 
-- Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes.
-- No raw I/O. Forbidden in `services/`: `os.*` (except pure path algebra: `realpath`, `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`.
-- No clocks or randomness: no `time.time()`, `time.monotonic()`, `datetime.now()`, `uuid.uuid4()`, `asyncio.sleep()`, `random.*` directly. Inject `Clock` / `UuidGen` / `Sleeper` Protocols.
-- No service-to-service concrete imports — services are independent. Cross-service deps are Protocol-typed.
-- Module functions from `domain/` are still a coupling — if tests need `patch("services.X.module_name.fn")`, wrap the module behind a Protocol and inject it.
-- **Constructor shape: every service takes a single `config: XxxServiceConfig` keyword argument.** Frozen dataclass, named `<ServiceName>Config` — the `Service` component is part of the name (`SteamGridConfig` is wrong, `SteamGridServiceConfig` is right). All deps live in the config: Protocol-typed adapters, infrastructure (loop, logger, clock, uuid_gen, sleeper), persistence callbacks, settings-derived values. No bare-param ctors, no mixed (some-explicit + some-in-config) ctors. Test setup is uniform: build `XxxServiceConfig(...)`, pass `XxxService(config=...)`.
-- **Debug logging: inject the `DebugLogger` Protocol.** Don't add per-service `_log_debug` methods that re-read settings at call time, and don't reach for `decky.logger.info` to bypass log-level filtering. The Protocol's wiring decision is the only knob.
-- God-class signal: services > ~600 LOC — decompose into sub-services with constructor injection (see `services/saves/` for the reference pattern). The S107 ctor-param threshold no longer fires because all Protocol-typed deps live in the config.
+- `[CP]` Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes. (Canonical dependency inversion.)
+- `[CP]` No raw I/O.
+  - `[ours]` Concrete allow/deny list: forbidden in `services/`: `os.*` (except pure path algebra: `realpath`, `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`. (Our enforcement surface; CP says "no I/O" without spelling out the call list.)
+- `[CP]` No clocks or randomness — inject side-effecting deps via abstractions.
+  - `[ours]` Specific Protocols: `Clock` / `UuidGen` / `Sleeper`. `time.time()` / `time.monotonic()` / `datetime.now()` / `uuid.uuid4()` / `asyncio.sleep()` / `random.*` banned at the call site.
+- `[CP]` No service-to-service concrete imports — services are independent. Cross-service deps are Protocol-typed.
+- `[ours]` Module functions from `domain/` are still a coupling — if tests need `patch("services.X.module_name.fn")`, wrap the module behind a Protocol and inject it. (Our enforcement tactic; CP doesn't prescribe Protocol-wrapping every module function.)
+- `[ours]` **Constructor shape: every service takes a single `config: XxxServiceConfig` keyword argument.** Frozen dataclass, named `<ServiceName>Config` — the `Service` component is part of the name (`SteamGridConfig` is wrong, `SteamGridServiceConfig` is right). All deps live in the config: Protocol-typed adapters, infrastructure (loop, logger, clock, uuid_gen, sleeper), persistence callbacks, settings-derived values. No bare-param ctors, no mixed (some-explicit + some-in-config) ctors. Test setup is uniform: build `XxxServiceConfig(...)`, pass `XxxService(config=...)`. (Project pattern. CP allows explicit ctor params; this is our consistency choice.)
+- `[ours]` **Debug logging: inject the `DebugLogger` Protocol.** Don't add per-service `_log_debug` methods that re-read settings at call time, and don't reach for `decky.logger.info` to bypass log-level filtering. The Protocol's wiring decision is the only knob.
+- `[ours]` God-class signal: services > ~600 LOC — decompose into sub-services with constructor injection (see `services/saves/` for the reference pattern). The S107 ctor-param threshold no longer fires because all Protocol-typed deps live in the config. (Our taste/threshold.)
 
-**Adapters**: own all I/O. Never import from `services/`. Implement Protocols defined in `services/protocols.py`.
+**Adapters**: `[CP]` Own all I/O. Never import from `services/`. Implement Protocols defined in `services/protocols.py`. (Canonical ports-and-adapters.)
 
-**Domain**: pure compute only. No I/O, no state mutation, no service or adapter imports. Functions take inputs, return outputs. Anything stateless and I/O-free that's currently in a service belongs here.
+**Domain**: `[CP]` Pure compute only. No I/O, no state mutation, no service or adapter imports. Functions take inputs, return outputs. Anything stateless and I/O-free that's currently in a service belongs here. (Canonical domain-model purity.)
 
-**Bootstrap (`bootstrap.py`)**: the only place where concrete adapters meet services. `WiringConfig` holds the wiring; protocols come in, services come out. Adapter instantiation never happens in `main.py` — if a service needs a Protocol-wrapped persister, the wrapper adapter is built in `bootstrap()` and passed through `CallbackBundle`.
+**Bootstrap (`bootstrap.py`)**: `[CP]` The composition root — the only place where concrete adapters meet services. (Canonical CP composition root.)
+- `[ours]` `WiringConfig` holds the wiring; protocols come in, services come out. Adapter instantiation never happens in `main.py` — if a service needs a Protocol-wrapped persister, the wrapper adapter is built in `bootstrap()` and passed through `CallbackBundle`. (Our concrete shape for the composition root.)
 
-**Process boundaries — `main.py` vs `bootstrap.py`**: `main.py` owns the Decky lifecycle (`_main`, `_unload`) and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter instantiation and service wiring. The split is binding — no callables in `bootstrap.py`, no service wiring in `main.py`. Both files grow with the surface they describe (callables for `main.py`, services for `bootstrap.py`); this is unavoidable density, not god-class. Split `bootstrap.py` into `bootstrap/{adapters,services}.py` only when it exceeds ~700 LOC.
+**Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`) and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter instantiation and service wiring. The split is binding — no callables in `bootstrap.py`, no service wiring in `main.py`. Both files grow with the surface they describe (callables for `main.py`, services for `bootstrap.py`); this is unavoidable density, not god-class. Split `bootstrap.py` into `bootstrap/{adapters,services}.py` only when it exceeds ~700 LOC. (Decky-plugin-specific; not a CP concept.)
 
-If a refactor breaks one of these rules, that's a Cosmic Python regression — call it out and fix it in the same PR or open a follow-up.
+If a refactor breaks a `[CP]` rule, that's an architectural regression — call it out and fix it in the same PR or open a follow-up. `[ours]` deviations should be flagged in review but can be debated (we can choose to soften the project rule rather than change the code).
 
 ## Refactor wave plan (live — see #277 for current status)
 
