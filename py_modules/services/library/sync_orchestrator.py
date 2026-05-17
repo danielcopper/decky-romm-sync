@@ -457,23 +457,19 @@ class SyncOrchestrator:
         # membership is the source of truth, no per-collection
         # "last_sync" gate today).
         if unit.type == "platform":
-            if prefetched is not None:
-                unit_roms = prefetched.roms
-                skipped = prefetched.skipped
-            else:
-                unit_roms, skipped = await self._fetcher.fetch_platform_unit(unit)
-            platform_rom_ids.update(r["id"] for r in unit_roms)
-            synced_rom_ids.update(r["id"] for r in unit_roms)
+            unit_roms, skipped = await self._sync_platform_unit(
+                unit,
+                prefetched=prefetched,
+                synced_rom_ids=synced_rom_ids,
+                platform_rom_ids=platform_rom_ids,
+            )
         else:
-            skipped = False
-            if prefetched is not None:
-                unit_roms = prefetched.roms
-                all_collection_rom_ids = prefetched.all_collection_rom_ids or []
-                synced_rom_ids.update(r["id"] for r in unit_roms)
-            else:
-                unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
-            if all_collection_rom_ids:
-                collection_memberships[unit.name] = all_collection_rom_ids
+            unit_roms, skipped = await self._sync_collection_unit(
+                unit,
+                prefetched=prefetched,
+                synced_rom_ids=synced_rom_ids,
+                collection_memberships=collection_memberships,
+            )
 
         if box.sync_state == SyncState.CANCELLING:
             return 0
@@ -535,6 +531,56 @@ class SyncOrchestrator:
         box.pending_sync = {}
         box.unit_complete_event = None
         return len(applied)
+
+    async def _sync_platform_unit(
+        self,
+        unit: WorkUnit,
+        *,
+        prefetched: PrefetchedUnit | None,
+        synced_rom_ids: set[int],
+        platform_rom_ids: set[int],
+    ) -> tuple[list[dict], bool]:
+        """Resolve ROMs for a platform unit and update cross-unit accumulators.
+
+        Returns ``(unit_roms, skipped)`` for the caller's downstream
+        shortcut + artwork + apply phases. ROMs come from the prefetched
+        cache when present, otherwise from a live per-unit fetch.
+        """
+        if prefetched is not None:
+            unit_roms = prefetched.roms
+            skipped = prefetched.skipped
+        else:
+            unit_roms, skipped = await self._fetcher.fetch_platform_unit(unit)
+        platform_rom_ids.update(r["id"] for r in unit_roms)
+        synced_rom_ids.update(r["id"] for r in unit_roms)
+        return unit_roms, skipped
+
+    async def _sync_collection_unit(
+        self,
+        unit: WorkUnit,
+        *,
+        prefetched: PrefetchedUnit | None,
+        synced_rom_ids: set[int],
+        collection_memberships: dict[str, list[int]],
+    ) -> tuple[list[dict], bool]:
+        """Resolve ROMs for a collection unit and record its membership.
+
+        Returns ``(unit_roms, skipped)`` — ``skipped`` is always
+        ``False`` because collection units have no incremental-skip
+        gate today. ROMs come from the prefetched cache when present,
+        otherwise from a live per-unit fetch that already dedups against
+        ``synced_rom_ids``.
+        """
+        skipped = False
+        if prefetched is not None:
+            unit_roms = prefetched.roms
+            all_collection_rom_ids = prefetched.all_collection_rom_ids or []
+            synced_rom_ids.update(r["id"] for r in unit_roms)
+        else:
+            unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
+        if all_collection_rom_ids:
+            collection_memberships[unit.name] = all_collection_rom_ids
+        return unit_roms, skipped
 
     async def _wait_for_unit_complete(self, unit: WorkUnit, event: asyncio.Event) -> dict[str, int] | None:
         """Heartbeat-based wait for the active unit's frontend callback.
