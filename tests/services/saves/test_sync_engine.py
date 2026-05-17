@@ -2229,3 +2229,493 @@ class TestResolveSyncConflictStaleConflict:
         assert upload_calls[0][2]["save_id"] == 100
         file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
+
+
+class TestMigrationPendingGuards:
+    """The defense-in-depth migration-pending guards in pre_launch_sync and
+    post_exit_sync. The decorator on the public callable is the primary gate;
+    this in-engine guard catches a future caller that bypasses it (engine.py
+    lines 286-292 / 340-347)."""
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_returns_blocked_when_migration_pending(self, tmp_path):
+        """pre_launch_sync must short-circuit with blocked_by_migration=True."""
+        svc, fake = make_service(
+            tmp_path,
+            is_retrodeck_migration_pending=lambda: True,
+        )
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"unsyncable")
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert result["blocked_by_migration"] is True
+        assert result["synced"] == 0
+        # No upload/download initiated — the guard fired before sync ran.
+        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_returns_blocked_when_migration_pending(self, tmp_path):
+        """post_exit_sync must short-circuit with blocked_by_migration=True."""
+        svc, fake = make_service(
+            tmp_path,
+            is_retrodeck_migration_pending=lambda: True,
+        )
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"unsyncable")
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert result["blocked_by_migration"] is True
+        assert result["synced"] == 0
+        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
+
+
+class TestEnsureDeviceRegisteredFailurePaths:
+    """When register_device fails, the four sync callables must surface
+    DEVICE_NOT_REGISTERED instead of proceeding with a missing device_id
+    (engine.py lines 309-311 / 365 / 407 / 437-439)."""
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_returns_device_not_registered_on_failure(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        # No device_id set — triggers ensure_device_registered.
+        _install_rom(svc, tmp_path)
+        # register_device raises → ensure_device_registered returns success=False.
+        fake.fail_on_next(RommApiError("Server unreachable"))
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert "Device" in result["message"] or "device" in result["message"]
+        # No sync ran — the guard returned early.
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_returns_device_not_registered_on_failure(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        # No device_id set.
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"data")
+        fake.fail_on_next(RommApiError("Server unreachable"))
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert "Device" in result["message"] or "device" in result["message"]
+        # No upload ran.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_returns_device_not_registered_on_failure(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        # No device_id set.
+        _install_rom(svc, tmp_path)
+        fake.fail_on_next(RommApiError("Server unreachable"))
+
+        result = await svc.sync_rom_saves(42)
+
+        assert result["success"] is False
+        assert "Device" in result["message"] or "device" in result["message"]
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_returns_device_not_registered_on_failure(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        # No device_id set.
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        fake.fail_on_next(RommApiError("Server unreachable"))
+
+        result = await svc.sync_all_saves()
+
+        assert result["success"] is False
+        assert "Device" in result["message"] or "device" in result["message"]
+        # No per-ROM sync ran.
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
+
+
+class TestPostExitServerOfflineGuard:
+    """post_exit_sync probes heartbeat first; on failure returns offline=True
+    instead of attempting upload (engine.py lines 358-360)."""
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_returns_offline_when_heartbeat_raises(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"data")
+        fake.heartbeat_raises = RommApiError("Connection refused")
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert result["offline"] is True
+        assert result["synced"] == 0
+        # No upload was attempted after heartbeat failed.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+
+class TestSyncRomSavesDisabledGuard:
+    """Public sync_rom_saves returns failure when save sync is disabled
+    (engine.py line 396)."""
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_disabled_returns_failure(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        # save_sync_enabled stays False by default.
+        result = await svc.sync_rom_saves(42)
+
+        assert result["success"] is False
+        assert "disabled" in result["message"].lower()
+        assert result["synced"] == 0
+        # No list_saves issued — the guard fired before sync ran.
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
+
+
+class TestSyncCallableErrorMessages:
+    """The error-count clause in each public callable's success message
+    (engine.py lines 318 / 380 / 414). Driven by stubbing _sync_rom_saves
+    to return a non-empty errors list."""
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_message_includes_error_count(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id):
+            return (0, ["pokemon.srm: bad gateway"], [])
+
+        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert "1 error(s)" in result["message"]
+        assert "Downloaded" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_message_includes_error_count(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id):
+            return (0, ["pokemon.srm: timeout"], [])
+
+        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert "1 error(s)" in result["message"]
+        assert "Uploaded" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_message_includes_error_count(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id):
+            return (0, ["pokemon.srm: 502 bad gateway"], [])
+
+        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.sync_rom_saves(42)
+
+        assert result["success"] is False
+        assert "1 error(s)" in result["message"]
+
+
+class TestSyncEngineDelegates:
+    """Cover the thin delegate methods on SyncEngine that forward to MatrixExecutor
+    or DeviceRegistry (engine.py lines 204 / 220 / 239)."""
+
+    def test_adopt_baseline_hash_delegates_to_matrix(self, tmp_path):
+        """SyncEngine._adopt_baseline_hash writes through to the matrix's state."""
+        svc, _ = make_service(tmp_path)
+
+        svc._sync_engine._adopt_baseline_hash("42", "pokemon.srm", "deadbeef" * 4)
+
+        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        assert file_state.last_sync_hash == "deadbeef" * 4
+
+    def test_build_sync_conflict_entry_delegates_to_matrix(self, tmp_path):
+        """SyncEngine._build_sync_conflict_entry builds the same dict shape as the matrix."""
+        svc, _ = make_service(tmp_path)
+        server = _server_save(save_id=77, filename="pokemon.srm", file_size_bytes=2048)
+
+        entry = svc._sync_engine._build_sync_conflict_entry(
+            rom_id=42,
+            filename="pokemon.srm",
+            server=server,
+            local_path=None,
+            local_hash=None,
+        )
+
+        assert entry["type"] == "sync_conflict"
+        assert entry["rom_id"] == 42
+        assert entry["filename"] == "pokemon.srm"
+        assert entry["server_save_id"] == 77
+        assert entry["server_size"] == 2048
+        assert "created_at" in entry
+
+    @pytest.mark.asyncio
+    async def test_list_devices_delegates_to_device_registry(self, tmp_path):
+        """SyncEngine.list_devices forwards to DeviceRegistry.list_devices."""
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.server_device_id = "device-1"
+        # Seed a registered device on the fake so list_devices returns non-empty.
+        fake._registered_devices.append({"id": "device-1", "name": "test-host"})
+
+        result = await svc._sync_engine.list_devices()
+
+        assert result["success"] is True
+        assert len(result["devices"]) == 1
+        assert result["devices"][0]["is_current_device"] is True
+
+
+class TestGetServerSaveHashNonRetryable:
+    """get_server_save_hash swallows non-retryable errors and returns None
+    (matrix.py line 130). The retryable-raise path (line 129) is already
+    covered by TestResolveSyncConflict.test_resolve_keep_local_falls_back_*."""
+
+    def test_get_server_save_hash_returns_none_on_non_retryable_error(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+
+        # download_save raises, and retry.is_retryable returns False (default
+        # in _make_retry), so the matrix should swallow and return None.
+        def _raise_on_download(save_id: int, dest_path: str) -> None:
+            fake.call_log.append(("download_save", (save_id, dest_path), {}))
+            raise RommApiError("permanent failure")
+
+        fake.download_save = _raise_on_download  # type: ignore[method-assign]
+
+        result = svc._sync_engine._matrix.get_server_save_hash({"id": 100})
+        assert result is None
+        # download_save was attempted exactly once.
+        download_calls = [c for c in fake.call_log if c[0] == "download_save"]
+        assert len(download_calls) == 1
+
+    def test_get_server_save_hash_returns_none_when_save_id_missing(self, tmp_path):
+        """No save_id on the server-save dict → short-circuit to None (line 120)."""
+        svc, _ = make_service(tmp_path)
+
+        result = svc._sync_engine._matrix.get_server_save_hash({"file_name": "x.srm"})
+        assert result is None
+
+
+class TestHandleUnexpectedError:
+    """_handle_unexpected_error records the error and cleans up the .tmp file
+    (matrix.py lines 322-326). Reached from _dispatch_sync_action's generic
+    except branch (line 480-481)."""
+
+    def test_dispatch_sync_action_handles_unexpected_exception(self, tmp_path):
+        """A non-RommApiError raised during dispatch is classified, recorded,
+        and the .tmp file is cleaned up."""
+        from domain.sync_action import Download
+
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        # Seed a .tmp file at the expected path — the cleanup branch must remove it.
+        tmp_file = saves_dir / "pokemon.srm.tmp"
+        tmp_file.write_bytes(b"partial download")
+        assert tmp_file.exists()
+
+        # do_download_save is reached for Download action; make it raise an
+        # unexpected (non-RommApi) Exception so _handle_unexpected_error fires.
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("disk full")
+
+        fake.download_save_content = _raise  # type: ignore[method-assign]
+
+        errors: list[str] = []
+        conflicts: list = []
+        action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
+        synced = svc._sync_engine._matrix._dispatch_sync_action(
+            action,
+            rom_id=42,
+            rom_id_str="42",
+            filename="pokemon.srm",
+            local_path=None,
+            local_hash=None,
+            saves_dir=str(saves_dir),
+            system="gba",
+            server_saves=[],
+            errors=errors,
+            conflicts=conflicts,
+        )
+
+        assert synced is False
+        assert len(errors) == 1
+        assert errors[0].startswith("pokemon.srm:")
+        # The .tmp file was removed by the cleanup branch.
+        assert not tmp_file.exists()
+
+
+class TestDispatchSyncActionErrorBranches:
+    """_dispatch_sync_action's typed-error branches (matrix.py lines 476-481).
+    RommApiError → classify + record; other Exception → _handle_unexpected_error."""
+
+    def test_dispatch_sync_action_records_rommapi_error(self, tmp_path):
+        """A RommApiError from a Download action is recorded with classify_error
+        message; no .tmp cleanup is attempted on this branch."""
+        from domain.sync_action import Download
+
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+
+        def _raise(*_args, **_kwargs):
+            raise RommApiError("upstream 502")
+
+        fake.download_save_content = _raise  # type: ignore[method-assign]
+
+        errors: list[str] = []
+        conflicts: list = []
+        action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
+        synced = svc._sync_engine._matrix._dispatch_sync_action(
+            action,
+            rom_id=42,
+            rom_id_str="42",
+            filename="pokemon.srm",
+            local_path=None,
+            local_hash=None,
+            saves_dir=str(saves_dir),
+            system="gba",
+            server_saves=[],
+            errors=errors,
+            conflicts=conflicts,
+        )
+
+        assert synced is False
+        assert len(errors) == 1
+        assert errors[0].startswith("pokemon.srm:")
+
+
+class TestDispatchUploadDefensiveBranches:
+    """_dispatch_upload's defensive guards (matrix.py lines 408-409, 419-422).
+    Both paths are unreachable from the algorithm's normal output but the
+    branches exist to keep a future caller's bug from corrupting state."""
+
+    def test_dispatch_upload_records_error_when_local_path_missing(self, tmp_path):
+        """Upload(target_save_id=None) with local_path=None records an error and skips."""
+        from domain.sync_action import Upload
+
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+
+        errors: list[str] = []
+        result = svc._sync_engine._matrix._dispatch_upload(
+            Upload(target_save_id=None),
+            rom_id=42,
+            rom_id_str="42",
+            filename="pokemon.srm",
+            local_path=None,
+            system="gba",
+            server_saves=[],
+            errors=errors,
+        )
+
+        assert result is False
+        assert len(errors) == 1
+        assert "upload requested but no local file" in errors[0]
+        # No upload was attempted.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    def test_dispatch_upload_skips_put_when_target_save_id_vanished(self, tmp_path):
+        """Upload(target_save_id=999) with server_saves missing that id is a
+        best-effort skip — no upload, no error (vanished between read and dispatch)."""
+        from domain.sync_action import Upload
+
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local-edited")
+
+        errors: list[str] = []
+        # server_saves does not contain id=999.
+        result = svc._sync_engine._matrix._dispatch_upload(
+            Upload(target_save_id=999),
+            rom_id=42,
+            rom_id_str="42",
+            filename="pokemon.srm",
+            local_path=str(save_path),
+            system="gba",
+            server_saves=[{"id": 100, "file_name": "pokemon.srm"}],
+            errors=errors,
+        )
+
+        assert result is False
+        # No error recorded — this is a best-effort skip, not a failure.
+        assert errors == []
+        # No upload was attempted.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+
+class TestPreLaunchSaveSortGate:
+    """pre_launch_sync short-circuits when a save-sort migration is pending
+    (engine.py line 297-303)."""
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_returns_save_sort_changed(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._save_sync_state.device_id = "test-device"
+        _install_rom(svc, tmp_path)
+        # Flag save-sort changed via the rom_info state path used by RomInfoService.
+        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
+        svc._state["save_sort_settings_previous"] = {"sort_by_content": False, "sort_by_core": False}
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert result["save_sort_changed"] is True
+        assert result["synced"] == 0
+        # No sync ran.
+        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
+
+
+class TestRecordOwnUploadNoneId:
+    """_record_own_upload guards against new_id=None (matrix.py line 305-306)."""
+
+    def test_record_own_upload_no_op_when_new_id_is_none(self, tmp_path):
+        """Passing new_id=None must not touch own_upload_ids."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        # Pre-seed own_upload_ids to assert it stays unchanged.
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {},
+                "system": "gba",
+                "active_slot": "default",
+                "own_upload_ids": [50, 51],
+            }
+        )
+
+        svc._sync_engine._matrix._record_own_upload("42", None)
+
+        assert svc._save_sync_state.saves["42"].own_upload_ids == [50, 51]
