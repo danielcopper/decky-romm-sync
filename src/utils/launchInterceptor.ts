@@ -55,6 +55,14 @@ export function registerLaunchInterceptor(): void {
           if (verdict.toast_title && verdict.toast_body) {
             toaster.toast({ title: verdict.toast_title, body: verdict.toast_body });
           }
+        } else if (verdict.action === "warn") {
+          // Soft warning — launch proceeds. Surfaced when the backend's
+          // save-status check failed for a ROM with tracked saves; silently
+          // allowing would risk corrupting the wrong slot on an unseen
+          // conflict, so the user gets a toast and can choose to retry.
+          if (verdict.toast_title && verdict.toast_body) {
+            toaster.toast({ title: verdict.toast_title, body: verdict.toast_body });
+          }
         }
       } catch (e) {
         logError(`Launch interceptor error: ${e}`);

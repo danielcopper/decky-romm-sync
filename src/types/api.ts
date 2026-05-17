@@ -71,8 +71,8 @@ export interface RomLookupResult {
 }
 
 export interface LaunchVerdict {
-  action: "allow" | "block";
-  reason: "not_installed" | "save_conflict" | null;
+  action: "allow" | "warn" | "block";
+  reason: "not_installed" | "save_conflict" | "save_status_failed" | null;
   toast_title: string | null;
   toast_body: string | null;
 }

@@ -101,15 +101,20 @@ class LaunchGateInstalledChecker(Protocol):
 
 
 class LaunchGateSaveStatusReader(Protocol):
-    """Save-status read consumed by LaunchGateService.
+    """Save-status surface consumed by LaunchGateService.
 
-    The composition root satisfies this with ``SaveService``'s
-    ``get_save_status``. The gate only consults the returned
-    ``conflicts`` array — any non-empty value blocks the launch with
-    a save-conflict verdict.
+    The composition root satisfies this with ``SaveService``. The gate
+    calls ``get_save_status`` for the canonical conflict signal (a
+    non-empty ``conflicts`` array blocks the launch) and falls back to
+    the synchronous ``has_tracked_save`` in-memory check to decide
+    whether a ``get_save_status`` failure should be soft-warned (ROM has
+    tracked saves — silent allow would risk data loss) or silently
+    allowed (no tracked saves — nothing to corrupt).
     """
 
     async def get_save_status(self, rom_id: int) -> dict: ...
+
+    def has_tracked_save(self, rom_id: int) -> bool: ...
 
 
 class SessionPlaytimeRecorder(Protocol):

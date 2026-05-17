@@ -29,6 +29,8 @@ _TOAST_TITLE_NOT_INSTALLED = "RomM Sync"
 _TOAST_BODY_NOT_INSTALLED = "ROM not downloaded. Open the game page to download it first."
 _TOAST_TITLE_SAVE_CONFLICT = "RomM Save Sync"
 _TOAST_BODY_SAVE_CONFLICT = "Save conflict detected — open game page to resolve before playing"
+_TOAST_TITLE_SAVE_STATUS_FAILED = "RomM Save Sync"
+_TOAST_BODY_SAVE_STATUS_FAILED = "Save-status check failed — retry?"
 
 
 @dataclass(frozen=True)
@@ -37,13 +39,17 @@ class LaunchVerdict:
 
     ``action="allow"`` means the launch may proceed (the ROM is either
     not a RomM ROM, is installed with no save conflict, or the save
-    status check failed non-critically). ``action="block"`` carries a
-    machine-readable ``reason`` and the human-readable toast title and
-    body the frontend surfaces to the user.
+    status check failed for a ROM with no tracked saves). ``action="warn"``
+    means the launch may proceed but the frontend should surface a
+    soft toast — used when ``get_save_status`` failed for a ROM that
+    *does* have tracked saves, where silent allow would risk data loss
+    on an unseen conflict. ``action="block"`` carries a machine-readable
+    ``reason`` and the human-readable toast title and body the frontend
+    surfaces to the user.
     """
 
-    action: Literal["allow", "block"]
-    reason: Literal["not_installed", "save_conflict"] | None = None
+    action: Literal["allow", "warn", "block"]
+    reason: Literal["not_installed", "save_conflict", "save_status_failed"] | None = None
     toast_title: str | None = None
     toast_body: str | None = None
 
@@ -103,9 +109,13 @@ class LaunchGateService:
         LaunchVerdict
             ``allow`` when the app is not a RomM ROM, when the ROM is
             installed with no save conflict, or when the save-status
-            read failed non-critically. ``block`` with ``reason``
-            ``not_installed`` or ``save_conflict`` and the matching
-            toast strings otherwise.
+            read failed for a ROM with no tracked saves. ``warn`` with
+            ``reason="save_status_failed"`` when the save-status read
+            failed for a ROM that has tracked saves — the frontend
+            surfaces the warning toast but lets the launch proceed.
+            ``block`` with ``reason="not_installed"`` or
+            ``reason="save_conflict"`` and the matching toast strings
+            otherwise.
         """
         rom = self._rom_lookup.get_rom_by_steam_app_id(steam_app_id)
         if rom is None:
@@ -125,8 +135,18 @@ class LaunchGateService:
         try:
             save_status = await self._save_status_reader.get_save_status(rom_id)
         except Exception as e:
-            # Non-critical: a failed conflict check must not block the launch.
-            self._logger.debug(f"LaunchGate save-status check failed for rom_id={rom_id}: {e}")
+            # A failed conflict check must not silently allow the launch
+            # for ROMs with tracked saves — an unseen conflict would
+            # corrupt the wrong slot. Soft-warn instead so the user can
+            # retry; pure-allow only when nothing is tracked.
+            self._logger.warning(f"LaunchGate save-status check failed for rom_id={rom_id}: {e}")
+            if self._save_status_reader.has_tracked_save(rom_id):
+                return LaunchVerdict(
+                    action="warn",
+                    reason="save_status_failed",
+                    toast_title=_TOAST_TITLE_SAVE_STATUS_FAILED,
+                    toast_body=_TOAST_BODY_SAVE_STATUS_FAILED,
+                )
             return LaunchVerdict(action="allow")
 
         if _has_any_save_conflict(save_status):

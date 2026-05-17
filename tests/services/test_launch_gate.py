@@ -46,16 +46,23 @@ class FakeSaveStatusReader:
         *,
         payload: dict | None = None,
         side_effect: BaseException | None = None,
+        tracked_rom_ids: set[int] | None = None,
     ) -> None:
         self.payload: dict = payload if payload is not None else {"conflicts": []}
         self.side_effect = side_effect
+        self.tracked_rom_ids: set[int] = tracked_rom_ids if tracked_rom_ids is not None else set()
         self.calls: list[int] = []
+        self.tracked_calls: list[int] = []
 
     async def get_save_status(self, rom_id: int) -> dict:
         self.calls.append(rom_id)
         if self.side_effect is not None:
             raise self.side_effect
         return self.payload
+
+    def has_tracked_save(self, rom_id: int) -> bool:
+        self.tracked_calls.append(rom_id)
+        return rom_id in self.tracked_rom_ids
 
 
 @pytest.fixture
@@ -127,11 +134,14 @@ class TestEvaluateAllow:
         assert installed_checker.calls == [99]
         assert save_status_reader.calls == [99]
 
-    def test_save_status_failure_does_not_block(self, event_loop, logger):
-        """ROM installed, save_status raises → allow (non-critical fallback)."""
+    def test_save_status_failure_no_tracked_saves_allows(self, event_loop, logger):
+        """ROM installed, save_status raises, no tracked saves → allow (nothing to corrupt)."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
         installed_checker = FakeInstalledChecker(installed={99: {"rom_id": 99}})
-        save_status_reader = FakeSaveStatusReader(side_effect=RuntimeError("boom"))
+        save_status_reader = FakeSaveStatusReader(
+            side_effect=RuntimeError("boom"),
+            tracked_rom_ids=set(),
+        )
         service = _make_service(
             rom_lookup=rom_lookup,
             installed_checker=installed_checker,
@@ -143,6 +153,7 @@ class TestEvaluateAllow:
 
         assert verdict == LaunchVerdict(action="allow")
         assert save_status_reader.calls == [99]
+        assert save_status_reader.tracked_calls == [99]
 
 
 class TestEvaluateBlock:
@@ -196,6 +207,59 @@ class TestEvaluateBlock:
         assert verdict.reason == "save_conflict"
         assert verdict.toast_title == "RomM Save Sync"
         assert verdict.toast_body == "Save conflict detected — open game page to resolve before playing"
+
+
+class TestEvaluateWarn:
+    def test_save_status_failure_with_tracked_saves_warns(self, event_loop, logger, caplog):
+        """ROM installed, save_status raises OSError, tracked saves present → warn."""
+        rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
+        installed_checker = FakeInstalledChecker(installed={99: {"rom_id": 99}})
+        save_status_reader = FakeSaveStatusReader(
+            side_effect=OSError("network down"),
+            tracked_rom_ids={99},
+        )
+        service = _make_service(
+            rom_lookup=rom_lookup,
+            installed_checker=installed_checker,
+            save_status_reader=save_status_reader,
+            logger=logger,
+        )
+
+        with caplog.at_level("WARNING", logger="test_launch_gate"):
+            verdict = event_loop.run_until_complete(service.evaluate(42))
+
+        assert verdict.action == "warn"
+        assert verdict.reason == "save_status_failed"
+        assert verdict.toast_title == "RomM Save Sync"
+        assert verdict.toast_body == "Save-status check failed — retry?"
+        assert save_status_reader.calls == [99]
+        assert save_status_reader.tracked_calls == [99]
+        # Bumped from DEBUG to WARNING — verify the level and that the
+        # exception detail is included.
+        warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warning_records) == 1
+        assert "rom_id=99" in warning_records[0].getMessage()
+        assert "network down" in warning_records[0].getMessage()
+
+    def test_save_status_failure_warn_when_only_slots_tracked(self, event_loop, logger):
+        """``has_tracked_save`` returning True (e.g. slots-only entry) → warn."""
+        rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
+        installed_checker = FakeInstalledChecker(installed={99: {"rom_id": 99}})
+        save_status_reader = FakeSaveStatusReader(
+            side_effect=RuntimeError("executor crash"),
+            tracked_rom_ids={99},
+        )
+        service = _make_service(
+            rom_lookup=rom_lookup,
+            installed_checker=installed_checker,
+            save_status_reader=save_status_reader,
+            logger=logger,
+        )
+
+        verdict = event_loop.run_until_complete(service.evaluate(42))
+
+        assert verdict.action == "warn"
+        assert verdict.reason == "save_status_failed"
 
 
 class TestEvaluateEdgeCases:

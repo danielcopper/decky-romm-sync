@@ -984,3 +984,44 @@ class TestPerRomLockSerialization:
         enters = [i for i, e in enumerate(order) if e[1] == "enter"]
         exits = [i for i, e in enumerate(order) if e[1] == "exit"]
         assert min(exits) > max(enters), order
+
+
+class TestHasTrackedSave:
+    """Pure in-memory predicate consumed by the launch gate."""
+
+    def test_returns_false_when_no_entry(self, tmp_path):
+        """ROM with no entry in state.saves → False."""
+        svc, _ = make_service(tmp_path)
+        assert svc.has_tracked_save(42) is False
+
+    def test_returns_false_for_empty_entry(self, tmp_path):
+        """ROM with an empty RomSaveState (no files, no slots) → False."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.saves["42"] = RomSaveState()
+        assert svc.has_tracked_save(42) is False
+
+    def test_returns_true_when_files_tracked(self, tmp_path):
+        """ROM with at least one tracked file → True."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.saves["42"] = RomSaveState(
+            files={"pokemon.srm": FileSyncState(tracked_save_id=7, last_sync_hash="abc")},
+        )
+        assert svc.has_tracked_save(42) is True
+
+    def test_returns_true_when_slots_configured(self, tmp_path):
+        """ROM with at least one slot configured (no files yet) → True."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.saves["42"] = RomSaveState(
+            slots={"default": {"label": "Default"}},
+        )
+        assert svc.has_tracked_save(42) is True
+
+    def test_accepts_int_rom_id_casting_to_str_key(self, tmp_path):
+        """``rom_id`` is int on the wire; state keys are str — service stringifies."""
+        svc, _ = make_service(tmp_path)
+        svc._save_sync_state.saves["99"] = RomSaveState(
+            files={"a.srm": FileSyncState(tracked_save_id=1)},
+        )
+        assert svc.has_tracked_save(99) is True
+        # Wrong rom_id misses cleanly.
+        assert svc.has_tracked_save(100) is False

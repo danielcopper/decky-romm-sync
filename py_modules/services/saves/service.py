@@ -187,6 +187,20 @@ class SaveService:
         """Check if emulator core changed since last sync for a ROM."""
         return self._status.check_core_change(rom_id)
 
+    def has_tracked_save(self, rom_id: int) -> bool:
+        """Return True when this ROM has at least one tracked save (slot or file).
+
+        Reads in-memory aggregate state only — no I/O, no network. Used by
+        the launch gate to decide whether a ``get_save_status`` failure
+        should surface as a soft ``warn`` verdict (tracked saves exist —
+        silent allow would risk data loss on an unseen conflict) or stay
+        a silent ``allow`` (no tracked saves — nothing to corrupt).
+        """
+        save_entry = self._save_sync_state.saves.get(str(rom_id))
+        if save_entry is None:
+            return False
+        return bool(save_entry.files) or bool(save_entry.slots)
+
     # ------------------------------------------------------------------
     # Sync orchestration (delegated to SyncEngine)
     # ------------------------------------------------------------------
