@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Pre-commit hook: format and lint staged Python files with ruff
+# Pre-commit hook: format and lint staged Python files with ruff.
+# On feature branches, also run basedpyright + pytest before allowing the commit.
+# Heavy checks are skipped when committing directly to main.
 
 # Find ruff — prefer Mason binary, fall back to PATH
 RUFF="${HOME}/.local/share/nvim/mason/bin/ruff"
@@ -11,7 +13,8 @@ if [ -z "$RUFF" ]; then
     exit 0
 fi
 
-# Get staged Python files
+# Get staged Python files. Hook exits early if no Python changed —
+# heavy checks below also skip in that case.
 STAGED=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 if [ -z "$STAGED" ]; then
     exit 0
@@ -28,9 +31,36 @@ for file in $STAGED; do
     fi
 done
 
-# Final check — abort on unfixable errors (e.g. line too long)
-$RUFF check $STAGED
-if [ $? -ne 0 ]; then
+# Final ruff check — abort on unfixable errors (e.g. line too long)
+if ! $RUFF check $STAGED; then
     echo "pre-commit: ruff found unfixable errors, aborting commit"
     exit 1
+fi
+
+# Heavy checks only on feature branches — skip when on main
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$BRANCH" = "main" ]; then
+    exit 0
+fi
+
+# basedpyright (full repo scan, ~10-20s)
+if command -v basedpyright >/dev/null 2>&1; then
+    echo "pre-commit: running basedpyright..."
+    if ! basedpyright; then
+        echo "pre-commit: basedpyright found errors, aborting commit"
+        exit 1
+    fi
+else
+    echo "pre-commit: basedpyright not in PATH, skipping type check"
+fi
+
+# pytest (full suite, ~1m)
+if command -v pytest >/dev/null 2>&1; then
+    echo "pre-commit: running pytest..."
+    if ! python -m pytest tests/ -q; then
+        echo "pre-commit: pytest failed, aborting commit"
+        exit 1
+    fi
+else
+    echo "pre-commit: pytest not in PATH, skipping tests"
 fi
