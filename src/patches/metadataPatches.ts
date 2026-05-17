@@ -182,21 +182,3 @@ export async function applyAllPlaytime(
   }
 }
 
-/**
- * Update metadata cache for a single app and apply direct property mutations.
- * Called after fetching fresh metadata for a ROM.
- */
-export function updateMetadataForApp(appId: number, romId: number, metadata: RomMetadata) {
-  metadataCache[String(romId)] = metadata;
-  appIdToRomId[appId] = romId;
-  registeredAppIds.add(appId);
-  applyDirectMutations(appId, metadata);
-}
-
-/**
- * Update the set of known RomM app IDs (e.g. after sync).
- */
-export function setRegisteredAppIds(appIds: number[]) {
-  registeredAppIds = new Set(appIds);
-}
-

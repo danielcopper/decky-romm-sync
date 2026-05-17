@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 
 from domain.save_state import (
     FileSyncState,
-    PlaytimeEntry,
     RomSaveState,
     SaveSyncSettings,
     SaveSyncState,
@@ -81,10 +80,6 @@ class StateService:
     # Typed accessors for the per-ROM substructure
     # ------------------------------------------------------------------
 
-    def get_rom_state(self, rom_id_str: str) -> RomSaveState | None:
-        """Return the typed per-ROM state, or ``None`` if not tracked."""
-        return self._save_sync_state.saves.get(rom_id_str)
-
     def ensure_rom_state(self, rom_id_str: str) -> RomSaveState:
         """Return the per-ROM state, creating an empty one if missing."""
         return self._save_sync_state.saves.setdefault(rom_id_str, RomSaveState())
@@ -99,10 +94,6 @@ class StateService:
     def get_settings(self) -> SaveSyncSettings:
         """Return the live settings dataclass."""
         return self._save_sync_state.settings
-
-    def get_playtime(self, rom_id_str: str) -> PlaytimeEntry | None:
-        """Return the typed playtime entry, or ``None`` if not tracked."""
-        return self._save_sync_state.playtime.get(rom_id_str)
 
     # ------------------------------------------------------------------
     # File tracking mutations

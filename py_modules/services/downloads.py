@@ -86,11 +86,6 @@ class DownloadService:
         self._download_queue: dict = {}
         self._download_tasks: dict = {}
 
-    @property
-    def download_tasks(self) -> dict:
-        """Active download tasks (read-only view)."""
-        return self._download_tasks
-
     def shutdown(self) -> None:
         """Cancel all active downloads and clear task tracking."""
         for task in self._download_tasks.values():

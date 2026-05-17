@@ -13,7 +13,7 @@ import { RomMGameInfoPanel } from "../components/RomMGameInfoPanel";
 import { debugLog } from "../api/backend";
 import type { RoutePatch } from "@decky/api";
 
-// Cached set of RomM app IDs — updated by registerRomMAppId / unregisterRomMAppId
+// Cached set of RomM app IDs — updated by registerRomMAppId
 const rommAppIds = new Set<number>();
 
 // Tracks which appIds have already had their tree dumped (once per page load)
@@ -141,10 +141,6 @@ function dumpTree(container: any, appId: number): void {
 
 export function registerRomMAppId(appId: number) {
   rommAppIds.add(appId);
-}
-
-export function unregisterRomMAppId(appId: number) {
-  rommAppIds.delete(appId);
 }
 
 export function isRomMAppId(appId: number): boolean {
