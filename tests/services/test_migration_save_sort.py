@@ -8,7 +8,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import FakeRetroDeckPaths
+from conftest import FakeMigrationFileAdapter, FakeRetroDeckPaths
 
 from adapters.migration_file import MigrationFileAdapter
 from services.migration import MigrationService, MigrationServiceConfig
@@ -30,10 +30,13 @@ def _make_service(
     state_overrides=None,
     active_core=_active_core,
     get_core_name=_no_corename,
+    migration_files=None,
 ):
     """Create a MigrationService with sensible defaults for sort migration tests.
 
     Returns (service, save_state_mock) so callers can assert on save_state calls.
+    Pass ``migration_files`` to swap the real ``MigrationFileAdapter`` for a
+    fake when a test needs failure injection.
     """
     state = {
         "shortcut_registry": {},
@@ -51,7 +54,7 @@ def _make_service(
 
     svc = MigrationService(
         config=MigrationServiceConfig(
-            migration_files=MigrationFileAdapter(),
+            migration_files=migration_files if migration_files is not None else MigrationFileAdapter(),
             state=state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
@@ -473,23 +476,21 @@ class TestMigrateSaveSortFiles:
         assert "save_sort_settings_previous" not in svc._state
 
     @pytest.mark.asyncio
-    async def test_conflict_mtime_read_oserror_records_error(self, tmp_path, monkeypatch):
+    async def test_conflict_mtime_read_oserror_records_error(self, tmp_path):
         """OSError during mtime read — conflict added to errors, no mutations."""
         roms_path = tmp_path / "roms"
         saves_path = tmp_path / "saves"
-        roms_path.mkdir()
-        saves_path.mkdir()
 
         rom_file = roms_path / "gba" / "Pokemon.gba"
-        rom_file.parent.mkdir(parents=True)
-        rom_file.write_text("rom")
-
-        old_save_dir = saves_path / "gba"
-        old_save_dir.mkdir(parents=True)
-        old_save = old_save_dir / "Pokemon.srm"
-        old_save.write_text("old")
+        old_save = saves_path / "gba" / "Pokemon.srm"
         new_save = saves_path / "Pokemon.srm"
-        new_save.write_text("new")
+
+        fake = FakeMigrationFileAdapter()
+        fake.files[str(rom_file)] = b"rom"
+        fake.files[str(old_save)] = b"old"
+        fake.files[str(new_save)] = b"new"
+        # Force the conflict's mtime read to raise on the old (source) path.
+        fake.getmtime_failures.add(str(old_save))
 
         installed_roms = {
             "1": {
@@ -508,52 +509,41 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
+            migration_files=fake,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
-
-        real_getmtime = os.path.getmtime
-
-        def boom(path):
-            if path == str(old_save):
-                raise OSError("mtime read failed")
-            return real_getmtime(path)
-
-        monkeypatch.setattr("services.migration.os.path.getmtime", boom)
 
         result = await svc.migrate_save_sort_files()
 
         assert result["success"] is False
         assert len(result["errors"]) == 1
-        assert "mtime read failed" in result["errors"][0]
-        # Files untouched
-        assert old_save.read_text() == "old"
-        assert new_save.read_text() == "new"
+        assert "simulated getmtime failure" in result["errors"][0]
+        # Files untouched — conflict resolution bailed before any mutation.
+        assert fake.files[str(old_save)] == b"old"
+        assert fake.files[str(new_save)] == b"new"
         # state_previous must be preserved when errors occur — users must still see
         # the migration prompt on the next detect pass
         assert "save_sort_settings_previous" in svc._state
         assert svc._state["save_sort_settings_previous"] == old_settings
 
     @pytest.mark.asyncio
-    async def test_conflict_remove_oserror_records_error(self, tmp_path, monkeypatch):
+    async def test_conflict_remove_oserror_records_error(self, tmp_path):
         """Destination-wins cleanup fails — error recorded, no crash."""
         roms_path = tmp_path / "roms"
         saves_path = tmp_path / "saves"
-        roms_path.mkdir()
-        saves_path.mkdir()
 
         rom_file = roms_path / "gba" / "Pokemon.gba"
-        rom_file.parent.mkdir(parents=True)
-        rom_file.write_text("rom")
-
-        old_save_dir = saves_path / "gba"
-        old_save_dir.mkdir(parents=True)
-        old_save = old_save_dir / "Pokemon.srm"
-        old_save.write_text("stale")
+        old_save = saves_path / "gba" / "Pokemon.srm"
         new_save = saves_path / "Pokemon.srm"
-        new_save.write_text("fresh")
 
-        os.utime(str(old_save), (1_000_000, 1_000_000))
-        os.utime(str(new_save), (2_000_000, 2_000_000))
+        fake = FakeMigrationFileAdapter()
+        fake.files[str(rom_file)] = b"rom"
+        fake.files[str(old_save)] = b"stale"
+        fake.files[str(new_save)] = b"fresh"
+        # Destination newer than source — newest-wins picks the remove path.
+        fake.mtimes[str(old_save)] = 1_000_000.0
+        fake.mtimes[str(new_save)] = 2_000_000.0
+        fake.remove_failures.add(str(old_save))
 
         installed_roms = {
             "1": {
@@ -572,45 +562,38 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
+            migration_files=fake,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
-
-        def boom_remove(path):
-            raise OSError("remove failed")
-
-        monkeypatch.setattr("services.migration.os.remove", boom_remove)
 
         result = await svc.migrate_save_sort_files()
 
         assert result["success"] is False
         assert len(result["errors"]) == 1
-        assert "remove failed" in result["errors"][0]
+        assert "simulated remove failure" in result["errors"][0]
         # state_previous must be preserved when errors occur — users must still see
         # the migration prompt on the next detect pass
         assert "save_sort_settings_previous" in svc._state
         assert svc._state["save_sort_settings_previous"] == old_settings
 
     @pytest.mark.asyncio
-    async def test_conflict_replace_oserror_records_error(self, tmp_path, monkeypatch):
+    async def test_conflict_replace_oserror_records_error(self, tmp_path):
         """Source-wins overwrite fails — error recorded, no crash."""
         roms_path = tmp_path / "roms"
         saves_path = tmp_path / "saves"
-        roms_path.mkdir()
-        saves_path.mkdir()
 
         rom_file = roms_path / "gba" / "Pokemon.gba"
-        rom_file.parent.mkdir(parents=True)
-        rom_file.write_text("rom")
-
-        old_save_dir = saves_path / "gba"
-        old_save_dir.mkdir(parents=True)
-        old_save = old_save_dir / "Pokemon.srm"
-        old_save.write_text("source newer")
+        old_save = saves_path / "gba" / "Pokemon.srm"
         new_save = saves_path / "Pokemon.srm"
-        new_save.write_text("destination older")
 
-        os.utime(str(new_save), (1_000_000, 1_000_000))
-        os.utime(str(old_save), (2_000_000, 2_000_000))
+        fake = FakeMigrationFileAdapter()
+        fake.files[str(rom_file)] = b"rom"
+        fake.files[str(old_save)] = b"source newer"
+        fake.files[str(new_save)] = b"destination older"
+        # Source newer than destination — newest-wins picks the rename path.
+        fake.mtimes[str(old_save)] = 2_000_000.0
+        fake.mtimes[str(new_save)] = 1_000_000.0
+        fake.rename_failures.add(str(old_save))
 
         installed_roms = {
             "1": {
@@ -629,19 +612,15 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
+            migration_files=fake,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
-
-        def boom_replace(src, dst):
-            raise OSError("replace failed")
-
-        monkeypatch.setattr("services.migration.os.replace", boom_replace)
 
         result = await svc.migrate_save_sort_files()
 
         assert result["success"] is False
         assert len(result["errors"]) == 1
-        assert "replace failed" in result["errors"][0]
+        assert "simulated rename failure" in result["errors"][0]
         # state_previous must be preserved when errors occur — users must still see
         # the migration prompt on the next detect pass
         assert "save_sort_settings_previous" in svc._state

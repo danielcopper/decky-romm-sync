@@ -448,9 +448,10 @@ class FakeMigrationFileAdapter:
     created via ``make_dirs``.
 
     Failure-injection seams support partial-failure tests:
-    - ``move_failures``, ``rename_failures``, ``remove_failures`` —
-      sets of source paths that should raise ``OSError`` on the
-      respective operation.
+    - ``move_failures``, ``rename_failures``, ``remove_failures``,
+      ``getmtime_failures`` — sets of paths that should raise
+      ``OSError`` on the respective operation even when the path is
+      otherwise present in ``files``.
     - ``mtimes`` — explicit ``{path: mtime}`` overrides for
       ``getmtime``; missing entries fall back to the order they were
       added (monotonically increasing).
@@ -465,6 +466,7 @@ class FakeMigrationFileAdapter:
         self.move_failures: set[str] = set()
         self.rename_failures: set[str] = set()
         self.remove_failures: set[str] = set()
+        self.getmtime_failures: set[str] = set()
         self.mtimes: dict[str, float] = {}
         self.walk_returns: dict[str, list[tuple[str, list[str], list[str]]]] | None = None
         self.move_calls: list[tuple[str, str]] = []
@@ -514,6 +516,8 @@ class FakeMigrationFileAdapter:
         self.files[dst] = self.files.pop(src)
 
     def getmtime(self, path: str) -> float:
+        if path in self.getmtime_failures:
+            raise OSError(f"simulated getmtime failure: {path}")
         if path in self.mtimes:
             return self.mtimes[path]
         if path not in self.files:
