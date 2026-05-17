@@ -14,6 +14,7 @@ import { DownloadQueue } from "./components/DownloadQueue";
 import { initUnitSyncManager } from "./utils/syncManager";
 import { setSyncProgress } from "./utils/syncProgress";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
+import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
@@ -386,24 +387,8 @@ export default definePlugin(() => {
 
   const downloadFailedListener = addEventListener<[DownloadFailedEvent]>(
     "download_failed",
-    (data: DownloadFailedEvent) => {
-      const prev = getDownloadState().find((d) => d.rom_id === data.rom_id);
-      updateDownload({
-        rom_id: data.rom_id,
-        rom_name: data.rom_name,
-        platform_name: data.platform_name,
-        file_name: prev?.file_name ?? "",
-        status: "failed",
-        progress: prev?.progress ?? 0,
-        bytes_downloaded: prev?.bytes_downloaded ?? 0,
-        total_bytes: prev?.total_bytes ?? 0,
-        error: data.error_message,
-      });
-      toaster.toast({
-        title: "RomM Sync",
-        body: `Download failed: ${data.rom_name} — ${data.error_message}`,
-      });
-    }
+    (data: DownloadFailedEvent) =>
+      handleGlobalDownloadFailure(data, { getDownloadState, updateDownload }, toaster),
   );
 
   const pathChangedListener = addEventListener<[{ old_path: string; new_path: string; cleared?: boolean }]>(

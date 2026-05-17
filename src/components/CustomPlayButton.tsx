@@ -40,6 +40,7 @@ import { getRommConnectionState } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "../utils/saveSetup";
+import { handleButtonDownloadFailure } from "../utils/downloadFailure";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { showSyncConflictModal } from "./SyncConflictModal";
 import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent, SyncConflict } from "../types";
@@ -203,14 +204,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
     const failedListener = addEventListener<[DownloadFailedEvent]>(
       "download_failed",
-      (evt: DownloadFailedEvent) => {
-        if (evt.rom_id !== romIdRef.current) return;
-        // Reset to download state so the user can retry; the global
-        // listener in index.tsx surfaces the failure toast.
-        setDlProgress(null);
-        setActionPending(false);
-        setState("download");
-      },
+      // The global listener in index.tsx owns the failure toast; here we only
+      // reset local UI so the user can retry.
+      (evt: DownloadFailedEvent) =>
+        handleButtonDownloadFailure(evt, romIdRef.current, () => {
+          setDlProgress(null);
+          setActionPending(false);
+          setState("download");
+        }),
     );
 
     const onUninstall = (e: Event) => {
