@@ -54,6 +54,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Check bundle size budget
+        run: pnpm size
+
   lint:
     runs-on: ubuntu-latest
     steps:
