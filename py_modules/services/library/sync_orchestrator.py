@@ -1,14 +1,15 @@
-"""Preview / apply / per-unit sync lifecycle and the safety heartbeat.
+"""Preview / apply / per-unit sync lifecycle and the heartbeat clock.
 
 Owns every async path the user triggers from the QAM that mutates
 in-flight sync state: starting and cancelling syncs, prefetching
-units for a preview, dispatching the per-unit sync pipeline on apply,
-and the safety-timeout watchdog that closes out stuck "applying"
-phases. Progress emission also lives here — sub-services that need
-to surface progress receive the orchestrator's ``_emit_progress``
-callback through their config. Anything that fetches ROMs belongs in
-:class:`LibraryFetcher`; anything that finalises shortcuts after the
-apply completes belongs in :class:`SyncReporter`.
+units for a preview, and dispatching the per-unit sync pipeline on
+apply. The heartbeat clock — refreshed on every progress emission
+and inspected by per-unit waits — lives here too. Progress emission
+also lives here — sub-services that need to surface progress receive
+the orchestrator's ``_emit_progress`` callback through their config.
+Anything that fetches ROMs belongs in :class:`LibraryFetcher`;
+anything that finalises shortcuts after the apply completes belongs
+in :class:`SyncReporter`.
 """
 
 from __future__ import annotations
@@ -140,7 +141,7 @@ class SyncOrchestrator:
         return {"success": True, "message": "Sync cancelling..."}
 
     def sync_heartbeat(self):
-        """Called by frontend during shortcut application to keep safety timeout alive."""
+        """Called by frontend during shortcut application to refresh the per-unit heartbeat clock."""
         self._sync_state.sync_last_heartbeat = self._clock.monotonic()
         return {"success": True}
 
@@ -265,9 +266,9 @@ class SyncOrchestrator:
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
 
-        # Update sync_stats up-front so the safety-timeout fallback path
-        # surfaces a sensible "X games from Y platforms" message even if
-        # the per-unit dispatch later stalls.
+        # Update sync_stats up-front so ``get_sync_stats`` and any
+        # subsequent shortcut-removal pass see the apply's intended
+        # counts even if the per-unit dispatch later stalls.
         self._state["sync_stats"] = {
             "platforms": delta.platforms_count,
             "roms": delta.total_roms,
@@ -303,49 +304,6 @@ class SyncOrchestrator:
             "totalSteps": total_steps,
         }
         await self._emit("sync_progress", self._sync_state.sync_progress)
-
-    def _start_safety_timeout(self, heartbeat_timeout_sec=30) -> asyncio.Task:
-        """Launch a background task that auto-completes sync if no heartbeat arrives.
-
-        Returns the spawned task so tests can deterministically await its
-        completion; production callers ignore the return value.
-        """
-        box = self._sync_state
-        box.sync_last_heartbeat = self._clock.monotonic()
-        captured_sync_id = box.current_sync_id
-
-        async def _safety_timeout():
-            while box.sync_progress.get("running"):
-                await self._sleeper.sleep(10)
-                # Generation guard: if our sync has ended (cancel, error,
-                # normal completion), current_sync_id was cleared or
-                # replaced. Don't fire stale "done" or overwrite the new
-                # sync state.
-                if box.current_sync_id != captured_sync_id:
-                    return
-                elapsed = self._clock.monotonic() - box.sync_last_heartbeat
-                if elapsed > heartbeat_timeout_sec:
-                    self._logger.warning(f"Sync safety timeout: no heartbeat for {elapsed:.0f}s")
-                    stats = self._state.get("sync_stats", {})
-                    await self._emit_progress(
-                        "done",
-                        current=stats.get("roms", 0),
-                        total=stats.get("roms", 0),
-                        message=(
-                            f"Sync complete: {stats.get('roms', 0)} games from {stats.get('platforms', 0)} platforms"
-                        ),
-                        running=False,
-                    )
-                    # Second generation check: the await above yielded the
-                    # event loop, so a new sync may have started during
-                    # _emit_progress. Don't stomp its state.
-                    if box.current_sync_id != captured_sync_id:
-                        return
-                    box.sync_state = SyncState.IDLE
-                    box.current_sync_id = None
-                    return
-
-        return self._loop.create_task(_safety_timeout())
 
     # ── Sync termination ─────────────────────────────────────────
 

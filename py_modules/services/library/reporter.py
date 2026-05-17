@@ -209,8 +209,9 @@ class SyncReporter:
             )
             self._logger.info(f"Sync results reported: {total} games")
         self._sync_state.sync_state = SyncState.IDLE
-        # Invalidate any in-flight safety timeout — sync is over, no
-        # late "done" event should fire on top of the one we just emitted.
+        # Invalidate the run's generation id — any in-flight per-unit
+        # waits that wake after this point see a stale id and exit
+        # without emitting a late "done".
         self._sync_state.current_sync_id = None
         return {"success": True}
 

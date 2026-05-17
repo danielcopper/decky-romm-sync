@@ -55,10 +55,11 @@ class LibrarySyncStateBox:
     """In-memory state for one library sync run, plus held preview/apply data.
 
     Holds the current ``SyncState`` (idle/running/cancelling), the
-    generation id used by the safety-timeout guard, the heartbeat
-    timestamp, the live progress dict emitted to the frontend, and the
-    apply-staging dicts populated during ``sync_preview`` /
-    ``sync_apply_delta`` and consumed by ``report_sync_results``.
+    generation id used to invalidate stale background work after the
+    run ends, the heartbeat timestamp, the live progress dict emitted
+    to the frontend, and the apply-staging dicts populated during
+    ``sync_preview`` / ``sync_apply_delta`` and consumed by
+    ``report_sync_results``.
     """
 
     sync_state: SyncState = SyncState.IDLE

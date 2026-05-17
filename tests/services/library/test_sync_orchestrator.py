@@ -375,7 +375,8 @@ class TestSyncApplyDelta:
 
     @pytest.mark.asyncio
     async def test_apply_persists_sync_stats(self, plugin, tmp_path):
-        """Apply writes the preview's platform/rom counts into ``sync_stats`` for the safety-timeout fallback."""
+        """Apply writes the preview's platform/rom counts into ``sync_stats`` so
+        ``get_sync_stats`` and the shortcut-removal pass see the apply's counts."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
@@ -548,8 +549,8 @@ class TestFinishSync:
 
     @pytest.mark.asyncio
     async def test_clears_current_sync_id(self, plugin):
-        """_finish_sync invalidates _current_sync_id so any in-flight safety
-        timeout for the cancelled sync sees a stale generation."""
+        """_finish_sync invalidates _current_sync_id so generation-guarded
+        background work (per-unit heartbeat) sees a stale generation."""
         plugin._sync_service._sync_state = SyncState.RUNNING
         plugin._sync_service._sync_progress = {"running": True}
         plugin._sync_service._current_sync_id = "sync-abc"
@@ -557,180 +558,6 @@ class TestFinishSync:
         await plugin._sync_service._orchestrator._finish_sync("Sync cancelled")
 
         assert plugin._sync_service._current_sync_id is None
-
-
-class TestSafetyTimeoutGenerationGuard:
-    """Regression for #351 — safety timeout must not emit a stale "done"
-    after _finish_sync (cancel/error) or report_sync_results (happy end)
-    has already transitioned the sync."""
-
-    @staticmethod
-    def _gated_sleeper(release: "asyncio.Event"):
-        """A sleeper that blocks until ``release`` is set."""
-
-        class _Gated:
-            async def sleep(self, _seconds: float) -> None:
-                await release.wait()
-
-        return _Gated()
-
-    @pytest.mark.asyncio
-    async def test_safety_timeout_silenced_after_finish_sync(self, plugin):
-        """Cancel during sync → safety timeout's late wake-up emits nothing.
-
-        Reproduces the original glitch: UI receiving `cancelled` followed by
-        a phantom `done` because the background timeout fired after
-        ``_finish_sync`` had already transitioned to IDLE.
-        """
-        import decky
-
-        svc = plugin._sync_service
-        loop = asyncio.get_event_loop()
-        plugin.loop = loop
-        svc._loop = loop
-
-        release = asyncio.Event()
-        svc._sleeper = self._gated_sleeper(release)
-        svc._sync_state = SyncState.RUNNING
-        svc._current_sync_id = "sync-abc"
-        svc._sync_progress = {"running": True, "current": 5, "total": 10}
-
-        decky.emit.reset_mock()
-        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
-        # Advance past the heartbeat timeout so the elapsed check would
-        # otherwise fire — the generation guard must override it.
-        svc._clock.advance(999)
-
-        # Let the safety-timeout task park on the gated sleep.
-        await asyncio.sleep(0)
-        # Cancel completes — clears _current_sync_id while timeout is parked.
-        await svc._orchestrator._finish_sync("Sync cancelled")
-        # Release the timeout; its generation guard should fire and exit.
-        release.set()
-        await task
-
-        progress_phases = [
-            call.args[1]["phase"] for call in decky.emit.call_args_list if call.args and call.args[0] == "sync_progress"
-        ]
-        assert "cancelled" in progress_phases
-        # The original glitch: a phantom "done" landing after "cancelled".
-        assert "done" not in progress_phases
-
-    @pytest.mark.asyncio
-    async def test_safety_timeout_fires_when_generation_unchanged(self, plugin):
-        """Sanity check the guard isn't over-eager: same generation → still fires."""
-        import decky
-
-        svc = plugin._sync_service
-        loop = asyncio.get_event_loop()
-        plugin.loop = loop
-        svc._loop = loop
-
-        release = asyncio.Event()
-        svc._sleeper = self._gated_sleeper(release)
-        svc._sync_state = SyncState.RUNNING
-        svc._current_sync_id = "sync-xyz"
-        svc._sync_progress = {"running": True, "current": 5, "total": 10}
-        svc._state["sync_stats"] = {"roms": 5, "platforms": 1}
-
-        decky.emit.reset_mock()
-        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
-        # Advance the FakeClock past the timeout so elapsed > heartbeat_timeout.
-        svc._clock.advance(999)
-
-        await asyncio.sleep(0)
-        # No cancel — generation id unchanged. Release the sleep; timeout fires.
-        release.set()
-        await task
-
-        progress_phases = [
-            call.args[1]["phase"] for call in decky.emit.call_args_list if call.args and call.args[0] == "sync_progress"
-        ]
-        assert "done" in progress_phases
-        assert svc._sync_state == SyncState.IDLE
-        assert svc._current_sync_id is None
-
-    @pytest.mark.asyncio
-    async def test_safety_timeout_silenced_after_report_sync_results(self, plugin, tmp_path):
-        """Happy-end path → safety timeout's late wake-up emits nothing.
-
-        Mirrors the cancel scenario for the report_sync_results clearing
-        path: frontend reports successfully, _current_sync_id is cleared,
-        any in-flight safety timeout sees the stale captured id and exits.
-        """
-        import decky
-
-        from adapters.persistence import PersistenceAdapter
-
-        svc = plugin._sync_service
-        loop = asyncio.get_event_loop()
-        plugin.loop = loop
-        svc._loop = loop
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        release = asyncio.Event()
-        svc._sleeper = self._gated_sleeper(release)
-        svc._sync_state = SyncState.RUNNING
-        svc._current_sync_id = "sync-happy"
-        svc._sync_progress = {"running": True, "current": 5, "total": 10}
-        svc._pending_sync = {}
-
-        decky.emit.reset_mock()
-        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
-        svc._clock.advance(999)
-
-        await asyncio.sleep(0)
-        # Happy end: report_sync_results clears the id and transitions to IDLE.
-        await plugin.report_sync_results({}, [])
-        release.set()
-        await task
-
-        progress_phases = [
-            call.args[1]["phase"] for call in decky.emit.call_args_list if call.args and call.args[0] == "sync_progress"
-        ]
-        # report_sync_results emits its own "done"; the safety timeout's
-        # captured id no longer matches, so it does NOT emit a second one.
-        assert progress_phases.count("done") == 1
-        assert svc._current_sync_id is None
-
-    @pytest.mark.asyncio
-    async def test_safety_timeout_does_not_stomp_new_sync_started_during_emit(self, plugin):
-        """Post-emit re-check: a new sync starting between safety timeout's
-        emit and its IDLE/clear must not have its state stomped."""
-        import decky
-
-        svc = plugin._sync_service
-        loop = asyncio.get_event_loop()
-        plugin.loop = loop
-        svc._loop = loop
-
-        release = asyncio.Event()
-        svc._sleeper = self._gated_sleeper(release)
-        svc._sync_state = SyncState.RUNNING
-        svc._current_sync_id = "sync-old"
-        svc._sync_progress = {"running": True, "current": 5, "total": 10}
-        svc._state["sync_stats"] = {"roms": 5, "platforms": 1}
-
-        # Inject a new-sync start during the safety timeout's _emit_progress
-        # await by stubbing _emit_progress to mutate the live state mid-call.
-        async def _emit_progress_mid_start(*_a, **_kw):
-            # Simulate a fresh sync racing in between emit and stomp.
-            svc._sync_state = SyncState.RUNNING
-            svc._current_sync_id = "sync-new"
-
-        svc._orchestrator._emit_progress = _emit_progress_mid_start
-
-        decky.emit.reset_mock()
-        task = svc._orchestrator._start_safety_timeout(heartbeat_timeout_sec=1)
-        svc._clock.advance(999)
-
-        await asyncio.sleep(0)
-        release.set()
-        await task
-
-        # The new sync's state must be intact — safety timeout's second
-        # generation check observed the change and exited.
-        assert svc._sync_state == SyncState.RUNNING
-        assert svc._current_sync_id == "sync-new"
 
 
 class TestSyncPreviewErrorHandling:
