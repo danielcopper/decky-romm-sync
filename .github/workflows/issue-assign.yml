@@ -1,0 +1,20 @@
+name: Auto-assign issues
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  assign:
+    runs-on: ubuntu-latest
+    if: toJson(github.event.issue.assignees) == '[]'
+    steps:
+      - name: Assign to repo owner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: gh issue edit "$ISSUE" --repo "$REPO" --add-assignee danielcopper
