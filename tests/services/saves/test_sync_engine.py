@@ -548,14 +548,14 @@ class TestUploadSpecialChars:
 
 
 class TestUpdateFileSyncState:
-    """Tests for _update_file_sync_state."""
+    """Tests for MatrixExecutor.update_file_sync_state, the per-file sync-state writer."""
 
     def test_creates_proper_entry(self, tmp_path):
         svc, _ = make_service(tmp_path)
         save_file = _create_save(tmp_path)
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_resp, str(save_file), "gba")
+        svc._sync_engine._matrix.update_file_sync_state("42", "pokemon.srm", server_resp, str(save_file), "gba")
 
         entry = svc._save_sync_state.saves["42"].files["pokemon.srm"]
         assert entry.last_sync_hash == svc._save_file.checksum_md5(str(save_file))
@@ -567,7 +567,7 @@ class TestUpdateFileSyncState:
         save_file = _create_save(tmp_path)
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._sync_engine._update_file_sync_state(
+        svc._sync_engine._matrix.update_file_sync_state(
             "42",
             "pokemon.srm",
             server_resp,
@@ -601,7 +601,7 @@ class TestUpdateFileSyncState:
         )
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._sync_engine._update_file_sync_state(
+        svc._sync_engine._matrix.update_file_sync_state(
             "42",
             "pokemon.srm",
             server_resp,
@@ -630,7 +630,7 @@ class TestUpdateFileSyncState:
         )
         server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}
 
-        svc._sync_engine._update_file_sync_state(
+        svc._sync_engine._matrix.update_file_sync_state(
             "42",
             "pokemon.srm",
             server_resp,
@@ -649,7 +649,7 @@ class TestUpdateFileSyncState:
         local_path = str(save_file)
         server_response = _server_save()
 
-        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
+        svc._sync_engine._matrix.update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
         file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
         assert isinstance(file_state.last_sync_local_mtime, float)
@@ -661,7 +661,7 @@ class TestUpdateFileSyncState:
         local_path = str(save_file)
         server_response = _server_save()
 
-        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
+        svc._sync_engine._matrix.update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
         file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
         assert isinstance(file_state.last_sync_local_size, int)
@@ -673,7 +673,7 @@ class TestUpdateFileSyncState:
         local_path = str(save_file)
         server_response = _server_save()
 
-        svc._sync_engine._update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
+        svc._sync_engine._matrix.update_file_sync_state("42", "pokemon.srm", server_response, local_path, "gba")
 
         # The legacy field name was never part of FileSyncState; ensure the
         # serialised on-disk shape doesn't carry it either.
@@ -685,7 +685,7 @@ class TestUpdateFileSyncState:
         local_path = str(tmp_path / "saves" / "gba" / "missing.srm")
         server_response = _server_save()
 
-        svc._sync_engine._update_file_sync_state("42", "missing.srm", server_response, local_path, "gba")
+        svc._sync_engine._matrix.update_file_sync_state("42", "missing.srm", server_response, local_path, "gba")
 
         file_state = svc._save_sync_state.saves["42"].files["missing.srm"]
         assert file_state.last_sync_local_mtime is None
@@ -1380,7 +1380,7 @@ class TestDoUploadSaveFileStatePersistence:
     The PUT branch with a slot already marked ``source='server'`` is a no-op
     for slot promotion. Without an unconditional persist at the end of
     ``_do_upload_save``, the per-file ``last_sync_hash`` / ``tracked_save_id``
-    written by ``_update_file_sync_state`` never reaches disk on that path —
+    written by ``update_file_sync_state`` never reaches disk on that path —
     so after a plugin restart the next sync re-detects drift and re-uploads
     the same content. This test asserts the upload outcome is persisted
     regardless of which slot-promotion branch fired.

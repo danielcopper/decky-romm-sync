@@ -158,7 +158,7 @@ class VersionsService:
            ``is_current`` evaluates true for us. Required because v4.8.1
            PUT does NOT auto-upsert sync rows.
         4. ``_do_upload_save`` refreshes local sync state via
-           ``_update_file_sync_state`` to match the post-PUT response.
+           ``update_file_sync_state`` to match the post-PUT response.
 
         After this, the next ``compute_sync_action`` run picks id=save_id
         (now newest), our ``is_current=true``, hash matches →

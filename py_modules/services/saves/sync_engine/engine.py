@@ -167,28 +167,6 @@ class SyncEngine:
         """Upload a local save file to server (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.do_upload_save(rom_id, file_path, filename, rom_id_str, system, server_save)
 
-    def _update_file_sync_state(
-        self,
-        rom_id_str: str,
-        filename: str,
-        server_response: dict,
-        local_path: str,
-        system: str,
-        *,
-        emulator_tag: str | None = None,
-        core_so: str | None = None,
-    ) -> None:
-        """Update per-file sync tracking after a successful sync operation."""
-        self._matrix.update_file_sync_state(
-            rom_id_str,
-            filename,
-            server_response,
-            local_path,
-            system,
-            emulator_tag=emulator_tag,
-            core_so=core_so,
-        )
-
     def iter_matrix_outcomes(
         self,
         rom_id: int,
