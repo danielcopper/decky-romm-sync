@@ -300,6 +300,10 @@ class FakeDownloadFileAdapter:
     - ``fail_on_atomic_write`` — when True, ``write_text_atomic`` cleans
       up the tmp file and raises ``OSError`` to mirror the real adapter
       behaviour.
+    - ``remove_failures`` / ``remove_tree_failures`` — sets of paths that
+      raise ``OSError`` on the respective operation; used by partial-
+      failure tests in ``cleanup_leftover_tmp_files`` and
+      ``_cleanup_partial_download``.
     - ``decode_calls`` / ``extract_calls`` / ``walk_calls`` — captured
       argument lists for tests that need to assert on adapter calls.
     """
@@ -314,6 +318,7 @@ class FakeDownloadFileAdapter:
         self.extract_calls: list[tuple[str, str, str]] = []
         self.walk_calls: list[tuple[str, tuple[str, ...]]] = []
         self.remove_failures: set[str] = set()
+        self.remove_tree_failures: set[str] = set()
 
     def set_disk_free(self, bytes_free: int) -> None:
         self.disk_free_bytes = bytes_free
@@ -327,6 +332,8 @@ class FakeDownloadFileAdapter:
         self.files.pop(path, None)
 
     def remove_tree(self, path: str) -> None:
+        if path in self.remove_tree_failures:
+            raise OSError(f"simulated remove_tree failure: {path}")
         prefix = path.rstrip("/") + "/"
         for stored in list(self.files):
             if stored == path or stored.startswith(prefix):

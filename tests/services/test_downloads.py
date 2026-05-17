@@ -2107,3 +2107,382 @@ class TestClearCompletedDownloads:
         assert result["success"] is True
         assert result["removed"] == 0
         assert len(plugin._download_service._download_queue) == 2
+
+
+class TestShutdown:
+    """Tests for DownloadService.shutdown — cancel active tasks + clear tracking."""
+
+    def test_shutdown_cancels_active_tasks_and_clears(self, plugin):
+        task_a = MagicMock()
+        task_b = MagicMock()
+        plugin._download_service._download_tasks[1] = task_a
+        plugin._download_service._download_tasks[2] = task_b
+
+        plugin._download_service.shutdown()
+
+        task_a.cancel.assert_called_once_with()
+        task_b.cancel.assert_called_once_with()
+        assert plugin._download_service._download_tasks == {}
+
+    def test_shutdown_no_tasks_is_noop(self, plugin):
+        # No tasks registered — must not raise.
+        plugin._download_service.shutdown()
+        assert plugin._download_service._download_tasks == {}
+
+
+class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
+    """Tests for cleanup_leftover_tmp_files when retrodeck paths resolve to empty.
+
+    Covers the early-return guard inside _clean_rom_tmp_files /
+    _clean_bios_tmp_files when retrodeck.json is absent (roms_path()
+    / bios_path() return ""). Service must not walk an empty path.
+    """
+
+    def test_no_retrodeck_paths_bundle_skips_walk(self, plugin):
+        from conftest import FakeDownloadFileAdapter
+
+        fake = FakeDownloadFileAdapter()
+        plugin._download_service._download_files = fake
+        # Drop the retrodeck_paths bundle entirely — both clean helpers
+        # must short-circuit before walking.
+        plugin._download_service._retrodeck_paths = None
+
+        plugin._download_service.cleanup_leftover_tmp_files()
+
+        assert fake.walk_calls == []
+
+    def test_empty_roms_and_bios_paths_skip_walk(self, plugin):
+        from conftest import FakeDownloadFileAdapter
+
+        fake = FakeDownloadFileAdapter()
+        plugin._download_service._download_files = fake
+        # retrodeck_paths present but both helpers return empty (no
+        # retrodeck.json) — service must early-return on each branch.
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(roms="", bios="")
+
+        plugin._download_service.cleanup_leftover_tmp_files()
+
+        assert fake.walk_calls == []
+
+
+class TestPollDownloadRequestsLoopBody:
+    """Tests for poll_download_requests — request dispatch + error swallowing.
+
+    Covers the loop body that reads from the queue adapter, dispatches
+    each rom_id via start_download, and the bare-except branch that
+    swallows + logs exceptions other than CancelledError so the poll
+    keeps running across transient failures.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dispatches_queued_request_to_start_download(self, plugin, tmp_path):
+        from unittest.mock import AsyncMock, patch
+
+        from conftest import FakeDownloadQueueAdapter
+
+        plugin._download_service._runtime_dir = str(tmp_path)
+        # No migration pending — must not block the loop body.
+        plugin._download_service._is_retrodeck_migration_pending = lambda: False
+
+        # Sleeper cancels after one full iteration so the body runs
+        # exactly once.
+        class _CancellingSleeper:
+            def __init__(self):
+                self.calls = 0
+
+            async def sleep(self, _seconds):
+                self.calls += 1
+                if self.calls >= 2:
+                    raise asyncio.CancelledError
+
+        plugin._download_service._sleeper = _CancellingSleeper()
+
+        tracking_queue = FakeDownloadQueueAdapter(entries=[{"rom_id": 42}, {"rom_id": 99}, {"no_rom_id": True}])
+        plugin._download_service._download_queue_io = tracking_queue
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        with patch.object(plugin._download_service, "start_download", new_callable=AsyncMock) as mock_start:
+            with pytest.raises(asyncio.CancelledError):
+                await plugin._download_service.poll_download_requests()
+
+            assert tracking_queue.poll_count >= 1
+            # Both entries with rom_id should be dispatched; the
+            # malformed entry without rom_id is skipped.
+            mock_start.assert_any_await(42)
+            mock_start.assert_any_await(99)
+            assert mock_start.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_poll_continues_without_dispatch(self, plugin, tmp_path):
+        from unittest.mock import AsyncMock, patch
+
+        from conftest import FakeDownloadQueueAdapter
+
+        plugin._download_service._runtime_dir = str(tmp_path)
+        plugin._download_service._is_retrodeck_migration_pending = None
+
+        class _CancellingSleeper:
+            def __init__(self):
+                self.calls = 0
+
+            async def sleep(self, _seconds):
+                self.calls += 1
+                if self.calls >= 2:
+                    raise asyncio.CancelledError
+
+        plugin._download_service._sleeper = _CancellingSleeper()
+
+        tracking_queue = FakeDownloadQueueAdapter(entries=[])
+        plugin._download_service._download_queue_io = tracking_queue
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        with patch.object(plugin._download_service, "start_download", new_callable=AsyncMock) as mock_start:
+            with pytest.raises(asyncio.CancelledError):
+                await plugin._download_service.poll_download_requests()
+
+            assert tracking_queue.poll_count >= 1
+            mock_start.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_swallows_non_cancelled_exception_and_keeps_polling(self, plugin, tmp_path, caplog):
+        import logging
+
+        plugin._download_service._runtime_dir = str(tmp_path)
+        plugin._download_service._is_retrodeck_migration_pending = None
+
+        # Sleeper cancels after a couple of iterations so the loop
+        # body runs at least once after the failing poll.
+        class _CancellingSleeper:
+            def __init__(self):
+                self.calls = 0
+
+            async def sleep(self, _seconds):
+                self.calls += 1
+                if self.calls >= 3:
+                    raise asyncio.CancelledError
+
+        plugin._download_service._sleeper = _CancellingSleeper()
+
+        # Queue adapter that raises on poll — exercises the bare-except
+        # branch which must log a warning and continue the loop.
+        class _ExplodingQueue:
+            def __init__(self):
+                self.poll_count = 0
+
+            def poll_and_clear(self, _path):
+                self.poll_count += 1
+                raise RuntimeError("boom: queue read failed")
+
+        exploding = _ExplodingQueue()
+        plugin._download_service._download_queue_io = exploding
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        with (
+            caplog.at_level(logging.WARNING, logger="test_romm"),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await plugin._download_service.poll_download_requests()
+
+        # Loop must have re-entered after the first failure (sleeper hit
+        # at least twice before the cancelling iteration).
+        assert exploding.poll_count >= 1
+        # Warning must mention the underlying error message.
+        assert any("Download request poll error" in rec.message and "boom" in rec.message for rec in caplog.records)
+
+
+class TestMakeProgressCallback:
+    """Tests for _make_progress_callback — throttling, logging, emission."""
+
+    def test_progress_callback_updates_queue_and_dispatches_emit(self, plugin):
+        # Pre-populate the queue entry the callback updates in place.
+        plugin._download_service._download_queue[7] = {
+            "rom_id": 7,
+            "rom_name": "Mario",
+            "platform_name": "N64",
+            "file_name": "mario.z64",
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+        fake_clock = FakeClock()
+        plugin._download_service._clock = fake_clock
+
+        # Replace the event loop with a MagicMock so call_soon_threadsafe
+        # is observable without actually scheduling on the real loop.
+        # Run create_task eagerly inside call_soon_threadsafe so the
+        # coroutine returned by emit() gets consumed (otherwise it
+        # leaks as un-awaited).
+        scheduled_calls: list[int] = []
+
+        def _eager_call_soon_threadsafe(fn, *args, **kwargs):
+            scheduled_calls.append(1)
+            return fn(*args, **kwargs)
+
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.call_soon_threadsafe = _eager_call_soon_threadsafe
+        plugin._download_service._loop.create_task = lambda coro: coro.close() or MagicMock()
+        emit_calls = []
+
+        def _record_emit(event, payload):
+            emit_calls.append((event, payload))
+
+            # Return a coroutine because the real emit is awaitable —
+            # the closure passes it to create_task.
+            async def _noop():
+                return None
+
+            return _noop()
+
+        plugin._download_service._emit = _record_emit
+
+        cb = plugin._download_service._make_progress_callback(7, "Mario", "N64", "mario.z64")
+        # Advance the clock so both branches fire (log-throttle >= 30s
+        # AND emit-throttle >= 0.5s — both gated on now - last_<x>).
+        fake_clock.advance(60)
+
+        cb(512, 1024)
+
+        # Queue entry must have been updated in place.
+        entry = plugin._download_service._download_queue[7]
+        assert entry["progress"] == 0.5
+        assert entry["bytes_downloaded"] == 512
+        assert entry["total_bytes"] == 1024
+
+        # call_soon_threadsafe must have been invoked once to schedule
+        # the emit coroutine.
+        assert len(scheduled_calls) == 1
+        # Emit was called with the right event name + payload shape.
+        assert len(emit_calls) == 1
+        event, payload = emit_calls[0]
+        assert event == "download_progress"
+        assert payload["rom_id"] == 7
+        assert payload["progress"] == 0.5
+        assert payload["bytes_downloaded"] == 512
+        assert payload["total_bytes"] == 1024
+
+    def test_progress_callback_throttles_intermediate_emits(self, plugin):
+        plugin._download_service._download_queue[8] = {
+            "rom_id": 8,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+        fake_clock = FakeClock()
+        plugin._download_service._clock = fake_clock
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._emit = MagicMock(return_value=None)
+
+        cb = plugin._download_service._make_progress_callback(8, "Game", "Plat", "game.bin")
+
+        # First call: monotonic == 0; last_emit starts at 0.0 too, but
+        # downloaded < total so the throttle check (now - last_emit <
+        # 0.5 AND downloaded < total) returns early. No update.
+        cb(100, 1000)
+        assert plugin._download_service._download_queue[8]["bytes_downloaded"] == 0
+        assert plugin._download_service._loop.call_soon_threadsafe.call_count == 0
+
+        # Final call: downloaded == total bypasses the throttle even
+        # when no time elapsed — the closure always emits the final
+        # completion frame.
+        cb(1000, 1000)
+        assert plugin._download_service._download_queue[8]["bytes_downloaded"] == 1000
+        assert plugin._download_service._loop.call_soon_threadsafe.call_count == 1
+
+    def test_progress_callback_handles_zero_total(self, plugin):
+        """total == 0 must not divide-by-zero — pct/progress fall back to 0."""
+        plugin._download_service._download_queue[9] = {
+            "rom_id": 9,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+        fake_clock = FakeClock()
+        plugin._download_service._clock = fake_clock
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._emit = MagicMock(return_value=None)
+
+        cb = plugin._download_service._make_progress_callback(9, "Game", "Plat", "game.bin")
+        # Advance past both throttles so the log + emit branches both
+        # execute with total == 0 — exercises the zero-guard branches.
+        fake_clock.advance(60)
+        cb(0, 0)
+
+        entry = plugin._download_service._download_queue[9]
+        assert entry["progress"] == 0
+        assert entry["total_bytes"] == 0
+        # Emit was still scheduled — final-frame path triggers when
+        # downloaded >= total (both zero satisfies the >= check).
+        assert plugin._download_service._loop.call_soon_threadsafe.call_count == 1
+
+
+class TestCleanupPartialDownloadFailureInjection:
+    """Tests for _cleanup_partial_download — adapter raises mid-cleanup.
+
+    The cleanup loop must swallow per-path OSError so one failing
+    remove never blocks the others, AND the multi-file remove_tree
+    branch must swallow its own failure the same way (logged as a
+    warning, no re-raise).
+    """
+
+    def test_remove_failures_are_logged_and_other_paths_still_removed(self, plugin, caplog):
+        import logging
+
+        from conftest import FakeDownloadFileAdapter
+
+        fake = FakeDownloadFileAdapter()
+        target = "/roms/n64/game.z64"
+        # Stage all three candidate paths so each remove call has
+        # something to act on; mark the .tmp variant as failing.
+        fake.files[target + _ZIP_TMP_EXT_LITERAL] = b"junk1"
+        fake.files[target + _TMP_EXT_LITERAL] = b"junk2"
+        fake.files[target] = b"junk3"
+        fake.remove_failures.add(target + _TMP_EXT_LITERAL)
+        plugin._download_service._download_files = fake
+
+        with caplog.at_level(logging.WARNING, logger="test_romm"):
+            plugin._download_service._cleanup_partial_download(target, False, "game.z64")
+
+        # The failing path is still in the fake (remove raised); the
+        # other two were successfully removed.
+        assert (target + _TMP_EXT_LITERAL) in fake.files
+        assert (target + _ZIP_TMP_EXT_LITERAL) not in fake.files
+        assert target not in fake.files
+        # Warning mentions the failing path.
+        assert any(
+            "Cleanup failed for" in rec.message and (target + _TMP_EXT_LITERAL) in rec.message for rec in caplog.records
+        )
+
+    def test_remove_tree_failure_is_logged_and_swallowed(self, plugin, caplog):
+        import logging
+
+        from conftest import FakeDownloadFileAdapter
+
+        fake = FakeDownloadFileAdapter()
+        target = "/roms/psx/game.zip"
+        extract_dir = "/roms/psx/game"
+        fake.make_dirs(extract_dir)
+        fake.files[os.path.join(extract_dir, "disc1.bin")] = b"\x00" * 16
+        # Inject a remove_tree failure for the extract dir; remove on
+        # the three tmp paths is a no-op (paths absent).
+        fake.remove_tree_failures.add(extract_dir)
+        plugin._download_service._download_files = fake
+
+        with caplog.at_level(logging.WARNING, logger="test_romm"):
+            # Must NOT raise even though remove_tree raises.
+            plugin._download_service._cleanup_partial_download(target, True, "game.zip")
+
+        # The dir is still present (remove_tree raised before clearing).
+        assert extract_dir in fake.dirs
+        # Warning mentions the failing directory.
+        assert any(
+            "Cleanup failed for directory" in rec.message and extract_dir in rec.message for rec in caplog.records
+        )
+
+
+# Internal constants — re-declared so the test file doesn't reach into
+# the service module's private names. Keep in sync with services/downloads.py.
+_ZIP_TMP_EXT_LITERAL = ".zip.tmp"
+_TMP_EXT_LITERAL = ".tmp"
