@@ -35,14 +35,16 @@ from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalSer
 if TYPE_CHECKING:
     # basedpyright resolves ``conftest`` to the nearest local file. The
     # actual fakes live in the parent ``tests/conftest.py``; declare the
-    # symbol for typing purposes here and let runtime resolve through
+    # symbols for typing purposes here and let runtime resolve through
     # ``importlib`` below.
-    from conftest import FakeSettingsPersister
+    from conftest import FakeCoverArtFileStore, FakeSettingsPersister
 
 # Runtime: pytest ensures the root ``tests/conftest.py`` is loaded under
 # the module name ``conftest`` before this local conftest is imported,
-# so the symbol is already on the loaded module.
-FakeSettingsPersister = importlib.import_module("conftest").FakeSettingsPersister
+# so the symbols are already on the loaded module.
+_root_conftest = importlib.import_module("conftest")
+FakeSettingsPersister = _root_conftest.FakeSettingsPersister
+FakeCoverArtFileStore = _root_conftest.FakeCoverArtFileStore
 
 
 @pytest.fixture

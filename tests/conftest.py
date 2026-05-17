@@ -192,7 +192,10 @@ class FakeCoverArtFileStore:
     Tests can pre-populate ``files`` directly to stage fixtures, and
     inspect it after the act to assert removals/renames. ``isdir_paths``
     can be set explicitly when a test needs to model an empty directory
-    or override the path-based default.
+    or override the path-based default. ``rename_failures`` injects
+    ``OSError`` on ``rename`` for the listed source paths so tests can
+    exercise the production error-handling branches without patching
+    stdlib.
     """
 
     def __init__(self, files: dict[str, bytes] | None = None) -> None:
@@ -200,6 +203,12 @@ class FakeCoverArtFileStore:
         # Explicit directory whitelist; when None, isdir is inferred from
         # parent-of-files membership.
         self.isdir_paths: set[str] | None = None
+        # Source paths that should raise OSError on rename. Mirrors the
+        # Wave 3 fake-adapter failure-injection pattern (e.g.
+        # FakeDownloadFileAdapter / FakeFirmwareFileAdapter) so tests
+        # drive error paths through the Protocol instead of patching
+        # ``os.replace`` globally.
+        self.rename_failures: set[str] = set()
 
     def exists(self, path: str) -> bool:
         return path in self.files or self.isdir(path)
@@ -208,6 +217,8 @@ class FakeCoverArtFileStore:
         self.files.pop(path, None)
 
     def rename(self, src: str, dst: str) -> None:
+        if src in self.rename_failures:
+            raise OSError(f"rename failed for {src}")
         if src not in self.files:
             raise FileNotFoundError(src)
         self.files[dst] = self.files.pop(src)

@@ -3,6 +3,7 @@
 import os
 
 import pytest
+from conftest import FakeCoverArtFileStore
 
 from adapters.persistence import (
     PersistenceAdapter,
@@ -246,16 +247,19 @@ class TestFinalizeCoverPath:
         assert result == ""
 
     def test_handles_rename_os_error(self, plugin, tmp_path):
-        from unittest.mock import patch
-
         grid = str(tmp_path)
-        staging = tmp_path / "romm_1_cover.png"
-        staging.write_text("data")
+        staging_path = os.path.join(grid, "romm_1_cover.png")
 
-        with patch("os.replace", side_effect=OSError("perm denied")):
-            result = plugin._sync_service._reporter._finalize_cover_path(grid, str(staging), 100001, "1")
+        # Inject OSError on rename through the CoverArtFileStore Protocol —
+        # mirrors the Wave 3 fake-adapter failure-injection pattern instead
+        # of patching ``os.replace`` globally.
+        fake_store = FakeCoverArtFileStore(files={staging_path: b"data"})
+        fake_store.rename_failures.add(staging_path)
+        plugin._artwork_service._cover_art_file_store = fake_store
+
+        result = plugin._sync_service._reporter._finalize_cover_path(grid, staging_path, 100001, "1")
         # Should return original path on error
-        assert result == str(staging)
+        assert result == staging_path
 
 
 class TestBuildRegistryEntry:
