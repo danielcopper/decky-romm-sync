@@ -95,7 +95,19 @@ class SlotDeleter:
                 )
                 server_save_ids = [s["id"] for s in server_saves]
             except Exception as e:
-                self._log_debug(f"get_slot_delete_info: failed to list saves for slot '{slot}': {e}")
+                # Don't return a fake "0 server saves" — the confirmation modal
+                # would render "delete 0 saves" and the user would confirm a
+                # destructive wipe of a slot we never actually inspected. Surface
+                # the failure so the frontend can refuse to open the confirm.
+                self._logger.warning(
+                    f"get_slot_delete_info: failed to list saves for slot '{slot}': {e}",
+                )
+                return {
+                    "success": False,
+                    "reason": "server_unreachable",
+                    "error": "server_unreachable",
+                    "message": "Cannot inspect slot — server unreachable",
+                }
 
         # Local tracked files pointing to server saves in this slot
         files_state = save_state.files

@@ -6,9 +6,11 @@ import {
   pickLastSyncer,
   attributionLabel,
   formatAttributionSegment,
+  slotDeleteFailureToast,
   statusLabel,
 } from "./helpers";
 import type { DeviceSyncInfo } from "../../types";
+import type { SlotDeleteInfo } from "../../api/backend";
 
 describe("displaySlot", () => {
   it("returns '(no slot)' for null", () => {
@@ -199,5 +201,60 @@ describe("statusLabel", () => {
 
   it("defaults to grey 'Not synced' when status is unknown and lastSyncAt is null", () => {
     expect(statusLabel("weird", null)).toEqual({ color: "#8f98a0", label: "Not synced" });
+  });
+});
+
+describe("slotDeleteFailureToast", () => {
+  it("explains the active-slot guard when reason='active_slot'", () => {
+    const info: SlotDeleteInfo = { success: false, reason: "active_slot" };
+    expect(slotDeleteFailureToast(info)).toBe(
+      "Cannot delete the active slot. Switch to a different slot first.",
+    );
+  });
+
+  it("explains the active-slot guard when is_active flag is set", () => {
+    const info: SlotDeleteInfo = { success: false, is_active: true };
+    expect(slotDeleteFailureToast(info)).toBe(
+      "Cannot delete the active slot. Switch to a different slot first.",
+    );
+  });
+
+  it("surfaces the server-unreachable warning when reason='server_unreachable'", () => {
+    // Regression for #626: without this branch the modal opens and the user
+    // confirms a destructive delete based on stale/empty data.
+    const info: SlotDeleteInfo = {
+      success: false,
+      reason: "server_unreachable",
+      message: "Cannot inspect slot — server unreachable",
+    };
+    expect(slotDeleteFailureToast(info)).toBe(
+      "Cannot inspect slot — server unreachable",
+    );
+  });
+
+  it("surfaces the server-unreachable warning when only error='server_unreachable'", () => {
+    const info: SlotDeleteInfo = {
+      success: false,
+      error: "server_unreachable",
+      message: "boom",
+    };
+    expect(slotDeleteFailureToast(info)).toBe("boom");
+  });
+
+  it("falls back to a generic server-unreachable message when no message is provided", () => {
+    const info: SlotDeleteInfo = { success: false, reason: "server_unreachable" };
+    expect(slotDeleteFailureToast(info)).toBe(
+      "Cannot inspect slot — RomM server is not reachable",
+    );
+  });
+
+  it("surfaces the backend message for unrecognised failure reasons", () => {
+    const info: SlotDeleteInfo = { success: false, reason: "weird", message: "Custom failure" };
+    expect(slotDeleteFailureToast(info)).toBe("Custom failure");
+  });
+
+  it("falls back to a generic message when no message and no special reason", () => {
+    const info: SlotDeleteInfo = { success: false };
+    expect(slotDeleteFailureToast(info)).toBe("Cannot delete this slot");
   });
 });

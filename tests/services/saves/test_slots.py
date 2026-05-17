@@ -1030,6 +1030,76 @@ class TestDeleteSlot:
         assert result["reason"] == "not_found"
 
     @pytest.mark.asyncio
+    async def test_get_slot_delete_info_server_unreachable(self, tmp_path):
+        """list_saves failure surfaces as success=False, not a fake 0-count.
+
+        Regression for #626: silently returning ``server_save_count: 0`` made
+        the confirmation modal claim the slot was empty, so the user could
+        confirm a destructive delete of a slot we never actually inspected.
+        """
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"save1": {"source": "server", "count": 3, "latest_updated_at": None}},
+            files_state={
+                "pokemon.srm": {"tracked_save_id": 10, "last_sync_hash": "abc"},
+            },
+        )
+        fake.fail_on_next(OSError("connection refused"))
+
+        result = await svc.get_slot_delete_info(42, "save1")
+
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+        assert result["error"] == "server_unreachable"
+        assert "message" in result
+        # Critically: no fake "0 saves" count that would let the confirm modal
+        # render "delete 0 saves".
+        assert "server_save_count" not in result
+        assert "server_save_ids" not in result
+
+    @pytest.mark.asyncio
+    async def test_get_slot_delete_info_local_slot_unaffected_by_server_failure(self, tmp_path):
+        """Local-source slots skip the API call and still succeed when the server is down."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"local1": {"source": "local", "count": 0, "latest_updated_at": None}},
+        )
+        # Even if the API were down, a local-only slot must not be blocked.
+        fake.fail_on_next(OSError("connection refused"))
+
+        result = await svc.get_slot_delete_info(42, "local1")
+
+        assert result["success"] is True
+        assert result["source"] == "local"
+        assert result["server_save_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_get_slot_delete_info_empty_server_slot_still_success(self, tmp_path):
+        """Server fetch succeeds with zero saves → success=True, count=0.
+
+        Confirms the new failure path doesn't swallow the legitimate "the
+        server answered and the list was empty" case.
+        """
+        svc, _fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"empty": {"source": "server", "count": 0, "latest_updated_at": None}},
+        )
+        # No saves added to fake — list_saves returns an empty list cleanly.
+
+        result = await svc.get_slot_delete_info(42, "empty")
+
+        assert result["success"] is True
+        assert result["server_save_count"] == 0
+        assert result["server_save_ids"] == []
+        assert result["local_file_count"] == 0
+
+    @pytest.mark.asyncio
     async def test_delete_slot_server_saves_success(self, tmp_path):
         """Deleting a server slot removes server saves and cleans up state."""
         svc, fake = make_service(tmp_path)

@@ -5,6 +5,7 @@
  */
 
 import type { DeviceSyncInfo } from "../../types";
+import type { SlotDeleteInfo } from "../../api/backend";
 
 /** Display a slot name, using "(no slot)" for null/empty values */
 export function displaySlot(slot: string | null | undefined): string {
@@ -80,6 +81,22 @@ export function formatAttributionSegment(
     return deviceName ? `${deviceName} ✓` : `✓`;
   }
   return null;
+}
+
+/**
+ * Pick the toast body to surface when `get_slot_delete_info` returned
+ * success=false. The frontend uses this to refuse the destructive confirm
+ * modal and explain why — most importantly the `server_unreachable` branch,
+ * which guards against confirming a wipe of a slot we never inspected.
+ */
+export function slotDeleteFailureToast(info: SlotDeleteInfo): string {
+  if (info.reason === "active_slot" || info.is_active) {
+    return "Cannot delete the active slot. Switch to a different slot first.";
+  }
+  if (info.reason === "server_unreachable" || info.error === "server_unreachable") {
+    return info.message ?? "Cannot inspect slot — RomM server is not reachable";
+  }
+  return info.message ?? "Cannot delete this slot";
 }
 
 /** Map a save file status to color and label */

@@ -11,7 +11,7 @@ import { getSlotSaves, switchSlot, debugLog, getSlotDeleteInfo, deleteSlot } fro
 import type { SlotDeleteInfo } from "../../api/backend";
 import type { SaveStatus, SyncConflict, SaveSlotSummary, SlotSaveFile, SwitchSlotResponse } from "../../types";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
-import { displaySlot, formatRelativeTime } from "./helpers";
+import { displaySlot, formatRelativeTime, slotDeleteFailureToast } from "./helpers";
 import { renderSaveFileRow } from "./SaveFileRow";
 import { renderServerSaveRow } from "./ServerSaveRow";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
@@ -223,11 +223,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
     try {
       const info: SlotDeleteInfo = await getSlotDeleteInfo(romId, slotName);
       if (!info.success) {
-        if (info.reason === "active_slot" || info.is_active) {
-          toaster.toast({ title: "RomM Sync", body: "Cannot delete the active slot. Switch to a different slot first." });
-        } else {
-          toaster.toast({ title: "RomM Sync", body: info.message ?? "Cannot delete this slot" });
-        }
+        toaster.toast({ title: "RomM Sync", body: slotDeleteFailureToast(info) });
         return;
       }
 

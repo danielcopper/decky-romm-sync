@@ -175,6 +175,9 @@ export interface SlotDeleteInfo {
   local_filenames?: string[];
   is_active?: boolean;
   reason?: string;
+  // Coarse failure category for routing (e.g. "server_unreachable").
+  // Mirrors `reason` for the cases the modal needs to handle differently.
+  error?: string;
   message?: string;
 }
 
