@@ -68,7 +68,7 @@ const PlatformActionModal: FC<{
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
         <DialogButton onClick={() => { closeModal?.(); onRemoveShortcuts(); }}>
-          Remove Shortcuts ({platform.count} game{platform.count !== 1 ? "s" : ""})
+          Remove Shortcuts ({platform.count} game{platform.count === 1 ? "" : "s"})
         </DialogButton>
         <DialogButton onClick={() => { closeModal?.(); onDeleteSaves(); }}>
           Delete Save Files
@@ -119,7 +119,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         await reportRemovalResults(result.rom_ids);
       }
       await clearPlatformCollection(result.platform_name || p.name);
-      setActionStatus(`Removed ${p.count} ${p.name} game${p.count !== 1 ? "s" : ""}`);
+      setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
       await refreshPlatforms();
       loadNonSteamApps();
     } catch {
@@ -439,7 +439,7 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
     for (const app of toRemove) {
       SteamClient.Apps.RemoveShortcut(app.appId);
     }
-    setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length !== 1 ? "s" : ""}`);
+    setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length === 1 ? "" : "s"}`);
     setConfirmRemoveAll(false);
     setConfirmRetrodeck(false);
     loadNonSteamApps();
@@ -456,7 +456,9 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
       }
       return `Are you sure? Remove ${nonSteamApps.length - whitelistedIds.size} games (${whitelistedIds.size} whitelisted)?`;
     }
-    return `Remove ${nonSteamApps.length - whitelistedIds.size} Non-Steam Games${whitelistedIds.size > 0 ? ` (${whitelistedIds.size} excluded)` : ""}`;
+    const remaining = nonSteamApps.length - whitelistedIds.size;
+    const excluded = whitelistedIds.size > 0 ? ` (${whitelistedIds.size} excluded)` : "";
+    return `Remove ${remaining} Non-Steam Games${excluded}`;
   };
 
   return (

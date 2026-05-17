@@ -66,9 +66,6 @@ const CoreChangeModalContent: FC<CoreChangeModalProps> = ({ oldLabel, newLabel, 
           </div>
         </div>
 
-        {/* TODO: Add wiki link for known incompatibilities once wiki is updated */}
-        {/* TODO: Remove per-game warning when RetroDECK fixes awk regex matching (#210) */}
-
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           <DialogButton onClick={() => handleChoice(true)}>
             Continue

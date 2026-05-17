@@ -33,6 +33,15 @@ type Page = "main" | "settings" | "library" | "data" | "downloads";
 // Module-level page state survives QAM remounts (e.g. after modal close)
 let currentPage: Page = "main";
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`callable timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
 const QAMPanel: FC = () => {
   const [page, setPageState] = useState<Page>(currentPage);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -96,15 +105,6 @@ export default definePlugin(() => {
   const CALLABLE_TIMEOUT = 5000;
   let initAttempt = 0;
   let initDone = false;
-
-  function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`callable timed out after ${ms}ms`)), ms),
-      ),
-    ]);
-  }
 
   async function loadAppIdsAndMetadata() {
     const [cache, appIdMap] = await withTimeout(

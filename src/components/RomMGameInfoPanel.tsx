@@ -158,7 +158,7 @@ function biosStatusFromCache(cachedBios: Record<string, unknown> | null | undefi
   return {
     needs_bios: true,
     ...cachedBios,
-  } as BiosStatus;
+  };
 }
 
 /** Build a `SaveStatus` from a cached game detail's `save_status` field. */
@@ -242,7 +242,7 @@ async function loadData(
     const biosStatus = biosStatusFromCache(cached.bios_status);
     const saveStatus = saveStatusFromCache(romId, cached.save_status);
     const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
-    const raId = (cached as any).ra_id ?? null;
+    const raId = cached.ra_id ?? null;
 
     // Render immediately with cached data (metadata may be null — that's OK)
     setter({
@@ -348,7 +348,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
     const handleSaveSyncSettingsChange = async (detail: any) => {
-      const enabled = detail.save_sync_enabled as boolean;
+      const enabled = detail.save_sync_enabled;
       if (enabled) {
         const updatedStatus = await getSaveStatus(romIdRef.current!).catch((): SaveStatus | null => null);
         const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
@@ -384,7 +384,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
     const handleCoreChange = async () => {
       // Re-fetch cached game detail to pick up new core info
-      delete (_cachedGameDetailCache as Record<number, unknown>)[appId];
+      delete _cachedGameDetailCache[appId];
       const cached = await getCachedGameDetail(appId);
       if (cancelled || !cached.found) return;
       let biosStatus: BiosStatus | null = null;
@@ -691,9 +691,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
 
     biosColumn.push(
       createElement("div", { key: "bios-title", className: "romm-panel-section-title", style: { marginBottom: "8px" } }, "BIOS"),
-    );
-
-    biosColumn.push(
       createElement("div", {
         key: "bios-row",
         className: "romm-panel-status-inline",
@@ -777,7 +774,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
             key: "unknown-note",
             className: "romm-panel-file-row",
             style: { color: "rgba(255, 255, 255, 0.4)", fontSize: "12px", marginTop: "8px" },
-          }, `+ ${unknownCount} other file${unknownCount !== 1 ? "s" : ""} on server (not required by any known core)`),
+          }, `+ ${unknownCount} other file${unknownCount === 1 ? "" : "s"} on server (not required by any known core)`),
         );
       }
 
@@ -889,7 +886,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => {
           top: `${Math.round(rng(i * 3) * 100)}%`,
           left: `${Math.round(rng(i * 3 + 1) * 100)}%`,
           dur: 2.2 + rng(i * 3 + 2) * 1.8, // 2.2–4.0s
-          delay: rng(i * 7 + 5) * 2.0,      // 0–2.0s
+          delay: rng(i * 7 + 5) * 2,      // 0–2.0s
         }));
       };
 

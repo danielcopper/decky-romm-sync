@@ -371,7 +371,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   } else if (syncing) {
     syncBody = (
       <>
-        {syncProgress && syncProgress.step && syncProgress.totalSteps ? (
+        {syncProgress?.step && syncProgress?.totalSteps ? (
           <PanelSectionRow>
             <ProgressBarWithInfo
               indeterminate={progressFraction === undefined}
@@ -479,7 +479,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             )}
           </>
         )}
-        {retroarchWarning && retroarchWarning.warning && (
+        {retroarchWarning?.warning && (
           <PanelSectionRow>
             <Field
               label="RetroArch: input_driver issue"

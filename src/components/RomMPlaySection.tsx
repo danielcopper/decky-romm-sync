@@ -748,7 +748,6 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => {
         createElement(MenuItem, { key: "properties", onClick: () => {
           SteamClient.Apps.OpenAppSettingsDialog(appId, "general");
         } }, "Properties"),
-        // TODO: Add to/Remove from Collection and Favorites when APIs are explored
       ),
       (e.currentTarget ?? e.target) as HTMLElement,
     );

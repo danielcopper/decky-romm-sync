@@ -164,7 +164,7 @@ export async function initSessionManager(): Promise<void> {
           if (update.bRunning) {
             // Game started — wait for Router.MainRunningApp to populate
             await delay(500);
-            const running = typeof Router !== "undefined" ? Router.MainRunningApp : null;
+            const running = typeof Router === "undefined" ? null : Router.MainRunningApp;
             const appId = running?.appid ?? update.unAppID;
             if (appId) {
               // Refresh map in case a sync happened since init

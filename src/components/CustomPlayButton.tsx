@@ -145,10 +145,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
         romIdRef.current = rid;
         if (cached.rom_name) setRomName(cached.rom_name);
 
-        if (!cached.installed) {
-          debugLog(`CustomPlayButton: -> download`);
-          setState("download");
-        } else {
+        if (cached.installed) {
           // Check for conflicts from cached save status
           const hasConflict = hasAnySaveConflict(cached.save_status);
           if (hasConflict) {
@@ -158,6 +155,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
             debugLog(`CustomPlayButton: -> play`);
             setState("play");
           }
+        } else {
+          debugLog(`CustomPlayButton: -> download`);
+          setState("download");
         }
       } catch (e) {
         logError(`CustomPlayButton init error: ${e}`);
@@ -658,7 +658,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
           disabled
         >
           <span className={`${appActionButtonClasses?.Throbber || ""} romm-throbber`.trim()} />
-          Launching...
+          <span>Launching...</span>
         </DialogButton>
       </Focusable>
     );
@@ -686,7 +686,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => {
           disabled
         >
           <span className={`${appActionButtonClasses?.Throbber || ""} romm-throbber`.trim()} />
-          Syncing saves...
+          <span>Syncing saves...</span>
         </DialogButton>
       </Focusable>
     );
