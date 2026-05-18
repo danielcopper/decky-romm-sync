@@ -206,7 +206,7 @@ async function loadCached(
     }
 
     if (staleFields.includes("bios")) {
-      refreshBiosInBackground(romId, cancelled(), setter);
+      refreshBiosInBackground(romId, cancelled, setter);
     }
   } catch (e) {
     debugLog(`RomMPlaySection: loadCached error: ${e}`);

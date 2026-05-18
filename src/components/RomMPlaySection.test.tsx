@@ -374,7 +374,7 @@ describe("RomMPlaySection", () => {
       );
       expect(sectionRefresh.refreshBiosInBackground).toHaveBeenCalledWith(
         99,
-        expect.any(Boolean),
+        expect.any(Function),
         expect.any(Function),
       );
       // Assert exact arg shape: (cached.bios_status, cached.bios_level, cached.bios_label).

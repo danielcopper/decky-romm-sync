@@ -37,13 +37,13 @@ export function refreshActiveSlotInBackground<S extends ActiveSlotFields>(
 
 export function refreshBiosInBackground<S extends BiosInfoFields>(
   romId: number,
-  cancelled: boolean,
+  cancelled: () => boolean,
   setter: Dispatch<SetStateAction<S>>,
 ): void {
   getBiosStatus(romId)
     .then((result) => {
       const b = result.bios_status;
-      if (!cancelled && b) {
+      if (!cancelled() && b) {
         setter((prev) => ({
           ...prev,
           ...extractBiosInfo(b as BiosStatus, result.bios_level, result.bios_label),
