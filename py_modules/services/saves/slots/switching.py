@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from lib.list_result import ErrorCode
 from services.saves._helpers import _local_save_target
 
 if TYPE_CHECKING:
@@ -173,8 +174,12 @@ class SlotSwitcher:
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
                 ),
             )
-        except Exception:
-            return {"success": False, "reason": "server_unreachable"}
+        except Exception as e:
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE,
+                "message": str(e),
+            }
 
         # Filter to the target slot (FakeSaveApi doesn't filter, real API may not either)
         # Normalize "" and None both to None before comparing (legacy saves may use either)

@@ -95,7 +95,7 @@ export function slotDeleteFailureToast(info: SlotDeleteInfo): string {
   if (info.reason === "active_slot" || info.is_active) {
     return "Cannot delete the active slot. Switch to a different slot first.";
   }
-  if (info.reason === "server_unreachable" || info.error === "server_unreachable") {
+  if (info.reason === "server_unreachable") {
     return info.message ?? "Cannot inspect slot — RomM server is not reachable";
   }
   return info.message ?? "Cannot delete this slot";

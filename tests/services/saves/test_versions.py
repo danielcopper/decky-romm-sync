@@ -158,7 +158,10 @@ class TestListFileVersions:
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
 
         assert result["status"] == "server_unreachable"
-        assert "network" in result["error"].lower()
+        assert "network" in result["message"].lower()
+        # Drift guard: the legacy ``error`` field was renamed to ``message``
+        # in #652 to align with the canonical {success, reason, message} shape.
+        assert "error" not in result
         # Must NOT be the same shape as the happy-path empty case.
         assert result != {"status": "ok", "versions": []}
 
@@ -528,7 +531,10 @@ class TestRollbackToVersion:
             fake.list_saves = original_list  # type: ignore[method-assign]
 
         assert result["status"] == "server_unreachable"
-        assert "unreachable" in result.get("error", "").lower()
+        assert "unreachable" in result.get("message", "").lower()
+        # Drift guard: the legacy ``error`` field was renamed to ``message``
+        # in #652 to align with the canonical {success, reason, message} shape.
+        assert "error" not in result
         # Critical: must NOT collide with the "genuinely deleted" case.
         assert result["status"] != "version_deleted"
 
@@ -631,7 +637,7 @@ class TestRollbackToVersion:
             fake.upload_save = original_upload  # type: ignore[method-assign]
 
         assert result["status"] == "put_failed"
-        assert "PUT failed" in result.get("error", "")
+        assert "PUT failed" in result.get("message", "")
         # Download did happen
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)

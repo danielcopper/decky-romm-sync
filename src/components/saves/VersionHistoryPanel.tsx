@@ -43,7 +43,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
       if (result.status === "ok") {
         setVersions(result.versions);
       } else if (result.status === "server_unreachable") {
-        debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.error}`);
+        debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`);
         setVersions(null);
         setLoadError("Couldn't reach RomM. Tap retry.");
       }

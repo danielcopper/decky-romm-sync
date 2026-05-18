@@ -105,12 +105,14 @@ export interface SlotSavesResponse {
   success: boolean;
   slot: string;
   saves: SlotSaveFile[];
-  error?: string;
+  reason?: "server_unreachable" | "sync_disabled";
+  message?: string;
 }
 
 export interface SwitchSlotResponse {
   success: boolean;
   reason?: "pending_uploads" | "server_unreachable" | "sync_disabled" | "not_installed";
+  message?: string;
   files?: string[];
   save_status?: SaveStatus;
 }

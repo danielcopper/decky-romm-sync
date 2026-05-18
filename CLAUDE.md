@@ -92,6 +92,17 @@ Protocol names carry a suffix that signals shape, so the call site reads correct
 
 When a sibling Protocol set mixes shapes (e.g. `RetroArchConfigReader` next to `RetroArchSaveSortingProvider`), that mix is intentional and reflects the shape difference, not a naming inconsistency.
 
+## Callable response shapes — canonical failure shape
+
+Decky callables that return a plain `dict` and can fail use the canonical failure shape `{success: False, reason: ErrorCode | str, message: str}`. Reuse `lib.list_result.ErrorCode` for server-reachability failures (`ErrorCode.SERVER_UNREACHABLE`). Never duplicate `reason` into a second `error` field; never replace `message` with `error`. `[ours]`
+
+Two carve-outs:
+
+- **Discriminated-status unions** (the `status: "ok" | "server_unreachable" | "version_deleted" | …` shape used by the saves version-history callables) keep the `status` discriminant — they carry more than two outcomes, so a binary `success` boolean would erase the routing slug. Failure branches still carry `message: str`, not `error: str`.
+- **Partial-success responses** that return a full payload alongside a failure flag (e.g. `get_save_status`'s additive `server_query_failed: bool`, `get_save_setup_info`'s `recommended_action: "server_unreachable" | ...`) keep the additive flag. The call has half-broken half-working semantics that the binary boolean would erase.
+
+Full convention paragraph lives in the `lib/list_result.py` module docstring.
+
 ## Refactor wave plan (live — see #277 for current status)
 
 The full Cosmic Python migration is tracked under [#277](https://github.com/danielcopper/decky-romm-sync/issues/277) (umbrella). Order is chosen to minimize rework: cross-cutting Protocols first, then domain promotions, then per-service vertical refactors smallest-to-largest.

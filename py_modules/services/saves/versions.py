@@ -98,7 +98,7 @@ class VersionsService:
           contains: id, file_name, emulator, updated_at, file_size_bytes,
           device_syncs, uploaded_by_us. ``versions`` may be empty — the
           server answered, nothing matched.
-        - ``{"status": "server_unreachable", "error": ...}`` if the
+        - ``{"status": "server_unreachable", "message": ...}`` if the
           ``list_saves`` call failed (network, server, auth, etc.). The
           frontend distinguishes this from an empty list so it can show a
           retry affordance instead of "no versions available".
@@ -116,7 +116,7 @@ class VersionsService:
             )
         except Exception as e:
             self._log_debug(f"list_file_versions: failed to list saves: {e}")
-            return {"status": "server_unreachable", "error": str(e)}
+            return {"status": "server_unreachable", "message": str(e)}
 
         file_state = self._find_file_state(rom_id_str, filename)
         tracked_id = file_state.tracked_save_id if file_state else None
@@ -210,7 +210,7 @@ class VersionsService:
                 save_id,
                 e,
             )
-            return {"status": "put_failed", "error": str(e)}
+            return {"status": "put_failed", "message": str(e)}
 
         return {"status": "ok"}
 
@@ -247,7 +247,7 @@ class VersionsService:
         - ``{"status": "version_deleted"}`` if the chosen save id is no
           longer on the server (genuinely deleted — the ``list_saves``
           call succeeded and the id was absent).
-        - ``{"status": "server_unreachable", "error": ...}`` if the
+        - ``{"status": "server_unreachable", "message": ...}`` if the
           post-preflight ``list_saves`` call failed (network, server,
           auth, etc.). The frontend distinguishes this from
           ``version_deleted`` so it can show a retry affordance instead
@@ -258,11 +258,11 @@ class VersionsService:
         - ``{"status": "preflight_failed", "errors": [...]}`` if the
           pre-flight hit non-conflict errors (network, server, etc.).
           No switch was attempted.
-        - ``{"status": "put_failed", "error": ...}`` if the local download
-          succeeded but the server-side ``updated_at`` bump failed. Local
-          file and state already point at the target; retrying is safe
-          and idempotent. Without a successful re-PUT the switch will not
-          propagate cross-device.
+        - ``{"status": "put_failed", "message": ...}`` if the local
+          download succeeded but the server-side ``updated_at`` bump
+          failed. Local file and state already point at the target;
+          retrying is safe and idempotent. Without a successful re-PUT
+          the switch will not propagate cross-device.
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
@@ -300,7 +300,7 @@ class VersionsService:
                 )
             except Exception as e:
                 self._log_debug(f"rollback_to_version: failed to list saves: {e}")
-                return {"status": "server_unreachable", "error": str(e)}
+                return {"status": "server_unreachable", "message": str(e)}
 
             result = await self._loop.run_in_executor(
                 None,

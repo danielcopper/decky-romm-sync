@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from lib.list_result import ErrorCode
 from services.saves._messages import SAVE_SYNC_DISABLED
 
 if TYPE_CHECKING:
@@ -82,9 +83,10 @@ class SlotListing:
             self._log_debug(f"Failed to fetch save slots for rom {rom_id}: {e}")
             return {
                 "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE,
+                "message": str(e),
                 "slots": [],
                 "active_slot": active_slot,
-                "error": str(e),
             }
         server_slots_list: list[dict] = summary.get("slots", [])
 
@@ -150,7 +152,13 @@ class SlotListing:
         slot = str(slot).strip() if slot else ""
 
         if not self._state_svc.is_save_sync_enabled():
-            return {"success": False, "slot": slot, "saves": [], "error": SAVE_SYNC_DISABLED}
+            return {
+                "success": False,
+                "reason": "sync_disabled",
+                "message": SAVE_SYNC_DISABLED,
+                "slot": slot,
+                "saves": [],
+            }
 
         device_id = self._state_svc.get_server_device_id()
 
@@ -173,4 +181,10 @@ class SlotListing:
             ]
             return {"success": True, "slot": slot, "saves": saves}
         except Exception as e:
-            return {"success": False, "slot": slot, "saves": [], "error": str(e)}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE,
+                "message": str(e),
+                "slot": slot,
+                "saves": [],
+            }

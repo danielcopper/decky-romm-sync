@@ -139,7 +139,7 @@ describe("VersionHistoryPanel", () => {
   it("shows error body + Retry button when server is unreachable on load", async () => {
     vi.mocked(backend.savesListFileVersions).mockResolvedValue({
       status: "server_unreachable",
-      error: "ECONNREFUSED",
+      message: "ECONNREFUSED",
     });
     const { getByText, container } = render(<VersionHistoryPanel {...defaultProps()} />);
     fireEvent.click(getByText("Previous Versions"));
@@ -150,7 +150,7 @@ describe("VersionHistoryPanel", () => {
 
   it("Retry button retriggers loadVersions", async () => {
     vi.mocked(backend.savesListFileVersions)
-      .mockResolvedValueOnce({ status: "server_unreachable", error: "boom" })
+      .mockResolvedValueOnce({ status: "server_unreachable", message: "boom" })
       .mockResolvedValueOnce({ status: "ok", versions: [makeVersion({ id: 7 })] });
 
     const { getByText, container } = render(<VersionHistoryPanel {...defaultProps()} />);
@@ -318,7 +318,7 @@ describe("VersionHistoryPanel", () => {
     it("status 'put_failed' toasts the local-success warning, collapses, and calls onRestored", async () => {
       vi.mocked(backend.savesRollbackToVersion).mockResolvedValue({
         status: "put_failed",
-        error: "503",
+        message: "503",
       });
       const { getByText, onRestored } = await expand();
       fireEvent.click(getByText("Restore"));
@@ -360,7 +360,7 @@ describe("VersionHistoryPanel", () => {
     it("status 'server_unreachable' toasts the connection-prompt message", async () => {
       vi.mocked(backend.savesRollbackToVersion).mockResolvedValue({
         status: "server_unreachable",
-        error: "ECONNREFUSED",
+        message: "ECONNREFUSED",
       });
       const { getByText } = await expand();
       fireEvent.click(getByText("Restore"));

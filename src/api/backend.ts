@@ -150,7 +150,7 @@ export const resolveSyncConflict = callable<
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");
 export const updateSaveSyncSettings = callable<[SaveSyncSettings], { success: boolean }>("update_save_sync_settings");
-export const getSaveSlots = callable<[number], { success: boolean; slots: SaveSlotSummary[]; active_slot: string; error?: string }>("get_save_slots");
+export const getSaveSlots = callable<[number], { success: boolean; slots: SaveSlotSummary[]; active_slot: string; reason?: string; message?: string }>("get_save_slots");
 export const getSlotSaves = callable<[number, string], SlotSavesResponse>("get_slot_saves");
 export const switchSlot = callable<[number, string], SwitchSlotResponse>("switch_slot");
 
@@ -163,10 +163,9 @@ export interface SlotDeleteInfo {
   local_file_count?: number;
   local_filenames?: string[];
   is_active?: boolean;
+  // Coarse failure category for routing (e.g. "server_unreachable",
+  // "not_found", "not_installed", "disabled", "active_slot").
   reason?: string;
-  // Coarse failure category for routing (e.g. "server_unreachable").
-  // Mirrors `reason` for the cases the modal needs to handle differently.
-  error?: string;
   message?: string;
 }
 
@@ -288,14 +287,14 @@ export type RollbackStatus =
   | { status: "rom_not_installed" }
   | { status: "version_deleted" }
   | { status: "unsupported" }
-  | { status: "server_unreachable"; error: string }
+  | { status: "server_unreachable"; message: string }
   | { status: "conflict_blocked"; conflicts: SyncConflict[] }
   | { status: "preflight_failed"; errors: string[] }
-  | { status: "put_failed"; error: string };
+  | { status: "put_failed"; message: string };
 
 export type ListFileVersionsResult =
   | { status: "ok"; versions: SaveVersionEntry[] }
-  | { status: "server_unreachable"; error: string };
+  | { status: "server_unreachable"; message: string };
 
 export const savesListFileVersions = callable<[number, string, string], ListFileVersionsResult>("saves_list_file_versions");
 export const savesRollbackToVersion = callable<[number, string, number], RollbackStatus>("saves_rollback_to_version");

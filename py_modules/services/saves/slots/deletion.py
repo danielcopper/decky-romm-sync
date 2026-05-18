@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from domain.save_state import RomSaveState
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -104,8 +105,7 @@ class SlotDeleter:
                 )
                 return {
                     "success": False,
-                    "reason": "server_unreachable",
-                    "error": "server_unreachable",
+                    "reason": ErrorCode.SERVER_UNREACHABLE,
                     "message": "Cannot inspect slot — server unreachable",
                 }
 

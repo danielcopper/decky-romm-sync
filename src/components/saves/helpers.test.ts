@@ -241,15 +241,6 @@ describe("slotDeleteFailureToast", () => {
     );
   });
 
-  it("surfaces the server-unreachable warning when only error='server_unreachable'", () => {
-    const info: SlotDeleteInfo = {
-      success: false,
-      error: "server_unreachable",
-      message: "boom",
-    };
-    expect(slotDeleteFailureToast(info)).toBe("boom");
-  });
-
   it("falls back to a generic server-unreachable message when no message is provided", () => {
     const info: SlotDeleteInfo = { success: false, reason: "server_unreachable" };
     expect(slotDeleteFailureToast(info)).toBe(

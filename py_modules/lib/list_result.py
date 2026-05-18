@@ -21,6 +21,42 @@ the ``else`` untyped under basic mode.
 Lives in ``lib/`` rather than ``models/`` because it is a cross-cutting
 control-flow primitive: services, adapters, and domain logic may all
 construct or consume it, and it has no place in the persisted-data layer.
+
+Canonical failure response shape for dict-returning callables
+=============================================================
+
+For Decky callables that return a plain ``dict`` (rather than the typed
+:data:`ListResult` union above) and that can fail because the RomM server
+is unreachable, the canonical failure shape is::
+
+    {"success": False, "reason": ErrorCode | str, "message": str, **extras}
+
+Three required fields:
+
+* ``success: False`` — binary success discriminant.
+* ``reason`` — coarse routing slug. For server-reachability failures use
+  :data:`ErrorCode.SERVER_UNREACHABLE`; for static guards (sync_disabled,
+  not_installed, not_found, active_slot, …) a plain string literal is fine.
+  Never duplicate ``reason`` into a second ``error`` field.
+* ``message: str`` — human-readable detail for logs and UI. Carries the
+  exception text on transport-layer failures.
+
+Optional payload-shape extras (``slot``, ``saves``, ``active_slot``, …) may
+appear alongside on a per-callable basis when the frontend needs to render
+fallback UI on failure.
+
+Two carve-outs:
+
+* **Discriminated-status unions** (e.g. ``versions.rollback_to_version``,
+  ``versions.list_file_versions``) keep the ``status: "ok" | "..."``
+  discriminant; the ``server_unreachable`` branch still carries
+  ``message: str`` instead of the legacy ``error: str``.
+* **Partial-success responses** that return a full data payload alongside
+  a failure flag (e.g. ``status.get_save_status``'s
+  ``server_query_failed: bool``, ``setup.get_save_setup_info``'s
+  ``recommended_action: "server_unreachable" | ...``) keep the additive
+  flag — the call has half-broken half-working semantics that the binary
+  ``success`` boolean would erase.
 """
 
 from __future__ import annotations
