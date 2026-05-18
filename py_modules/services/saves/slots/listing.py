@@ -52,7 +52,13 @@ class SlotListing:
         """
         rom_id = int(rom_id)
         if not self._state_svc.is_save_sync_enabled():
-            return {"success": False, "slots": [], "active_slot": "default"}
+            return {
+                "success": False,
+                "reason": "sync_disabled",
+                "message": SAVE_SYNC_DISABLED,
+                "slots": [],
+                "active_slot": "default",
+            }
 
         rom_id_str = str(rom_id)
         device_id = self._state_svc.get_server_device_id()

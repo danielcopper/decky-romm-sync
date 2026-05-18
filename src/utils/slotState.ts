@@ -17,7 +17,8 @@ export interface SlotsResponse {
   success: boolean;
   slots: SaveSlotSummary[];
   active_slot?: string | null;
-  error?: string;
+  reason?: string;
+  message?: string;
 }
 
 export interface RefreshSlotFields {
@@ -55,7 +56,7 @@ export function applyLoadSlotsResult<S extends LoadSlotsFields>(
   logError: (msg: string) => void,
 ): void {
   if (!result.success) {
-    logError(`Failed to load save slots: ${result.error ?? "unknown"}`);
+    logError(`Failed to load save slots: ${result.message ?? result.reason ?? "unknown"}`);
     loadedRef.current = false;
     setter((prev) => ({ ...prev, slotsLoading: false }));
     return;

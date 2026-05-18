@@ -57,7 +57,7 @@ const callCount = <S>(setter: Dispatch<SetStateAction<S>>): number =>
 describe("applyRefreshSlotResult", () => {
   it("skips the setter when success=false (preserves persisted state)", () => {
     const setter = makeSetter<RefreshState>();
-    const result: SlotsResponse = { success: false, slots: [], error: "boom" };
+    const result: SlotsResponse = { success: false, slots: [], message: "boom" };
     applyRefreshSlotResult<RefreshState>(result, setter);
     expect(callCount(setter)).toBe(0);
   });
@@ -107,7 +107,7 @@ describe("applyLoadSlotsResult", () => {
     const setter = makeSetter<LoadState>();
     const loadedRef: MutableRefObject<boolean> = { current: true };
     const logError = vi.fn();
-    const result: SlotsResponse = { success: false, slots: [], error: "boom" };
+    const result: SlotsResponse = { success: false, slots: [], message: "boom" };
     applyLoadSlotsResult<LoadState>(result, setter, loadedRef, logError);
 
     expect(logError).toHaveBeenCalledWith("Failed to load save slots: boom");
