@@ -8,6 +8,7 @@ per-method ``*_side_effect`` attributes (persistent) — no
 ``run_in_executor`` patching, no ``MagicMock(romm_api)``.
 """
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,14 +18,12 @@ from domain.work_unit import WorkUnit
 
 
 def _wire_fake(plugin, fake_romm_api):
-    """Point both the plugin and the fetcher at the shared ``FakeRommApi``.
+    """Point the fetcher at the shared ``FakeRommApi``.
 
     The ``plugin`` fixture wires the LibraryService with a bare
     ``MagicMock`` romm_api; tests that drive end-to-end need to swap
-    that for the seeded fake on both the façade and the fetcher's
-    captured ref.
+    that for the seeded fake on the fetcher's captured ref.
     """
-    plugin._romm_api = fake_romm_api
     plugin._sync_service._fetcher._romm_api = fake_romm_api
 
 
@@ -32,8 +31,6 @@ class TestCheckCancelling:
     """Tests for _check_cancelling() — pure state check, no API surface."""
 
     def test_raises_when_cancelling(self, plugin):
-        import asyncio
-
         plugin._sync_service._sync_state = SyncState.CANCELLING
         with pytest.raises(asyncio.CancelledError):
             plugin._sync_service._fetcher._check_cancelling()
@@ -282,9 +279,10 @@ class TestFullFetchPlatformRoms:
     async def test_raises_on_second_page_failure(self, plugin, fake_romm_api):
         """Page 1 OK + page 2 raises must propagate — partial accumulation is unsafe.
 
-        Uses ``fail_on_next`` so the first ``list_roms`` succeeds (returning
-        the seeded page) and the second one raises; this exercises the
-        pagination-break fix from #630.
+        Wraps ``list_roms`` with a counter-closure so the first call returns
+        the seeded page and the second call raises after the first page's
+        bytes are already consumed; this exercises the pagination-break fix
+        from #630.
         """
         _wire_fake(plugin, fake_romm_api)
         # Seed exactly one full page so the loop performs a second call.
@@ -309,8 +307,6 @@ class TestFullFetchPlatformRoms:
 
     @pytest.mark.asyncio
     async def test_cancelling_during_fetch(self, plugin, fake_romm_api):
-        import asyncio
-
         _wire_fake(plugin, fake_romm_api)
         plugin._sync_service._sync_state = SyncState.CANCELLING
 
