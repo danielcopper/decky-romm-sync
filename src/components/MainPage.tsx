@@ -291,6 +291,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     }
   };
 
+  const finishCancelWithStatus = (msg: string) => {
+    stopPolling();
+    setSyncing(false);
+    setLoading(false);
+    setStatus(msg);
+    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+    statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
+  };
+
   const handleCancel = async () => {
     if (preview) {
       await handleDismiss();
@@ -301,9 +310,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     try {
       requestSyncCancel();
       const result = await cancelSync();
-      setStatus(result.message);
+      finishCancelWithStatus(result.message);
     } catch {
-      setStatus("Failed to cancel sync");
+      finishCancelWithStatus("Failed to cancel sync");
     }
   };
 

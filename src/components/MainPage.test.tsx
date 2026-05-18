@@ -15,7 +15,9 @@
 //   - handleApply try/catch → setStatus("Failed to apply sync") — asserted.
 //   - handleDismiss inline `.catch(() => {})` — truly-ignored; asserted by
 //     verifying the dismiss path completed (preview cleared, no crash).
-//   - handleCancel try/catch → setStatus("Failed to cancel sync") — asserted.
+//   - handleCancel try/catch → finishCancelWithStatus("Failed to cancel sync")
+//     surfaces the message after stopPolling + setSyncing(false) + setLoading(false)
+//     un-gate the status field; #733 fix landed — message now visible.
 //   - fixRetroarchInputDriver inline `.catch(() => {})` (inside ConfirmModal
 //     onOK) — truly-ignored; warning state remains (no clear).
 //
@@ -1155,14 +1157,78 @@ describe("MainPage", () => {
       expect(vi.mocked(backend.cancelSync)).toHaveBeenCalled();
     });
 
-    it("cancelSync rejection: catch fires but status field stays masked by syncing=true (source-bug-flagged below)", async () => {
-      // SOURCE BUG: handleCancel's catch sets setStatus("Failed to cancel
-      // sync") but never sets setSyncing(false), so the status field
-      // (`status && !syncing && !preview`) stays hidden — the user sees
-      // nothing after a cancel-failure. The non-rejection branch suffers the
-      // same: result.message is set but never surfaced while syncing is true.
-      // This test exercises the catch arm (cancelSync was rejected, the call
-      // site survived without crashing) and documents the missed surface.
+    it("cancelSync success: surfaces result.message in the status field (un-gated)", async () => {
+      // #733 fix: handleCancel now stops polling + flips syncing/loading off
+      // before setting status, so the `status && !syncing && !preview` gate
+      // un-masks the cancel-specific message.
+      setSyncProgress({
+        running: true,
+        message: "Working",
+      });
+      vi.mocked(backend.cancelSync).mockResolvedValue({
+        success: true,
+        message: "cancelled-msg",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Cancel Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Cancel-specific message visible — Cancel Sync button gone (syncing=false).
+      expect(fieldLabels(container)).toContain("cancelled-msg");
+      expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
+    });
+
+    it("cancelSync success: stops polling and status auto-clears after 8s (mirrors startPolling's finish branch)", async () => {
+      vi.useFakeTimers({
+        toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+      });
+      try {
+        setSyncProgress({
+          running: true,
+          message: "Working",
+        });
+        // Realistic backend behavior: cancelSync flips the progress store to
+        // running:false with a different message. This drives the poll tick's
+        // !progress.running branch — if handleCancel forgets to stopPolling(),
+        // the next tick clobbers our "cancelled-msg" with "poll-clobbered-msg".
+        vi.mocked(backend.cancelSync).mockImplementation(async () => {
+          setSyncProgress({
+            running: false,
+            message: "poll-clobbered-msg",
+          });
+          return { success: true, message: "cancelled-msg" };
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await act(async () => {
+          fireEvent.click(buttonByExactText(container, "Cancel Sync")!);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(fieldLabels(container)).toContain("cancelled-msg");
+        // Advance the 8s auto-clear timer. Without stopPolling() the 250ms
+        // poll tick would fire and clobber the status with "poll-clobbered-msg"
+        // (and arm its own 8s timer), so the auto-clear assertion below would
+        // fail in two ways: the message survives, and it's the wrong one.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(8000);
+        });
+        expect(fieldLabels(container)).not.toContain("cancelled-msg");
+        expect(fieldLabels(container)).not.toContain("poll-clobbered-msg");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancelSync rejection: surfaces 'Failed to cancel sync' in the status field", async () => {
+      // #733 fix: catch branch now uses the same cleanup-and-status helper, so
+      // the failure message is visible to the user.
       setSyncProgress({
         running: true,
         message: "Working",
@@ -1176,10 +1242,9 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.cancelSync)).toHaveBeenCalled();
-      // Cancel Sync button still visible — syncing was never flipped off.
-      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
-      // Status field is masked by `syncing=true` guard — bug surface here.
-      expect(fieldLabels(container)).not.toContain("Failed to cancel sync");
+      // Status field un-gated and shows the failure message.
+      expect(fieldLabels(container)).toContain("Failed to cancel sync");
+      expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
     });
 
     it("when a preview is showing: clicking Cancel (non-zero preview) routes through handleDismiss", async () => {
