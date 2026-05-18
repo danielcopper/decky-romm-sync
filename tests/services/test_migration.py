@@ -199,7 +199,7 @@ class TestPathChangeDetection:
         assert loop.tasks == []
         assert plugin._migration_service._emit.calls == []
 
-    def test_path_change_emits_event(self, plugin, tmp_path):
+    async def test_path_change_emits_event(self, plugin, tmp_path):
         """Path changed — stores both old and new, emits event."""
         import decky
 
@@ -211,15 +211,27 @@ class TestPathChangeDetection:
         os.makedirs(new_home, exist_ok=True)
 
         plugin._state["retrodeck_home_path"] = old_home
-        loop = _RecordingLoop()
-        plugin._migration_service._loop = loop
 
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=new_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
+        # ``create_task`` schedules the emit coroutine on the running loop —
+        # yield once so the scheduled coroutine runs and the emitter records.
+        await asyncio.sleep(0)
+
         assert plugin._state["retrodeck_home_path"] == new_home
         assert plugin._state["retrodeck_home_path_previous"] == old_home
-        assert len(loop.tasks) == 1
+
+        emit_calls = plugin._migration_service._emit.calls
+        assert len(emit_calls) == 1
+        event, args = emit_calls[0]
+        assert event == "retrodeck_path_changed"
+        payload = args[0]
+        assert isinstance(payload, dict)
+        assert payload["old_path"] == old_home
+        assert payload["new_path"] == new_home
+        # Path-change emit does NOT carry ``cleared`` — only the auto-clear emit does.
+        assert "cleared" not in payload
 
     def test_empty_current_home_no_action(self, plugin, tmp_path):
         """If ``retrodeck_paths`` returns empty string, do nothing."""
@@ -237,8 +249,8 @@ class TestPathChangeDetection:
         assert plugin._migration_service._emit.calls == []
         assert plugin._state["retrodeck_home_path"] == ""
 
-    def test_detect_path_change_auto_clears_when_reverted_to_previous(self, plugin, tmp_path):
-        """User reverted RetroDECK to the previous home — drop the marker, no event."""
+    async def test_detect_path_change_auto_clears_when_reverted_to_previous(self, plugin, tmp_path):
+        """User reverted RetroDECK to the previous home — drop the marker, emit cleared event."""
         import decky
 
         decky.DECKY_USER_HOME = str(tmp_path)
@@ -251,14 +263,25 @@ class TestPathChangeDetection:
         plugin._state["retrodeck_home_path"] = new_home
         plugin._state["retrodeck_home_path_previous"] = old_home
 
-        loop = _RecordingLoop()
-        plugin._migration_service._loop = loop
-
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=old_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
+        # ``create_task`` schedules the emit coroutine on the running loop —
+        # yield once so the scheduled coroutine runs and the emitter records.
+        await asyncio.sleep(0)
+
         assert plugin._state["retrodeck_home_path"] == old_home
         assert "retrodeck_home_path_previous" not in plugin._state
+
+        emit_calls = plugin._migration_service._emit.calls
+        assert len(emit_calls) == 1
+        event, args = emit_calls[0]
+        assert event == "retrodeck_path_changed"
+        payload = args[0]
+        assert isinstance(payload, dict)
+        assert payload["cleared"] is True
+        assert payload["old_path"] == old_home
+        assert payload["new_path"] == old_home
 
     async def test_detect_path_change_auto_clear_emits_cleared_event(self, plugin, tmp_path):
         """Auto-clear MUST emit retrodeck_path_changed with cleared=True so the
