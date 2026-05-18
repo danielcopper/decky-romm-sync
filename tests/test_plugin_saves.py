@@ -38,7 +38,9 @@ def plugin(tmp_path):
         "enabled_platforms": {},
         "log_level": "warn",
     }
-    p._http_adapter = RommHttpAdapter(p.settings, __import__("decky").DECKY_PLUGIN_DIR, logging.getLogger("test"))
+    p._http_adapter = RommHttpAdapter(
+        p.settings, __import__("decky").DECKY_PLUGIN_DIR, logging.getLogger("test"), "decky-romm-sync/9.9.9"
+    )
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
     p._metadata_cache = {}

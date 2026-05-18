@@ -43,16 +43,21 @@ class RommHttpAdapter:
         Absolute path to the plugin directory (replaces ``decky.DECKY_PLUGIN_DIR``).
     logger:
         Logger instance (replaces ``decky.logger``).
+    user_agent:
+        Outgoing ``User-Agent`` header value (e.g. ``"decky-romm-sync/0.17.1"``).
+        Required because Cloudflare's Bot Fight Mode 403s the default
+        ``Python-urllib`` UA before requests reach self-hosted RomM origins.
     """
 
     _CONNECT_TIMEOUT = 30
     _READ_TIMEOUT = 60
     _DOWNLOAD_BLOCK_SIZE = 65536
 
-    def __init__(self, settings: dict, plugin_dir: str, logger: logging.Logger) -> None:
+    def __init__(self, settings: dict, plugin_dir: str, logger: logging.Logger, user_agent: str) -> None:
         self._settings = settings
         self._plugin_dir = plugin_dir
         self._logger = logger
+        self._user_agent = user_agent
 
     # ------------------------------------------------------------------
     # Platform map
@@ -198,6 +203,7 @@ class RommHttpAdapter:
         def _do_request():
             req = urllib.request.Request(url, method="GET")
             req.add_header("Authorization", self.auth_header())
+            req.add_header("User-Agent", self._user_agent)
             try:
                 with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
                     return json.loads(resp.read().decode())
@@ -252,6 +258,7 @@ class RommHttpAdapter:
         def _do_download():
             req = urllib.request.Request(url, method="GET")
             req.add_header("Authorization", self.auth_header())
+            req.add_header("User-Agent", self._user_agent)
             ctx = self.ssl_context()
             try:
                 with urllib.request.urlopen(req, context=ctx, timeout=self._CONNECT_TIMEOUT) as resp:
@@ -278,6 +285,7 @@ class RommHttpAdapter:
             req = urllib.request.Request(url, data=body, method=method)
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", self.auth_header())
+            req.add_header("User-Agent", self._user_agent)
             try:
                 with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
                     return json.loads(resp.read().decode())
@@ -318,6 +326,7 @@ class RommHttpAdapter:
         req = urllib.request.Request(url, data=body, method=method)
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
         req.add_header("Authorization", self.auth_header())
+        req.add_header("User-Agent", self._user_agent)
         try:
             with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
                 return json.loads(resp.read().decode())

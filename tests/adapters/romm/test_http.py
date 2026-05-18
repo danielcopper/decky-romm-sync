@@ -37,7 +37,9 @@ def plugin():
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     import decky
 
-    p._http_adapter = RommHttpAdapter(p.settings, decky.DECKY_PLUGIN_DIR, logging.getLogger("test"))
+    p._http_adapter = RommHttpAdapter(
+        p.settings, decky.DECKY_PLUGIN_DIR, logging.getLogger("test"), "decky-romm-sync/9.9.9"
+    )
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
     p._metadata_cache = {}
@@ -188,6 +190,28 @@ class TestRommRequest:
         req = mock_open.call_args[0][0]
         assert "Basic " in req.get_header("Authorization")
 
+    def test_sends_user_agent(self, plugin):
+        """GET requests carry the injected ``User-Agent`` so Cloudflare Bot
+        Fight Mode does not 403 self-hosted RomM behind a tunnel (#249)."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_user"] = "user"
+        plugin.settings["romm_pass"] = "pass"
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = _json.dumps({"ok": True}).encode()
+        fake_resp.__enter__ = MagicMock(return_value=fake_resp)
+        fake_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=fake_resp) as mock_open:
+            plugin._http_adapter.request("/api/test")
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
+
 
 class TestRommJsonRequest:
     def test_post_json(self, plugin):
@@ -212,6 +236,7 @@ class TestRommJsonRequest:
         assert req.get_method() == "POST"
         assert req.get_header("Content-type") == "application/json"
         assert "Basic " in req.get_header("Authorization")
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
     def test_put_json(self, plugin):
         import json as _json
@@ -260,6 +285,7 @@ class TestRommUploadMultipart:
         assert "multipart/form-data" in req.get_header("Content-type")
         assert b"save data here" in req.data
         assert "Basic " in req.get_header("Authorization")
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
     def test_upload_strips_control_chars_from_filename(self, plugin, tmp_path):
         """Filenames with CRLF/null bytes must not inject multipart headers."""
@@ -905,6 +931,7 @@ class TestTranslateHttpStatus:
             {"romm_url": "http://test", "romm_user": "u", "romm_pass": "p"},
             "/tmp",
             logging.getLogger("test"),
+            "decky-romm-sync/9.9.9",
         )
 
     def test_400_bad_request(self):
@@ -1058,7 +1085,7 @@ class TestDownloadTimeout:
         import logging
 
         settings = {"romm_url": "http://romm.local", "romm_user": "user", "romm_pass": "pass"}
-        return RommHttpAdapter(settings, "/fake/plugin_dir", logging.getLogger("test"))
+        return RommHttpAdapter(settings, "/fake/plugin_dir", logging.getLogger("test"), "decky-romm-sync/9.9.9")
 
     # ------------------------------------------------------------------
     # _stream_to_file direct tests
@@ -1179,6 +1206,27 @@ class TestDownloadTimeout:
 
         with open(dest, "rb") as f:
             assert f.read() == data
+
+    def test_download_sends_user_agent(self, tmp_path):
+        """download() requests carry the injected ``User-Agent`` (#249)."""
+        from io import BytesIO
+
+        adapter = self._make_adapter()
+        dest = str(tmp_path / "rom.zip")
+        data = b"hello"
+
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Length": str(len(data))}
+        stream = BytesIO(data)
+        mock_resp.read = stream.read
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            adapter.download("/roms/game.zip", dest)
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
     def test_connection_timeout_still_works(self, tmp_path):
         """socket.timeout raised by urlopen (connection phase) -> RommTimeoutError."""

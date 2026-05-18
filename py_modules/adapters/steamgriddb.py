@@ -17,15 +17,26 @@ if TYPE_CHECKING:
     import logging
 
 _SGDB_BASE_URL = "https://www.steamgriddb.com/api/v2"
-_USER_AGENT = "decky-romm-sync/0.1"
 
 
 class SteamGridDbAdapter:
-    """Concrete SteamGridDB HTTP adapter."""
+    """Concrete SteamGridDB HTTP adapter.
 
-    def __init__(self, *, settings: dict, logger: logging.Logger) -> None:
+    Parameters
+    ----------
+    settings:
+        Shared settings dict (held by reference). Source of the SGDB API key.
+    logger:
+        Logger instance.
+    user_agent:
+        Outgoing ``User-Agent`` header value (e.g. ``"decky-romm-sync/0.17.1"``).
+        SteamGridDB rejects the default ``Python-urllib`` UA with 403.
+    """
+
+    def __init__(self, *, settings: dict, logger: logging.Logger, user_agent: str) -> None:
         self._settings = settings
         self._logger = logger
+        self._user_agent = user_agent
 
     def _ssl_context(self) -> ssl.SSLContext:
         return ssl.create_default_context(cafile=_ca_bundle())
@@ -38,7 +49,7 @@ class SteamGridDbAdapter:
         url = _SGDB_BASE_URL + path
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {api_key}")
-        req.add_header("User-Agent", _USER_AGENT)
+        req.add_header("User-Agent", self._user_agent)
         try:
             with urllib.request.urlopen(req, context=self._ssl_context(), timeout=30) as resp:
                 return json.loads(resp.read().decode())
@@ -50,7 +61,7 @@ class SteamGridDbAdapter:
         tmp_path = dest_path + ".tmp"
         try:
             req = urllib.request.Request(url, method="GET")
-            req.add_header("User-Agent", _USER_AGENT)
+            req.add_header("User-Agent", self._user_agent)
             ctx = self._ssl_context()
             with urllib.request.urlopen(req, context=ctx, timeout=30) as resp, open(tmp_path, "wb") as f:
                 while True:
@@ -76,7 +87,7 @@ class SteamGridDbAdapter:
         url = f"{_SGDB_BASE_URL}/search/autocomplete/test"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {api_key}")
-        req.add_header("User-Agent", _USER_AGENT)
+        req.add_header("User-Agent", self._user_agent)
         try:
             with urllib.request.urlopen(req, context=self._ssl_context(), timeout=30) as resp:
                 return json.loads(resp.read().decode())

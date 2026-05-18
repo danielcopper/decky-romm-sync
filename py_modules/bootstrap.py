@@ -308,10 +308,16 @@ def bootstrap(
     state_persister = StatePersisterAdapter(persistence, state)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
     metadata_cache_persister = MetadataCachePersisterAdapter(persistence, metadata_cache)
-    http_adapter = RommHttpAdapter(settings, plugin_dir, logger)
+    plugin_metadata = PluginMetadataAdapter()
+    # Single source of truth for outgoing User-Agent — read package.json
+    # version once at boot and thread the string to every HTTP-talking
+    # adapter. Bot Fight Mode on Cloudflare blocks the default
+    # ``Python-urllib`` UA before requests reach self-hosted RomM (#249).
+    user_agent = f"decky-romm-sync/{plugin_metadata.read_version(plugin_dir)}"
+    http_adapter = RommHttpAdapter(settings, plugin_dir, logger, user_agent)
     romm_api = RommApiAdapter(http_adapter)
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
-    sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
+    sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger, user_agent=user_agent)
     cover_art_file_store = CoverArtFileStoreAdapter()
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
     download_file_store = DownloadFileAdapter()
@@ -326,7 +332,6 @@ def bootstrap(
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
-    plugin_metadata = PluginMetadataAdapter()
     save_sync_state = SaveService.make_default_state()
 
     adapters = AdapterBundle(
