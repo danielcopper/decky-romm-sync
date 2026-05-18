@@ -286,6 +286,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       return "proceed";
     }
 
+    /* istanbul ignore next -- delegates to applyLaunchGateSetupOutcome; logic covered in src/utils/saveSetup.test.ts */
     const outcome = resolveSaveSetupOutcome(setupInfo);
     return applyLaunchGateSetupOutcome(outcome, {
       rid,
