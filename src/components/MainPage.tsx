@@ -192,7 +192,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // Check if a sync is already in progress (handles QAM close/reopen)
     const progress = getSyncProgress();
     if (progress.running) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(#617): re-mount sync state recovery to avoid cascading renders
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- recovery of in-flight sync state on QAM re-mount; legitimate mount-time setState
       setSyncing(true);
       setLoading(true);
       setSyncProgress(progress);
@@ -505,7 +505,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                     }}
                   />
                 )}
-                // @ts-expect-error onFocus works at runtime; not in Decky's DialogButton types
                 onFocus={scrollToTop}
               >
                 Fix

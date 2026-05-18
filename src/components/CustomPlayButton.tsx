@@ -754,7 +754,6 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           backgroundSize: "330% 100%",
         }}
         onClick={handlePlay}
-        // @ts-expect-error onFocus works at runtime; not in Decky's DialogButton types
         onFocus={scrollToTop}
       >
         Play
@@ -766,7 +765,6 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           background: dropdownBg,
         }}
         onClick={showDropdownMenu}
-        // @ts-expect-error onFocus works at runtime; not in Decky's DialogButton types
         onFocus={scrollToTop}
       >
         <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">

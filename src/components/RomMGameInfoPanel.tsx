@@ -20,7 +20,7 @@ import { DialogButton, Focusable } from "@decky/ui";
 // context). Style as content sections, not buttons.
 import {
   getCachedGameDetail,
-  _cachedGameDetailCache,
+  invalidateCachedGameDetail,
   getRomMetadata,
   getInstalledRom,
   checkPlatformBios,
@@ -380,7 +380,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
     const handleCoreChange = async () => {
       // Re-fetch cached game detail to pick up new core info
-      delete _cachedGameDetailCache[appId];
+      invalidateCachedGameDetail(appId);
       const cached = await getCachedGameDetail(appId);
       if (cancelled || !cached.found) return;
       let biosStatus: BiosStatus | null = null;

@@ -31,23 +31,13 @@ export interface CachedGameDetail {
   stale_fields?: string[];
 }
 
-const _cachedGameDetailRaw = callable<[number], CachedGameDetail>("get_cached_game_detail");
-export const _cachedGameDetailCache: Record<number, { promise: Promise<CachedGameDetail>; ts: number }> = {};
-const CACHE_TTL_MS = 3000; // reuse result for 3 seconds
-
-export function getCachedGameDetail(appId: number): Promise<CachedGameDetail> {
-  const now = Date.now();
-  const entry = _cachedGameDetailCache[appId];
-  if (entry && now - entry.ts < CACHE_TTL_MS) return entry.promise;
-  const promise = _cachedGameDetailRaw(appId);
-  _cachedGameDetailCache[appId] = { promise, ts: now };
-  promise.then(() => {
-    setTimeout(() => { delete _cachedGameDetailCache[appId]; }, CACHE_TTL_MS);
-  }, () => {
-    delete _cachedGameDetailCache[appId];
-  });
-  return promise;
-}
+// get_cached_game_detail wiring lives in utils/cachedGameDetailStore.ts so the
+// module-scope cache + invalidation surface is in one place. Re-exported here
+// for back-compat with existing import sites.
+export {
+  getCachedGameDetail,
+  invalidateCachedGameDetail,
+} from "../utils/cachedGameDetailStore";
 export const getSettings = callable<[], PluginSettings>("get_settings");
 export const saveSettings = callable<[string, string, string, boolean], BackendResult>("save_settings");
 

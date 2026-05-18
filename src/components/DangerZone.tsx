@@ -570,7 +570,7 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   };
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- TODO(#617): debounce or defer initial loads
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial async data loads on mount are the standard React pattern; the rule is overzealous here
     refreshPlatforms();
     loadNonSteamApps();
     getWhitelistSettings().then((s) => {

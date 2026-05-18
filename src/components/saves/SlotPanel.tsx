@@ -5,7 +5,7 @@
  */
 
 import { useState, useRef, createElement, FC } from "react";
-import { ConfirmModal, DialogButton, Focusable, showModal } from "@decky/ui";
+import { ConfirmModal, DialogButton, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { getSlotSaves, switchSlot, debugLog, getSlotDeleteInfo, deleteSlot } from "../../api/backend";
 import type { SlotDeleteInfo } from "../../api/backend";
@@ -13,7 +13,7 @@ import type { SaveStatus, SyncConflict, SaveSlotSummary, SlotSaveFile, SwitchSlo
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
 import { computeSyncSummary, displaySlot, slotDeleteFailureToast } from "./helpers";
 import { renderSaveFileRow } from "./SaveFileRow";
-import { renderServerSaveRow } from "./ServerSaveRow";
+import { InactiveSlotBody } from "./InactiveSlotBody";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 
 const MUTED_COLOR = "#8f98a0";
@@ -44,75 +44,6 @@ function renderActiveSlotBody(
   }
   return [createElement("div", { key: "no-files", style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic" } },
     "No save files tracked yet")];
-}
-
-interface InactiveSlotBodyOpts {
-  loadingSlot: boolean;
-  slotFiles: SlotSaveFile[] | null;
-  switching: boolean;
-  switchError: string | null;
-  isOffline: boolean;
-  handleActivate: () => void;
-  handleDelete: () => void;
-  deleting: boolean;
-}
-
-function renderInactiveSlotBody(opts: InactiveSlotBodyOpts): (ReturnType<typeof createElement> | null)[] {
-  const { loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting } = opts;
-  const children: (ReturnType<typeof createElement> | null)[] = [];
-
-  if (loadingSlot) {
-    children.push(createElement("div", { key: "loading", style: { fontSize: "13px", color: MUTED_COLOR } }, "Loading..."));
-  } else if (slotFiles && slotFiles.length > 0) {
-    for (const f of slotFiles) {
-      children.push(renderServerSaveRow(f));
-    }
-  } else if (slotFiles !== null) {
-    children.push(createElement("div", { key: "no-server-files", style: { fontSize: "13px", color: MUTED_COLOR, fontStyle: "italic" } },
-      "No saves in this slot"));
-  }
-
-  const activateLabel = switching ? "Switching..." : "Activate Slot";
-  const deleteLabel = deleting ? "Deleting..." : "Delete Slot";
-
-  children.push(
-    createElement(Focusable as any, {
-      key: "activate-row",
-      "flow-children": "right",
-      style: { marginTop: "10px", display: "flex", gap: "8px", alignItems: "center" },
-    },
-      createElement(DialogButton as any, {
-        key: "activate-btn",
-        style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto" },
-        noFocusRing: false,
-        onFocus: scrollFocusedToCenter,
-        disabled: switching || isOffline,
-        onClick: handleActivate,
-      }, activateLabel),
-      createElement(DialogButton as any, {
-        key: "delete-btn",
-        style: { padding: "4px 12px", minWidth: "auto", fontSize: "12px", width: "auto", color: "#d94126" },
-        noFocusRing: false,
-        onFocus: scrollFocusedToCenter,
-        disabled: deleting || switching,
-        onClick: handleDelete,
-      }, deleteLabel),
-    ),
-    isOffline
-      ? createElement("div", {
-          key: "offline-hint",
-          style: { fontSize: "11px", color: "#8f98a0", fontStyle: "italic" as const, marginTop: "4px" },
-        }, "Offline — slot switching unavailable")
-      : null,
-    switchError
-      ? createElement("div", {
-          key: "switch-error",
-          style: { fontSize: "11px", color: "#d94126", marginTop: "4px" },
-        }, switchError)
-      : null,
-  );
-
-  return children;
 }
 
 interface SlotPanelProps {
@@ -308,19 +239,18 @@ export const SlotPanel: FC<SlotPanelProps> = ({
     : null;
 
   // --- Slot body ---
-  let bodyChildren: (ReturnType<typeof createElement> | null)[] = [];
+  let bodyEl: ReturnType<typeof createElement> | null = null;
   if (expanded) {
-    bodyChildren = isActive
-      ? renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored)
-      // eslint-disable-next-line react-hooks/refs -- TODO(#617): refactor sub-panel as component during #613 SavesTab decomposition
-      : renderInactiveSlotBody({ loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting });
+    bodyEl = isActive
+      ? createElement("div", { key: "body", className: "romm-slot-body" },
+          ...renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored).filter(Boolean),
+        )
+      // eslint-disable-next-line react-hooks/refs -- createElement of an FC in a ternary branch trips the new react-hooks/refs rule; the component itself takes no ref.
+      : createElement(InactiveSlotBody, {
+          key: "body",
+          loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting,
+        });
   }
-
-  const bodyEl = expanded
-    ? createElement("div", { key: "body", className: "romm-slot-body" },
-        ...bodyChildren.filter(Boolean),
-      )
-    : null;
 
   return createElement("div", { key: `slot-${slotName}`, className: panelClasses },
     headerEl,

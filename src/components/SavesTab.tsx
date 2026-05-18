@@ -231,8 +231,8 @@ export const SavesTab: FC<SavesTabProps> = ({
 
     // New Slot button + error feedback
     createElement("div", { key: "new-slot-area", style: { marginTop: "10px" } },
-      // eslint-disable-next-line react-hooks/refs -- TODO(#617): drop DialogButton-as-any cast, type properly during #613
-      createElement(DialogButton as any, {
+      // eslint-disable-next-line react-hooks/refs -- react-hooks/refs flags createElement of forwardRef components in ternary/conditional positions; @decky/ui's DialogButton extends RefAttributes via DialogCommonProps. Module-augmentation in src/types/decky-ui-augmentation.d.ts eliminated the `as any` cast but the refs rule fires independently.
+      createElement(DialogButton, {
         key: "new-slot-btn",
         style: {
           padding: "6px 12px",
