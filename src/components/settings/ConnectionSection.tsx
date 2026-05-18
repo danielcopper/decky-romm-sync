@@ -15,7 +15,7 @@ import {
   ToggleField,
 } from "@decky/ui";
 import { TextInputModal } from "./TextInputModal";
-import { isSharedAccount } from "./helpers";
+import { isSharedAccount } from "../../utils/sharedAccount";
 
 interface ConnectionSectionProps {
   url: string;

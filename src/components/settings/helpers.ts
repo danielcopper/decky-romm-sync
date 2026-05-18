@@ -4,15 +4,6 @@
  * belongs here; rendering helpers live alongside their sections.
  */
 
-/** Names that are commonly shared accounts on a self-hosted RomM server. */
-export const SHARED_ACCOUNT_NAMES: ReadonlySet<string> = new Set([
-  "admin",
-  "romm",
-  "user",
-  "guest",
-  "root",
-]);
-
 /** Format a relative time string (e.g. "5m ago", "2h ago") from an ISO string */
 export function formatRelativeTime(isoStr: string | null): string {
   if (!isoStr) return "never";
@@ -31,12 +22,4 @@ export function formatRelativeTime(isoStr: string | null): string {
 /** Format a one-line summary of the RetroArch save-sort flags. */
 export function sortLabel(settings: { sort_by_content: boolean; sort_by_core: boolean }): string {
   return `Sort by content: ${settings.sort_by_content ? "ON" : "OFF"}, Sort by core: ${settings.sort_by_core ? "ON" : "OFF"}`;
-}
-
-/**
- * Return true if the username matches a well-known shared-account name.
- * Comparison is case-insensitive and trims surrounding whitespace.
- */
-export function isSharedAccount(username: string): boolean {
-  return SHARED_ACCOUNT_NAMES.has(username.trim().toLowerCase());
 }
