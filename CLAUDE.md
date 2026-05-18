@@ -56,14 +56,14 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 
 **Services**:
 
-- `[CP]` Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes. (Canonical dependency inversion.)
+- `[CP]` Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes. (Canonical dependency inversion.) Carve-out: sub-services within a single bounded context (e.g. all of `services/saves/`) may hold concrete peer-service refs in their `*ServiceConfig` dataclass when they share an aggregate (e.g. `SaveSyncState`). The `[CP]` Protocol rule applies to services across bounded contexts and to adapters.
 - `[CP]` No raw I/O.
   - `[ours]` Concrete allow/deny list: forbidden in `services/`: `os.*` (except pure path algebra: `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`. (Our enforcement surface; CP says "no I/O" without spelling out the call list.)
 - `[CP]` No clocks or randomness — inject side-effecting deps via abstractions.
   - `[ours]` Specific Protocols: `Clock` / `UuidGen` / `Sleeper`. `time.time()` / `time.monotonic()` / `datetime.now()` / `uuid.uuid4()` / `asyncio.sleep()` / `random.*` banned at the call site.
 - `[CP]` No service-to-service concrete imports — services are independent. Cross-service deps are Protocol-typed.
 - `[ours]` Module functions from `domain/` are still a coupling — if tests need `patch("services.X.module_name.fn")`, wrap the module behind a Protocol and inject it. (Our enforcement tactic; CP doesn't prescribe Protocol-wrapping every module function.)
-- `[ours]` **Constructor shape: every service takes a single `config: XxxServiceConfig` keyword argument.** Frozen dataclass, named `<ServiceName>Config` — the `Service` component is part of the name (`SteamGridConfig` is wrong, `SteamGridServiceConfig` is right). All deps live in the config: Protocol-typed adapters, infrastructure (loop, logger, clock, uuid_gen, sleeper), persistence callbacks, settings-derived values. No bare-param ctors, no mixed (some-explicit + some-in-config) ctors. Test setup is uniform: build `XxxServiceConfig(...)`, pass `XxxService(config=...)`. (Project pattern. CP allows explicit ctor params; this is our consistency choice.)
+- `[ours]` **Constructor shape: every service takes a single `config: XxxServiceConfig` keyword argument.** Frozen dataclass, named `<ServiceName>Config` — outer services keep the `Service` token in both class and config name (`SteamGridConfig` is wrong, `SteamGridService` + `SteamGridServiceConfig` is right). Sub-services may use role-based class names without the token (`SyncEngine` + `SyncEngineConfig`, `SyncOrchestrator` + `SyncOrchestratorConfig`) when the role name reads more naturally than the suffixed form. All deps live in the config: Protocol-typed adapters, infrastructure (loop, logger, clock, uuid_gen, sleeper), persistence callbacks, settings-derived values. No bare-param ctors, no mixed (some-explicit + some-in-config) ctors. Test setup is uniform: build `XxxServiceConfig(...)`, pass `XxxService(config=...)`. (Project pattern. CP allows explicit ctor params; this is our consistency choice.)
 - `[ours]` **Debug logging: inject the `DebugLogger` Protocol.** Don't add per-service `_log_debug` methods that re-read settings at call time, and don't reach for `decky.logger.info` to bypass log-level filtering. The Protocol's wiring decision is the only knob.
 - `[ours]` God-class signal: services > ~700 LOC — decompose into sub-services with constructor injection (see `services/saves/` for the reference pattern). Matches the `bootstrap.py` split threshold below. The S107 ctor-param threshold no longer fires because all Protocol-typed deps live in the config. (Our taste/threshold. Earlier wording said ~600 LOC; raised after audit #485 found 5 stable cohesive files in the 656-749 range — fetcher, sync_orchestrator, migration, slots/service, sync_engine/matrix.)
 
@@ -78,6 +78,19 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 **Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`) and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter instantiation and service wiring. The split is binding — no callables in `bootstrap.py`, no service wiring in `main.py`. Both files grow with the surface they describe (callables for `main.py`, services for `bootstrap.py`); this is unavoidable density, not god-class. Split `bootstrap.py` into `bootstrap/{adapters,services}.py` only when it exceeds ~700 LOC. (Decky-plugin-specific; not a CP concept.)
 
 If a refactor breaks a `[CP]` rule, that's an architectural regression — call it out and fix it in the same PR or open a follow-up. `[ours]` deviations should be flagged in review but can be debated (we can choose to soften the project rule rather than change the code).
+
+## Protocol naming — suffix by shape
+
+Protocol names carry a suffix that signals shape, so the call site reads correctly without jumping to the definition. `[ours]`
+
+- `…Reader` — object-shaped Protocols with multiple methods (e.g. `RetroArchConfigReader`, `RetroArchCoreInfoReader`).
+- `…Provider` or `…Fn` — call-shaped Protocols (`__call__`-only) (e.g. `RetroArchSaveSortingProvider`, `CoreNameProviderFn`).
+- `…Store` — file-store Protocols (e.g. `CoverArtFileStore`).
+- `…Cache` — cache Protocols (e.g. `SgdbArtworkCache`).
+- `…Persister` — persistence Protocols (e.g. `StatePersister`, `FirmwareCachePersister`).
+- Bare names — pervasive cross-cutting primitives (`Clock`, `Sleeper`, `UuidGen`, `DebugLogger`).
+
+When a sibling Protocol set mixes shapes (e.g. `RetroArchConfigReader` next to `RetroArchSaveSortingProvider`), that mix is intentional and reflects the shape difference, not a naming inconsistency.
 
 ## Refactor wave plan (live — see #277 for current status)
 
