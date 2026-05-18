@@ -86,7 +86,7 @@ class DownloadService:
         self._download_in_progress: set = set()
         self._download_queue: dict = {}
         self._download_tasks: dict = {}
-        self._poll_task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         """Spawn the background ``poll_download_requests`` task.
