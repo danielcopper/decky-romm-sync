@@ -4,7 +4,7 @@ Owns the raw POSIX calls used by DownloadService to manage downloaded
 ROM files under the RetroDECK roms/bios directories. Path construction,
 queue policy, and progress callbacks remain a service concern; this
 adapter exposes only the I/O seams declared by
-``services.protocols.DownloadFileAdapter``.
+``services.protocols.DownloadFileStore``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import zipfile
 class DownloadFileAdapter:
     """Synchronous filesystem operations for ROM download files.
 
-    Implements the ``DownloadFileAdapter`` Protocol. Methods are
+    Implements the ``DownloadFileStore`` Protocol. Methods are
     synchronous — services that call from an async context offload via
     ``loop.run_in_executor``.
     """
@@ -28,7 +28,7 @@ class DownloadFileAdapter:
         """Return True when *path* refers to an existing file or directory."""
         return os.path.exists(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         with contextlib.suppress(FileNotFoundError):
             os.remove(path)

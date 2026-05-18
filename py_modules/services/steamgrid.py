@@ -4,7 +4,7 @@ Owns the runtime decisions for SteamGridDB integration: resolving SGDB
 game IDs from registry/RomM hints, fanning out cached vs. remote
 artwork requests, and routing icon writes into Steam's grid directory.
 All raw I/O is delegated to adapters (``SgdbArtworkCache``,
-``SteamConfigAdapter``); pure asset-type / endpoint compute lives in
+``SteamConfigStore``); pure asset-type / endpoint compute lives in
 ``domain.sgdb_artwork``.
 """
 
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
         SettingsPersister,
         SgdbArtworkCache,
         StatePersister,
-        SteamConfigAdapter,
+        SteamConfigStore,
         SteamGridDbApi,
     )
 
@@ -52,7 +52,7 @@ class SteamGridServiceConfig:
 
     sgdb_api: SteamGridDbApi
     romm_api: RommRomReader
-    steam_config: SteamConfigAdapter
+    steam_config: SteamConfigStore
     sgdb_artwork_cache: SgdbArtworkCache
     state: dict
     settings: dict
@@ -245,7 +245,7 @@ class SteamGridService:
     def prune_orphaned_artwork_cache(self):
         """Remove SGDB artwork cache files for rom_ids not in the shortcut registry."""
         art_dir = self._sgdb_artwork_cache.cache_dir()
-        if not self._sgdb_artwork_cache.isdir(art_dir):
+        if not self._sgdb_artwork_cache.is_dir(art_dir):
             return
         registry = self._state.get("shortcut_registry", {})
         pruned = 0
@@ -253,7 +253,7 @@ class SteamGridService:
             # Always remove leftover .tmp files
             if filename.endswith(".tmp"):
                 try:
-                    self._sgdb_artwork_cache.remove(os.path.join(art_dir, filename))
+                    self._sgdb_artwork_cache.remove_file(os.path.join(art_dir, filename))
                     pruned += 1
                     self._logger.info(f"Removed leftover artwork tmp: {filename}")
                 except OSError as e:
@@ -266,7 +266,7 @@ class SteamGridService:
             rom_id = parts[0]
             if rom_id not in registry:
                 try:
-                    self._sgdb_artwork_cache.remove(os.path.join(art_dir, filename))
+                    self._sgdb_artwork_cache.remove_file(os.path.join(art_dir, filename))
                     pruned += 1
                 except OSError as e:
                     self._logger.warning(f"Failed to remove orphaned artwork {filename}: {e}")

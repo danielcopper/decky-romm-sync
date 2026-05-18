@@ -12,7 +12,7 @@ from lib.path_safety import is_safe_rom_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import DownloadQueueCleanup, RetroDeckPaths, RomFileAdapter, StatePersister
+    from services.protocols import DownloadQueueCleanup, RetroDeckPaths, RomFileStore, StatePersister
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class RomRemovalServiceConfig:
     loop: asyncio.AbstractEventLoop
     state_persister: StatePersister
     save_sync_state_writer: StatePersister
-    rom_files: RomFileAdapter
+    rom_file_store: RomFileStore
     retrodeck_paths: RetroDeckPaths | None = None
     download_queue_cleanup: DownloadQueueCleanup | None = None
 
@@ -51,7 +51,7 @@ class RomRemovalService:
         self._loop = config.loop
         self._state_persister = config.state_persister
         self._save_sync_state_writer = config.save_sync_state_writer
-        self._rom_files = config.rom_files
+        self._rom_file_store = config.rom_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._download_queue_cleanup = config.download_queue_cleanup
 
@@ -61,19 +61,19 @@ class RomRemovalService:
         file_path = installed.get("file_path", "")
 
         roms_base = self._retrodeck_paths.roms_path() if self._retrodeck_paths else ""
-        if rom_dir and self._rom_files.is_dir(rom_dir):
+        if rom_dir and self._rom_file_store.is_dir(rom_dir):
             if not is_safe_rom_path(rom_dir, roms_base):
                 self._logger.error(f"Refusing to delete path outside roms directory: {rom_dir}")
                 return
-            self._rom_files.remove_tree(rom_dir)
+            self._rom_file_store.remove_tree(rom_dir)
         elif file_path:
             if not is_safe_rom_path(file_path, roms_base):
                 self._logger.error(f"Refusing to delete path outside roms directory: {file_path}")
                 return
-            if self._rom_files.is_dir(file_path):
-                self._rom_files.remove_tree(file_path)
-            elif self._rom_files.exists(file_path):
-                self._rom_files.remove_file(file_path)
+            if self._rom_file_store.is_dir(file_path):
+                self._rom_file_store.remove_tree(file_path)
+            elif self._rom_file_store.exists(file_path):
+                self._rom_file_store.remove_file(file_path)
 
     def _remove_rom_io(self, rom_id_str: str, installed: dict) -> None:
         """Sync helper for remove_rom — file deletion + state update in executor."""

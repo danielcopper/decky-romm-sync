@@ -6,7 +6,7 @@ backing up, hashing, and removing local save files under the RetroDECK
 saves directory. Path construction, platform-specific extension lookup,
 and slot/sync policy remain a service or domain concern; this adapter
 exposes only the I/O seams declared by
-``services.protocols.SaveFileAdapter``.
+``services.protocols.SaveFileStore``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _MD5_CHUNK_SIZE = 8192
 class SaveFileAdapter:
     """Synchronous filesystem operations for local save files.
 
-    Implements the ``SaveFileAdapter`` Protocol. Methods are
+    Implements the ``SaveFileStore`` Protocol. Methods are
     synchronous — services that call from an async context offload via
     ``loop.run_in_executor``.
     """
@@ -43,7 +43,7 @@ class SaveFileAdapter:
         """Create *path* and any missing parents. Idempotent."""
         os.makedirs(path, exist_ok=True)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         with contextlib.suppress(FileNotFoundError):
             os.remove(path)

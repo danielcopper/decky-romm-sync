@@ -98,7 +98,7 @@ def plugin(tmp_path):
                     logger=logging.getLogger("test"),
                 )
             ),
-            save_file=SaveFileAdapter(),
+            save_file_store=SaveFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(
                 saves=saves_path,
                 roms=str(tmp_path / "retrodeck" / "roms"),
@@ -146,7 +146,7 @@ def plugin(tmp_path):
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             state_persister=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
-            firmware_files=FirmwareFileAdapter(),
+            firmware_file_store=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
         ),

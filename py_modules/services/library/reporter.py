@@ -32,7 +32,7 @@ if TYPE_CHECKING:
         Clock,
         EventEmitter,
         StatePersister,
-        SteamConfigAdapter,
+        SteamConfigStore,
     )
 
     EmitProgressFn = Callable[..., Awaitable[None]]
@@ -53,7 +53,7 @@ class SyncReporterConfig:
     cover-path finalisation.
     """
 
-    steam_config: SteamConfigAdapter
+    steam_config: SteamConfigStore
     state: dict
     settings: dict
     loop: asyncio.AbstractEventLoop

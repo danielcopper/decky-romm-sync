@@ -1031,7 +1031,7 @@ class TestHasTrackedSave:
 class TestBadPathDeleteSavesPartialFailure:
     """Coverage for the per-file ``except`` arm in ``_delete_saves_for_roms``.
 
-    Wires a ``FakeSaveFileAdapter`` into the service post-construction so
+    Wires a ``FakeSaveFileStore`` into the service post-construction so
     one targeted ``remove`` call raises ``OSError`` while the rest succeed.
     """
 
@@ -1043,15 +1043,15 @@ class TestBadPathDeleteSavesPartialFailure:
         reference — both must point at the same fake so file discovery
         and deletion run through the failure-injecting instance.
         """
-        from conftest import FakeSaveFileAdapter
+        from conftest import FakeSaveFileStore
 
-        fake = FakeSaveFileAdapter(files=files)
+        fake = FakeSaveFileStore(files=files)
         # Mark each saves-dir as present so ``find_save_files`` walks them.
         for path in files:
             fake.dirs.add(os.path.dirname(path))
         fake.remove_failures = set(remove_failures)
-        svc._save_file = fake
-        svc._rom_info._save_file = fake
+        svc._save_file_store = fake
+        svc._rom_info._save_file_store = fake
         return fake
 
     @pytest.mark.asyncio

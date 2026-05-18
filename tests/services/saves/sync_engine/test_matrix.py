@@ -51,7 +51,7 @@ class TestUpdateFileSyncState:
         svc._sync_engine._matrix.update_file_sync_state("42", "pokemon.srm", server_resp, str(save_file), "gba")
 
         entry = svc._save_sync_state.saves["42"].files["pokemon.srm"]
-        assert entry.last_sync_hash == svc._save_file.checksum_md5(str(save_file))
+        assert entry.last_sync_hash == svc._save_file_store.checksum_md5(str(save_file))
         assert entry.last_sync_at is not None
         assert entry.last_sync_server_save_id == 200
 

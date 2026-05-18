@@ -59,7 +59,7 @@ def plugin():
         config=DownloadServiceConfig(
             romm_api=p._romm_api,
             state=p._state,
-            download_files=DownloadFileAdapter(),
+            download_file_store=DownloadFileAdapter(),
             download_queue=DownloadQueueAdapter(),
             resolve_system=p._resolve_system,
             loop=asyncio.get_event_loop(),
@@ -83,7 +83,7 @@ def plugin():
             loop=asyncio.get_event_loop(),
             state_persister=MagicMock(),
             save_sync_state_writer=MagicMock(),
-            rom_files=RomFileAdapter(),
+            rom_file_store=RomFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
             ),
@@ -136,7 +136,7 @@ class TestStartDownload:
             return MagicMock()
 
         plugin._download_service._loop.create_task = _close_coro_task
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
 
         result = await plugin.start_download(42)
 
@@ -190,7 +190,7 @@ class TestStartDownload:
         plugin._download_service._loop = MagicMock()
         plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
 
-        plugin._download_service._download_files.disk_free = lambda _path: 50 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 50 * 1024 * 1024
         result = await plugin.start_download(42)
 
         assert result["success"] is False
@@ -510,7 +510,7 @@ class TestDiskSpaceMultiFile:
         plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
 
         # 700MB free: enough for single-file (600MB) but not multi-file (1100MB)
-        plugin._download_service._download_files.disk_free = lambda _path: 700 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 700 * 1024 * 1024
         result = await plugin.start_download(42)
 
         assert result["success"] is False
@@ -547,7 +547,7 @@ class TestDiskSpaceMultiFile:
         plugin._download_service._loop.create_task = MagicMock()
 
         # 700MB free: enough for single-file (600MB)
-        plugin._download_service._download_files.disk_free = lambda _path: 700 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 700 * 1024 * 1024
         result = await plugin.start_download(43)
 
         assert result["success"] is True
@@ -1047,7 +1047,7 @@ class TestDoDownloadNestedSingleFile:
 
         plugin._download_service._loop.create_task = _close_coro_task
 
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
         result = await plugin.start_download(7)
 
         assert result["success"] is True
@@ -1090,7 +1090,7 @@ class TestDoDownloadNestedSingleFile:
             return MagicMock()
 
         plugin._download_service._loop.create_task = _close_coro_task
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             result = await plugin.start_download(8)
@@ -1136,7 +1136,7 @@ class TestDoDownloadNestedSingleFile:
             return MagicMock()
 
         plugin._download_service._loop.create_task = _close_coro_task
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             result = await plugin.start_download(9)
@@ -1182,7 +1182,7 @@ class TestDoDownloadNestedSingleFile:
 
         plugin._download_service._loop.create_task = _close_coro_task
 
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
         result = await plugin.start_download(13)
 
         assert result["success"] is True
@@ -1293,7 +1293,7 @@ class TestPathTraversalFsName:
 
         plugin._download_service._loop.create_task = _close_coro_task
 
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
         result = await plugin.start_download(77)
 
         assert result["success"] is True
@@ -1533,7 +1533,7 @@ class TestStartDownloadReDownload:
         # Set status to completed (previous download)
         plugin._download_service._download_queue[42] = {"status": "completed"}
 
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
         result = await plugin.start_download(42)
 
         assert result["success"] is True
@@ -1882,7 +1882,7 @@ class TestCleanupLeftoverTmpFiles:
         import logging
 
         import decky
-        from conftest import FakeDownloadFileAdapter
+        from conftest import FakeDownloadFileStore
 
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
@@ -1900,12 +1900,12 @@ class TestCleanupLeftoverTmpFiles:
         bios_base = str(tmp_path / "retrodeck" / "bios")
         tmp_file_path = os.path.join(roms_base, "n64", "zelda.z64.tmp")
 
-        fake = FakeDownloadFileAdapter()
+        fake = FakeDownloadFileStore()
         fake.make_dirs(roms_base)
         fake.make_dirs(bios_base)
         fake.files[tmp_file_path] = b"partial"
         fake.remove_failures.add(tmp_file_path)
-        plugin._download_service._download_files = fake
+        plugin._download_service._download_file_store = fake
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             plugin._download_service.cleanup_leftover_tmp_files()
@@ -2118,7 +2118,7 @@ class TestStartDownloadCreateTaskFailure:
         plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
         plugin._download_service._loop.create_task = MagicMock(side_effect=RuntimeError("loop closed"))
 
-        plugin._download_service._download_files.disk_free = lambda _path: 500 * 1024 * 1024
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
         result = await plugin.start_download(42)
 
         assert result["success"] is False
@@ -2261,10 +2261,10 @@ class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
     """
 
     def test_no_retrodeck_paths_bundle_skips_walk(self, plugin):
-        from conftest import FakeDownloadFileAdapter
+        from conftest import FakeDownloadFileStore
 
-        fake = FakeDownloadFileAdapter()
-        plugin._download_service._download_files = fake
+        fake = FakeDownloadFileStore()
+        plugin._download_service._download_file_store = fake
         # Drop the retrodeck_paths bundle entirely — both clean helpers
         # must short-circuit before walking.
         plugin._download_service._retrodeck_paths = None
@@ -2274,10 +2274,10 @@ class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
         assert fake.walk_calls == []
 
     def test_empty_roms_and_bios_paths_skip_walk(self, plugin):
-        from conftest import FakeDownloadFileAdapter
+        from conftest import FakeDownloadFileStore
 
-        fake = FakeDownloadFileAdapter()
-        plugin._download_service._download_files = fake
+        fake = FakeDownloadFileStore()
+        plugin._download_service._download_file_store = fake
         # retrodeck_paths present but both helpers return empty (no
         # retrodeck.json) — service must early-return on each branch.
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(roms="", bios="")
@@ -2552,9 +2552,9 @@ class TestCleanupPartialDownloadFailureInjection:
     def test_remove_failures_are_logged_and_other_paths_still_removed(self, plugin, caplog):
         import logging
 
-        from conftest import FakeDownloadFileAdapter
+        from conftest import FakeDownloadFileStore
 
-        fake = FakeDownloadFileAdapter()
+        fake = FakeDownloadFileStore()
         target = "/roms/n64/game.z64"
         # Stage all three candidate paths so each remove call has
         # something to act on; mark the .tmp variant as failing.
@@ -2562,7 +2562,7 @@ class TestCleanupPartialDownloadFailureInjection:
         fake.files[target + _TMP_EXT_LITERAL] = b"junk2"
         fake.files[target] = b"junk3"
         fake.remove_failures.add(target + _TMP_EXT_LITERAL)
-        plugin._download_service._download_files = fake
+        plugin._download_service._download_file_store = fake
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             plugin._download_service._cleanup_partial_download(target, False, "game.z64")
@@ -2580,9 +2580,9 @@ class TestCleanupPartialDownloadFailureInjection:
     def test_remove_tree_failure_is_logged_and_swallowed(self, plugin, caplog):
         import logging
 
-        from conftest import FakeDownloadFileAdapter
+        from conftest import FakeDownloadFileStore
 
-        fake = FakeDownloadFileAdapter()
+        fake = FakeDownloadFileStore()
         target = "/roms/psx/game.zip"
         extract_dir = "/roms/psx/game"
         fake.make_dirs(extract_dir)
@@ -2590,7 +2590,7 @@ class TestCleanupPartialDownloadFailureInjection:
         # Inject a remove_tree failure for the extract dir; remove on
         # the three tmp paths is a no-op (paths absent).
         fake.remove_tree_failures.add(extract_dir)
-        plugin._download_service._download_files = fake
+        plugin._download_service._download_file_store = fake
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             # Must NOT raise even though remove_tree raises.

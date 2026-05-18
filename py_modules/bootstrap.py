@@ -17,12 +17,12 @@ from dataclasses import dataclass
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
-from adapters.download_file import DownloadFileAdapter as DownloadFileAdapterImpl
+from adapters.download_file import DownloadFileAdapter
 from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapterImpl
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
-from adapters.firmware_file import FirmwareFileAdapter as FirmwareFileAdapterImpl
+from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
-from adapters.migration_file import MigrationFileAdapter as MigrationFileAdapterImpl
+from adapters.migration_file import MigrationFileAdapter
 from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import (
     FirmwareCachePersisterAdapter,
@@ -36,10 +36,10 @@ from adapters.plugin_metadata import PluginMetadataAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
-from adapters.rom_files import RomFileAdapter as RomFileAdapterImpl
+from adapters.rom_files import RomFileAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
-from adapters.save_file import SaveFileAdapter as SaveFileAdapterImpl
+from adapters.save_file import SaveFileAdapter
 from adapters.sgdb_artwork_cache import SgdbArtworkCacheAdapter
 from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
@@ -66,30 +66,30 @@ from services.protocols import (
     CoreNameProviderFn,
     CoverArtFileStore,
     DebugLogger,
-    DownloadFileAdapter,
+    DownloadFileStore,
     DownloadQueueAdapter,
     EventEmitter,
     FirmwareCachePersister,
-    FirmwareFileAdapter,
+    FirmwareFileStore,
     GamelistXmlEditorProtocol,
     HostnameProvider,
     MetadataCachePersister,
-    MigrationFileAdapter,
+    MigrationFileStore,
     PathExistsProbe,
     PluginMetadataReader,
     RetroArchSaveSortingProvider,
     RetroDeckPaths,
-    RomFileAdapter,
+    RomFileStore,
     RommApi,
-    SaveFileAdapter,
+    SaveFileStore,
     SaveSyncStatePersister,
     SettingsPersister,
     SgdbArtworkCache,
     Sleeper,
     StatePersister,
+    SteamConfigStore,
     UuidGen,
 )
-from services.protocols import SteamConfigAdapter as SteamConfigProtocol
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
 from services.session_lifecycle import SessionLifecycleService, SessionLifecycleServiceConfig
@@ -124,16 +124,16 @@ class AdapterBundle:
 
     http_adapter: RommHttpAdapter
     romm_api: RommApi
-    steam_config: SteamConfigProtocol
+    steam_config: SteamConfigStore
     sgdb_adapter: SteamGridDbAdapter
     cover_art_file_store: CoverArtFileStore
     sgdb_artwork_cache: SgdbArtworkCache
-    download_files: DownloadFileAdapter
+    download_file_store: DownloadFileStore
     download_queue: DownloadQueueAdapter
-    firmware_files: FirmwareFileAdapter
-    migration_files: MigrationFileAdapter
-    rom_files: RomFileAdapter
-    save_file: SaveFileAdapter
+    firmware_file_store: FirmwareFileStore
+    migration_file_store: MigrationFileStore
+    rom_file_store: RomFileStore
+    save_file_store: SaveFileStore
     gamelist_editor: GamelistXmlEditorProtocol
     path_probe: PathExistsProbe
     core_info_provider: CoreInfoProvider
@@ -313,12 +313,12 @@ def bootstrap(
     sgdb_adapter = SteamGridDbAdapter(settings=settings, logger=logger)
     cover_art_file_store = CoverArtFileStoreAdapter()
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
-    download_files = DownloadFileAdapterImpl()
+    download_file_store = DownloadFileAdapter()
     download_queue = DownloadQueueAdapterImpl()
-    firmware_files = FirmwareFileAdapterImpl()
-    migration_files = MigrationFileAdapterImpl()
-    rom_files = RomFileAdapterImpl()
-    save_file = SaveFileAdapterImpl()
+    firmware_file_store = FirmwareFileAdapter()
+    migration_file_store = MigrationFileAdapter()
+    rom_file_store = RomFileAdapter()
+    save_file_store = SaveFileAdapter()
     path_probe = PathProbeAdapter()
     clock = SystemClock()
     uuid_gen = SystemUuidGen()
@@ -335,12 +335,12 @@ def bootstrap(
         sgdb_adapter=sgdb_adapter,
         cover_art_file_store=cover_art_file_store,
         sgdb_artwork_cache=sgdb_artwork_cache,
-        download_files=download_files,
+        download_file_store=download_file_store,
         download_queue=download_queue,
-        firmware_files=firmware_files,
-        migration_files=migration_files,
-        rom_files=rom_files,
-        save_file=save_file,
+        firmware_file_store=firmware_file_store,
+        migration_file_store=migration_file_store,
+        rom_file_store=rom_file_store,
+        save_file_store=save_file_store,
         gamelist_editor=gamelist_editor,
         path_probe=path_probe,
         core_info_provider=core_resolver,
@@ -406,7 +406,7 @@ def wire_services(cfg: WiringConfig) -> dict:
     # fresh sort state before computing saves_dir (#238).
     migration_service = MigrationService(
         config=MigrationServiceConfig(
-            migration_files=cfg.adapters.migration_files,
+            migration_file_store=cfg.adapters.migration_file_store,
             state=cfg.stores.state,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
@@ -427,7 +427,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         state=cfg.stores.state,
         save_sync_state=cfg.stores.save_sync_state,
         save_sync_state_persister=cfg.callbacks.save_sync_state_persister,
-        save_file=cfg.adapters.save_file,
+        save_file_store=cfg.adapters.save_file_store,
         loop=cfg.runtime.loop,
         logger=cfg.runtime.logger,
         clock=cfg.runtime.clock,
@@ -522,7 +522,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         config=DownloadServiceConfig(
             romm_api=cfg.adapters.romm_api,
             state=cfg.stores.state,
-            download_files=cfg.adapters.download_files,
+            download_file_store=cfg.adapters.download_file_store,
             download_queue=cfg.adapters.download_queue,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
             loop=cfg.runtime.loop,
@@ -545,7 +545,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             loop=cfg.runtime.loop,
             state_persister=cfg.callbacks.state_persister,
             save_sync_state_writer=save_sync_service,
-            rom_files=cfg.adapters.rom_files,
+            rom_file_store=cfg.adapters.rom_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             download_queue_cleanup=download_service,
         ),
@@ -561,7 +561,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             clock=cfg.runtime.clock,
             state_persister=cfg.callbacks.state_persister,
             firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
-            firmware_files=cfg.adapters.firmware_files,
+            firmware_file_store=cfg.adapters.firmware_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.adapters.core_info_provider,
         ),

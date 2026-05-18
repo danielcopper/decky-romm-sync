@@ -2,7 +2,7 @@
 
 Owns every callable that reads or mutates the live ``settings`` dict
 from the frontend. Adapter-level I/O (Steam Input config, RetroArch
-input driver) is reached via the ``SteamConfigAdapter`` Protocol;
+input driver) is reached via the ``SteamConfigStore`` Protocol;
 on-disk persistence is fired through the injected
 ``save_settings_to_disk`` callable so the service never touches the
 filesystem directly.
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, ClassVar
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import SettingsPersister, SteamConfigAdapter
+    from services.protocols import SettingsPersister, SteamConfigStore
 
 
 _MASK_PLACEHOLDER = "••••"
@@ -40,7 +40,7 @@ class SettingsServiceConfig:
     state: dict
     logger: logging.Logger
     settings_persister: SettingsPersister
-    steam_config: SteamConfigAdapter
+    steam_config: SteamConfigStore
 
 
 class SettingsService:

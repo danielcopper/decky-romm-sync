@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-    from services.protocols import CoverArtFileStore, PendingSyncReader, RommRomReader, SteamConfigAdapter
+    from services.protocols import CoverArtFileStore, PendingSyncReader, RommRomReader, SteamConfigStore
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class ArtworkServiceConfig:
     """
 
     romm_api: RommRomReader
-    steam_config: SteamConfigAdapter
+    steam_config: SteamConfigStore
     cover_art_file_store: CoverArtFileStore
     state: dict
     loop: asyncio.AbstractEventLoop
@@ -147,13 +147,13 @@ class ArtworkService:
         # Try cover_path first (stores the final renamed path)
         cover_path = entry.get("cover_path", "")
         if cover_path and self._cover_art_file_store.exists(cover_path):
-            self._cover_art_file_store.remove(cover_path)
+            self._cover_art_file_store.remove_file(cover_path)
             removed = True
         # Try {app_id}p.png (the standard Steam grid filename)
         if not removed and entry.get("app_id"):
             app_path = os.path.join(grid, final_filename(entry["app_id"]))
             if self._cover_art_file_store.exists(app_path):
-                self._cover_art_file_store.remove(app_path)
+                self._cover_art_file_store.remove_file(app_path)
                 removed = True
         # Fallback: legacy artwork_id format
         if not removed:
@@ -161,11 +161,11 @@ class ArtworkService:
             if artwork_id:
                 art_path = os.path.join(grid, final_filename(artwork_id))
                 if self._cover_art_file_store.exists(art_path):
-                    self._cover_art_file_store.remove(art_path)
+                    self._cover_art_file_store.remove_file(art_path)
         # Clean up any leftover staging file
         staging = os.path.join(grid, staging_filename(rom_id))
         if self._cover_art_file_store.exists(staging):
-            self._cover_art_file_store.remove(staging)
+            self._cover_art_file_store.remove_file(staging)
 
     # ── Artwork base64 query ───────────────────────────────────────────────
 
@@ -215,7 +215,7 @@ class ArtworkService:
     def prune_orphaned_staging_artwork(self) -> None:
         """Remove orphaned romm_{rom_id}_cover.png staging files from Steam grid dir."""
         grid = self._steam_config.grid_dir()
-        if not grid or not self._cover_art_file_store.isdir(grid):
+        if not grid or not self._cover_art_file_store.is_dir(grid):
             return
         registry = self._state.get("shortcut_registry", {})
         pruned = []
@@ -230,7 +230,7 @@ class ArtworkService:
             if not self.is_staging_file_orphaned(grid, registry, rom_id):
                 continue
             try:
-                self._cover_art_file_store.remove(os.path.join(grid, filename))
+                self._cover_art_file_store.remove_file(os.path.join(grid, filename))
                 pruned.append(filename)
             except OSError as e:
                 self._logger.warning(f"Failed to remove orphaned staging artwork {filename}: {e}")

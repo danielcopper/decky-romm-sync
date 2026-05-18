@@ -523,7 +523,7 @@ class TestPruneOrphanedArtworkCache:
         def raising_remove(_path: str) -> None:
             raise OSError("Permission denied")
 
-        sgdb_artwork_cache.remove = raising_remove  # type: ignore[method-assign]
+        sgdb_artwork_cache.remove_file = raising_remove  # type: ignore[method-assign]
         plugin._sgdb_service.prune_orphaned_artwork_cache()
         # File still exists because remove was patched to fail
         assert orphan in sgdb_artwork_cache.files
@@ -1021,7 +1021,7 @@ class TestPruneOrphanedArtworkCacheEdgeCases:
         def raising_remove(_path: str) -> None:
             raise OSError("permission denied")
 
-        sgdb_artwork_cache.remove = raising_remove  # type: ignore[method-assign]
+        sgdb_artwork_cache.remove_file = raising_remove  # type: ignore[method-assign]
 
         # Should not crash
         plugin._sgdb_service.prune_orphaned_artwork_cache()

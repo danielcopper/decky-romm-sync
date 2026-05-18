@@ -14,7 +14,7 @@ if TYPE_CHECKING:
         EventEmitter,
         RommPlatformReader,
         StatePersister,
-        SteamConfigAdapter,
+        SteamConfigStore,
     )
 
 
@@ -28,7 +28,7 @@ class ShortcutRemovalServiceConfig:
     """
 
     romm_api: RommPlatformReader
-    steam_config: SteamConfigAdapter
+    steam_config: SteamConfigStore
     state: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger

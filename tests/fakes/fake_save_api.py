@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from services.protocols import SaveFileAdapter
+    from services.protocols import SaveFileStore
 
 
 class FakeSaveApi:
@@ -18,14 +18,15 @@ class FakeSaveApi:
     when those methods are needed.
 
     Server-side save bytes live in ``_save_content`` (``save_id -> bytes``).
-    All filesystem I/O is delegated to the injected ``save_file`` adapter so
-    this fake never imports ``os``, ``open``, or ``shutil`` directly. When
-    ``save_file`` is None the fake is fully in-memory: uploads record a zero-
-    byte snapshot and downloads write the default zero-byte payload nowhere.
+    All filesystem I/O is delegated to the injected ``save_file_store`` adapter
+    so this fake never imports ``os``, ``open``, or ``shutil`` directly. When
+    ``save_file_store`` is None the fake is fully in-memory: uploads record a
+    zero-byte snapshot and downloads write the default zero-byte payload
+    nowhere.
     """
 
-    def __init__(self, save_file: SaveFileAdapter | None = None) -> None:
-        self.save_file: SaveFileAdapter | None = save_file
+    def __init__(self, save_file_store: SaveFileStore | None = None) -> None:
+        self.save_file_store: SaveFileStore | None = save_file_store
         self.saves: dict[int, dict] = {}  # save_id -> save dict
         self.roms: dict[int, dict] = {}  # rom_id -> rom detail dict
         self.notes: dict[int, list[dict]] = {}  # rom_id -> [note dicts]
@@ -68,16 +69,16 @@ class FakeSaveApi:
     def _capture_upload(self, save_id: int, file_path: str) -> int:
         """Read bytes from *file_path* via the injected adapter and return size.
 
-        When no ``save_file`` adapter is wired, records empty bytes (size 0)
+        When no ``save_file_store`` adapter is wired, records empty bytes (size 0)
         — tests that exercise size/hash semantics must wire an adapter.
         """
-        if self.save_file is None:
+        if self.save_file_store is None:
             self._save_content[save_id] = b""
             return 0
-        if not self.save_file.is_file(file_path):
+        if not self.save_file_store.is_file(file_path):
             self._save_content[save_id] = b""
             return 0
-        data = self.save_file.read_bytes(file_path)
+        data = self.save_file_store.read_bytes(file_path)
         self._save_content[save_id] = data
         return len(data)
 
@@ -91,12 +92,12 @@ class FakeSaveApi:
            a file to disk and pointed at it; we re-read via the adapter.
         3. Fallback to 1024 zero-bytes so callers always get a file.
         """
-        if self.save_file is None:
+        if self.save_file_store is None:
             return
         if save_id in self._save_content:
             data = self._save_content[save_id]
-        elif save_id in self.uploaded_files and self.save_file.is_file(self.uploaded_files[save_id]):
-            data = self.save_file.read_bytes(self.uploaded_files[save_id])
+        elif save_id in self.uploaded_files and self.save_file_store.is_file(self.uploaded_files[save_id]):
+            data = self.save_file_store.read_bytes(self.uploaded_files[save_id])
         else:
             data = b"\x00" * 1024
         pathlib.Path(dest_path).write_bytes(data)

@@ -7,7 +7,7 @@ import pytest
 from conftest import (
     FakeCoreInfoProvider,
     FakeFirmwareCachePersister,
-    FakeMigrationFileAdapter,
+    FakeMigrationFileStore,
     FakeRetroDeckPaths,
     FakeSettingsPersister,
     FakeStatePersister,
@@ -76,7 +76,7 @@ def plugin(tmp_path, fake_romm_api):
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             state_persister=FakeStatePersister(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
-            firmware_files=FirmwareFileAdapter(),
+            firmware_file_store=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
         ),
@@ -114,7 +114,7 @@ def plugin(tmp_path, fake_romm_api):
 
     p._migration_service = MigrationService(
         config=MigrationServiceConfig(
-            migration_files=MigrationFileAdapter(),
+            migration_file_store=MigrationFileAdapter(),
             state=p._state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
@@ -894,7 +894,7 @@ class TestDetectSaveSortChangeThreadSafety:
 
 
 class TestMigrationFailureInjection:
-    """Adapter-level failure injection tests using FakeMigrationFileAdapter.
+    """Adapter-level failure injection tests using FakeMigrationFileStore.
 
     These tests exercise paths the tmp_path-based integration tests cannot
     reach: simulated ``OSError`` during ``move`` / ``rename`` / ``remove``
@@ -923,12 +923,12 @@ class TestMigrationFailureInjection:
         }
         defaults.update(overrides)
         return MigrationService(
-            config=MigrationServiceConfig(migration_files=fake_files, **defaults),
+            config=MigrationServiceConfig(migration_file_store=fake_files, **defaults),
         )
 
     def test_move_failure_records_error_and_continues(self):
         """Mid-batch ``move`` failure is captured in ``errors``; other items still move."""
-        fake = FakeMigrationFileAdapter()
+        fake = FakeMigrationFileStore()
         old_home = "/old"
         new_home = "/new"
         bad_rom = "/old/roms/n64/bad.z64"
@@ -962,7 +962,7 @@ class TestMigrationFailureInjection:
 
     def test_rename_failure_records_save_sort_error(self):
         """``OSError`` from ``rename`` during save-sort overwrite path is captured."""
-        fake = FakeMigrationFileAdapter()
+        fake = FakeMigrationFileStore()
         old_path = "/saves/old/game.srm"
         new_path = "/saves/new/game.srm"
         fake.files[old_path] = b"new content"
@@ -995,7 +995,7 @@ class TestMigrationFailureInjection:
 
     def test_remove_failure_records_save_sort_orphan_cleanup_error(self):
         """``OSError`` from ``remove`` during save-sort newest-wins cleanup is captured."""
-        fake = FakeMigrationFileAdapter()
+        fake = FakeMigrationFileStore()
         old_path = "/saves/old/game.srm"
         new_path = "/saves/new/game.srm"
         fake.files[old_path] = b"stale"

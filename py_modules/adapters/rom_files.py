@@ -4,7 +4,7 @@ Owns the raw POSIX calls used by RomRemovalService when physically
 removing an installed ROM (single file or multi-file ROM directory).
 Path construction, safety checks, and state mutation remain a service
 or domain concern; this adapter exposes only the I/O seams declared by
-``services.protocols.RomFileAdapter``.
+``services.protocols.RomFileStore``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import shutil
 class RomFileAdapter:
     """Synchronous filesystem operations for installed ROM files.
 
-    Implements the ``RomFileAdapter`` Protocol. Methods are
+    Implements the ``RomFileStore`` Protocol. Methods are
     synchronous — services that call from an async context offload via
     ``loop.run_in_executor``.
     """

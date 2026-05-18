@@ -211,11 +211,12 @@ class FakeCoverArtFileStore:
     """In-memory ``CoverArtFileStore`` for tests.
 
     Backed by a ``dict[str, bytes]`` so file ops are deterministic and
-    free of filesystem side effects. ``remove`` is idempotent per the
-    Protocol contract. ``listdir`` returns entries whose path's parent
-    directory matches *directory* (no recursion). ``isdir`` reports True
-    for any path that is the parent of an entry, mirroring the loose
-    "directory exists when it contains files" semantics tests need.
+    free of filesystem side effects. ``remove_file`` is idempotent per
+    the Protocol contract. ``listdir`` returns entries whose path's
+    parent directory matches *directory* (no recursion). ``is_dir``
+    reports True for any path that is the parent of an entry, mirroring
+    the loose "directory exists when it contains files" semantics tests
+    need.
 
     Tests can pre-populate ``files`` directly to stage fixtures, and
     inspect it after the act to assert removals/renames. ``isdir_paths``
@@ -228,20 +229,20 @@ class FakeCoverArtFileStore:
 
     def __init__(self, files: dict[str, bytes] | None = None) -> None:
         self.files: dict[str, bytes] = dict(files) if files else {}
-        # Explicit directory whitelist; when None, isdir is inferred from
-        # parent-of-files membership.
+        # Explicit directory whitelist; when None, is_dir is inferred
+        # from parent-of-files membership.
         self.isdir_paths: set[str] | None = None
         # Source paths that should raise OSError on rename. Mirrors the
         # Wave 3 fake-adapter failure-injection pattern (e.g.
-        # FakeDownloadFileAdapter / FakeFirmwareFileAdapter) so tests
-        # drive error paths through the Protocol instead of patching
+        # FakeDownloadFileStore / FakeFirmwareFileStore) so tests drive
+        # error paths through the Protocol instead of patching
         # ``os.replace`` globally.
         self.rename_failures: set[str] = set()
 
     def exists(self, path: str) -> bool:
-        return path in self.files or self.isdir(path)
+        return path in self.files or self.is_dir(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         self.files.pop(path, None)
 
     def rename(self, src: str, dst: str) -> None:
@@ -257,7 +258,7 @@ class FakeCoverArtFileStore:
             path[len(prefix) :] for path in self.files if path.startswith(prefix) and "/" not in path[len(prefix) :]
         ]
 
-    def isdir(self, path: str) -> bool:
+    def is_dir(self, path: str) -> bool:
         if self.isdir_paths is not None:
             return path in self.isdir_paths
         prefix = path.rstrip("/") + "/"
@@ -273,9 +274,9 @@ class FakeSgdbArtworkCache:
     """In-memory ``SgdbArtworkCache`` for tests.
 
     Backed by a ``dict[str, bytes]`` so file ops are deterministic and
-    free of filesystem side effects. ``remove`` is idempotent per the
-    Protocol contract. ``cache_dir`` returns the canonical
-    ``{cache_root}/artwork`` path; ``isdir`` reports True for any path
+    free of filesystem side effects. ``remove_file`` is idempotent per
+    the Protocol contract. ``cache_dir`` returns the canonical
+    ``{cache_root}/artwork`` path; ``is_dir`` reports True for any path
     that is the parent of an entry or matches ``cache_dir``, mirroring
     the loose "directory exists when it contains files" semantics tests
     need.
@@ -296,9 +297,9 @@ class FakeSgdbArtworkCache:
         return self._cache_dir
 
     def exists(self, path: str) -> bool:
-        return path in self.files or self.isdir(path)
+        return path in self.files or self.is_dir(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         self.files.pop(path, None)
 
     def listdir(self, directory: str) -> list[str]:
@@ -307,7 +308,7 @@ class FakeSgdbArtworkCache:
             path[len(prefix) :] for path in self.files if path.startswith(prefix) and "/" not in path[len(prefix) :]
         ]
 
-    def isdir(self, path: str) -> bool:
+    def is_dir(self, path: str) -> bool:
         if self.isdir_paths is not None:
             return path in self.isdir_paths
         if path == self._cache_dir:
@@ -321,14 +322,14 @@ class FakeSgdbArtworkCache:
         return self.files[path]
 
 
-class FakeDownloadFileAdapter:
-    """In-memory ``DownloadFileAdapter`` for tests.
+class FakeDownloadFileStore:
+    """In-memory ``DownloadFileStore`` for tests.
 
     Backed by a ``dict[str, bytes]`` so file ops are deterministic and
-    free of filesystem side effects. ``remove`` / ``remove_tree`` are
-    idempotent per the Protocol contract. ``isdir`` reports True for any
-    path that is the parent of an entry or matches a directory created
-    via ``make_dirs``.
+    free of filesystem side effects. ``remove_file`` / ``remove_tree``
+    are idempotent per the Protocol contract. ``is_dir`` reports True
+    for any path that is the parent of an entry or matches a directory
+    created via ``make_dirs``.
 
     The fake captures enough state to model the download flow:
     - ``files`` — ``{path: bytes}`` snapshot of the virtual filesystem.
@@ -363,9 +364,9 @@ class FakeDownloadFileAdapter:
         self.disk_free_bytes = bytes_free
 
     def exists(self, path: str) -> bool:
-        return path in self.files or self.isdir(path)
+        return path in self.files or self.is_dir(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         if path in self.remove_failures:
             raise OSError(f"simulated remove failure: {path}")
         self.files.pop(path, None)
@@ -393,7 +394,7 @@ class FakeDownloadFileAdapter:
     def disk_free(self, path: str) -> int:
         return self.disk_free_bytes
 
-    def isdir(self, path: str) -> bool:
+    def is_dir(self, path: str) -> bool:
         if path in self.dirs:
             return True
         prefix = path.rstrip("/") + "/"
@@ -401,7 +402,7 @@ class FakeDownloadFileAdapter:
 
     def walk_files_matching_suffixes(self, base_dir: str, suffixes: tuple[str, ...]) -> list[str]:
         self.walk_calls.append((base_dir, suffixes))
-        if not self.isdir(base_dir):
+        if not self.is_dir(base_dir):
             return []
         prefix = base_dir.rstrip("/") + "/"
         matches: list[str] = []
@@ -463,22 +464,22 @@ class FakeDownloadFileAdapter:
         self.tmp_files.discard(tmp_path)
 
 
-class FakeMigrationFileAdapter:
-    """In-memory ``MigrationFileAdapter`` for tests.
+class FakeMigrationFileStore:
+    """In-memory ``MigrationFileStore`` for tests.
 
     Backed by a ``dict[str, bytes]`` so file ops are deterministic and
-    free of filesystem side effects. ``remove`` / ``remove_tree`` are
-    idempotent per the Protocol contract. ``is_dir`` reports True for
-    any path that is the parent of an entry or matches a directory
+    free of filesystem side effects. ``remove_file`` / ``remove_tree``
+    are idempotent per the Protocol contract. ``is_dir`` reports True
+    for any path that is the parent of an entry or matches a directory
     created via ``make_dirs``.
 
     Failure-injection seams support partial-failure tests:
     - ``move_failures``, ``rename_failures``, ``remove_failures``,
-      ``getmtime_failures`` — sets of paths that should raise
+      ``get_mtime_failures`` — sets of paths that should raise
       ``OSError`` on the respective operation even when the path is
       otherwise present in ``files``.
     - ``mtimes`` — explicit ``{path: mtime}`` overrides for
-      ``getmtime``; missing entries fall back to the order they were
+      ``get_mtime``; missing entries fall back to the order they were
       added (monotonically increasing).
     - ``walk_returns`` — explicit ``{base_dir: triples}`` override for
       ``walk_files``; when absent, triples are synthesised from the
@@ -491,7 +492,7 @@ class FakeMigrationFileAdapter:
         self.move_failures: set[str] = set()
         self.rename_failures: set[str] = set()
         self.remove_failures: set[str] = set()
-        self.getmtime_failures: set[str] = set()
+        self.get_mtime_failures: set[str] = set()
         self.mtimes: dict[str, float] = {}
         self.walk_returns: dict[str, list[tuple[str, list[str], list[str]]]] | None = None
         self.move_calls: list[tuple[str, str]] = []
@@ -509,7 +510,7 @@ class FakeMigrationFileAdapter:
     def make_dirs(self, path: str) -> None:
         self.dirs.add(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         if path in self.remove_failures:
             raise OSError(f"simulated remove failure: {path}")
         self.files.pop(path, None)
@@ -540,9 +541,9 @@ class FakeMigrationFileAdapter:
             raise FileNotFoundError(src)
         self.files[dst] = self.files.pop(src)
 
-    def getmtime(self, path: str) -> float:
-        if path in self.getmtime_failures:
-            raise OSError(f"simulated getmtime failure: {path}")
+    def get_mtime(self, path: str) -> float:
+        if path in self.get_mtime_failures:
+            raise OSError(f"simulated get_mtime failure: {path}")
         if path in self.mtimes:
             return self.mtimes[path]
         if path not in self.files:
@@ -635,13 +636,13 @@ class FakeDownloadQueueAdapter:
         return out
 
 
-class FakeFirmwareFileAdapter:
-    """In-memory ``FirmwareFileAdapter`` for tests.
+class FakeFirmwareFileStore:
+    """In-memory ``FirmwareFileStore`` for tests.
 
     Backed by a ``dict[str, bytes]`` so file ops are deterministic and
-    free of filesystem side effects. ``remove`` is idempotent per the
-    Protocol contract. ``exists`` reports True for any stored file or
-    any path explicitly registered as a directory (via ``make_dirs``).
+    free of filesystem side effects. ``remove_file`` is idempotent per
+    the Protocol contract. ``exists`` reports True for any stored file
+    or any path explicitly registered as a directory (via ``make_dirs``).
 
     Failure injection:
     - ``remove_failures`` — paths that raise ``OSError`` when removed,
@@ -663,7 +664,7 @@ class FakeFirmwareFileAdapter:
         prefix = path.rstrip("/") + "/"
         return any(stored.startswith(prefix) for stored in self.files)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         if path in self.remove_failures:
             raise OSError(f"simulated remove failure: {path}")
         self.files.pop(path, None)
@@ -691,8 +692,8 @@ class FakeFirmwareFileAdapter:
         return self.files[path]
 
 
-class FakeRomFileAdapter:
-    """In-memory ``RomFileAdapter`` for tests.
+class FakeRomFileStore:
+    """In-memory ``RomFileStore`` for tests.
 
     Backed by a ``dict[str, bytes]`` for files and a ``set[str]`` for
     explicit directories so file ops are deterministic and free of
@@ -755,17 +756,17 @@ class FakeRomFileAdapter:
                 self.dirs.discard(d)
 
 
-class FakeSaveFileAdapter:
-    """In-memory ``SaveFileAdapter`` for tests.
+class FakeSaveFileStore:
+    """In-memory ``SaveFileStore`` for tests.
 
     Backed by a ``dict[str, bytes]`` so file ops are deterministic and
-    free of filesystem side effects. ``remove`` is idempotent per the
-    Protocol contract. ``is_dir`` reports True for any path explicitly
-    registered as a directory (via ``make_dirs``) or any path that is
-    the parent of a stored file. ``make_temp_path`` returns a
-    monotonically incrementing path under ``/tmp`` and registers it as
-    an empty file so subsequent ``remove`` calls behave like the real
-    adapter.
+    free of filesystem side effects. ``remove_file`` is idempotent per
+    the Protocol contract. ``is_dir`` reports True for any path
+    explicitly registered as a directory (via ``make_dirs``) or any
+    path that is the parent of a stored file. ``make_temp_path`` returns
+    a monotonically incrementing path under ``/tmp`` and registers it as
+    an empty file so subsequent ``remove_file`` calls behave like the
+    real adapter.
 
     Mtime/size behaviour: ``get_mtime`` returns the value set via
     ``set_mtime`` (or the monotonically-incrementing default assigned
@@ -812,7 +813,7 @@ class FakeSaveFileAdapter:
     def make_dirs(self, path: str) -> None:
         self.dirs.add(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         self.remove_calls.append(path)
         if path in self.remove_failures:
             raise OSError(f"simulated remove failure: {path}")

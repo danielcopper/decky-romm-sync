@@ -35,7 +35,7 @@ class SgdbArtworkCacheAdapter:
         """Return True when *path* refers to an existing file or directory."""
         return os.path.exists(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         with contextlib.suppress(FileNotFoundError):
             os.remove(path)
@@ -44,7 +44,7 @@ class SgdbArtworkCacheAdapter:
         """Return the entries in *directory*."""
         return os.listdir(directory)
 
-    def isdir(self, path: str) -> bool:
+    def is_dir(self, path: str) -> bool:
         """Return True when *path* exists and is a directory."""
         return os.path.isdir(path)
 

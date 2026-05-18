@@ -33,7 +33,7 @@ if TYPE_CHECKING:
         DebugLogger,
         RetryStrategy,
         RommSyncApi,
-        SaveFileAdapter,
+        SaveFileStore,
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
@@ -61,7 +61,7 @@ class RollbackOrchestrator:
         matrix: MatrixExecutor,
         retry: RetryStrategy,
         clock: Clock,
-        save_file: SaveFileAdapter,
+        save_file_store: SaveFileStore,
         logger: logging.Logger,
         log_debug: DebugLogger,
     ) -> None:
@@ -71,7 +71,7 @@ class RollbackOrchestrator:
         self._matrix = matrix
         self._retry = retry
         self._clock = clock
-        self._save_file = save_file
+        self._save_file_store = save_file_store
         self._logger = logger
         self._log_debug = log_debug
 
@@ -258,9 +258,9 @@ class RollbackOrchestrator:
         """
         target = _local_save_target(server, rom_name)
         local_path = os.path.join(saves_dir, target)
-        if not self._save_file.is_file(local_path):
+        if not self._save_file_store.is_file(local_path):
             raise FileNotFoundError(f"Local save not found: {local_path}")
-        local_hash = self._save_file.checksum_md5(local_path)
+        local_hash = self._save_file_store.checksum_md5(local_path)
         try:
             server_hash = self._retry.with_retry(lambda: self._matrix.get_server_save_hash(server))
         except Exception:
@@ -278,8 +278,8 @@ class RollbackOrchestrator:
             file_state.last_sync_at = self._clock.now().isoformat()
             file_state.last_sync_server_updated_at = server.get("updated_at", "") or ""
             file_state.last_sync_server_size = server.get("file_size_bytes")
-            file_state.last_sync_local_mtime = self._save_file.get_mtime(local_path)
-            file_state.last_sync_local_size = self._save_file.get_size(local_path)
+            file_state.last_sync_local_mtime = self._save_file_store.get_mtime(local_path)
+            file_state.last_sync_local_size = self._save_file_store.get_size(local_path)
             self._state_svc.save_state()
             return
 

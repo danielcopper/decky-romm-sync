@@ -2,7 +2,7 @@
 
 Owns the runtime decisions for relocating ROMs, BIOS, and save files
 when the RetroDECK home path changes or RetroArch save sorting flips.
-All raw filesystem I/O is delegated to the ``MigrationFileAdapter``
+All raw filesystem I/O is delegated to the ``MigrationFileStore``
 Protocol; conflict resolution, state mutations, and event emission
 remain the service's responsibility.
 """
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         CoreNameProviderFn,
         CoreResolverFn,
         EventEmitter,
-        MigrationFileAdapter,
+        MigrationFileStore,
         RetroArchSaveSortingProvider,
         RetroDeckPaths,
         StatePersister,
@@ -42,7 +42,7 @@ class MigrationServiceConfig:
     time.
     """
 
-    migration_files: MigrationFileAdapter
+    migration_file_store: MigrationFileStore
     state: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -59,7 +59,7 @@ class MigrationService:
     """Handles RetroDECK path change detection and file migration."""
 
     def __init__(self, *, config: MigrationServiceConfig) -> None:
-        self._migration_files = config.migration_files
+        self._migration_file_store = config.migration_file_store
         self._state = config.state
         self._loop = config.loop
         self._logger = config.logger
@@ -79,7 +79,7 @@ class MigrationService:
         if not current_home:
             return
 
-        if not self._migration_files.is_dir(current_home):
+        if not self._migration_file_store.is_dir(current_home):
             self._logger.warning(f"RetroDECK home path does not exist, skipping: {current_home}")
             return
 
@@ -199,7 +199,7 @@ class MigrationService:
         items = []
         old_bios = os.path.join(old_home, "bios")
         new_bios = self._retrodeck_paths.bios_path() if self._retrodeck_paths else ""
-        if not self._migration_files.is_dir(old_bios):
+        if not self._migration_file_store.is_dir(old_bios):
             return items
         downloaded_bios = self._state.get("downloaded_bios", {})
         for file_name, reg_entry in self._get_bios_files_index().items():
@@ -208,7 +208,7 @@ class MigrationService:
             firmware_path = reg_entry.get("firmware_path", file_name)
             old_file = os.path.join(old_bios, firmware_path)
             new_file = os.path.join(new_bios, firmware_path)
-            if not self._migration_files.exists(old_file):
+            if not self._migration_file_store.exists(old_file):
                 continue
             items.append((file_name, old_file, new_file, lambda: None, "bios"))
         return items
@@ -223,9 +223,9 @@ class MigrationService:
         items = []
         old_saves = os.path.join(old_home, "saves")
         new_saves = self._retrodeck_paths.saves_path() if self._retrodeck_paths else ""
-        if not self._migration_files.is_dir(old_saves):
+        if not self._migration_file_store.is_dir(old_saves):
             return items
-        for dirpath, _dirs, filenames in self._migration_files.walk_files(old_saves):
+        for dirpath, _dirs, filenames in self._migration_file_store.walk_files(old_saves):
             rel_dir = os.path.relpath(dirpath, old_saves)
             # Skip any descendant of a hidden directory by inspecting the
             # relative-path segments. ``rel_dir == "."`` for the saves
@@ -258,7 +258,7 @@ class MigrationService:
         """Return sorted list of labels where both source and destination exist."""
         conflict_set = set()
         for label, old_path, new_path, _updater, _kind in items:
-            if self._migration_files.exists(new_path) and self._migration_files.exists(old_path):
+            if self._migration_file_store.exists(new_path) and self._migration_file_store.exists(old_path):
                 conflict_set.add(label)
         return sorted(conflict_set)
 
@@ -266,14 +266,14 @@ class MigrationService:
         """Migrate a single file/directory item. Updates counts and errors in place."""
         count_key = kind if kind != "rom_dir" else None
 
-        if not self._migration_files.exists(old_path):
-            if self._migration_files.exists(new_path):
+        if not self._migration_file_store.exists(old_path):
+            if self._migration_file_store.exists(new_path):
                 state_updater()
                 if count_key:
                     counts[count_key] = counts.get(count_key, 0) + 1
             return
 
-        if self._migration_files.exists(new_path):
+        if self._migration_file_store.exists(new_path):
             self._migrate_conflict_item(
                 label,
                 old_path,
@@ -287,8 +287,8 @@ class MigrationService:
             return
 
         try:
-            self._migration_files.make_dirs(os.path.dirname(new_path))
-            self._migration_files.move(old_path, new_path)
+            self._migration_file_store.make_dirs(os.path.dirname(new_path))
+            self._migration_file_store.move(old_path, new_path)
             state_updater()
             if count_key:
                 counts[count_key] = counts.get(count_key, 0) + 1
@@ -311,12 +311,12 @@ class MigrationService:
         """Handle migration when destination already exists."""
         if conflict_strategy == "overwrite":
             try:
-                if self._migration_files.is_dir(new_path):
-                    self._migration_files.remove_tree(new_path)
+                if self._migration_file_store.is_dir(new_path):
+                    self._migration_file_store.remove_tree(new_path)
                 else:
-                    self._migration_files.remove(new_path)
-                self._migration_files.make_dirs(os.path.dirname(new_path))
-                self._migration_files.move(old_path, new_path)
+                    self._migration_file_store.remove_file(new_path)
+                self._migration_file_store.make_dirs(os.path.dirname(new_path))
+                self._migration_file_store.move(old_path, new_path)
                 state_updater()
                 if count_key:
                     counts[count_key] = counts.get(count_key, 0) + 1
@@ -575,7 +575,7 @@ class MigrationService:
             filename = rom_name + ext
             old_file = os.path.join(old_dir, filename)
             new_file = os.path.join(new_dir, filename)
-            if self._migration_files.exists(old_file):
+            if self._migration_file_store.exists(old_file):
                 items.append((filename, old_file, new_file, lambda: None, "save"))
 
     def _get_save_sort_migration_status_io(self, old_settings: dict, new_settings: dict) -> dict:
@@ -635,8 +635,8 @@ class MigrationService:
         fails the server still holds the authoritative copy.
         """
         try:
-            old_mtime = self._migration_files.getmtime(old_path)
-            new_mtime = self._migration_files.getmtime(new_path)
+            old_mtime = self._migration_file_store.get_mtime(old_path)
+            new_mtime = self._migration_file_store.get_mtime(new_path)
         except OSError as e:
             errors.append(f"{label}: {e}")
             self._logger.error(f"Save-sort conflict mtime read failed: {old_path}: {e}")
@@ -645,7 +645,7 @@ class MigrationService:
         if new_mtime >= old_mtime:
             # Destination is newer — keep it, delete the stale orphan at old_path.
             try:
-                self._migration_files.remove(old_path)
+                self._migration_file_store.remove_file(old_path)
                 state_updater()
                 counts[count_key] = counts.get(count_key, 0) + 1
                 self._logger.info(f"Save-sort conflict: kept newer {new_path}, removed stale {old_path}")
@@ -656,8 +656,8 @@ class MigrationService:
 
         # Source is newer — atomically overwrite destination.
         try:
-            self._migration_files.make_dirs(os.path.dirname(new_path))
-            self._migration_files.rename(old_path, new_path)
+            self._migration_file_store.make_dirs(os.path.dirname(new_path))
+            self._migration_file_store.rename(old_path, new_path)
             state_updater()
             counts[count_key] = counts.get(count_key, 0) + 1
             self._logger.info(f"Save-sort conflict: moved newer {old_path} -> {new_path}")
@@ -680,7 +680,7 @@ class MigrationService:
         counts: dict[str, int] = {"rom": 0, "bios": 0, "save": 0}
         errors: list[str] = []
         for label, old_path, new_path, updater, _kind in items:
-            if self._migration_files.exists(old_path) and self._migration_files.exists(new_path):
+            if self._migration_file_store.exists(old_path) and self._migration_file_store.exists(new_path):
                 self._resolve_save_sort_conflict(label, old_path, new_path, updater, counts, "save", errors)
             else:
                 self._migrate_single_item(label, old_path, new_path, updater, "save", None, counts, errors)

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeFirmwareFileAdapter, FakeRetroDeckPaths
+from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeFirmwareFileStore, FakeRetroDeckPaths
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
 
@@ -53,7 +53,7 @@ def plugin():
             clock=_make_clock(),
             state_persister=MagicMock(),
             firmware_cache_persister=FakeFirmwareCachePersister(),
-            firmware_files=FirmwareFileAdapter(),
+            firmware_file_store=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
         ),
@@ -1444,7 +1444,7 @@ class TestBiosFilesIndexUnloadedRaises:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
@@ -1467,7 +1467,7 @@ class TestBiosFilesIndexUnloadedRaises:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
@@ -1614,7 +1614,7 @@ class TestFirmwareListCache:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
@@ -1682,7 +1682,7 @@ class TestFirmwareListCache:
                 clock=clock,
                 state_persister=MagicMock(),
                 firmware_cache_persister=persister,
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
@@ -1765,7 +1765,7 @@ class TestCheckPlatformBiosCached:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=core_info,
             ),
@@ -1845,7 +1845,7 @@ class TestCheckPlatformBiosCached:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=core_info,
             ),
@@ -1880,7 +1880,7 @@ class TestFirmwareCachePersistence:
                 clock=clock,
                 state_persister=MagicMock(),
                 firmware_cache_persister=persister,
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
@@ -1904,7 +1904,7 @@ class TestFirmwareCachePersistence:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=persister,
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
@@ -1926,7 +1926,7 @@ class TestFirmwareCachePersistence:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=persister,
-                firmware_files=FirmwareFileAdapter(),
+                firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),
@@ -2022,9 +2022,9 @@ class TestDeletePlatformBiosIOLogsWarnings:
         """A per-file OSError surfaces as a logger.warning and an error entry."""
         import logging
 
-        fake_files = FakeFirmwareFileAdapter()
+        fake_files = FakeFirmwareFileStore()
         fake_files.remove_failures.add("/fake/bios/scph5501.bin")
-        fw._firmware_files = fake_files
+        fw._firmware_file_store = fake_files
 
         async def mock_check(slug, rom_filename=None):
             return {
@@ -2100,7 +2100,7 @@ class TestBadPathFirmwareCallables:
                 clock=_make_clock(),
                 state_persister=MagicMock(),
                 firmware_cache_persister=firmware_cache_persister,
-                firmware_files=FakeFirmwareFileAdapter(),
+                firmware_file_store=FakeFirmwareFileStore(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
             ),

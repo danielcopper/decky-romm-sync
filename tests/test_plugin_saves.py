@@ -78,7 +78,7 @@ def plugin(tmp_path):
     # Wire services with FakeSaveApi sharing the SaveFileAdapter so download
     # bytes land on the same filesystem view the service inspects.
     save_file_adapter = SaveFileAdapter()
-    fake_api = FakeSaveApi(save_file=save_file_adapter)
+    fake_api = FakeSaveApi(save_file_store=save_file_adapter)
     p._save_sync_state = SaveService.make_default_state()
     saves_path = str(tmp_path / "retrodeck" / "saves")
 
@@ -99,7 +99,7 @@ def plugin(tmp_path):
                     logger=logging.getLogger("test"),
                 )
             ),
-            save_file=save_file_adapter,
+            save_file_store=save_file_adapter,
             retrodeck_paths=FakeRetroDeckPaths(
                 saves=saves_path,
                 roms=str(tmp_path / "retrodeck" / "roms"),
@@ -454,7 +454,7 @@ class TestPostExitSync:
         # with state is what detect will discover.
         real_migration = MigrationService(
             config=MigrationServiceConfig(
-                migration_files=MigrationFileAdapter(),
+                migration_file_store=MigrationFileAdapter(),
                 state=plugin._state,
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),

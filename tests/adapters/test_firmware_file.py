@@ -32,18 +32,18 @@ class TestRemove:
     def test_removes_existing(self, fw_files, tmp_path):
         f = tmp_path / "bios.bin"
         f.write_bytes(b"x")
-        fw_files.remove(str(f))
+        fw_files.remove_file(str(f))
         assert not f.exists()
 
     def test_missing_is_noop(self, fw_files, tmp_path):
         # idempotent: must not raise
-        fw_files.remove(str(tmp_path / "missing.bin"))
+        fw_files.remove_file(str(tmp_path / "missing.bin"))
 
     def test_propagates_non_filenotfound_errors(self, fw_files, tmp_path):
         # Removing a non-empty directory raises IsADirectoryError or OSError —
         # anything other than FileNotFoundError must surface.
         with pytest.raises(OSError):
-            fw_files.remove(str(tmp_path))
+            fw_files.remove_file(str(tmp_path))
 
 
 class TestRename:

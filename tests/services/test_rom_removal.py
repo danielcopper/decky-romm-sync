@@ -7,7 +7,7 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeDownloadQueueCleanup, FakeRetroDeckPaths, FakeRomFileAdapter
+from conftest import FakeDownloadQueueCleanup, FakeRetroDeckPaths, FakeRomFileStore
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 sys.path.insert(0, os.path.dirname(__file__))
@@ -41,8 +41,8 @@ def queue_cleanup() -> FakeDownloadQueueCleanup:
 
 
 @pytest.fixture
-def rom_files() -> FakeRomFileAdapter:
-    return FakeRomFileAdapter()
+def rom_files() -> FakeRomFileStore:
+    return FakeRomFileStore()
 
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def service(state, save_sync_state, logger, queue_cleanup, rom_files):
             loop=asyncio.new_event_loop(),
             state_persister=MagicMock(),
             save_sync_state_writer=MagicMock(),
-            rom_files=rom_files,
+            rom_file_store=rom_files,
             retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
             download_queue_cleanup=queue_cleanup,
         ),
@@ -469,7 +469,7 @@ class TestDownloadQueueCleanup:
     @pytest.mark.asyncio
     async def test_no_cleanup_dependency_is_safe(self, state, save_sync_state, logger):
         """Without a ``DownloadQueueCleanup`` wired, eviction is skipped."""
-        rom_files = FakeRomFileAdapter()
+        rom_files = FakeRomFileStore()
         rom_path = f"{_ROMS_BASE}/n64/g.z64"
         rom_files.files[rom_path] = b"\x00" * 100
         state["installed_roms"]["7"] = {"rom_id": 7, "file_path": rom_path, "system": "n64"}
@@ -482,7 +482,7 @@ class TestDownloadQueueCleanup:
                 loop=asyncio.get_event_loop(),
                 state_persister=MagicMock(),
                 save_sync_state_writer=MagicMock(),
-                rom_files=rom_files,
+                rom_file_store=rom_files,
                 retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
                 download_queue_cleanup=None,
             ),

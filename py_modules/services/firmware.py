@@ -23,7 +23,7 @@ if TYPE_CHECKING:
         Clock,
         CoreInfoProvider,
         FirmwareCachePersister,
-        FirmwareFileAdapter,
+        FirmwareFileStore,
         RetroDeckPaths,
         RommFirmwareApi,
         StatePersister,
@@ -51,7 +51,7 @@ class FirmwareServiceConfig:
     clock: Clock
     state_persister: StatePersister
     firmware_cache_persister: FirmwareCachePersister
-    firmware_files: FirmwareFileAdapter
+    firmware_file_store: FirmwareFileStore
     retrodeck_paths: RetroDeckPaths
     core_info: CoreInfoProvider
 
@@ -72,7 +72,7 @@ class FirmwareService:
         self._clock = config.clock
         self._state_persister = config.state_persister
         self._firmware_cache_persister = config.firmware_cache_persister
-        self._firmware_files = config.firmware_files
+        self._firmware_file_store = config.firmware_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._core_info = config.core_info
         self._bios_registry: dict = {}
@@ -101,9 +101,9 @@ class FirmwareService:
         # then defaults/ subdirectory (dev deploys via mise run deploy)
         root_path = os.path.join(self._plugin_dir, "bios_registry.json")
         defaults_path = os.path.join(self._plugin_dir, "defaults", "bios_registry.json")
-        registry_path = root_path if self._firmware_files.exists(root_path) else defaults_path
+        registry_path = root_path if self._firmware_file_store.exists(root_path) else defaults_path
         try:
-            data = self._firmware_files.read_bytes(registry_path)
+            data = self._firmware_file_store.read_bytes(registry_path)
             self._bios_registry = json.loads(data)
             # Build flat reverse index: {filename: {entry_data + "platform": slug}}
             for platform, files in self._bios_registry.get("platforms", {}).items():
@@ -232,7 +232,7 @@ class FirmwareService:
         items = [
             {
                 "file_name": fw.get("file_name", ""),
-                "downloaded": self._firmware_files.exists(self._firmware_dest_path(fw)),
+                "downloaded": self._firmware_file_store.exists(self._firmware_dest_path(fw)),
                 "dest": self._firmware_dest_path(fw),
             }
             for fw in self._firmware_cache
@@ -279,7 +279,7 @@ class FirmwareService:
                     "file_name": fw.get("file_name", ""),
                     "size": fw.get("file_size_bytes", 0),
                     "md5": fw.get("md5_hash", ""),
-                    "downloaded": self._firmware_files.exists(dest),
+                    "downloaded": self._firmware_file_store.exists(dest),
                 }
             )
         return platforms_map
@@ -300,7 +300,7 @@ class FirmwareService:
                         "file_name": file_name,
                         "size": 0,
                         "md5": reg_entry.get("md5", ""),
-                        "downloaded": self._firmware_files.exists(dest),
+                        "downloaded": self._firmware_file_store.exists(dest),
                     }
                 )
         return platforms_map
@@ -344,14 +344,14 @@ class FirmwareService:
     def _download_firmware_post_io(self, fw, firmware_id, dest, tmp_path):
         """Sync helper for download_firmware — rename, hash verification, state save in executor."""
         file_name = fw.get("file_name", "")
-        self._firmware_files.rename(tmp_path, dest)
+        self._firmware_file_store.rename(tmp_path, dest)
 
         # Compute local MD5 once (used for both server-hash and registry-hash checks)
         expected_md5 = fw.get("md5_hash", "")
         reg_entry = self.bios_files_index.get(file_name)
         reg_md5 = reg_entry.get("md5", "") if reg_entry else ""
 
-        local_md5 = self._firmware_files.checksum_md5(dest) if (expected_md5 or reg_md5) else None
+        local_md5 = self._firmware_file_store.checksum_md5(dest) if (expected_md5 or reg_md5) else None
 
         md5_match = local_md5 == expected_md5 if expected_md5 and local_md5 is not None else None
         registry_hash_valid = local_md5.lower() == reg_md5.lower() if reg_md5 and local_md5 is not None else None
@@ -381,10 +381,10 @@ class FirmwareService:
         tmp_path = dest + ".tmp"
 
         try:
-            await self._loop.run_in_executor(None, self._firmware_files.make_dirs, os.path.dirname(dest))
+            await self._loop.run_in_executor(None, self._firmware_file_store.make_dirs, os.path.dirname(dest))
             await self._loop.run_in_executor(None, self._romm_api.download_firmware, firmware_id, file_name, tmp_path)
         except Exception as e:
-            await self._loop.run_in_executor(None, self._firmware_files.remove, tmp_path)
+            await self._loop.run_in_executor(None, self._firmware_file_store.remove_file, tmp_path)
             self._logger.error(f"Failed to download firmware {file_name}: {e}")
             return error_response(e)
 
@@ -418,7 +418,7 @@ class FirmwareService:
         errors = []
         for fw in platform_firmware:
             dest = self._firmware_dest_path(fw)
-            if self._firmware_files.exists(dest):
+            if self._firmware_file_store.exists(dest):
                 continue
             result = await self.download_firmware(fw["id"])
             if result.get("success"):
@@ -446,7 +446,7 @@ class FirmwareService:
         errors = []
         for fw in platform_firmware:
             dest = self._firmware_dest_path(fw)
-            if self._firmware_files.exists(dest):
+            if self._firmware_file_store.exists(dest):
                 continue
             result = await self.download_firmware(fw["id"])
             if result.get("success"):
@@ -497,7 +497,7 @@ class FirmwareService:
             items = [
                 {
                     "file_name": fw.get("file_name", ""),
-                    "downloaded": self._firmware_files.exists(self._firmware_dest_path(fw)),
+                    "downloaded": self._firmware_file_store.exists(self._firmware_dest_path(fw)),
                     "dest": self._firmware_dest_path(fw),
                 }
                 for fw in firmware_list
@@ -511,7 +511,7 @@ class FirmwareService:
             registry_items = [
                 {
                     "file_name": file_name,
-                    "downloaded": self._firmware_files.exists(
+                    "downloaded": self._firmware_file_store.exists(
                         os.path.join(bios_base, reg_entry.get("firmware_path", file_name))
                     ),
                     "dest": os.path.join(bios_base, reg_entry.get("firmware_path", file_name)),
@@ -552,7 +552,7 @@ class FirmwareService:
             if not f.downloaded:
                 continue
             try:
-                self._firmware_files.remove(f.local_path)
+                self._firmware_file_store.remove_file(f.local_path)
             except OSError as e:
                 self._logger.warning(f"Failed to remove BIOS file {f.file_name}: {e}")
                 errors.append(f"{f.file_name}: {e}")

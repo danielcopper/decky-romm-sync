@@ -32,7 +32,7 @@ if TYPE_CHECKING:
         DebugLogger,
         RetryStrategy,
         RommSaveApi,
-        SaveFileAdapter,
+        SaveFileStore,
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
@@ -65,7 +65,7 @@ class SlotsServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
-    save_file: SaveFileAdapter
+    save_file_store: SaveFileStore
     log_debug: DebugLogger
     get_active_core: CoreResolverFn
 
@@ -92,7 +92,7 @@ class SlotsService:
             retry=config.retry,
             loop=config.loop,
             clock=config.clock,
-            save_file=config.save_file,
+            save_file_store=config.save_file_store,
             log_debug=config.log_debug,
         )
         self._setup = SetupWizard(
@@ -103,7 +103,7 @@ class SlotsService:
             retry=config.retry,
             loop=config.loop,
             logger=config.logger,
-            save_file=config.save_file,
+            save_file_store=config.save_file_store,
             log_debug=config.log_debug,
             get_active_core=config.get_active_core,
         )

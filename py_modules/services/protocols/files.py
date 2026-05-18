@@ -18,8 +18,8 @@ from typing import Protocol
 class CoverArtFileStore(Protocol):
     """Filesystem seam for cover-art file operations.
 
-    Owns the raw POSIX calls (``exists``, ``remove``, atomic ``rename``,
-    ``listdir``, ``isdir``, ``read_bytes``) ArtworkService uses to manage
+    Owns the raw POSIX calls (``exists``, ``remove_file``, atomic ``rename``,
+    ``listdir``, ``is_dir``, ``read_bytes``) ArtworkService uses to manage
     cover art under the Steam grid directory. Path construction, registry
     lookups, and orphan detection remain a service concern; this Protocol
     exposes only the I/O seams.
@@ -32,7 +32,7 @@ class CoverArtFileStore(Protocol):
         """Return True when *path* refers to an existing file or directory."""
         ...
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         ...
 
@@ -44,7 +44,7 @@ class CoverArtFileStore(Protocol):
         """Return the entries in *directory*."""
         ...
 
-    def isdir(self, path: str) -> bool:
+    def is_dir(self, path: str) -> bool:
         """Return True when *path* exists and is a directory."""
         ...
 
@@ -53,7 +53,7 @@ class CoverArtFileStore(Protocol):
         ...
 
 
-class DownloadFileAdapter(Protocol):
+class DownloadFileStore(Protocol):
     """Filesystem seam for ROM download target operations.
 
     Owns the raw POSIX calls DownloadService uses to manage downloaded
@@ -71,7 +71,7 @@ class DownloadFileAdapter(Protocol):
         """Return True when *path* refers to an existing file or directory."""
         ...
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         ...
 
@@ -160,7 +160,7 @@ class DownloadQueueAdapter(Protocol):
         ...
 
 
-class FirmwareFileAdapter(Protocol):
+class FirmwareFileStore(Protocol):
     """Filesystem seam for firmware/BIOS file operations.
 
     Owns the raw POSIX calls FirmwareService uses to manage firmware
@@ -178,7 +178,7 @@ class FirmwareFileAdapter(Protocol):
         """Return True when *path* refers to an existing file or directory."""
         ...
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         ...
 
@@ -199,7 +199,7 @@ class FirmwareFileAdapter(Protocol):
         ...
 
 
-class MigrationFileAdapter(Protocol):
+class MigrationFileStore(Protocol):
     """Filesystem seam for RetroDECK path and save-sort migration I/O.
 
     Owns the raw POSIX calls MigrationService uses to walk source
@@ -232,7 +232,7 @@ class MigrationFileAdapter(Protocol):
         """Create *path* and any missing parents. Idempotent."""
         ...
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete the file at *path*. Idempotent: a missing file is not an error."""
         ...
 
@@ -259,7 +259,7 @@ class MigrationFileAdapter(Protocol):
         """
         ...
 
-    def getmtime(self, path: str) -> float:
+    def get_mtime(self, path: str) -> float:
         """Return the mtime of *path* as a Unix timestamp."""
         ...
 
@@ -273,7 +273,7 @@ class MigrationFileAdapter(Protocol):
         ...
 
 
-class RomFileAdapter(Protocol):
+class RomFileStore(Protocol):
     """Filesystem seam for installed ROM file operations.
 
     Owns the raw POSIX calls RomRemovalService uses when physically
@@ -302,7 +302,7 @@ class RomFileAdapter(Protocol):
         ...
 
 
-class SaveFileAdapter(Protocol):
+class SaveFileStore(Protocol):
     """Filesystem seam for local save file operations.
 
     Owns the raw POSIX, ``open()``, ``tempfile``, and ``hashlib``-on-file
@@ -332,7 +332,7 @@ class SaveFileAdapter(Protocol):
         """Create *path* and any missing parents. Idempotent."""
         ...
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         ...
 
@@ -398,7 +398,7 @@ class SgdbArtworkCache(Protocol):
         """Return True when *path* refers to an existing file or directory."""
         ...
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         ...
 
@@ -406,7 +406,7 @@ class SgdbArtworkCache(Protocol):
         """Return the entries in *directory*."""
         ...
 
-    def isdir(self, path: str) -> bool:
+    def is_dir(self, path: str) -> bool:
         """Return True when *path* exists and is a directory."""
         ...
 

@@ -5,7 +5,7 @@ locations, create destination directories, and relocate files when the
 RetroDECK home path changes or RetroArch save sorting flips. Path
 construction, conflict policy, and state updates remain a service
 concern; this adapter exposes only the I/O seams declared by
-``services.protocols.MigrationFileAdapter``.
+``services.protocols.MigrationFileStore``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import shutil
 class MigrationFileAdapter:
     """Synchronous filesystem operations for RetroDECK migration flows.
 
-    Implements the ``MigrationFileAdapter`` Protocol. Methods are
+    Implements the ``MigrationFileStore`` Protocol. Methods are
     synchronous — services that call from an async context offload via
     ``loop.run_in_executor``.
     """
@@ -35,7 +35,7 @@ class MigrationFileAdapter:
         """Create *path* and any missing parents. Idempotent."""
         os.makedirs(path, exist_ok=True)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete the file at *path*. Idempotent: a missing file is not an error."""
         with contextlib.suppress(FileNotFoundError):
             os.remove(path)
@@ -60,7 +60,7 @@ class MigrationFileAdapter:
         """
         os.replace(src, dst)
 
-    def getmtime(self, path: str) -> float:
+    def get_mtime(self, path: str) -> float:
         """Return the mtime of *path* as a Unix timestamp."""
         return os.path.getmtime(path)
 

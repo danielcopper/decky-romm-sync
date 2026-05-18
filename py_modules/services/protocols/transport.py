@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 
-class SteamConfigAdapter(Protocol):
+class SteamConfigStore(Protocol):
     """Protocol for Steam configuration operations."""
 
     def grid_dir(self) -> str | None: ...

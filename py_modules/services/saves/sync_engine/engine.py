@@ -35,7 +35,7 @@ if TYPE_CHECKING:
         MigrationPendingFn,
         RetryStrategy,
         RommSyncApi,
-        SaveFileAdapter,
+        SaveFileStore,
         SaveSortChangeFn,
     )
     from services.saves.rom_info import RomInfoService
@@ -67,7 +67,7 @@ class SyncEngineConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
-    save_file: SaveFileAdapter
+    save_file_store: SaveFileStore
     log_debug: DebugLogger
     get_active_core: CoreResolverFn
     hostname_provider: HostnameProvider
@@ -89,7 +89,7 @@ class SyncEngine:
         self._loop = config.loop
         self._logger = config.logger
         self._clock = config.clock
-        self._save_file = config.save_file
+        self._save_file_store = config.save_file_store
         self._log_debug = config.log_debug
         self._get_active_core = config.get_active_core
         self._hostname_provider = config.hostname_provider
@@ -108,7 +108,7 @@ class SyncEngine:
             retry=config.retry,
             logger=config.logger,
             clock=config.clock,
-            save_file=config.save_file,
+            save_file_store=config.save_file_store,
             log_debug=config.log_debug,
             get_active_core=config.get_active_core,
         )
@@ -127,7 +127,7 @@ class SyncEngine:
             matrix=self._matrix,
             retry=config.retry,
             clock=config.clock,
-            save_file=config.save_file,
+            save_file_store=config.save_file_store,
             logger=config.logger,
             log_debug=config.log_debug,
         )

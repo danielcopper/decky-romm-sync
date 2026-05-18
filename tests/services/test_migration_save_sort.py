@@ -8,7 +8,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import FakeMigrationFileAdapter, FakeRetroDeckPaths
+from conftest import FakeMigrationFileStore, FakeRetroDeckPaths
 
 from adapters.migration_file import MigrationFileAdapter
 from services.migration import MigrationService, MigrationServiceConfig
@@ -30,13 +30,13 @@ def _make_service(
     state_overrides=None,
     active_core=_active_core,
     get_core_name=_no_corename,
-    migration_files=None,
+    migration_file_store=None,
 ):
     """Create a MigrationService with sensible defaults for sort migration tests.
 
     Returns (service, save_state_mock) so callers can assert on save_state calls.
-    Pass ``migration_files`` to swap the real ``MigrationFileAdapter`` for a
-    fake when a test needs failure injection.
+    Pass ``migration_file_store`` to swap the real ``MigrationFileAdapter``
+    for a fake when a test needs failure injection.
     """
     state = {
         "shortcut_registry": {},
@@ -54,7 +54,7 @@ def _make_service(
 
     svc = MigrationService(
         config=MigrationServiceConfig(
-            migration_files=migration_files if migration_files is not None else MigrationFileAdapter(),
+            migration_file_store=migration_file_store if migration_file_store is not None else MigrationFileAdapter(),
             state=state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
@@ -148,7 +148,7 @@ class TestDetectSaveSortChange:
         save_state_mock = MagicMock()
         svc = MigrationService(
             config=MigrationServiceConfig(
-                migration_files=MigrationFileAdapter(),
+                migration_file_store=MigrationFileAdapter(),
                 state={"save_sort_settings": None, "installed_roms": {}},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
@@ -485,12 +485,12 @@ class TestMigrateSaveSortFiles:
         old_save = saves_path / "gba" / "Pokemon.srm"
         new_save = saves_path / "Pokemon.srm"
 
-        fake = FakeMigrationFileAdapter()
+        fake = FakeMigrationFileStore()
         fake.files[str(rom_file)] = b"rom"
         fake.files[str(old_save)] = b"old"
         fake.files[str(new_save)] = b"new"
         # Force the conflict's mtime read to raise on the old (source) path.
-        fake.getmtime_failures.add(str(old_save))
+        fake.get_mtime_failures.add(str(old_save))
 
         installed_roms = {
             "1": {
@@ -509,7 +509,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
-            migration_files=fake,
+            migration_file_store=fake,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
@@ -517,7 +517,7 @@ class TestMigrateSaveSortFiles:
 
         assert result["success"] is False
         assert len(result["errors"]) == 1
-        assert "simulated getmtime failure" in result["errors"][0]
+        assert "simulated get_mtime failure" in result["errors"][0]
         # Files untouched — conflict resolution bailed before any mutation.
         assert fake.files[str(old_save)] == b"old"
         assert fake.files[str(new_save)] == b"new"
@@ -536,7 +536,7 @@ class TestMigrateSaveSortFiles:
         old_save = saves_path / "gba" / "Pokemon.srm"
         new_save = saves_path / "Pokemon.srm"
 
-        fake = FakeMigrationFileAdapter()
+        fake = FakeMigrationFileStore()
         fake.files[str(rom_file)] = b"rom"
         fake.files[str(old_save)] = b"stale"
         fake.files[str(new_save)] = b"fresh"
@@ -562,7 +562,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
-            migration_files=fake,
+            migration_file_store=fake,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
@@ -586,7 +586,7 @@ class TestMigrateSaveSortFiles:
         old_save = saves_path / "gba" / "Pokemon.srm"
         new_save = saves_path / "Pokemon.srm"
 
-        fake = FakeMigrationFileAdapter()
+        fake = FakeMigrationFileStore()
         fake.files[str(rom_file)] = b"rom"
         fake.files[str(old_save)] = b"source newer"
         fake.files[str(new_save)] = b"destination older"
@@ -612,7 +612,7 @@ class TestMigrateSaveSortFiles:
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
-            migration_files=fake,
+            migration_file_store=fake,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
@@ -737,7 +737,7 @@ class TestResolveRetroArchCorename:
 
         svc = MigrationService(
             config=MigrationServiceConfig(
-                migration_files=MigrationFileAdapter(),
+                migration_file_store=MigrationFileAdapter(),
                 state={"installed_roms": {}, "save_sort_settings": None},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
@@ -754,7 +754,7 @@ class TestResolveRetroArchCorename:
         """Service constructed without ``get_active_core`` — method returns (None, None)."""
         svc = MigrationService(
             config=MigrationServiceConfig(
-                migration_files=MigrationFileAdapter(),
+                migration_file_store=MigrationFileAdapter(),
                 state={"installed_roms": {}, "save_sort_settings": None},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),

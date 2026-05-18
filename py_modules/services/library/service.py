@@ -39,7 +39,7 @@ if TYPE_CHECKING:
         SettingsPersister,
         Sleeper,
         StatePersister,
-        SteamConfigAdapter,
+        SteamConfigStore,
         UuidGen,
     )
 
@@ -56,7 +56,7 @@ class LibraryServiceConfig:
     """
 
     romm_api: RommLibraryApi
-    steam_config: SteamConfigAdapter
+    steam_config: SteamConfigStore
     state: dict
     settings: dict
     metadata_cache: dict

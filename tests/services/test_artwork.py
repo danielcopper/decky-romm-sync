@@ -492,7 +492,7 @@ class TestPruneOrphanedStagingArtwork:
         def boom(_path: str) -> None:
             raise OSError("permission denied")
 
-        file_store.remove = boom  # type: ignore[method-assign]
+        file_store.remove_file = boom  # type: ignore[method-assign]
 
         with caplog.at_level(logging.WARNING):
             artwork_service.prune_orphaned_staging_artwork()

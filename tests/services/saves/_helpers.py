@@ -28,13 +28,13 @@ def _make_save_sync_state_persister(tmp_path) -> SaveSyncStatePersisterAdapter:
 
 def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["SaveService", "FakeSaveApi"]:
     """Create a SaveService with sensible defaults for testing."""
-    save_file = SaveFileAdapter()
-    fake: FakeSaveApi = fake_api or FakeSaveApi(save_file=save_file)
+    save_file_store = SaveFileAdapter()
+    fake: FakeSaveApi = fake_api or FakeSaveApi(save_file_store=save_file_store)
     # Tests that build their own FakeSaveApi without wiring the adapter get
     # the same instance as the service so download_save_content materializes
     # bytes onto the shared filesystem view.
-    if fake.save_file is None:
-        fake.save_file = save_file
+    if fake.save_file_store is None:
+        fake.save_file_store = save_file_store
     config_kwargs: dict[str, Any] = dict(
         romm_api=fake,
         retry=_make_retry(),
@@ -42,7 +42,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         state={"shortcut_registry": {}, "installed_roms": {}},
         save_sync_state=SaveService.make_default_state(),
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
-        save_file=save_file,
+        save_file_store=save_file_store,
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),

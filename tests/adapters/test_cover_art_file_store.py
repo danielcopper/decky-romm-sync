@@ -29,18 +29,18 @@ class TestRemove:
     def test_removes_existing(self, store, tmp_path):
         f = tmp_path / "a.png"
         f.write_bytes(b"x")
-        store.remove(str(f))
+        store.remove_file(str(f))
         assert not f.exists()
 
     def test_missing_is_noop(self, store, tmp_path):
         # idempotent: must not raise
-        store.remove(str(tmp_path / "missing.png"))
+        store.remove_file(str(tmp_path / "missing.png"))
 
     def test_propagates_non_filenotfound_errors(self, store, tmp_path):
         # Removing a non-empty directory raises IsADirectoryError or
         # OSError — anything other than FileNotFoundError must surface.
         with pytest.raises(OSError):
-            store.remove(str(tmp_path))
+            store.remove_file(str(tmp_path))
 
 
 class TestRename:
@@ -88,15 +88,15 @@ class TestListdir:
 
 class TestIsdir:
     def test_true_for_directory(self, store, tmp_path):
-        assert store.isdir(str(tmp_path)) is True
+        assert store.is_dir(str(tmp_path)) is True
 
     def test_false_for_file(self, store, tmp_path):
         f = tmp_path / "a.png"
         f.write_bytes(b"")
-        assert store.isdir(str(f)) is False
+        assert store.is_dir(str(f)) is False
 
     def test_false_for_missing(self, store, tmp_path):
-        assert store.isdir(str(tmp_path / "missing")) is False
+        assert store.is_dir(str(tmp_path / "missing")) is False
 
 
 class TestReadBytes:

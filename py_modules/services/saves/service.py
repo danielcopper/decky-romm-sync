@@ -29,7 +29,7 @@ class SaveService:
     entrypoints — every public method delegates to a sub-service. Bulk
     local-save deletion is the only flow whose orchestration lives directly
     on the aggregate root because it spans :class:`RomInfoService` (file
-    discovery), the on-disk save files (via the injected ``SaveFileAdapter``),
+    discovery), the on-disk save files (via the injected ``SaveFileStore``),
     and :class:`StateService` (file-tracking state hygiene) without belonging
     to any single sub-service.
 
@@ -43,7 +43,7 @@ class SaveService:
     def __init__(self, *, config: SaveServiceConfig) -> None:
         self._config = config
         self._state = config.state
-        self._save_file = config.save_file
+        self._save_file_store = config.save_file_store
         # Resolve plugin version once at construction; SyncEngine and any
         # other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
@@ -62,7 +62,7 @@ class SaveService:
         self._rom_info = RomInfoService(
             config=RomInfoServiceConfig(
                 state=config.state,
-                save_file=config.save_file,
+                save_file_store=config.save_file_store,
                 retrodeck_paths=config.retrodeck_paths,
                 get_active_core=config.get_active_core,
                 get_core_name=config.get_core_name,
@@ -80,7 +80,7 @@ class SaveService:
                 loop=config.loop,
                 logger=config.logger,
                 clock=config.clock,
-                save_file=config.save_file,
+                save_file_store=config.save_file_store,
                 log_debug=config.log_debug,
                 get_active_core=config.get_active_core,
                 hostname_provider=config.hostname_provider,
@@ -131,7 +131,7 @@ class SaveService:
                 loop=config.loop,
                 logger=config.logger,
                 clock=config.clock,
-                save_file=config.save_file,
+                save_file_store=config.save_file_store,
                 log_debug=config.log_debug,
                 get_active_core=config.get_active_core,
             ),
@@ -330,7 +330,7 @@ class SaveService:
             files = self._rom_info.find_save_files(rom_id)
             for f in files:
                 try:
-                    self._save_file.remove(f["path"])
+                    self._save_file_store.remove_file(f["path"])
                     total_deleted += 1
                 except Exception as e:
                     errors.append(f"{f['filename']}: {e}")

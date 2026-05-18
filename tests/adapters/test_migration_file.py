@@ -54,18 +54,18 @@ class TestRemove:
     def test_removes_existing(self, adapter, tmp_path):
         f = tmp_path / "a.rom"
         f.write_bytes(b"x")
-        adapter.remove(str(f))
+        adapter.remove_file(str(f))
         assert not f.exists()
 
     def test_missing_is_noop(self, adapter, tmp_path):
         # Idempotent — must not raise on a missing file
-        adapter.remove(str(tmp_path / "missing.rom"))
+        adapter.remove_file(str(tmp_path / "missing.rom"))
 
     def test_propagates_non_filenotfound(self, adapter, tmp_path):
         # Removing a directory with os.remove raises IsADirectoryError /
         # OSError — anything other than FileNotFoundError must surface.
         with pytest.raises(OSError):
-            adapter.remove(str(tmp_path))
+            adapter.remove_file(str(tmp_path))
 
 
 class TestRemoveTree:
@@ -143,11 +143,11 @@ class TestGetmtime:
         f = tmp_path / "a.rom"
         f.write_bytes(b"x")
         os.utime(str(f), (1_700_000_000.0, 1_700_000_000.0))
-        assert adapter.getmtime(str(f)) == pytest.approx(1_700_000_000.0)
+        assert adapter.get_mtime(str(f)) == pytest.approx(1_700_000_000.0)
 
     def test_missing_raises_oserror(self, adapter, tmp_path):
         with pytest.raises(OSError):
-            adapter.getmtime(str(tmp_path / "missing"))
+            adapter.get_mtime(str(tmp_path / "missing"))
 
 
 class TestWalkFiles:
@@ -207,11 +207,11 @@ class TestProtocolMethodCount:
             "exists",
             "is_dir",
             "make_dirs",
-            "remove",
+            "remove_file",
             "remove_tree",
             "move",
             "rename",
-            "getmtime",
+            "get_mtime",
             "walk_files",
         }
         for name in method_names:

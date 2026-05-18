@@ -28,7 +28,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RetryStrategy,
         RommSyncApi,
-        SaveFileAdapter,
+        SaveFileStore,
         SaveSortChangeFn,
         SaveSyncStatePersister,
     )
@@ -58,7 +58,7 @@ class SaveServiceConfig:
         Protocol-typed I/O wrapper for ``save_sync_state.json``. The
         ``StateService`` uses ``.save(data)`` / ``.load() -> dict | None``
         — file path, locking, and atomic-write are adapter-internal.
-    save_file:
+    save_file_store:
         Protocol-typed filesystem adapter for local save files. Owns the
         raw POSIX, ``open()``, ``tempfile``, and ``hashlib``-on-file
         calls SaveService and its sub-services use when reading,
@@ -133,7 +133,7 @@ class SaveServiceConfig:
     state: dict
     save_sync_state: SaveSyncState
     save_sync_state_persister: SaveSyncStatePersister
-    save_file: SaveFileAdapter
+    save_file_store: SaveFileStore
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock

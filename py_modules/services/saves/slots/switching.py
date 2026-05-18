@@ -22,7 +22,7 @@ if TYPE_CHECKING:
         DebugLogger,
         RetryStrategy,
         RommSaveApi,
-        SaveFileAdapter,
+        SaveFileStore,
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
@@ -50,7 +50,7 @@ class SlotSwitcher:
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
         clock: Clock,
-        save_file: SaveFileAdapter,
+        save_file_store: SaveFileStore,
         log_debug: DebugLogger,
     ) -> None:
         self._state_svc = state_svc
@@ -61,7 +61,7 @@ class SlotSwitcher:
         self._retry = retry
         self._loop = loop
         self._clock = clock
-        self._save_file = save_file
+        self._save_file_store = save_file_store
         self._log_debug = log_debug
 
     def _set_active_slot(self, rom_id: int, slot: str) -> dict:
@@ -110,7 +110,7 @@ class SlotSwitcher:
             file_state = files_state.get(filename)
             last_sync_hash = file_state.last_sync_hash if file_state else None
             if last_sync_hash:
-                current_hash = self._save_file.checksum_md5(lf["path"])
+                current_hash = self._save_file_store.checksum_md5(lf["path"])
                 if current_hash != last_sync_hash:
                     pending.append(filename)
 
@@ -247,7 +247,7 @@ class SlotSwitcher:
         local_files = self._rom_info.find_save_files(rom_id)
         for lf in local_files:
             try:
-                self._save_file.remove(lf["path"])
+                self._save_file_store.remove_file(lf["path"])
                 self._log_debug(f"Deleted local save for switch: {lf['filename']}")
             except Exception as e:
                 self._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")

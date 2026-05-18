@@ -4,7 +4,7 @@ Owns the raw POSIX calls used by FirmwareService to manage firmware
 downloads under the RetroDECK BIOS directory. Path construction,
 registry lookups, and download orchestration remain a service concern;
 this adapter exposes only the I/O seams declared by
-``services.protocols.FirmwareFileAdapter``.
+``services.protocols.FirmwareFileStore``.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ _MD5_CHUNK_SIZE = 8192
 class FirmwareFileAdapter:
     """Synchronous filesystem operations for firmware/BIOS files.
 
-    Implements the ``FirmwareFileAdapter`` Protocol. Methods are
+    Implements the ``FirmwareFileStore`` Protocol. Methods are
     synchronous — services that call from an async context offload via
     ``loop.run_in_executor``.
     """
@@ -29,7 +29,7 @@ class FirmwareFileAdapter:
         """Return True when *path* refers to an existing file or directory."""
         return os.path.exists(path)
 
-    def remove(self, path: str) -> None:
+    def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         with contextlib.suppress(FileNotFoundError):
             os.remove(path)

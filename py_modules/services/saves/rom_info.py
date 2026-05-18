@@ -26,7 +26,7 @@ if TYPE_CHECKING:
         CoreNameProviderFn,
         CoreResolverFn,
         RetroDeckPaths,
-        SaveFileAdapter,
+        SaveFileStore,
     )
 
 
@@ -42,7 +42,7 @@ class RomInfoServiceConfig:
     """
 
     state: dict
-    save_file: SaveFileAdapter
+    save_file_store: SaveFileStore
     retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
     get_core_name: CoreNameProviderFn | None
@@ -55,7 +55,7 @@ class RomInfoService:
     def __init__(self, *, config: RomInfoServiceConfig) -> None:
         self._config = config
         self._state = config.state
-        self._save_file = config.save_file
+        self._save_file_store = config.save_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._get_active_core = config.get_active_core
         self._get_core_name = config.get_core_name
@@ -181,12 +181,12 @@ class RomInfoService:
         rom_name = info["rom_name"]
         saves_dir = info["saves_dir"]
         platform_slug = info["platform_slug"]
-        if not self._save_file.is_dir(saves_dir):
+        if not self._save_file_store.is_dir(saves_dir):
             return []
         results = []
         for ext in get_save_extensions(platform_slug):
             save_path = os.path.join(saves_dir, rom_name + ext)
-            if self._save_file.is_file(save_path):
+            if self._save_file_store.is_file(save_path):
                 results.append({"path": save_path, "filename": rom_name + ext})
         return results
 

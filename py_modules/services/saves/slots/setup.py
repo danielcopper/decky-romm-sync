@@ -23,7 +23,7 @@ if TYPE_CHECKING:
         DebugLogger,
         RetryStrategy,
         RommSaveApi,
-        SaveFileAdapter,
+        SaveFileStore,
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
@@ -45,7 +45,7 @@ class SetupWizard:
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
-        save_file: SaveFileAdapter,
+        save_file_store: SaveFileStore,
         log_debug: DebugLogger,
         get_active_core: CoreResolverFn,
     ) -> None:
@@ -56,7 +56,7 @@ class SetupWizard:
         self._retry = retry
         self._loop = loop
         self._logger = logger
-        self._save_file = save_file
+        self._save_file_store = save_file_store
         self._log_debug = log_debug
         self._get_active_core = get_active_core
 
@@ -85,12 +85,9 @@ class SetupWizard:
         local_files = self._rom_info.find_save_files(rom_id)
         local_file_info = []
         for lf in local_files:
-            local_file_info.append(
-                {
-                    "filename": lf["filename"],
-                    "size": self._save_file.get_size(lf["path"]) if self._save_file.is_file(lf["path"]) else 0,
-                }
-            )
+            path = lf["path"]
+            size = self._save_file_store.get_size(path) if self._save_file_store.is_file(path) else 0
+            local_file_info.append({"filename": lf["filename"], "size": size})
 
         # Server saves. On failure we MUST NOT treat the empty list as
         # "server has no saves" — that path auto-confirms the default slot
@@ -262,7 +259,7 @@ class SetupWizard:
         for old_save in old_slot_saves:
             fname = old_save.get("file_name", "")
             local_file = local_by_name.get(fname)
-            if local_file and self._save_file.is_file(local_file["path"]):
+            if local_file and self._save_file_store.is_file(local_file["path"]):
                 # Upload to new slot
                 await self._loop.run_in_executor(
                     None,

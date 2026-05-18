@@ -42,8 +42,8 @@ class PathExistsProbe(Protocol):
 
     Used by services that need to check whether a path is currently
     present on disk without touching ``os.path`` directly. Distinct from
-    the domain-shaped ``CoverArtFileStore`` / ``DownloadFileAdapter`` /
-    ``MigrationFileAdapter`` Protocols: this one exposes only the
+    the domain-shaped ``CoverArtFileStore`` / ``DownloadFileStore`` /
+    ``MigrationFileStore`` Protocols: this one exposes only the
     semantic question "does this path exist?" and carries no implication
     about which subtree of the filesystem the caller is reasoning about.
     """

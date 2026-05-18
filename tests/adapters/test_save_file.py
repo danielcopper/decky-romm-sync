@@ -77,18 +77,18 @@ class TestRemove:
     def test_removes_existing(self, save_files, tmp_path):
         f = tmp_path / "game.srm"
         f.write_bytes(b"x")
-        save_files.remove(str(f))
+        save_files.remove_file(str(f))
         assert not f.exists()
 
     def test_missing_is_noop(self, save_files, tmp_path):
         # Idempotent: must not raise.
-        save_files.remove(str(tmp_path / "missing.srm"))
+        save_files.remove_file(str(tmp_path / "missing.srm"))
 
     def test_propagates_non_filenotfound_errors(self, save_files, tmp_path):
         # Removing a non-empty directory raises IsADirectoryError or OSError —
         # anything other than FileNotFoundError must surface.
         with pytest.raises(OSError):
-            save_files.remove(str(tmp_path))
+            save_files.remove_file(str(tmp_path))
 
 
 class TestRename:
