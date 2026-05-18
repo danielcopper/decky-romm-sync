@@ -807,13 +807,18 @@ class TestMainStartupOrdering:
     async def test_main_calls_detect_path_change_before_prune(self):
         from unittest.mock import AsyncMock, patch
 
+        from bootstrap import (
+            AdapterBundle,
+            BootstrapHandles,
+            BootstrapResult,
+            CallbackBundle,
+            RuntimeAdaptersBundle,
+            StateBundle,
+        )
+
         from main import Plugin
 
         plugin = Plugin()
-        plugin._persistence = MagicMock()
-        plugin._persistence.load_settings.return_value = {}
-        plugin._persistence.load_state.side_effect = lambda x: x
-        plugin._persistence.load_metadata_cache.return_value = {}
 
         call_order: list[str] = []
 
@@ -870,51 +875,60 @@ class TestMainStartupOrdering:
             "session_lifecycle_service": MagicMock(),
         }
 
-        bootstrapped_adapters = {
-            "persistence": plugin._persistence,
-            "firmware_cache_persister": MagicMock(),
-            "save_sync_state_persister": MagicMock(),
-            "state_persister": MagicMock(),
-            "settings_persister": MagicMock(),
-            "metadata_cache_persister": MagicMock(),
-            "settings": {},
-            "state": {
-                "shortcut_registry": {},
-                "installed_roms": {},
-                "last_sync": None,
-                "sync_stats": {"platforms": 0, "roms": 0},
-                "downloaded_bios": {},
-                "retrodeck_home_path": "",
-                "save_sort_settings": None,
-            },
-            "metadata_cache": {},
-            "http_adapter": MagicMock(),
-            "romm_api": MagicMock(),
-            "steam_config": MagicMock(),
-            "sgdb_adapter": MagicMock(),
-            "cover_art_file_store": MagicMock(),
-            "sgdb_artwork_cache": MagicMock(),
-            "download_files": MagicMock(),
-            "firmware_files": MagicMock(),
-            "download_queue": MagicMock(),
-            "migration_files": MagicMock(),
-            "rom_files": MagicMock(),
-            "save_file": MagicMock(),
-            "path_probe": MagicMock(),
-            "retrodeck_paths": MagicMock(),
-            "retroarch_config": MagicMock(),
-            "retroarch_core_info": MagicMock(),
-            "clock": MagicMock(),
-            "uuid_gen": MagicMock(),
-            "sleeper": MagicMock(),
-            "hostname_provider": MagicMock(),
-            "debug_logger": MagicMock(),
-            "core_resolver": MagicMock(),
-            "gamelist_editor": MagicMock(),
-        }
+        bootstrap_result = BootstrapResult(
+            adapters=AdapterBundle(
+                http_adapter=MagicMock(),
+                romm_api=MagicMock(),
+                steam_config=MagicMock(),
+                sgdb_adapter=MagicMock(),
+                cover_art_file_store=MagicMock(),
+                sgdb_artwork_cache=MagicMock(),
+                download_files=MagicMock(),
+                download_queue=MagicMock(),
+                firmware_files=MagicMock(),
+                migration_files=MagicMock(),
+                rom_files=MagicMock(),
+                save_file=MagicMock(),
+                gamelist_editor=MagicMock(),
+                path_probe=MagicMock(),
+                core_info_provider=MagicMock(),
+            ),
+            stores=StateBundle(
+                state={
+                    "shortcut_registry": {},
+                    "installed_roms": {},
+                    "last_sync": None,
+                    "sync_stats": {"platforms": 0, "roms": 0},
+                    "downloaded_bios": {},
+                    "retrodeck_home_path": "",
+                    "save_sort_settings": None,
+                },
+                settings={},
+                metadata_cache={},
+                save_sync_state=MagicMock(),
+            ),
+            callbacks=CallbackBundle(
+                retrodeck_paths=MagicMock(),
+                get_retroarch_save_sorting=MagicMock(),
+                get_core_name=MagicMock(),
+                state_persister=MagicMock(),
+                settings_persister=MagicMock(),
+                metadata_cache_persister=MagicMock(),
+                firmware_cache_persister=MagicMock(),
+                save_sync_state_persister=MagicMock(),
+                log_debug=MagicMock(),
+            ),
+            runtime_adapters=RuntimeAdaptersBundle(
+                clock=MagicMock(),
+                uuid_gen=MagicMock(),
+                sleeper=MagicMock(),
+                hostname_provider=MagicMock(),
+            ),
+            handles=BootstrapHandles(debug_logger=MagicMock()),
+        )
 
         with (
-            patch("main.bootstrap", return_value=bootstrapped_adapters),
+            patch("main.bootstrap", return_value=bootstrap_result),
             patch("main.wire_services", return_value=wired_services),
         ):
             await plugin._main()

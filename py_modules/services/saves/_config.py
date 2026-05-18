@@ -134,8 +134,8 @@ class SaveServiceConfig:
     get_active_core: CoreResolverFn
     hostname_provider: HostnameProvider
     log_debug: DebugLogger
+    plugin_version: str
     get_core_name: CoreNameProviderFn | None = None
-    plugin_version: str = "0.0.0"
     emit: EventEmitter | None = None
     detect_sort_change: Callable[[], None] | None = None
     is_retrodeck_migration_pending: Callable[[], bool] | None = None

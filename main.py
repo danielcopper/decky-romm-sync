@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 from dataclasses import asdict
+from typing import Any
 
 plugin_dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(plugin_dir, "py_modules"))
@@ -9,26 +10,38 @@ sys.path.insert(0, plugin_dir)
 
 import decky
 from bootstrap import (
-    AdapterBundle,
-    CallbackBundle,
     RuntimeBundle,
-    StateBundle,
     WiringConfig,
     bootstrap,
     wire_services,
 )
 
 from lib.migration_gate import migration_blocked
-from services.protocols import (
-    RetroArchConfigReader,
-    RetroArchCoreInfoReader,
-    RetroDeckPaths,
-)
 
 
 class Plugin:
     settings: dict
     loop: asyncio.AbstractEventLoop
+
+    # Test-only attribute slots — production ``Plugin`` does not read
+    # these after ``_main`` (the wired services own them), but the
+    # test suite constructs ``Plugin()`` bare and pokes the same handles
+    # the production wiring would set. Annotated as ``Any`` because
+    # tests pass real adapters, ``MagicMock``s, or fakes interchangeably.
+    # Annotations alone do not create the attribute, so bare access still
+    # raises ``AttributeError`` (the ``TestPersistenceAttributeIsLoud``
+    # regression remains green).
+    _persistence: Any
+    _state: Any
+    _metadata_cache: Any
+    _state_persister: Any
+    _settings_persister: Any
+    _metadata_cache_persister: Any
+    _http_adapter: Any
+    _romm_api: Any
+    _steam_config: Any
+    _retrodeck_paths: Any
+    _save_sync_state: Any
 
     _MIN_REQUIRED_VERSION = (4, 8, 1)
 
@@ -58,80 +71,33 @@ class Plugin:
         # ── 1. Wire adapters ────────────────────────────────────────────────
         # Bootstrap loads + migrates settings as part of adapter construction
         # so RommHttpAdapter binds the live, migrated dict in one pass.
-        adapters = bootstrap(
+        result = bootstrap(
             settings_dir=decky.DECKY_PLUGIN_SETTINGS_DIR,
             runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             user_home=decky.DECKY_USER_HOME,
             logger=decky.logger,
         )
-        self._persistence = adapters["persistence"]
-        self.settings = adapters["settings"]
-        self._state = adapters["state"]
-        self._metadata_cache = adapters["metadata_cache"]
-        self._state_persister = adapters["state_persister"]
-        self._settings_persister = adapters["settings_persister"]
-        self._metadata_cache_persister = adapters["metadata_cache_persister"]
-        self._http_adapter = adapters["http_adapter"]
-        self._romm_api = adapters["romm_api"]
-        self._steam_config = adapters["steam_config"]
-        self._sgdb_adapter = adapters["sgdb_adapter"]
-        self._retrodeck_paths: RetroDeckPaths = adapters["retrodeck_paths"]
-        self._retroarch_config: RetroArchConfigReader = adapters["retroarch_config"]
-        self._retroarch_core_info: RetroArchCoreInfoReader = adapters["retroarch_core_info"]
-        self._debug_logger = adapters["debug_logger"]
+        self.settings = result.stores.settings
+        self._debug_logger = result.handles.debug_logger
 
         # ── 4. Wire services ────────────────────────────────────────────────
-        from services.saves import SaveService
-
-        self._save_sync_state = SaveService.make_default_state()
         services = wire_services(
             WiringConfig(
-                adapters=AdapterBundle(
-                    http_adapter=self._http_adapter,
-                    romm_api=self._romm_api,
-                    steam_config=self._steam_config,
-                    sgdb_adapter=self._sgdb_adapter,
-                    cover_art_file_store=adapters["cover_art_file_store"],
-                    sgdb_artwork_cache=adapters["sgdb_artwork_cache"],
-                    download_files=adapters["download_files"],
-                    download_queue=adapters["download_queue"],
-                    firmware_files=adapters["firmware_files"],
-                    migration_files=adapters["migration_files"],
-                    rom_files=adapters["rom_files"],
-                    save_file=adapters["save_file"],
-                    gamelist_editor=adapters["gamelist_editor"],
-                    path_probe=adapters["path_probe"],
-                ),
-                stores=StateBundle(
-                    state=self._state,
-                    settings=self.settings,
-                    metadata_cache=self._metadata_cache,
-                    save_sync_state=self._save_sync_state,
-                ),
+                adapters=result.adapters,
+                stores=result.stores,
                 runtime=RuntimeBundle(
                     loop=self.loop,
                     logger=decky.logger,
                     plugin_dir=decky.DECKY_PLUGIN_DIR,
                     runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
                     emit=decky.emit,
-                    clock=adapters["clock"],
-                    uuid_gen=adapters["uuid_gen"],
-                    sleeper=adapters["sleeper"],
-                    hostname_provider=adapters["hostname_provider"],
+                    clock=result.runtime_adapters.clock,
+                    uuid_gen=result.runtime_adapters.uuid_gen,
+                    sleeper=result.runtime_adapters.sleeper,
+                    hostname_provider=result.runtime_adapters.hostname_provider,
                 ),
-                callbacks=CallbackBundle(
-                    retrodeck_paths=self._retrodeck_paths,
-                    get_retroarch_save_sorting=self._retroarch_config.get_retroarch_save_sorting,
-                    get_core_name=self._retroarch_core_info.get_corename,
-                    state_persister=self._state_persister,
-                    settings_persister=self._settings_persister,
-                    metadata_cache_persister=self._metadata_cache_persister,
-                    firmware_cache_persister=adapters["firmware_cache_persister"],
-                    core_info_provider=adapters["core_resolver"],
-                    save_sync_state_persister=adapters["save_sync_state_persister"],
-                    log_debug=self._debug_logger,
-                ),
+                callbacks=result.callbacks,
                 min_required_version=self._MIN_REQUIRED_VERSION,
             )
         )

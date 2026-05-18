@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from bootstrap import (
     AdapterBundle,
+    BootstrapResult,
     CallbackBundle,
     RuntimeBundle,
     StateBundle,
@@ -30,9 +31,6 @@ from conftest import (
 )
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
-from adapters.persistence import PersistenceAdapter
-from adapters.retroarch_config import RetroArchConfigAdapter
-from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
@@ -48,92 +46,88 @@ from services.saves import SaveService
 from services.steamgrid import SteamGridService
 
 
-class TestBootstrap:
-    def test_returns_persistence_adapter(self, tmp_path):
-        result = bootstrap(
-            settings_dir=str(tmp_path / "settings"),
-            runtime_dir=str(tmp_path / "runtime"),
-            plugin_dir=str(tmp_path / "plugin"),
-            user_home=str(tmp_path / "home"),
-            logger=logging.getLogger("test"),
-        )
-        assert "persistence" in result
-        assert isinstance(result["persistence"], PersistenceAdapter)
+def _bootstrap_for(tmp_path) -> BootstrapResult:
+    return bootstrap(
+        settings_dir=str(tmp_path / "settings"),
+        runtime_dir=str(tmp_path / "runtime"),
+        plugin_dir=str(tmp_path / "plugin"),
+        user_home=str(tmp_path / "home"),
+        logger=logging.getLogger("test"),
+    )
 
-    def test_returns_http_adapter(self, tmp_path):
-        result = bootstrap(
-            settings_dir=str(tmp_path / "settings"),
-            runtime_dir=str(tmp_path / "runtime"),
-            plugin_dir=str(tmp_path / "plugin"),
-            user_home=str(tmp_path / "home"),
-            logger=logging.getLogger("test"),
-        )
-        assert "http_adapter" in result
-        assert isinstance(result["http_adapter"], RommHttpAdapter)
+
+class TestBootstrap:
+    def test_returns_typed_bootstrap_result(self, tmp_path):
+        result = _bootstrap_for(tmp_path)
+        assert isinstance(result, BootstrapResult)
 
     def test_http_adapter_shares_settings_reference(self, tmp_path):
-        """RommHttpAdapter binds the same dict bootstrap returns under "settings"."""
-        result = bootstrap(
-            settings_dir=str(tmp_path / "settings"),
-            runtime_dir=str(tmp_path / "runtime"),
-            plugin_dir=str(tmp_path / "plugin"),
-            user_home=str(tmp_path / "home"),
-            logger=logging.getLogger("test"),
-        )
-        # Mutate the dict bootstrap returned — http_adapter holds the same ref.
-        result["settings"]["romm_url"] = "http://changed.com"
-        assert result["http_adapter"]._settings["romm_url"] == "http://changed.com"
-        assert result["http_adapter"]._settings is result["settings"]
+        """RommHttpAdapter binds the same dict the StateBundle exposes."""
+        result = _bootstrap_for(tmp_path)
+        # Mutate the live settings dict — http_adapter holds the same ref.
+        result.stores.settings["romm_url"] = "http://changed.com"
+        assert result.adapters.http_adapter._settings["romm_url"] == "http://changed.com"
+        assert result.adapters.http_adapter._settings is result.stores.settings
 
-    def test_persistence_has_correct_paths(self, tmp_path):
-        settings_dir = str(tmp_path / "s")
-        runtime_dir = str(tmp_path / "r")
-        result = bootstrap(
-            settings_dir=settings_dir,
-            runtime_dir=runtime_dir,
-            plugin_dir=str(tmp_path / "p"),
-            user_home=str(tmp_path / "home"),
-            logger=logging.getLogger("test"),
-        )
-        assert result["persistence"]._settings_dir == settings_dir
-        assert result["persistence"]._runtime_dir == runtime_dir
+    def test_returns_http_adapter(self, tmp_path):
+        result = _bootstrap_for(tmp_path)
+        assert isinstance(result.adapters.http_adapter, RommHttpAdapter)
 
     def test_returns_steam_config(self, tmp_path):
-        result = bootstrap(
-            settings_dir=str(tmp_path / "settings"),
-            runtime_dir=str(tmp_path / "runtime"),
-            plugin_dir=str(tmp_path / "plugin"),
-            user_home=str(tmp_path / "home"),
-            logger=logging.getLogger("test"),
-        )
-        assert "steam_config" in result
-        assert isinstance(result["steam_config"], SteamConfigAdapter)
+        result = _bootstrap_for(tmp_path)
+        assert isinstance(result.adapters.steam_config, SteamConfigAdapter)
 
     def test_returns_romm_api(self, tmp_path):
-        result = bootstrap(
-            settings_dir=str(tmp_path / "settings"),
-            runtime_dir=str(tmp_path / "runtime"),
-            plugin_dir=str(tmp_path / "plugin"),
-            user_home=str(tmp_path / "home"),
-            logger=logging.getLogger("test"),
-        )
-        assert "romm_api" in result
-        assert isinstance(result["romm_api"], RommApiAdapter)
+        result = _bootstrap_for(tmp_path)
+        assert isinstance(result.adapters.romm_api, RommApiAdapter)
 
-    def test_returns_split_retrodeck_adapters(self, tmp_path):
-        """Bootstrap instantiates all three split adapters (paths, cfg, core_info)."""
-        result = bootstrap(
-            settings_dir=str(tmp_path / "settings"),
-            runtime_dir=str(tmp_path / "runtime"),
-            plugin_dir=str(tmp_path / "plugin"),
-            user_home=str(tmp_path / "home"),
-            logger=logging.getLogger("test"),
-        )
-        assert isinstance(result["retrodeck_paths"], RetroDeckPathsAdapter)
-        assert isinstance(result["retroarch_config"], RetroArchConfigAdapter)
-        assert isinstance(result["retroarch_core_info"], RetroArchCoreInfoAdapter)
-        # Old bundled key must no longer be present.
-        assert "retrodeck_config" not in result
+    def test_returns_retrodeck_paths_adapter(self, tmp_path):
+        """Bootstrap instantiates the RetroDECK paths adapter for the callbacks bundle."""
+        result = _bootstrap_for(tmp_path)
+        assert isinstance(result.callbacks.retrodeck_paths, RetroDeckPathsAdapter)
+
+    def test_returns_core_info_provider_on_adapters(self, tmp_path):
+        """``core_info_provider`` (CoreResolver) is bundled with adapters, not callbacks.
+
+        Lock-in for #671 — stateful adapter sits next to ``gamelist_editor``
+        in :class:`AdapterBundle`. :class:`CallbackBundle` carries only
+        provider callables and persisters.
+        """
+        result = _bootstrap_for(tmp_path)
+        # AdapterBundle exposes the stateful CoreResolver.
+        assert result.adapters.core_info_provider is not None
+        # CallbackBundle no longer carries it.
+        assert not hasattr(result.callbacks, "core_info_provider")
+
+    def test_persistence_loaded_with_default_state_factory(self, tmp_path):
+        """First-run state contains the keys ``_default_state()`` ships.
+
+        Regression for #671: ``_default_state`` must be a factory, not a
+        shared module-level dict — services mutate ``state`` in place.
+        """
+        result = _bootstrap_for(tmp_path)
+        state = result.stores.state
+        # Inner containers were independently constructed; mutating them
+        # does not bleed into a future bootstrap call's state.
+        state["shortcut_registry"]["sentinel"] = {"app_id": 1}
+        state["sync_stats"]["platforms"] = 42
+
+        second = _bootstrap_for(tmp_path)
+        assert second.stores.state["shortcut_registry"] == {}
+        assert second.stores.state["sync_stats"] == {"platforms": 0, "roms": 0}
+
+    def test_handles_debug_logger_exposed(self, tmp_path):
+        """``BootstrapHandles.debug_logger`` is the same instance the CallbackBundle wires."""
+        result = _bootstrap_for(tmp_path)
+        assert result.handles.debug_logger is result.callbacks.log_debug
+
+    def test_runtime_adapters_bundle_populated(self, tmp_path):
+        """Bootstrap owns instantiation of clock/uuid/sleeper/hostname for ``main.py`` to compose RuntimeBundle."""
+        result = _bootstrap_for(tmp_path)
+        assert result.runtime_adapters.clock is not None
+        assert result.runtime_adapters.uuid_gen is not None
+        assert result.runtime_adapters.sleeper is not None
+        assert result.runtime_adapters.hostname_provider is not None
 
 
 class TestWireServices:
@@ -215,6 +209,7 @@ class TestWireServices:
                 save_file=deps["save_file"],
                 gamelist_editor=deps["gamelist_editor"],
                 path_probe=deps["path_probe"],
+                core_info_provider=deps["core_info_provider"],
             ),
             stores=StateBundle(
                 state=deps["state"],
@@ -241,7 +236,6 @@ class TestWireServices:
                 settings_persister=deps["settings_persister"],
                 metadata_cache_persister=deps["metadata_cache_persister"],
                 firmware_cache_persister=deps["firmware_cache_persister"],
-                core_info_provider=deps["core_info_provider"],
                 save_sync_state_persister=deps["save_sync_state_persister"],
                 log_debug=deps["log_debug"],
             ),

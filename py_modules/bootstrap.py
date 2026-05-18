@@ -96,15 +96,24 @@ from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalSer
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 from services.steamgrid import SteamGridService, SteamGridServiceConfig
 
-_DEFAULT_STATE: dict = {
-    "shortcut_registry": {},
-    "installed_roms": {},
-    "last_sync": None,
-    "sync_stats": {"platforms": 0, "roms": 0},
-    "downloaded_bios": {},
-    "retrodeck_home_path": "",
-    "save_sort_settings": None,
-}
+
+def _default_state() -> dict:
+    """Fresh default ``state`` dict for first-run persistence.
+
+    A factory (not a module-level constant) so that callers always receive
+    independent inner containers — services may mutate ``state`` in place,
+    and a shared module-level default would silently corrupt subsequent
+    loads.
+    """
+    return {
+        "shortcut_registry": {},
+        "installed_roms": {},
+        "last_sync": None,
+        "sync_stats": {"platforms": 0, "roms": 0},
+        "downloaded_bios": {},
+        "retrodeck_home_path": "",
+        "save_sort_settings": None,
+    }
 
 
 @dataclass(frozen=True)
@@ -125,6 +134,7 @@ class AdapterBundle:
     save_file: SaveFileAdapter
     gamelist_editor: GamelistXmlEditorProtocol
     path_probe: PathExistsProbe
+    core_info_provider: CoreInfoProvider
 
 
 @dataclass(frozen=True)
@@ -163,9 +173,58 @@ class CallbackBundle:
     settings_persister: SettingsPersister
     metadata_cache_persister: MetadataCachePersister
     firmware_cache_persister: FirmwareCachePersister
-    core_info_provider: CoreInfoProvider
     save_sync_state_persister: SaveSyncStatePersister
     log_debug: DebugLogger
+
+
+@dataclass(frozen=True)
+class RuntimeAdaptersBundle:
+    """Concrete adapters for the Clock/UuidGen/Sleeper/HostnameProvider seams.
+
+    Bootstrap owns adapter instantiation, but the ``RuntimeBundle``
+    handed to ``wire_services`` also needs runtime-only state ``main.py``
+    introduces (the ``asyncio`` loop, ``decky.emit``). This sub-bundle
+    carries the seams bootstrap builds so ``main.py`` can compose the
+    final ``RuntimeBundle`` without instantiating any adapters itself.
+    """
+
+    clock: Clock
+    uuid_gen: UuidGen
+    sleeper: Sleeper
+    hostname_provider: HostnameProvider
+
+
+@dataclass(frozen=True)
+class BootstrapHandles:
+    """Bootstrap outputs ``main.py`` needs that don't fit the wiring bundles.
+
+    Anything ``Plugin`` itself binds (not the services) lives here:
+    the debug logger forwarded by ``Plugin._log_debug``. The bundles
+    already cover everything passed to ``wire_services``; this struct
+    keeps those Plugin-only handles typed instead of returning them
+    via the untyped dict shape of yore.
+    """
+
+    debug_logger: DebugLogger
+
+
+@dataclass(frozen=True)
+class BootstrapResult:
+    """Typed return shape for :func:`bootstrap`.
+
+    The four bundles carry every Protocol-typed seam and live state
+    dict that services need; :attr:`handles` carries the small set of
+    raw outputs only ``main.py`` itself binds (debug logger). Together
+    they replace the historical untyped ``dict`` return so every
+    consumer is caught by basedpyright instead of failing silently at
+    runtime on a typo.
+    """
+
+    adapters: AdapterBundle
+    stores: StateBundle
+    callbacks: CallbackBundle
+    runtime_adapters: RuntimeAdaptersBundle
+    handles: BootstrapHandles
 
 
 @dataclass(frozen=True)
@@ -191,8 +250,8 @@ def bootstrap(
     plugin_dir: str,
     user_home: str,
     logger: logging.Logger,
-) -> dict:
-    """Create and return all adapters and on-disk state dicts.
+) -> BootstrapResult:
+    """Build every adapter and bundle the composition root hands to ``main.py``.
 
     Bootstrap owns adapter instantiation and is the only path that
     constructs ``PersistenceAdapter``. Settings, plugin state, and the
@@ -218,10 +277,10 @@ def bootstrap(
 
     Returns
     -------
-    Mapping of adapter name to instance, plus ``"settings"`` / ``"state"``
-    / ``"metadata_cache"`` — the live migrated dicts shared with the
-    persister adapters and any other consumer that binds the same
-    reference.
+    :class:`BootstrapResult`
+        Typed bundles consumed by ``wire_services`` (``adapters``,
+        ``stores``, ``callbacks``) plus the small set of Plugin-only
+        handles ``main.py`` itself binds (``handles.debug_logger``).
     """
     retrodeck_paths = RetroDeckPathsAdapter(user_home=user_home, logger=logger)
     retroarch_config = RetroArchConfigAdapter(user_home=user_home, logger=logger)
@@ -239,7 +298,7 @@ def bootstrap(
     settings = persistence.load_settings()
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
-    state = persistence.load_state(dict(_DEFAULT_STATE))
+    state = persistence.load_state(_default_state())
     state = migrate_state(state)
     metadata_cache = persistence.load_metadata_cache()
     state_persister = StatePersisterAdapter(persistence, state)
@@ -263,41 +322,57 @@ def bootstrap(
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
+    save_sync_state = SaveService.make_default_state()
 
-    return {
-        "persistence": persistence,
-        "firmware_cache_persister": firmware_cache_persister,
-        "save_sync_state_persister": save_sync_state_persister,
-        "state_persister": state_persister,
-        "settings_persister": settings_persister,
-        "metadata_cache_persister": metadata_cache_persister,
-        "settings": settings,
-        "state": state,
-        "metadata_cache": metadata_cache,
-        "http_adapter": http_adapter,
-        "romm_api": romm_api,
-        "steam_config": steam_config,
-        "sgdb_adapter": sgdb_adapter,
-        "cover_art_file_store": cover_art_file_store,
-        "sgdb_artwork_cache": sgdb_artwork_cache,
-        "download_files": download_files,
-        "download_queue": download_queue,
-        "firmware_files": firmware_files,
-        "migration_files": migration_files,
-        "rom_files": rom_files,
-        "save_file": save_file,
-        "path_probe": path_probe,
-        "retrodeck_paths": retrodeck_paths,
-        "retroarch_config": retroarch_config,
-        "retroarch_core_info": retroarch_core_info,
-        "clock": clock,
-        "uuid_gen": uuid_gen,
-        "sleeper": sleeper,
-        "hostname_provider": hostname_provider,
-        "debug_logger": debug_logger,
-        "core_resolver": core_resolver,
-        "gamelist_editor": gamelist_editor,
-    }
+    adapters = AdapterBundle(
+        http_adapter=http_adapter,
+        romm_api=romm_api,
+        steam_config=steam_config,
+        sgdb_adapter=sgdb_adapter,
+        cover_art_file_store=cover_art_file_store,
+        sgdb_artwork_cache=sgdb_artwork_cache,
+        download_files=download_files,
+        download_queue=download_queue,
+        firmware_files=firmware_files,
+        migration_files=migration_files,
+        rom_files=rom_files,
+        save_file=save_file,
+        gamelist_editor=gamelist_editor,
+        path_probe=path_probe,
+        core_info_provider=core_resolver,
+    )
+    stores = StateBundle(
+        state=state,
+        settings=settings,
+        metadata_cache=metadata_cache,
+        save_sync_state=save_sync_state,
+    )
+    callbacks = CallbackBundle(
+        retrodeck_paths=retrodeck_paths,
+        get_retroarch_save_sorting=retroarch_config.get_retroarch_save_sorting,
+        get_core_name=retroarch_core_info.get_corename,
+        state_persister=state_persister,
+        settings_persister=settings_persister,
+        metadata_cache_persister=metadata_cache_persister,
+        firmware_cache_persister=firmware_cache_persister,
+        save_sync_state_persister=save_sync_state_persister,
+        log_debug=debug_logger,
+    )
+    runtime_adapters = RuntimeAdaptersBundle(
+        clock=clock,
+        uuid_gen=uuid_gen,
+        sleeper=sleeper,
+        hostname_provider=hostname_provider,
+    )
+    handles = BootstrapHandles(debug_logger=debug_logger)
+
+    return BootstrapResult(
+        adapters=adapters,
+        stores=stores,
+        callbacks=callbacks,
+        runtime_adapters=runtime_adapters,
+        handles=handles,
+    )
 
 
 def wire_services(cfg: WiringConfig) -> dict:
@@ -337,7 +412,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             get_bios_files_index=bios_files_index_binding.get,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
-            get_active_core=cfg.callbacks.core_info_provider.get_active_core,
+            get_active_core=cfg.adapters.core_info_provider.get_active_core,
             get_core_name=cfg.callbacks.get_core_name,
         ),
     )
@@ -354,7 +429,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         logger=cfg.runtime.logger,
         clock=cfg.runtime.clock,
         retrodeck_paths=cfg.callbacks.retrodeck_paths,
-        get_active_core=cfg.callbacks.core_info_provider.get_active_core,
+        get_active_core=cfg.adapters.core_info_provider.get_active_core,
         hostname_provider=cfg.runtime.hostname_provider,
         log_debug=cfg.callbacks.log_debug,
         get_core_name=cfg.callbacks.get_core_name,
@@ -484,7 +559,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
             firmware_files=cfg.adapters.firmware_files,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
-            core_info=cfg.callbacks.core_info_provider,
+            core_info=cfg.adapters.core_info_provider,
         ),
     )
     # Load the BIOS registry from disk now so the property does not raise
@@ -546,7 +621,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         config=CoreServiceConfig(
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            core_info=cfg.callbacks.core_info_provider,
+            core_info=cfg.adapters.core_info_provider,
             gamelist_editor=cfg.adapters.gamelist_editor,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             bios_checker=firmware_service,

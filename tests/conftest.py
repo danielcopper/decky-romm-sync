@@ -61,7 +61,14 @@ def _make_testable_plugin():
     from main import Plugin
 
     class TestablePlugin(Plugin):
-        """Plugin subclass that declares test-only attributes for type safety."""
+        """Plugin subclass that declares test-only attributes for type safety.
+
+        Only the genuinely test-fixture-only attributes (``_fake_api``,
+        ``_resolve_system``) live here. Test-fixture handles shared with
+        production wiring (``_state``, ``_http_adapter``, ...) are
+        declared on ``Plugin`` itself as ``Any``-typed annotation slots
+        so test-only construction paths type-check uniformly.
+        """
 
         _fake_api: Any
         _resolve_system: Any
@@ -69,7 +76,7 @@ def _make_testable_plugin():
     instance = TestablePlugin()
     instance._migration_service = MagicMock()
     instance._migration_service.is_retrodeck_migration_pending.return_value = False
-    instance._debug_logger = lambda _msg: None
+    instance._debug_logger = lambda msg: None
     return instance
 
 
