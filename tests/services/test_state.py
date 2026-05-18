@@ -2,7 +2,7 @@
 
 import logging
 
-from conftest import FakeSaveSyncStatePersister
+from fakes.fake_save_sync_state_persister import FakeSaveSyncStatePersister
 
 from domain.save_state import FileSyncState, PlaytimeEntry, RomSaveState
 from services.saves.state import StateService, StateServiceConfig

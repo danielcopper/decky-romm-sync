@@ -4,14 +4,12 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import (
-    FakeCoreInfoProvider,
-    FakeFirmwareCachePersister,
-    FakeMigrationFileStore,
-    FakeRetroDeckPaths,
-    FakeSettingsPersister,
-    FakeStatePersister,
-)
+from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
+from fakes.fake_migration_file_store import FakeMigrationFileStore
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_settings_persister import FakeSettingsPersister
+from fakes.fake_state_persister import FakeStatePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.firmware_file import FirmwareFileAdapter

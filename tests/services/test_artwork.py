@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 # conftest.py patches decky before this import
 import decky
 import pytest
-from conftest import FakeCoverArtFileStore
+from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 
 from services.artwork import ArtworkService, ArtworkServiceConfig
 

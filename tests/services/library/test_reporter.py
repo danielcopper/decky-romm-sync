@@ -3,7 +3,7 @@
 import os
 
 import pytest
-from conftest import FakeCoverArtFileStore
+from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 
 from adapters.persistence import (
     PersistenceAdapter,

@@ -10,11 +10,10 @@ sits on top of an identical setup.
 """
 
 import asyncio
-import importlib
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
+from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
@@ -31,20 +30,6 @@ from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
-
-if TYPE_CHECKING:
-    # basedpyright resolves ``conftest`` to the nearest local file. The
-    # actual fakes live in the parent ``tests/conftest.py``; declare the
-    # symbols for typing purposes here and let runtime resolve through
-    # ``importlib`` below.
-    from conftest import FakeCoverArtFileStore, FakeSettingsPersister
-
-# Runtime: pytest ensures the root ``tests/conftest.py`` is loaded under
-# the module name ``conftest`` before this local conftest is imported,
-# so the symbols are already on the loaded module.
-_root_conftest = importlib.import_module("conftest")
-FakeSettingsPersister = _root_conftest.FakeSettingsPersister
-FakeCoverArtFileStore = _root_conftest.FakeCoverArtFileStore
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import FakeSettingsPersister
+from fakes.fake_settings_persister import FakeSettingsPersister
 
 from adapters.persistence import (
     PersistenceAdapter,

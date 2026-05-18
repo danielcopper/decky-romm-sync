@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeFirmwareCachePersister, FakeFirmwareFileStore, FakeRetroDeckPaths
+from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
+from fakes.fake_firmware_file_store import FakeFirmwareFileStore
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
 

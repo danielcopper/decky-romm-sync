@@ -6,7 +6,8 @@ import asyncio
 import logging
 
 import pytest
-from conftest import FakeCoreInfoProvider, FakeRetroDeckPaths
+from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 
 from services.cores import CoreService, CoreServiceConfig
 

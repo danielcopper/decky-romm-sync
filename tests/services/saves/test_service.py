@@ -7,7 +7,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakePluginMetadataReader
+from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_save_api import FakeSaveApi
 
 from domain.save_state import FileSyncState, RomSaveState
@@ -1043,7 +1043,7 @@ class TestBadPathDeleteSavesPartialFailure:
         reference — both must point at the same fake so file discovery
         and deletion run through the failure-injecting instance.
         """
-        from conftest import FakeSaveFileStore
+        from fakes.fake_save_file_store import FakeSaveFileStore
 
         fake = FakeSaveFileStore(files=files)
         # Mark each saves-dir as present so ``find_save_files`` walks them.

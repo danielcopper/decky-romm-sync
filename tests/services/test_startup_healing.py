@@ -6,7 +6,8 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakePathProbe, FakeRetroDeckPaths
+from fakes.fake_path_probe import FakePathProbe
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 

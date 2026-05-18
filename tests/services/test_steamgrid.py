@@ -3,7 +3,9 @@ import http.client
 import os
 
 import pytest
-from conftest import FakeSettingsPersister, FakeSgdbArtworkCache, FakeStatePersister
+from fakes.fake_settings_persister import FakeSettingsPersister
+from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
+from fakes.fake_state_persister import FakeStatePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger

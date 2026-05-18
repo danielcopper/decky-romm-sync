@@ -6,15 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import (
-    FakeCoreInfoProvider,
-    FakeFirmwareCachePersister,
-    FakeHostnameProvider,
-    FakePluginMetadataReader,
-    FakeRetroDeckPaths,
-    _make_retry,
-    _make_testable_plugin,
-)
+from conftest import _make_retry, _make_testable_plugin
+from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
+from fakes.fake_hostname_provider import FakeHostnameProvider
+from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 

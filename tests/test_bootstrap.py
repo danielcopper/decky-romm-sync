@@ -14,22 +14,20 @@ from bootstrap import (
     bootstrap,
     wire_services,
 )
-from conftest import (
-    FakeCoreInfoProvider,
-    FakeCoverArtFileStore,
-    FakeDownloadFileStore,
-    FakeDownloadQueueAdapter,
-    FakeFirmwareCachePersister,
-    FakeFirmwareFileStore,
-    FakeHostnameProvider,
-    FakeMigrationFileStore,
-    FakePathProbe,
-    FakePluginMetadataReader,
-    FakeRetroDeckPaths,
-    FakeRomFileStore,
-    FakeSaveFileStore,
-    FakeSgdbArtworkCache,
-)
+from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
+from fakes.fake_download_file_store import FakeDownloadFileStore
+from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
+from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
+from fakes.fake_firmware_file_store import FakeFirmwareFileStore
+from fakes.fake_hostname_provider import FakeHostnameProvider
+from fakes.fake_migration_file_store import FakeMigrationFileStore
+from fakes.fake_path_probe import FakePathProbe
+from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_rom_file_store import FakeRomFileStore
+from fakes.fake_save_file_store import FakeSaveFileStore
+from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.retrodeck_paths import RetroDeckPathsAdapter

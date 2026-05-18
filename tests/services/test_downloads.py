@@ -7,7 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import FakeRetroDeckPaths, _make_testable_plugin
+from conftest import _make_testable_plugin
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.download_file import DownloadFileAdapter
@@ -625,7 +626,7 @@ class TestPollDownloadRequestsMigrationPause:
         plugin._download_service._sleeper = _CancellingSleeper()
 
         # Track whether the request file IO was invoked via the queue adapter.
-        from conftest import FakeDownloadQueueAdapter
+        from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
 
         tracking_queue = FakeDownloadQueueAdapter()
         plugin._download_service._download_queue_io = tracking_queue
@@ -1882,7 +1883,7 @@ class TestCleanupLeftoverTmpFiles:
         import logging
 
         import decky
-        from conftest import FakeDownloadFileStore
+        from fakes.fake_download_file_store import FakeDownloadFileStore
 
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
@@ -2261,7 +2262,7 @@ class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
     """
 
     def test_no_retrodeck_paths_bundle_skips_walk(self, plugin):
-        from conftest import FakeDownloadFileStore
+        from fakes.fake_download_file_store import FakeDownloadFileStore
 
         fake = FakeDownloadFileStore()
         plugin._download_service._download_file_store = fake
@@ -2274,7 +2275,7 @@ class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
         assert fake.walk_calls == []
 
     def test_empty_roms_and_bios_paths_skip_walk(self, plugin):
-        from conftest import FakeDownloadFileStore
+        from fakes.fake_download_file_store import FakeDownloadFileStore
 
         fake = FakeDownloadFileStore()
         plugin._download_service._download_file_store = fake
@@ -2300,7 +2301,7 @@ class TestPollDownloadRequestsLoopBody:
     async def test_dispatches_queued_request_to_start_download(self, plugin, tmp_path):
         from unittest.mock import AsyncMock, patch
 
-        from conftest import FakeDownloadQueueAdapter
+        from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
 
         plugin._download_service._runtime_dir = str(tmp_path)
         # No migration pending — must not block the loop body.
@@ -2338,7 +2339,7 @@ class TestPollDownloadRequestsLoopBody:
     async def test_empty_poll_continues_without_dispatch(self, plugin, tmp_path):
         from unittest.mock import AsyncMock, patch
 
-        from conftest import FakeDownloadQueueAdapter
+        from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
 
         plugin._download_service._runtime_dir = str(tmp_path)
         plugin._download_service._is_retrodeck_migration_pending = None
@@ -2552,7 +2553,7 @@ class TestCleanupPartialDownloadFailureInjection:
     def test_remove_failures_are_logged_and_other_paths_still_removed(self, plugin, caplog):
         import logging
 
-        from conftest import FakeDownloadFileStore
+        from fakes.fake_download_file_store import FakeDownloadFileStore
 
         fake = FakeDownloadFileStore()
         target = "/roms/n64/game.z64"
@@ -2580,7 +2581,7 @@ class TestCleanupPartialDownloadFailureInjection:
     def test_remove_tree_failure_is_logged_and_swallowed(self, plugin, caplog):
         import logging
 
-        from conftest import FakeDownloadFileStore
+        from fakes.fake_download_file_store import FakeDownloadFileStore
 
         fake = FakeDownloadFileStore()
         target = "/roms/psx/game.zip"

@@ -5,7 +5,9 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import FakeMetadataCachePersister, FakeSettingsPersister, FakeStatePersister
+from fakes.fake_metadata_cache_persister import FakeMetadataCachePersister
+from fakes.fake_settings_persister import FakeSettingsPersister
+from fakes.fake_state_persister import FakeStatePersister
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger

@@ -6,7 +6,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from conftest import FakeHostnameProvider, FakePluginMetadataReader, FakeRetroDeckPaths, _make_retry
+from conftest import _make_retry
+from fakes.fake_hostname_provider import FakeHostnameProvider
+from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
 

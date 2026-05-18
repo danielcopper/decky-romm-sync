@@ -8,7 +8,8 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import FakeMigrationFileStore, FakeRetroDeckPaths
+from fakes.fake_migration_file_store import FakeMigrationFileStore
+from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 
 from adapters.migration_file import MigrationFileAdapter
 from services.migration import MigrationService, MigrationServiceConfig
