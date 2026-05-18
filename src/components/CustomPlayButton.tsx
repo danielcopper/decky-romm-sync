@@ -287,8 +287,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
 
     /* istanbul ignore next -- delegates to applyLaunchGateSetupOutcome; logic covered in src/utils/saveSetup.test.ts */
-    const outcome = resolveSaveSetupOutcome(setupInfo);
-    return applyLaunchGateSetupOutcome(outcome, {
+    return applyLaunchGateSetupOutcome(resolveSaveSetupOutcome(setupInfo), {
       rid,
       confirmSlotChoice,
       toast: (body) => toaster.toast({ title: "RomM Save Sync", body }),
