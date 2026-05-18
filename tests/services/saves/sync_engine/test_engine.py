@@ -451,21 +451,6 @@ class TestPostExitSync:
         assert any("detect_sort_change failed" in rec.message for rec in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_post_exit_sync_works_when_detect_sort_change_is_none(self, tmp_path):
-        """Default detect_sort_change=None: post_exit_sync still runs without error (#238)."""
-        svc, _ = make_service(tmp_path)  # detect_sort_change not passed → None
-        assert svc._sync_engine._detect_sort_change is None
-        svc._save_sync_state.settings.save_sync_enabled = True
-        svc._save_sync_state.device_id = "test-device"
-        _install_rom(svc, tmp_path)
-        _create_save(tmp_path, content=b"progress")
-
-        result = await svc.post_exit_sync(42)
-
-        assert result["success"] is True
-        assert result["synced"] == 1
-
-    @pytest.mark.asyncio
     async def test_post_exit_sync_message_includes_conflict_count(self, tmp_path):
         """post_exit_sync must surface conflict count in its message.
 
@@ -511,15 +496,6 @@ class TestCheckSaveStatusBackground:
         result = emitted[0][1][0]
         assert result["rom_id"] == 42
         assert len(result["files"]) >= 1
-
-    @pytest.mark.asyncio
-    async def test_no_emit_when_emit_is_none(self, tmp_path):
-        """Background check works without emit (no crash)."""
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path)
-
-        # Should not raise even without emit
-        await svc.check_save_status_background(42)
 
     @pytest.mark.asyncio
     async def test_swallows_errors(self, tmp_path):

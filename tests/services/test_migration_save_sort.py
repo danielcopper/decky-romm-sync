@@ -144,24 +144,6 @@ class TestDetectSaveSortChange:
         assert len(scheduled) == 1
         save_state_mock.save_state.assert_called_once()
 
-    def test_no_callback_noop(self, tmp_path):
-        """No get_retroarch_save_sorting callback — method is a no-op."""
-        save_state_mock = MagicMock()
-        svc = MigrationService(
-            config=MigrationServiceConfig(
-                migration_file_store=MigrationFileAdapter(),
-                state={"save_sort_settings": None, "installed_roms": {}},
-                loop=asyncio.get_event_loop(),
-                logger=logging.getLogger("test"),
-                state_persister=save_state_mock,
-                emit=MagicMock(),
-                get_bios_files_index=lambda: {},
-            ),
-        )
-        # Should not raise, no state changes
-        svc.detect_save_sort_change()
-        save_state_mock.save_state.assert_not_called()
-
 
 class TestCollectSaveSortingItems:
     def test_finds_existing_saves(self, tmp_path):
@@ -729,43 +711,6 @@ class TestResolveRetroArchCorename:
 
         svc, _ = _make_service(tmp_path, active_core=active_core, get_core_name=get_core_name)
         assert svc._resolve_retroarch_corename("blank", "Game.rom") == (None, "blank_libretro")
-
-    def test_no_core_name_callback_returns_none(self, tmp_path):
-        """Service constructed without ``get_core_name`` — method returns (None, None)."""
-
-        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
-            return ("snes9x_libretro", "Snes9x - Current")
-
-        svc = MigrationService(
-            config=MigrationServiceConfig(
-                migration_file_store=MigrationFileAdapter(),
-                state={"installed_roms": {}, "save_sort_settings": None},
-                loop=asyncio.get_event_loop(),
-                logger=logging.getLogger("test"),
-                state_persister=MagicMock(),
-                emit=MagicMock(),
-                get_bios_files_index=lambda: {},
-                get_active_core=active_core,
-                # get_core_name intentionally omitted
-            ),
-        )
-        assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") == (None, None)
-
-    def test_no_active_core_callback_returns_none(self, tmp_path):
-        """Service constructed without ``get_active_core`` — method returns (None, None)."""
-        svc = MigrationService(
-            config=MigrationServiceConfig(
-                migration_file_store=MigrationFileAdapter(),
-                state={"installed_roms": {}, "save_sort_settings": None},
-                loop=asyncio.get_event_loop(),
-                logger=logging.getLogger("test"),
-                state_persister=MagicMock(),
-                emit=MagicMock(),
-                get_bios_files_index=lambda: {},
-                get_core_name=lambda core_so: "Snes9x",
-            ),
-        )
-        assert svc._resolve_retroarch_corename("snes", "Zelda.sfc") == (None, None)
 
 
 class TestSortByCoreMigrationEndToEnd:

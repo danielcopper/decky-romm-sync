@@ -59,8 +59,8 @@ class DownloadServiceConfig:
     clock: Clock
     sleeper: Sleeper
     state_persister: StatePersister
-    retrodeck_paths: RetroDeckPaths | None = None
-    is_retrodeck_migration_pending: MigrationPendingFn | None = None
+    retrodeck_paths: RetroDeckPaths
+    is_retrodeck_migration_pending: MigrationPendingFn
 
 
 class DownloadService:
@@ -156,7 +156,7 @@ class DownloadService:
 
     def _clean_rom_tmp_files(self):
         """Remove leftover .tmp and .zip.tmp files from ROM directories."""
-        roms_base = self._retrodeck_paths.roms_path() if self._retrodeck_paths else ""
+        roms_base = self._retrodeck_paths.roms_path()
         if not roms_base:
             return 0
         paths = self._download_file_store.walk_files_matching_suffixes(roms_base, (_TMP_EXT, _ZIP_TMP_EXT))
@@ -164,7 +164,7 @@ class DownloadService:
 
     def _clean_bios_tmp_files(self):
         """Remove leftover .tmp files from BIOS directory."""
-        bios_base = self._retrodeck_paths.bios_path() if self._retrodeck_paths else ""
+        bios_base = self._retrodeck_paths.bios_path()
         if not bios_base:
             return 0
         paths = self._download_file_store.walk_files_matching_suffixes(bios_base, (_TMP_EXT,))
@@ -186,7 +186,7 @@ class DownloadService:
                 # short-circuit BEFORE poll_and_clear reads + clears the
                 # request file, otherwise queued requests would be silently
                 # dropped on the floor.
-                if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+                if self._is_retrodeck_migration_pending():
                     continue
                 requests = await self._loop.run_in_executor(None, self._download_queue_io.poll_and_clear, requests_path)
                 if not requests:
@@ -217,7 +217,7 @@ class DownloadService:
         platform_fs_slug = rom_detail.get("platform_fs_slug")
         system = self._resolve_system(platform_slug, platform_fs_slug)
 
-        roms_dir = os.path.join(self._retrodeck_paths.roms_path() if self._retrodeck_paths else "", system)
+        roms_dir = os.path.join(self._retrodeck_paths.roms_path(), system)
         file_name, files_missing = resolve_local_file_name(rom_detail)
         if files_missing:
             self._logger.warning(
@@ -271,7 +271,7 @@ class DownloadService:
         rom_dir_name = os.path.splitext(file_name)[0]
         extract_dir = os.path.join(os.path.dirname(target_path), rom_dir_name)
         self._download_file_store.make_dirs(extract_dir)
-        roms_base = self._retrodeck_paths.roms_path() if self._retrodeck_paths else ""
+        roms_base = self._retrodeck_paths.roms_path()
         tmp_zip = target_path + _ZIP_TMP_EXT
         # ZIP-slip protection: adapter validates members resolve within extract_dir
         # AND that extract_dir itself resolves within roms_base.

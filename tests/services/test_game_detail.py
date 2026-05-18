@@ -13,6 +13,7 @@ from fakes.fake_hostname_provider import FakeHostnameProvider
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
+from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.firmware_file import FirmwareFileAdapter
@@ -69,6 +70,8 @@ def plugin(tmp_path):
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
+            metadata_service=FakeMetadataExtractor(),
+            artwork=FakeArtworkManager(),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)
@@ -105,6 +108,10 @@ def plugin(tmp_path):
             log_debug=p._log_debug,
             plugin_metadata=FakePluginMetadataReader(version="0.14.0"),
             plugin_dir=str(tmp_path / "plugin"),
+            emit=AsyncMock(),
+            get_core_name=lambda core_so: None,
+            detect_sort_change=lambda: None,
+            is_retrodeck_migration_pending=lambda: False,
         ),
     )
     p._save_sync_service.init_state()

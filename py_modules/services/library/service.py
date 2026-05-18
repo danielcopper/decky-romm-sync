@@ -51,8 +51,8 @@ class LibraryServiceConfig:
     Holds the Protocol-typed adapters, the live state/settings/metadata
     cache dicts, runtime infrastructure, time/sleep/uuid seams, plugin-
     dir reference, event emitter, persistence callbacks, debug-logger
-    seam, and the optional metadata/artwork peer services LibraryService
-    needs at construction time.
+    seam, and the metadata/artwork peer services LibraryService needs
+    at construction time.
     """
 
     romm_api: RommLibraryApi
@@ -70,8 +70,8 @@ class LibraryServiceConfig:
     state_persister: StatePersister
     settings_persister: SettingsPersister
     log_debug: DebugLogger
-    metadata_service: MetadataExtractor | None = None
-    artwork: ArtworkManager | None = None
+    metadata_service: MetadataExtractor
+    artwork: ArtworkManager
 
 
 class LibraryService:

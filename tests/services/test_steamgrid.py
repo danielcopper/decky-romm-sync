@@ -6,6 +6,7 @@ import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_state_persister import FakeStatePersister
+from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger
@@ -57,6 +58,8 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
             state_persister=p._state_persister,
             settings_persister=p._settings_persister,
             log_debug=p._log_debug,
+            metadata_service=FakeMetadataExtractor(),
+            artwork=FakeArtworkManager(),
         ),
     )
 
@@ -713,6 +716,8 @@ class TestDebugLoggerProtocolSeam:
                 state_persister=FakeStatePersister(),
                 settings_persister=FakeSettingsPersister(),
                 log_debug=capture,
+                metadata_service=FakeMetadataExtractor(),
+                artwork=FakeArtworkManager(),
             ),
         )
 

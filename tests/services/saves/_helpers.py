@@ -29,6 +29,10 @@ def _make_save_sync_state_persister(tmp_path) -> SaveSyncStatePersisterAdapter:
     )
 
 
+async def _noop_emit(_event: str, /, *_args: object) -> None:
+    """Default emitter for SaveService tests — drops all events."""
+
+
 def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["SaveService", "FakeSaveApi"]:
     """Create a SaveService with sensible defaults for testing."""
     save_file_store = SaveFileAdapter()
@@ -58,7 +62,10 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         log_debug=lambda _msg: None,
         plugin_metadata=FakePluginMetadataReader(version="0.14.0"),
         plugin_dir=str(tmp_path / "plugin"),
-        emit=emit,
+        emit=emit if emit is not None else _noop_emit,
+        get_core_name=lambda core_so: None,
+        detect_sort_change=lambda: None,
+        is_retrodeck_migration_pending=lambda: False,
     )
     config_kwargs.update(overrides)
     svc = SaveService(config=SaveServiceConfig(**config_kwargs))

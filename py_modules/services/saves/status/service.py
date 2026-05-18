@@ -39,8 +39,8 @@ class StatusServiceConfig:
     (state, sync_engine, rom_info), the Protocol-typed RomM adapter
     and retry strategy, the plugin event loop, the standard-library
     logger, the ``DebugLogger`` seam, the ES-DE core resolver, and
-    the optional event emitter used to push background status updates
-    to the frontend.
+    the event emitter used to push background status updates to the
+    frontend.
     """
 
     state: dict
@@ -53,7 +53,7 @@ class StatusServiceConfig:
     logger: logging.Logger
     log_debug: DebugLogger
     get_active_core: CoreResolverFn
-    emit: EventEmitter | None
+    emit: EventEmitter
 
 
 class StatusService:
@@ -276,8 +276,7 @@ class StatusService:
         """Run full save status check in background and emit result to frontend."""
         try:
             result = await self.get_save_status(rom_id)
-            if self._emit is not None:
-                await self._emit("save_status_updated", result)
+            await self._emit("save_status_updated", result)
         except Exception as e:
             self._log_debug(f"Background save status check failed for rom {rom_id}: {e}")
 

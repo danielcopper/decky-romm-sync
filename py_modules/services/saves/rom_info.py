@@ -37,15 +37,14 @@ class RomInfoServiceConfig:
     Holds the main plugin state dict (for ``installed_roms`` reads and
     save-sort state), the Protocol-typed filesystem adapter, the
     RetroDECK runtime-path accessor, the ES-DE core resolver, the
-    optional RetroArch core-name provider, and the standard-library
-    logger.
+    RetroArch core-name provider, and the standard-library logger.
     """
 
     state: dict
     save_file_store: SaveFileStore
     retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
-    get_core_name: CoreNameProviderFn | None
+    get_core_name: CoreNameProviderFn
     logger: logging.Logger
 
 
@@ -154,16 +153,13 @@ class RomInfoService:
         Returns ``(corename, core_so)``. Either element may be ``None``
         when resolution fails at that step: ``core_so`` is ``None`` when
         ES-DE cannot determine the active core, ``corename`` is ``None``
-        when ``.info`` parsing returns nothing (or when ``get_core_name``
-        is not injected). Returning the tuple — rather than just
-        ``corename`` — lets callers include ``core_so`` in diagnostic
-        logs so users can identify which ``.info`` file is at fault.
-        Callers choose their own fallback strategy (e.g. warn and fall
-        back for critical-path SaveService flows; skip and warn for
-        one-shot migrations).
+        when ``.info`` parsing returns nothing. Returning the tuple —
+        rather than just ``corename`` — lets callers include ``core_so``
+        in diagnostic logs so users can identify which ``.info`` file
+        is at fault. Callers choose their own fallback strategy (e.g.
+        warn and fall back for critical-path SaveService flows; skip
+        and warn for one-shot migrations).
         """
-        if self._get_core_name is None:
-            return (None, None)
         core_so, _label = self._get_active_core(system, rom_filename)
         if not core_so:
             return (None, None)

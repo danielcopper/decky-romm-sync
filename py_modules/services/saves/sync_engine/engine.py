@@ -72,8 +72,8 @@ class SyncEngineConfig:
     get_active_core: CoreResolverFn
     hostname_provider: HostnameProvider
     plugin_version: str
-    detect_sort_change: SaveSortChangeFn | None
-    is_retrodeck_migration_pending: MigrationPendingFn | None
+    detect_sort_change: SaveSortChangeFn
+    is_retrodeck_migration_pending: MigrationPendingFn
 
 
 class SyncEngine:
@@ -236,8 +236,6 @@ class SyncEngine:
         previously-known state — save-sync must not abort because of a
         config read error.
         """
-        if self._detect_sort_change is None:
-            return
         try:
             await self._loop.run_in_executor(None, self._detect_sort_change)
         except Exception as e:
@@ -260,7 +258,7 @@ class SyncEngine:
             # files still living at the old home. Internal _sync_rom_saves callers
             # (sync_all_saves, rollback_to_version) are protected by the decorator
             # on their own public callables — this guard is for pre_launch_sync.
-            if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+            if self._is_retrodeck_migration_pending():
                 return {
                     "success": False,
                     "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
@@ -314,7 +312,7 @@ class SyncEngine:
             # Defense in depth: same rationale as pre_launch_sync — internal
             # _sync_rom_saves callers are protected by @migration_blocked on
             # their public callables; this guard covers post_exit_sync only.
-            if self._is_retrodeck_migration_pending and self._is_retrodeck_migration_pending():
+            if self._is_retrodeck_migration_pending():
                 self._logger.info("post_exit_sync skipped: retrodeck migration pending")
                 return {
                     "success": False,

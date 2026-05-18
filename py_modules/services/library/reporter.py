@@ -49,8 +49,8 @@ class SyncReporterConfig:
     reporter reads the pending-sync dicts populated by the orchestrator
     and clears the active sync id when reporting completes), an
     orchestrator-supplied ``emit_progress`` callback for the terminal
-    "done" event, and the optional ``ArtworkManager`` peer used for
-    cover-path finalisation.
+    "done" event, and the ``ArtworkManager`` peer used for cover-path
+    finalisation.
     """
 
     steam_config: SteamConfigStore
@@ -63,7 +63,7 @@ class SyncReporterConfig:
     state_persister: StatePersister
     sync_state_box: LibrarySyncStateBox
     emit_progress: EmitProgressFn
-    artwork: ArtworkManager | None = None
+    artwork: ArtworkManager
 
 
 class SyncReporter:
@@ -85,10 +85,8 @@ class SyncReporter:
     # ── Report sync results (frontend callback) ──────────────────
 
     def _finalize_cover_path(self, grid, cover_path, app_id, rom_id_str):
-        """Delegate to ArtworkService callback if available, else passthrough."""
-        if self._artwork is not None:
-            return self._artwork.finalize_cover_path(grid, cover_path, app_id, rom_id_str)
-        return cover_path
+        """Delegate to ArtworkService for the final ``{app_id}p.png`` cover-path."""
+        return self._artwork.finalize_cover_path(grid, cover_path, app_id, rom_id_str)
 
     def _build_registry_entry(self, pending, app_id, cover_path):
         """Build a registry entry dict from pending sync data."""

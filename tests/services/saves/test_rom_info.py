@@ -267,17 +267,16 @@ class TestGetRomSaveInfo:
         assert warnings, "expected fallback warning"
         assert "core_so=mgba_libretro" in warnings[0]
 
-    def test_sort_by_core_falls_back_when_get_core_name_missing(self, tmp_path, caplog):
-        """Constructed without get_core_name → still warns and falls back.
+    def test_sort_by_core_falls_back_when_get_core_name_returns_none(self, tmp_path, caplog):
+        """``get_core_name`` returns ``None`` (.info unreadable) → warns and falls back.
 
-        When ``get_core_name`` is not injected, the helper short-circuits before
-        calling ``get_active_core``, so ``core_so`` is never resolved and the log
-        records ``core_so=unresolved`` for that case.
+        ``get_active_core`` succeeded so ``core_so`` is identified in the
+        diagnostic log to help the user locate the unreadable .info file.
         """
         svc, _ = make_service(
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
-            # get_core_name intentionally omitted (defaults to None)
+            get_core_name=lambda core_so: None,
         )
         _install_rom(svc, tmp_path)
         svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
@@ -289,7 +288,7 @@ class TestGetRomSaveInfo:
         assert result["saves_dir"].endswith("saves/gba")
         warnings = [rec.message for rec in caplog.records if "unable to resolve RetroArch corename" in rec.message]
         assert warnings, "expected fallback warning"
-        assert "core_so=unresolved" in warnings[0]
+        assert "core_so=mgba_libretro" in warnings[0]
 
     def test_sort_by_core_falls_back_when_active_core_unresolved(self, tmp_path, caplog):
         """sort_by_core=True but get_active_core returns (None, None) → warn + fall back.

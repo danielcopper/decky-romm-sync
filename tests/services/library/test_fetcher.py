@@ -473,30 +473,6 @@ class TestPrefetchAllUnits:
         assert all_roms == []
         assert prefetched[0].all_collection_rom_ids == []
 
-    @pytest.mark.asyncio
-    async def test_skips_metadata_block_when_no_metadata_service(self, plugin, fake_romm_api):
-        """Branch 628->634: when metadata_service is None, the cache-stamping loop is skipped."""
-        _wire_fake(plugin, fake_romm_api)
-        fake_romm_api.platforms = [
-            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 1},
-        ]
-        fake_romm_api.roms = {
-            10: {"id": 10, "platform_id": 1, "name": "A"},
-        }
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
-
-        plugin._sync_service._fetcher._metadata_service = None
-        # Tracking dict to confirm the metadata_cache was NOT touched.
-        plugin._sync_service._fetcher._metadata_cache = {}
-
-        prefetched, all_roms, *_ = await plugin._sync_service._fetcher.prefetch_all_units()
-
-        assert len(all_roms) == 1
-        assert prefetched[0].unit.name == "N64"
-        # No metadata service => metadata_cache stays empty.
-        assert plugin._sync_service._fetcher._metadata_cache == {}
-
 
 class TestBuildWorkQueueErrorPaths:
     """Tests for build_work_queue() collection-list failure / filter branches."""

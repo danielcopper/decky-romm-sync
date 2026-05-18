@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,6 +12,7 @@ from fakes.fake_hostname_provider import FakeHostnameProvider
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
+from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.migration_file import MigrationFileAdapter
@@ -68,6 +69,8 @@ def plugin(tmp_path):
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
+            metadata_service=FakeMetadataExtractor(),
+            artwork=FakeArtworkManager(),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)
@@ -106,6 +109,10 @@ def plugin(tmp_path):
             log_debug=p._log_debug,
             plugin_metadata=FakePluginMetadataReader(version="0.14.0"),
             plugin_dir=str(tmp_path / "plugin"),
+            emit=AsyncMock(),
+            get_core_name=lambda core_so: None,
+            detect_sort_change=lambda: None,
+            is_retrodeck_migration_pending=lambda: False,
         ),
     )
     p._save_sync_service.init_state()
@@ -458,7 +465,10 @@ class TestPostExitSync:
                 state_persister=MagicMock(),
                 emit=MagicMock(),
                 get_bios_files_index=lambda: {},
+                retrodeck_paths=FakeRetroDeckPaths(),
                 get_retroarch_save_sorting=lambda: (False, False),
+                get_active_core=lambda system_name, rom_filename=None: (None, None),
+                get_core_name=lambda core_so: None,
             ),
         )
         # Sanity: same state object — mutations through migration will be

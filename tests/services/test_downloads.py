@@ -9,6 +9,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.download_file import DownloadFileAdapter
@@ -53,6 +54,8 @@ def plugin():
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
+            metadata_service=FakeMetadataExtractor(),
+            artwork=FakeArtworkManager(),
         ),
     )
     p._save_sync_state = SaveSyncState()
@@ -74,6 +77,7 @@ def plugin():
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
+            is_retrodeck_migration_pending=lambda: False,
         ),
     )
     p._rom_removal_service = RomRemovalService(
@@ -2261,19 +2265,6 @@ class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
     / bios_path() return ""). Service must not walk an empty path.
     """
 
-    def test_no_retrodeck_paths_bundle_skips_walk(self, plugin):
-        from fakes.fake_download_file_store import FakeDownloadFileStore
-
-        fake = FakeDownloadFileStore()
-        plugin._download_service._download_file_store = fake
-        # Drop the retrodeck_paths bundle entirely — both clean helpers
-        # must short-circuit before walking.
-        plugin._download_service._retrodeck_paths = None
-
-        plugin._download_service.cleanup_leftover_tmp_files()
-
-        assert fake.walk_calls == []
-
     def test_empty_roms_and_bios_paths_skip_walk(self, plugin):
         from fakes.fake_download_file_store import FakeDownloadFileStore
 
@@ -2342,7 +2333,7 @@ class TestPollDownloadRequestsLoopBody:
         from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
 
         plugin._download_service._runtime_dir = str(tmp_path)
-        plugin._download_service._is_retrodeck_migration_pending = None
+        plugin._download_service._is_retrodeck_migration_pending = lambda: False
 
         class _CancellingSleeper:
             def __init__(self):
@@ -2371,7 +2362,7 @@ class TestPollDownloadRequestsLoopBody:
         import logging
 
         plugin._download_service._runtime_dir = str(tmp_path)
-        plugin._download_service._is_retrodeck_migration_pending = None
+        plugin._download_service._is_retrodeck_migration_pending = lambda: False
 
         # Sleeper cancels after a couple of iterations so the loop
         # body runs at least once after the failing poll.

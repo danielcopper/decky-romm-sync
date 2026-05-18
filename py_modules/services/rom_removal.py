@@ -20,10 +20,11 @@ class RomRemovalServiceConfig:
     """Frozen wiring bundle handed to ``RomRemovalService.__init__``.
 
     Holds the live state dicts, runtime infrastructure, persistence
-    callbacks, the Protocol-typed filesystem adapter, optional
-    RetroDECK paths bundle, and the optional ``DownloadQueueCleanup``
-    eviction seam. Decomposes the ctor so a new dependency does not
-    push past the S107 parameter-count limit.
+    callbacks, the Protocol-typed filesystem adapter, the RetroDECK
+    paths bundle, and the ``DownloadQueueCleanup`` eviction seam
+    (``None`` when no download cleanup is wired). Decomposes the ctor
+    so a new dependency does not push past the S107 parameter-count
+    limit.
     """
 
     state: dict
@@ -33,8 +34,8 @@ class RomRemovalServiceConfig:
     state_persister: StatePersister
     save_sync_state_writer: StatePersister
     rom_file_store: RomFileStore
-    retrodeck_paths: RetroDeckPaths | None = None
-    download_queue_cleanup: DownloadQueueCleanup | None = None
+    retrodeck_paths: RetroDeckPaths
+    download_queue_cleanup: DownloadQueueCleanup | None
 
 
 class RomRemovalService:
@@ -60,7 +61,7 @@ class RomRemovalService:
         rom_dir = installed.get("rom_dir", "")
         file_path = installed.get("file_path", "")
 
-        roms_base = self._retrodeck_paths.roms_path() if self._retrodeck_paths else ""
+        roms_base = self._retrodeck_paths.roms_path()
         if rom_dir and self._rom_file_store.is_dir(rom_dir):
             if not is_safe_rom_path(rom_dir, roms_base):
                 self._logger.error(f"Refusing to delete path outside roms directory: {rom_dir}")

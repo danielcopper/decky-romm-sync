@@ -49,10 +49,10 @@ class MigrationServiceConfig:
     state_persister: StatePersister
     emit: EventEmitter
     get_bios_files_index: Callable[[], dict]
-    retrodeck_paths: RetroDeckPaths | None = None
-    get_retroarch_save_sorting: RetroArchSaveSortingProvider | None = None
-    get_active_core: CoreResolverFn | None = None
-    get_core_name: CoreNameProviderFn | None = None
+    retrodeck_paths: RetroDeckPaths
+    get_retroarch_save_sorting: RetroArchSaveSortingProvider
+    get_active_core: CoreResolverFn
+    get_core_name: CoreNameProviderFn
 
 
 class MigrationService:
@@ -73,7 +73,7 @@ class MigrationService:
 
     def detect_retrodeck_path_change(self) -> None:
         """Check if RetroDECK home path changed since last run."""
-        current_home = self._retrodeck_paths.retrodeck_home() if self._retrodeck_paths else ""
+        current_home = self._retrodeck_paths.retrodeck_home()
         stored_home = self._state.get("retrodeck_home_path", "")
 
         if not current_home:
@@ -198,7 +198,7 @@ class MigrationService:
         """Collect untracked BIOS migration items (downloaded before state tracking)."""
         items = []
         old_bios = os.path.join(old_home, "bios")
-        new_bios = self._retrodeck_paths.bios_path() if self._retrodeck_paths else ""
+        new_bios = self._retrodeck_paths.bios_path()
         if not self._migration_file_store.is_dir(old_bios):
             return items
         downloaded_bios = self._state.get("downloaded_bios", {})
@@ -222,7 +222,7 @@ class MigrationService:
         """
         items = []
         old_saves = os.path.join(old_home, "saves")
-        new_saves = self._retrodeck_paths.saves_path() if self._retrodeck_paths else ""
+        new_saves = self._retrodeck_paths.saves_path()
         if not self._migration_file_store.is_dir(old_saves):
             return items
         for dirpath, _dirs, filenames in self._migration_file_store.walk_files(old_saves):
@@ -449,8 +449,6 @@ class MigrationService:
         ``loop.create_task`` is NOT thread-safe and races with loop
         internals on CPython (#238 review).
         """
-        if self._get_retroarch_save_sorting is None:
-            return
         sort_by_content, sort_by_core = self._get_retroarch_save_sorting()
         current = {"sort_by_content": sort_by_content, "sort_by_core": sort_by_core}
         stored = self._state.get("save_sort_settings")
@@ -485,13 +483,11 @@ class MigrationService:
         subdirectories.
 
         Returns a ``(corename, core_so)`` tuple. ``corename`` is ``None``
-        (fail loud, no ES-DE label fallback) if either provider is
-        missing or unable to resolve. ``core_so`` is the underlying
+        (fail loud, no ES-DE label fallback) when the providers cannot
+        resolve a core for this system/ROM. ``core_so`` is the underlying
         ES-DE core ``.so`` basename when known (useful for diagnostics
         when ``corename`` is ``None``), otherwise ``None``.
         """
-        if self._get_active_core is None or self._get_core_name is None:
-            return (None, None)
         core_so, _label = self._get_active_core(system, rom_filename)
         if not core_so:
             return (None, None)
@@ -500,8 +496,6 @@ class MigrationService:
 
     def _collect_save_sorting_items(self, old_settings: dict, new_settings: dict) -> list:
         """Collect save files that need migration due to sort setting change."""
-        if not self._retrodeck_paths:
-            return []
         saves_base = self._retrodeck_paths.saves_path()
         roms_base = self._retrodeck_paths.roms_path()
         need_core = bool(old_settings.get("sort_by_core") or new_settings.get("sort_by_core"))

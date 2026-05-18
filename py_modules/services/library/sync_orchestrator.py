@@ -72,10 +72,10 @@ class SyncOrchestratorConfig:
     plugin-dir reference for shortcut data construction, the shared
     :class:`LibrarySyncStateBox`, and three peer references the
     orchestrator drives at runtime: the :class:`LibraryFetcher` it
-    delegates prefetching and per-unit fetches to, an optional
+    delegates prefetching and per-unit fetches to, an
     :class:`ArtworkManager` for the apply-phase artwork download, and
-    an optional :class:`MetadataExtractor` it asks to flush its dirty
-    metadata cache during the sync ``finally``. The ``reporter`` field
+    a :class:`MetadataExtractor` it asks to flush its dirty metadata
+    cache during the sync ``finally``. The ``reporter`` field
     is a :class:`LateBinding` because :class:`LibraryService` constructs
     the orchestrator before the reporter exists; the façade plugs the
     reader in via ``set()`` once the reporter is built.
@@ -94,8 +94,8 @@ class SyncOrchestratorConfig:
     sync_state_box: LibrarySyncStateBox
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
-    metadata_service: MetadataExtractor | None = None
-    artwork: ArtworkManager | None = None
+    metadata_service: MetadataExtractor
+    artwork: ArtworkManager
 
 
 class SyncOrchestrator:
@@ -422,8 +422,7 @@ class SyncOrchestrator:
             self._loop.create_task(self._emit("sync_progress", box.sync_progress))
             box.sync_state = SyncState.IDLE
         finally:
-            if self._metadata_service is not None:
-                self._metadata_service.flush_metadata_if_dirty()
+            self._metadata_service.flush_metadata_if_dirty()
 
     async def _sync_one_unit(
         self,
@@ -646,12 +645,10 @@ class SyncOrchestrator:
     async def _download_artwork(self, all_roms, progress_step=4, progress_total_steps=6):
         """Delegate artwork download to ArtworkService callback."""
         box = self._sync_state
-        if self._artwork is not None:
-            return await self._artwork.download_artwork(
-                all_roms,
-                emit_progress=self._emit_progress,
-                is_cancelling=lambda: box.sync_state == SyncState.CANCELLING,
-                progress_step=progress_step,
-                progress_total_steps=progress_total_steps,
-            )
-        return {}
+        return await self._artwork.download_artwork(
+            all_roms,
+            emit_progress=self._emit_progress,
+            is_cancelling=lambda: box.sync_state == SyncState.CANCELLING,
+            progress_step=progress_step,
+            progress_total_steps=progress_total_steps,
+        )

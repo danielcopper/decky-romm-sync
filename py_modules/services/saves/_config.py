@@ -84,14 +84,14 @@ class SaveServiceConfig:
     get_core_name:
         Callable returning the RetroArch canonical ``corename`` field
         from a core's ``.info`` file for a given ``core_so`` (e.g.
-        ``"mgba_libretro"`` -> ``"mGBA"``). Optional. When
+        ``"mgba_libretro"`` -> ``"mGBA"``). When
         ``sort_savefiles_enable`` is active on RetroArch, this is the
         authoritative name used for the per-core save subdirectory — it
         is NOT the same as the ES-DE UI label returned by
         ``get_active_core`` (see the Config-Source-Parsers wiki page
-        for the one-parser-per-source rationale). When ``None`` or when
-        resolution fails at runtime, SaveService warns and falls back
-        to the parent directory path; see
+        for the one-parser-per-source rationale). When resolution fails
+        at runtime (the callable returns ``None``), SaveService warns
+        and falls back to the parent directory path; see
         ``_resolve_retroarch_corename``.
     plugin_metadata:
         ``PluginMetadataReader`` Protocol seam — read once during
@@ -101,11 +101,10 @@ class SaveServiceConfig:
         Plugin install directory (``decky.DECKY_PLUGIN_DIR``) passed to
         :meth:`PluginMetadataReader.read_version`.
     emit:
-        Optional event emitter for pushing save-sync progress to the
-        frontend. ``None`` disables emission (used in unit tests).
+        Event emitter for pushing save-sync progress to the frontend.
     detect_sort_change:
-        Optional synchronous callback that refreshes save-sort state
-        from the live RetroArch config (wired to
+        Synchronous callback that refreshes save-sort state from the
+        live RetroArch config (wired to
         ``MigrationService.detect_save_sort_change`` in ``bootstrap``).
         Save-sync MUST see fresh save-sort state before computing
         ``saves_dir`` — otherwise a direct-Steam-launch with no
@@ -113,14 +112,11 @@ class SaveServiceConfig:
         content to the wrong layout and destroy real user progress
         during the subsequent migration (#238). ``pre_launch_sync`` and
         ``post_exit_sync`` invoke this callback once at their entry
-        point. ``None`` disables the call (used only in unit tests
-        where state is seeded explicitly); failures are logged and
-        swallowed so save-sync degrades gracefully to the
-        previously-known state.
+        point; failures are logged and swallowed so save-sync degrades
+        gracefully to the previously-known state.
     is_retrodeck_migration_pending:
-        Optional callback returning ``True`` when a RetroDECK migration
-        is in flight; SaveService gates destructive operations on this
-        signal. ``None`` disables the gate (unit tests).
+        Callback returning ``True`` when a RetroDECK migration is in
+        flight; SaveService gates destructive operations on this signal.
     log_debug:
         ``DebugLogger`` Protocol seam — routes through the user's QAM
         log-level filter. Injected directly into each sub-service that
@@ -143,7 +139,7 @@ class SaveServiceConfig:
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
     plugin_dir: str
-    get_core_name: CoreNameProviderFn | None = None
-    emit: EventEmitter | None = None
-    detect_sort_change: SaveSortChangeFn | None = None
-    is_retrodeck_migration_pending: MigrationPendingFn | None = None
+    get_core_name: CoreNameProviderFn
+    emit: EventEmitter
+    detect_sort_change: SaveSortChangeFn
+    is_retrodeck_migration_pending: MigrationPendingFn

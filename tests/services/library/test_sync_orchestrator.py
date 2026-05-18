@@ -1677,12 +1677,3 @@ class TestDownloadArtworkDelegation:
         assert is_cancelling() is False
         plugin._sync_service._sync_state = SyncState.CANCELLING
         assert is_cancelling() is True
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_when_artwork_manager_missing(self, plugin):
-        """No _artwork bound → return {} without raising."""
-        plugin._sync_service._orchestrator._artwork = None
-        result = await plugin._sync_service._orchestrator._download_artwork(
-            [{"id": 1}], progress_step=1, progress_total_steps=1
-        )
-        assert result == {}

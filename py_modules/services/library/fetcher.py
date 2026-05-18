@@ -52,9 +52,8 @@ class LibraryFetcherConfig:
     settings persistence callback, debug-logger seam, the shared
     ``LibrarySyncStateBox`` (read for the cancel signal), an
     ``_emit_progress`` callback the fetcher uses to surface long
-    paginated fetches to the frontend, and the optional
-    ``MetadataExtractor`` peer service the fetcher stamps the metadata
-    cache through.
+    paginated fetches to the frontend, and the ``MetadataExtractor``
+    peer service the fetcher stamps the metadata cache through.
     """
 
     romm_api: RommLibraryApi
@@ -68,7 +67,7 @@ class LibraryFetcherConfig:
     log_debug: DebugLogger
     sync_state_box: LibrarySyncStateBox
     emit_progress: EmitProgressFn
-    metadata_service: MetadataExtractor | None = None
+    metadata_service: MetadataExtractor
 
 
 class LibraryFetcher:
@@ -633,12 +632,11 @@ class LibraryFetcher:
         shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir)
         self._check_cancelling()
 
-        if self._metadata_service is not None:
-            for rom in all_roms:
-                rom_id_str = str(rom["id"])
-                self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
-                self._metadata_service.mark_metadata_dirty()
-            self._metadata_service.flush_metadata_if_dirty()
+        for rom in all_roms:
+            rom_id_str = str(rom["id"])
+            self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
+            self._metadata_service.mark_metadata_dirty()
+        self._metadata_service.flush_metadata_if_dirty()
         self._log_debug(f"Metadata cached for {len(all_roms)} ROMs (prefetch)")
 
         return prefetched, all_roms, shortcuts_data, collection_memberships, platform_rom_ids
@@ -649,7 +647,7 @@ class LibraryFetcher:
         Called by the per-unit pipeline after each unit so a mid-sync
         crash leaves cached metadata for every unit that completed.
         """
-        if self._metadata_service is None or not unit_roms:
+        if not unit_roms:
             return
         for rom in unit_roms:
             rom_id_str = str(rom["id"])

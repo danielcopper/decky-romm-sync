@@ -8,6 +8,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
 
@@ -82,6 +83,8 @@ def plugin():
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
+            metadata_service=FakeMetadataExtractor(),
+            artwork=FakeArtworkManager(),
         ),
     )
     return p

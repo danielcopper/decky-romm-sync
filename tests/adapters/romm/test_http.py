@@ -5,6 +5,7 @@ import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.romm.http import RommHttpAdapter
@@ -60,6 +61,8 @@ def plugin():
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
+            metadata_service=FakeMetadataExtractor(),
+            artwork=FakeArtworkManager(),
         ),
     )
 

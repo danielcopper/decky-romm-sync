@@ -10,6 +10,7 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_state_persister import FakeStatePersister
+from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.debug_logger import SettingsAwareDebugLogger
@@ -69,6 +70,8 @@ def plugin():
             state_persister=p._state_persister,
             settings_persister=p._settings_persister,
             log_debug=p._log_debug,
+            metadata_service=FakeMetadataExtractor(),
+            artwork=FakeArtworkManager(),
         ),
     )
 
