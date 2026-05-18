@@ -62,14 +62,6 @@ export interface RomMetadata {
   steam_categories?: number[];
 }
 
-export interface RomLookupResult {
-  rom_id: number;
-  name: string;
-  platform_name: string;
-  platform_slug: string;
-  installed: InstalledRom | null;
-}
-
 export interface LaunchVerdict {
   action: "allow" | "warn" | "block";
   reason: "not_installed" | "save_conflict" | "save_status_failed" | null;

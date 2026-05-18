@@ -69,7 +69,7 @@ class VersionsService:
     # Version History API
     # ------------------------------------------------------------------
 
-    def _find_file_state(self, rom_id_str: str, filename: str, server_saves: list[dict]) -> FileSyncState | None:  # noqa: ARG002 — server_saves kept for callable signature stability
+    def _find_file_state(self, rom_id_str: str, filename: str) -> FileSyncState | None:
         """Look up the per-file sync state for *filename* (canonical local name).
 
         State keys are always ``<rom_name>.<ext>`` — the same canonical
@@ -117,7 +117,7 @@ class VersionsService:
             self._log_debug(f"list_file_versions: failed to list saves: {e}")
             return {"status": "server_unreachable", "error": str(e)}
 
-        file_state = self._find_file_state(rom_id_str, filename, server_saves)
+        file_state = self._find_file_state(rom_id_str, filename)
         tracked_id = file_state.tracked_save_id if file_state else None
 
         rom_state = self._state_svc.state.saves.get(rom_id_str)
