@@ -14,6 +14,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import InstalledRomEntry, PluginState, SaveSortSettings
+
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
 
@@ -43,7 +45,7 @@ class MigrationServiceConfig:
     """
 
     migration_file_store: MigrationFileStore
-    state: dict
+    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     state_persister: StatePersister
@@ -450,7 +452,7 @@ class MigrationService:
         internals on CPython (#238 review).
         """
         sort_by_content, sort_by_core = self._get_retroarch_save_sorting()
-        current = {"sort_by_content": sort_by_content, "sort_by_core": sort_by_core}
+        current: SaveSortSettings = {"sort_by_content": sort_by_content, "sort_by_core": sort_by_core}
         stored = self._state.get("save_sort_settings")
         if stored is None:
             self._state["save_sort_settings"] = current
@@ -494,7 +496,7 @@ class MigrationService:
         corename = self._get_core_name(core_so)
         return (corename or None, core_so)
 
-    def _collect_save_sorting_items(self, old_settings: dict, new_settings: dict) -> list:
+    def _collect_save_sorting_items(self, old_settings: SaveSortSettings, new_settings: SaveSortSettings) -> list:
         """Collect save files that need migration due to sort setting change."""
         saves_base = self._retrodeck_paths.saves_path()
         roms_base = self._retrodeck_paths.roms_path()
@@ -514,11 +516,11 @@ class MigrationService:
 
     def _collect_rom_sort_items(
         self,
-        entry: dict,
+        entry: InstalledRomEntry,
         saves_base: str,
         roms_base: str,
-        old_settings: dict,
-        new_settings: dict,
+        old_settings: SaveSortSettings,
+        new_settings: SaveSortSettings,
         need_core: bool,
         items: list,
     ) -> None:
@@ -572,7 +574,9 @@ class MigrationService:
             if self._migration_file_store.exists(old_file):
                 items.append((filename, old_file, new_file, lambda: None, "save"))
 
-    def _get_save_sort_migration_status_io(self, old_settings: dict, new_settings: dict) -> dict:
+    def _get_save_sort_migration_status_io(
+        self, old_settings: SaveSortSettings, new_settings: SaveSortSettings
+    ) -> dict:
         items = self._collect_save_sorting_items(old_settings, new_settings)
         return {
             "pending": True,
@@ -660,7 +664,7 @@ class MigrationService:
             self._logger.error(f"Save-sort overwrite failed: {old_path}: {e}")
 
     def _migrate_save_sort_files_io(
-        self, old_settings: dict, new_settings: dict, conflict_strategy: str | None
+        self, old_settings: SaveSortSettings, new_settings: SaveSortSettings, conflict_strategy: str | None
     ) -> dict:
         # conflict_strategy is retained for backwards-compatibility with the
         # callable signature but is unused for save-sort migration — conflicts

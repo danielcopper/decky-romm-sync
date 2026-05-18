@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 from bootstrap import (
@@ -29,6 +30,7 @@ from fakes.fake_rom_file_store import FakeRomFileStore
 from fakes.fake_save_file_store import FakeSaveFileStore
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import ShortcutRegistryEntry
 
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
@@ -108,7 +110,7 @@ class TestBootstrap:
         state = result.stores.state
         # Inner containers were independently constructed; mutating them
         # does not bleed into a future bootstrap call's state.
-        state["shortcut_registry"]["sentinel"] = {"app_id": 1}
+        state["shortcut_registry"]["sentinel"] = cast("ShortcutRegistryEntry", {"app_id": 1})
         state["sync_stats"]["platforms"] = 42
 
         second = _bootstrap_for(tmp_path)

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from models.state import PluginState, SaveSortSettings
 
 from adapters.migration_file import MigrationFileAdapter
 from services.migration import MigrationService, MigrationServiceConfig
@@ -39,11 +40,14 @@ def _make_service(
     Pass ``migration_file_store`` to swap the real ``MigrationFileAdapter``
     for a fake when a test needs failure injection.
     """
-    state = {
+    state: PluginState = {
         "shortcut_registry": {},
         "installed_roms": installed_roms or {},
         "retrodeck_home_path": "",
         "save_sort_settings": None,
+        "last_sync": None,
+        "sync_stats": {"platforms": 0, "roms": 0},
+        "downloaded_bios": {},
     }
     if state_overrides:
         state.update(state_overrides)
@@ -140,7 +144,7 @@ class TestDetectSaveSortChange:
             migration_module.asyncio.run_coroutine_threadsafe = original  # type: ignore[assignment]
 
         assert svc._state["save_sort_settings"] == {"sort_by_content": False, "sort_by_core": True}
-        assert svc._state["save_sort_settings_previous"] == old
+        assert svc._state.get("save_sort_settings_previous") == old
         assert len(scheduled) == 1
         save_state_mock.save_state.assert_called_once()
 
@@ -180,8 +184,8 @@ class TestCollectSaveSortingItems:
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         items = svc._collect_save_sorting_items(old_settings, new_settings)
 
         assert len(items) == 1
@@ -212,7 +216,7 @@ class TestCollectSaveSortingItems:
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         # Same settings -> same dir
-        same_settings = {"sort_by_content": True, "sort_by_core": False}
+        same_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         items = svc._collect_save_sorting_items(same_settings, same_settings)
 
         assert items == []
@@ -238,8 +242,8 @@ class TestCollectSaveSortingItems:
         svc, _ = _make_service(tmp_path, installed_roms=installed_roms)
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         items = svc._collect_save_sorting_items(old_settings, new_settings)
 
         assert items == []
@@ -279,8 +283,8 @@ class TestSaveSortMigrationStatus:
                 "platform_slug": "gba",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         svc, _ = _make_service(
             tmp_path,
             installed_roms=installed_roms,
@@ -326,8 +330,8 @@ class TestMigrateSaveSortFiles:
                 "platform_slug": "gba",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         svc, _ = _make_service(
             tmp_path,
             installed_roms=installed_roms,
@@ -383,8 +387,8 @@ class TestMigrateSaveSortFiles:
                 "platform_slug": "gba",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         svc, _ = _make_service(
             tmp_path,
             installed_roms=installed_roms,
@@ -436,8 +440,8 @@ class TestMigrateSaveSortFiles:
                 "platform_slug": "gba",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         svc, _ = _make_service(
             tmp_path,
             installed_roms=installed_roms,
@@ -482,8 +486,8 @@ class TestMigrateSaveSortFiles:
                 "platform_slug": "gba",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         svc, _ = _make_service(
             tmp_path,
             installed_roms=installed_roms,
@@ -535,8 +539,8 @@ class TestMigrateSaveSortFiles:
                 "platform_slug": "gba",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         svc, _ = _make_service(
             tmp_path,
             installed_roms=installed_roms,
@@ -585,8 +589,8 @@ class TestMigrateSaveSortFiles:
                 "platform_slug": "gba",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         svc, _ = _make_service(
             tmp_path,
             installed_roms=installed_roms,
@@ -617,8 +621,8 @@ class TestMigrateSaveSortFiles:
         roms_path.mkdir()
         saves_path.mkdir()
 
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": False}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         # No installed ROMs — migration runs with 0 items but still succeeds
         svc, _ = _make_service(
             tmp_path,
@@ -745,8 +749,8 @@ class TestSortByCoreMigrationEndToEnd:
                 "platform_slug": "snes",
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": True}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": True}
 
         def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
             return ("snes9x_libretro", "Snes9x - Current")
@@ -798,8 +802,8 @@ class TestSortByCoreMigrationEndToEnd:
                 "platform_slug": "snes",  # triggers .srm extension
             }
         }
-        old_settings = {"sort_by_content": True, "sort_by_core": False}
-        new_settings = {"sort_by_content": False, "sort_by_core": True}
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": True}
 
         def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
             return ("oddcore_libretro", "Oddcore Label")

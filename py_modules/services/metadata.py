@@ -8,9 +8,10 @@ the list API and served from cache on demand (no detail API calls).
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from models.metadata import RomMetadata
+from models.state import MetadataCache, MetadataCacheEntry, PluginState
 
 from domain.steam_categories import build_steam_categories
 
@@ -30,8 +31,8 @@ class MetadataServiceConfig:
     seams MetadataService needs at construction time.
     """
 
-    state: dict
-    metadata_cache: dict
+    state: PluginState
+    metadata_cache: MetadataCache
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
@@ -54,7 +55,7 @@ class MetadataService:
         self._metadata_dirty_count = 0
         self._METADATA_FLUSH_INTERVAL = 50
 
-    def extract_metadata(self, rom):
+    def extract_metadata(self, rom: dict) -> MetadataCacheEntry:
         """Extract metadata fields from a ROM dict into cache format."""
         metadatum = rom.get("metadatum") or {}
         first_release_date = metadatum.get("first_release_date")
@@ -66,18 +67,21 @@ class MetadataService:
         genres_list = metadatum.get("genres") or []
         game_modes_list = metadatum.get("game_modes") or []
         steam_cats = build_steam_categories(genres_list, game_modes_list)
-        return asdict(
-            RomMetadata(
-                summary=rom.get("summary", "") or "",
-                genres=tuple(genres_list),
-                companies=tuple(metadatum.get("companies") or []),
-                first_release_date=first_release_date,
-                average_rating=average_rating,
-                game_modes=tuple(game_modes_list),
-                player_count=metadatum.get("player_count", "") or "",
-                cached_at=self._clock.time(),
-                steam_categories=tuple(steam_cats),
-            )
+        return cast(
+            "MetadataCacheEntry",
+            asdict(
+                RomMetadata(
+                    summary=rom.get("summary", "") or "",
+                    genres=tuple(genres_list),
+                    companies=tuple(metadatum.get("companies") or []),
+                    first_release_date=first_release_date,
+                    average_rating=average_rating,
+                    game_modes=tuple(game_modes_list),
+                    player_count=metadatum.get("player_count", "") or "",
+                    cached_at=self._clock.time(),
+                    steam_categories=tuple(steam_cats),
+                )
+            ),
         )
 
     def mark_metadata_dirty(self):

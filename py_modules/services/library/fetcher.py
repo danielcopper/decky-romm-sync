@@ -16,6 +16,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import MetadataCache, PluginState
+
 from domain.shortcut_data import build_shortcuts_data
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
@@ -57,9 +59,9 @@ class LibraryFetcherConfig:
     """
 
     romm_api: RommLibraryApi
-    state: dict
+    state: PluginState
     settings: dict
-    metadata_cache: dict
+    metadata_cache: MetadataCache
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str

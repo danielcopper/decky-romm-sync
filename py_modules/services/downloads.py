@@ -14,6 +14,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import InstalledRomEntry, PluginState
+
 from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u, resolve_local_file_name
 from lib.errors import error_response
 
@@ -48,7 +50,7 @@ class DownloadServiceConfig:
     """
 
     romm_api: RommRomReader
-    state: dict
+    state: PluginState
     download_file_store: DownloadFileStore
     download_queue: DownloadQueueAdapter
     resolve_system: SystemResolver
@@ -284,7 +286,7 @@ class DownloadService:
         launch_file = self._collect_and_detect_launch_file(extract_dir)
 
         # Register as installed
-        installed_entry = {
+        installed_entry: InstalledRomEntry = {
             "rom_id": rom_id,
             "file_name": file_name,
             "file_path": launch_file,
@@ -302,7 +304,7 @@ class DownloadService:
         tmp_path = target_path + _TMP_EXT
         self._download_file_store.rename(tmp_path, target_path)
 
-        installed_entry = {
+        installed_entry: InstalledRomEntry = {
             "rom_id": rom_id,
             "file_name": file_name,
             "file_path": target_path,

@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.save_state import (
     FileSyncState,
     RomSaveState,
@@ -36,7 +38,7 @@ class StateServiceConfig:
     """
 
     save_sync_state: SaveSyncState
-    state: dict
+    state: PluginState
     persister: SaveSyncStatePersister
     logger: logging.Logger
 

@@ -13,6 +13,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import cast
+
+from models.state import MetadataCache, PluginState, make_default_plugin_state
 
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
@@ -99,23 +102,16 @@ from services.startup_healing import StartupHealingService, StartupHealingServic
 from services.steamgrid import SteamGridService, SteamGridServiceConfig
 
 
-def _default_state() -> dict:
+def _default_state() -> PluginState:
     """Fresh default ``state`` dict for first-run persistence.
 
-    A factory (not a module-level constant) so that callers always receive
-    independent inner containers — services may mutate ``state`` in place,
-    and a shared module-level default would silently corrupt subsequent
-    loads.
+    Delegates to :func:`models.state.make_default_plugin_state` so the
+    canonical shape lives next to the :class:`PluginState` schema. Wrapped
+    here (rather than re-exported) to preserve the module-level factory
+    indirection — callers always receive independent inner containers
+    even if the underlying default ever changes.
     """
-    return {
-        "shortcut_registry": {},
-        "installed_roms": {},
-        "last_sync": None,
-        "sync_stats": {"platforms": 0, "roms": 0},
-        "downloaded_bios": {},
-        "retrodeck_home_path": "",
-        "save_sort_settings": None,
-    }
+    return make_default_plugin_state()
 
 
 @dataclass(frozen=True)
@@ -143,9 +139,9 @@ class AdapterBundle:
 class StateBundle:
     """Live mutable state stores shared across services."""
 
-    state: dict
+    state: PluginState
     settings: dict
-    metadata_cache: dict
+    metadata_cache: MetadataCache
     save_sync_state: SaveSyncState
 
 
@@ -301,9 +297,9 @@ def bootstrap(
     settings = persistence.load_settings()
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
-    state = persistence.load_state(_default_state())
-    state = migrate_state(state)
-    metadata_cache = persistence.load_metadata_cache()
+    state = cast("PluginState", persistence.load_state(cast("dict", _default_state())))
+    state = cast("PluginState", migrate_state(cast("dict", state)))
+    metadata_cache = cast("MetadataCache", persistence.load_metadata_cache())
     state_persister = StatePersisterAdapter(persistence, state)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
     metadata_cache_persister = MetadataCachePersisterAdapter(persistence, metadata_cache)

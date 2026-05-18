@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.emulator_tag import build_emulator_tag
 from domain.save_state import FileSyncState, RomSaveState
 from domain.sync_action import (
@@ -80,7 +82,7 @@ class MatrixExecutor:
     def __init__(
         self,
         *,
-        state: dict,
+        state: PluginState,
         state_svc: StateService,
         rom_info: RomInfoService,
         romm_api: RommSyncApi,

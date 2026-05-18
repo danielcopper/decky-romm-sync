@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
+from models.state import PluginState
+
 if TYPE_CHECKING:
     import logging
 
@@ -37,7 +39,7 @@ class SettingsServiceConfig:
     """
 
     settings: dict
-    state: dict
+    state: PluginState
     logger: logging.Logger
     settings_persister: SettingsPersister
     steam_config: SteamConfigStore

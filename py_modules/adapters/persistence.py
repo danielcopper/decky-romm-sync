@@ -10,6 +10,9 @@ import fcntl
 import json
 import logging
 import os
+from typing import cast
+
+from models.state import MetadataCache, PluginState
 
 _STATE_VERSION = 1
 _METADATA_CACHE_VERSION = 1
@@ -278,12 +281,12 @@ class StatePersisterAdapter:
     this class.
     """
 
-    def __init__(self, persistence: PersistenceAdapter, state: dict) -> None:
+    def __init__(self, persistence: PersistenceAdapter, state: PluginState) -> None:
         self._persistence = persistence
         self._state = state
 
     def save_state(self) -> None:
-        self._persistence.save_state(self._state)
+        self._persistence.save_state(cast("dict", self._state))
 
 
 class SettingsPersisterAdapter:
@@ -312,12 +315,12 @@ class MetadataCachePersisterAdapter:
     never on this class.
     """
 
-    def __init__(self, persistence: PersistenceAdapter, metadata_cache: dict) -> None:
+    def __init__(self, persistence: PersistenceAdapter, metadata_cache: MetadataCache) -> None:
         self._persistence = persistence
         self._metadata_cache = metadata_cache
 
     def save_metadata(self) -> None:
-        self._persistence.save_metadata_cache(self._metadata_cache)
+        self._persistence.save_metadata_cache(cast("dict", self._metadata_cache))
 
 
 class SaveSyncStatePersisterAdapter:

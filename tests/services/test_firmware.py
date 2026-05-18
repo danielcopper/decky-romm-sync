@@ -11,6 +11,7 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.bios import BiosFileEntry
+from models.state import PluginState, make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -24,6 +25,11 @@ from services.library import LibraryService, LibraryServiceConfig
 def _make_clock() -> FakeClock:
     """Return a fresh FakeClock pinned to a synthetic instant."""
     return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
+
+
+def _minimal_state() -> PluginState:
+    """Default PluginState shape for FirmwareService tests."""
+    return make_default_plugin_state()
 
 
 @pytest.fixture
@@ -1443,7 +1449,7 @@ class TestBiosFilesIndexUnloadedRaises:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=MagicMock(),
-                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -1466,7 +1472,7 @@ class TestBiosFilesIndexUnloadedRaises:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=MagicMock(),
-                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir="/nonexistent",
@@ -1613,7 +1619,7 @@ class TestFirmwareListCache:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=romm_api,
-                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -1681,7 +1687,7 @@ class TestFirmwareListCache:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=api,
-                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -1764,7 +1770,7 @@ class TestCheckPlatformBiosCached:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=MagicMock(),
-                state=state or {"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
+                state=state or _minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
                 plugin_dir="/fake",
@@ -1844,7 +1850,7 @@ class TestCheckPlatformBiosCached:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=api,
-                state={"shortcut_registry": {}, "installed_roms": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
                 plugin_dir="/fake",
@@ -1879,7 +1885,7 @@ class TestFirmwareCachePersistence:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=MagicMock(),
-                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -1903,7 +1909,7 @@ class TestFirmwareCachePersistence:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=MagicMock(),
-                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -1925,7 +1931,7 @@ class TestFirmwareCachePersistence:
         fw = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=MagicMock(),
-                state={"shortcut_registry": {}, "downloaded_bios": {}},
+                state=_minimal_state(),
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -2090,12 +2096,7 @@ class TestBadPathFirmwareCallables:
 
         if firmware_cache_persister is None:
             firmware_cache_persister = FakeFirmwareCachePersister()
-        state = {
-            "shortcut_registry": {},
-            "installed_roms": {},
-            "downloaded_bios": {},
-            "retrodeck_home_path": "",
-        }
+        state = _minimal_state()
         svc = FirmwareService(
             config=FirmwareServiceConfig(
                 romm_api=fake_romm_api,

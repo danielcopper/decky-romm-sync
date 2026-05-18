@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.achievements import extract_achievements_from_rom, extract_game_progress
 
 if TYPE_CHECKING:
@@ -28,7 +30,7 @@ class AchievementsServiceConfig:
     """
 
     romm_api: RommAchievementsApi
-    state: dict
+    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock

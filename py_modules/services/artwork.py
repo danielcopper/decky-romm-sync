@@ -8,6 +8,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState, ShortcutRegistryEntry
+
 from domain.artwork_paths import final_filename, staging_filename
 
 if TYPE_CHECKING:
@@ -29,7 +31,7 @@ class ArtworkServiceConfig:
     romm_api: RommRomReader
     steam_config: SteamConfigStore
     cover_art_file_store: CoverArtFileStore
-    state: dict
+    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     get_pending_sync: PendingSyncReader
@@ -141,7 +143,7 @@ class ArtworkService:
 
     # ── Artwork removal ────────────────────────────────────────────────────
 
-    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None:
+    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: ShortcutRegistryEntry) -> None:
         """Remove all artwork files for a registry entry."""
         removed = False
         # Try cover_path first (stores the final renamed path)

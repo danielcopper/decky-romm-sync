@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 from models.metadata import AchievementSummary
+from models.state import MetadataCache, MetadataCacheEntry, PluginState, ShortcutRegistryEntry
 
 from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
 from domain.save_state import SaveSyncState
@@ -37,8 +38,8 @@ class GameDetailServiceConfig:
     GameDetailService consults to assemble the game-detail payload.
     """
 
-    state: dict
-    metadata_cache: dict
+    state: PluginState
+    metadata_cache: MetadataCache
     save_sync_state: SaveSyncState
     logger: logging.Logger
     clock: Clock
@@ -58,14 +59,14 @@ class GameDetailService:
         self._bios_checker = config.bios_checker
         self._achievements = config.achievements
 
-    def _resolve_rom_by_app_id(self, app_id: int) -> tuple[int | None, dict | None]:
+    def _resolve_rom_by_app_id(self, app_id: int) -> tuple[int | None, ShortcutRegistryEntry | None]:
         """Reverse lookup: find rom_id by app_id in shortcut_registry."""
         for rid, reg in self._state["shortcut_registry"].items():
             if reg.get("app_id") == app_id:
                 return int(rid), reg
         return None, None
 
-    def _resolve_rom_file(self, rom_id_str: str, entry: dict) -> str:
+    def _resolve_rom_file(self, rom_id_str: str, entry: ShortcutRegistryEntry) -> str:
         """ROM filename from installed_roms or registry fs_name fallback."""
         rom_file = ""
         installed_rom = self._state["installed_roms"].get(rom_id_str, {})
@@ -114,7 +115,7 @@ class GameDetailService:
     def _compute_stale_fields(
         *,
         now: float,
-        metadata: dict | None,
+        metadata: MetadataCacheEntry | None,
         bios_status: dict | None,
         platform_slug: str,
         ra_id: int | None,

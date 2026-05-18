@@ -9,7 +9,9 @@ can assert on the recorded activity.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+from models.state import MetadataCacheEntry, ShortcutRegistryEntry
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -30,9 +32,9 @@ class FakeMetadataExtractor:
         self.mark_dirty_count: int = 0
         self.flush_count: int = 0
 
-    def extract_metadata(self, rom: dict) -> dict:
+    def extract_metadata(self, rom: dict) -> MetadataCacheEntry:
         self.extract_calls.append(rom)
-        return dict(self.canned_extract)
+        return cast("MetadataCacheEntry", dict(self.canned_extract))
 
     def mark_metadata_dirty(self) -> None:
         self.mark_dirty_count += 1
@@ -62,7 +64,7 @@ class FakeArtworkManager:
         self.finalize_override = finalize_override
         self.download_calls: list[tuple[list[dict], Any, Any, int, int]] = []
         self.finalize_calls: list[tuple[str | None, str, int, str]] = []
-        self.remove_calls: list[tuple[str, str | int, dict]] = []
+        self.remove_calls: list[tuple[str, str | int, ShortcutRegistryEntry]] = []
 
     async def download_artwork(
         self,
@@ -81,5 +83,5 @@ class FakeArtworkManager:
             return self.finalize_override(grid, cover_path, app_id, rom_id_str)
         return cover_path
 
-    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None:
-        self.remove_calls.append((grid, rom_id, dict(entry)))
+    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: ShortcutRegistryEntry) -> None:
+        self.remove_calls.append((grid, rom_id, cast("ShortcutRegistryEntry", dict(entry))))

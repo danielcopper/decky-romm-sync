@@ -15,6 +15,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.sgdb_artwork import (
     asset_type_endpoint,
     asset_type_name,
@@ -54,7 +56,7 @@ class SteamGridServiceConfig:
     romm_api: RommRomReader
     steam_config: SteamConfigStore
     sgdb_artwork_cache: SgdbArtworkCache
-    state: dict
+    state: PluginState
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger

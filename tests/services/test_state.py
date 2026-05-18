@@ -1,8 +1,10 @@
 """Tests for services.saves.state.StateService."""
 
 import logging
+from typing import cast
 
 from fakes.fake_save_sync_state_persister import FakeSaveSyncStatePersister
+from models.state import ShortcutRegistryEntry, make_default_plugin_state
 
 from domain.save_state import FileSyncState, PlaytimeEntry, RomSaveState
 from services.saves.state import StateService, StateServiceConfig
@@ -12,7 +14,7 @@ def _make_state_svc(
     persister: FakeSaveSyncStatePersister | None = None,
 ) -> tuple[StateService, FakeSaveSyncStatePersister]:
     save_sync_state = StateService.make_default_state()
-    state: dict = {"shortcut_registry": {}, "installed_roms": {}}
+    state = make_default_plugin_state()
     p = persister or FakeSaveSyncStatePersister()
     return (
         StateService(
@@ -178,7 +180,7 @@ class TestLoadState:
 class TestPruneOrphanedState:
     def test_prune_persists_when_entries_removed(self):
         svc, persister = _make_state_svc()
-        svc._state["shortcut_registry"] = {"42": {"app_id": 1}}
+        svc._state["shortcut_registry"] = {"42": cast("ShortcutRegistryEntry", {"app_id": 1})}
         svc.state.saves["42"] = RomSaveState()
         svc.state.saves["999"] = RomSaveState()  # orphaned
         svc.state.playtime["888"] = PlaytimeEntry()  # orphaned
@@ -192,7 +194,7 @@ class TestPruneOrphanedState:
 
     def test_prune_does_not_persist_when_nothing_removed(self):
         svc, persister = _make_state_svc()
-        svc._state["shortcut_registry"] = {"42": {"app_id": 1}}
+        svc._state["shortcut_registry"] = {"42": cast("ShortcutRegistryEntry", {"app_id": 1})}
         svc.state.saves["42"] = RomSaveState()
 
         svc.prune_orphaned_state()

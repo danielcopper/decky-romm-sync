@@ -6,6 +6,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import InstalledRomEntry, PluginState
+
 from domain.save_state import SaveSyncState
 from lib.path_safety import is_safe_rom_path
 
@@ -27,7 +29,7 @@ class RomRemovalServiceConfig:
     limit.
     """
 
-    state: dict
+    state: PluginState
     save_sync_state: SaveSyncState
     logger: logging.Logger
     loop: asyncio.AbstractEventLoop
@@ -56,7 +58,7 @@ class RomRemovalService:
         self._retrodeck_paths = config.retrodeck_paths
         self._download_queue_cleanup = config.download_queue_cleanup
 
-    def _delete_rom_files(self, installed: dict) -> None:
+    def _delete_rom_files(self, installed: InstalledRomEntry) -> None:
         """Delete ROM files for an installed entry. Handles both single-file and multi-file ROMs."""
         rom_dir = installed.get("rom_dir", "")
         file_path = installed.get("file_path", "")
@@ -76,7 +78,7 @@ class RomRemovalService:
             elif self._rom_file_store.exists(file_path):
                 self._rom_file_store.remove_file(file_path)
 
-    def _remove_rom_io(self, rom_id_str: str, installed: dict) -> None:
+    def _remove_rom_io(self, rom_id_str: str, installed: InstalledRomEntry) -> None:
         """Sync helper for remove_rom — file deletion + state update in executor."""
         self._delete_rom_files(installed)
 

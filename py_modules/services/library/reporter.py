@@ -18,6 +18,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.shortcut_data import build_registry_entry
 from domain.sync_diff import should_include_in_platform_collection
 from domain.sync_state import SyncState
@@ -54,7 +56,7 @@ class SyncReporterConfig:
     """
 
     steam_config: SteamConfigStore
-    state: dict
+    state: PluginState
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger

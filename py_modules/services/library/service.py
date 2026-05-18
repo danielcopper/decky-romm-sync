@@ -18,6 +18,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import MetadataCache, PluginState
+
 from lib.late_binding import LateBinding
 from services.library._state import LibrarySyncStateBox
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
@@ -57,9 +59,9 @@ class LibraryServiceConfig:
 
     romm_api: RommLibraryApi
     steam_config: SteamConfigStore
-    state: dict
+    state: PluginState
     settings: dict
-    metadata_cache: dict
+    metadata_cache: MetadataCache
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
@@ -262,7 +264,7 @@ class LibraryService:
         self._reporter._loop = value
 
     @property
-    def _state(self) -> dict:
+    def _state(self) -> PluginState:
         return self._config.state
 
     @property
@@ -270,7 +272,7 @@ class LibraryService:
         return self._config.settings
 
     @property
-    def _metadata_cache(self) -> dict:
+    def _metadata_cache(self) -> MetadataCache:
         return self._config.metadata_cache
 
     # Getters mirror the pre-decomposition attribute shape for external

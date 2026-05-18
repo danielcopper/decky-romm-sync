@@ -12,6 +12,8 @@ import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain import firmware_paths
 from domain.bios import collect_firmware_status
 from lib.errors import error_response
@@ -44,7 +46,7 @@ class FirmwareServiceConfig:
     """
 
     romm_api: RommFirmwareApi
-    state: dict
+    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 from fakes.fake_path_probe import FakePathProbe
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from models.state import InstalledRomEntry, PluginState, ShortcutRegistryEntry, make_default_plugin_state
 
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 
@@ -24,16 +26,23 @@ def state_persister() -> MagicMock:
     return MagicMock()
 
 
-def _make_state() -> dict:
-    return {
-        "installed_roms": {},
-        "shortcut_registry": {},
-    }
+def _make_state() -> PluginState:
+    return make_default_plugin_state()
+
+
+def _installed(**fields: object) -> InstalledRomEntry:
+    """Build a partial InstalledRomEntry for tests that intentionally probe sparse shapes."""
+    return cast("InstalledRomEntry", dict(fields))
+
+
+def _registry(**fields: object) -> ShortcutRegistryEntry:
+    """Build a partial ShortcutRegistryEntry for tests that intentionally probe sparse shapes."""
+    return cast("ShortcutRegistryEntry", dict(fields))
 
 
 def _make_service(
     *,
-    state: dict,
+    state: PluginState,
     logger: logging.Logger,
     state_persister: MagicMock,
     retrodeck_home: str = _RETRODECK_HOME,
@@ -56,7 +65,7 @@ class TestPruneStaleInstalledRoms:
         """Guard: retrodeck home not present on disk → skip prune, log info."""
         state = _make_state()
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/run/media/deck/Emulation/retrodeck/roms/n64/a.z64"},
+            "1": _installed(rom_id=1, file_path="/run/media/deck/Emulation/retrodeck/roms/n64/a.z64"),
         }
         # path_probe knows nothing — retrodeck home not on disk.
         service = _make_service(
@@ -75,7 +84,7 @@ class TestPruneStaleInstalledRoms:
         """Empty retrodeck_home (first-run) → skip prune."""
         state = _make_state()
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/somewhere/a.z64"},
+            "1": _installed(rom_id=1, file_path="/somewhere/a.z64"),
         }
         service = _make_service(
             state=state,
@@ -91,7 +100,7 @@ class TestPruneStaleInstalledRoms:
     def test_prune_missing_file_path(self, logger, state_persister):
         state = _make_state()
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/nonexistent/game.z64"},
+            "1": _installed(rom_id=1, file_path="/nonexistent/game.z64"),
         }
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_installed_roms()
@@ -101,7 +110,7 @@ class TestPruneStaleInstalledRoms:
     def test_preserve_existing_file_path(self, logger, state_persister):
         state = _make_state()
         rom_file = "/run/media/deck/Emulation/retrodeck/roms/n64/game.z64"
-        state["installed_roms"] = {"1": {"rom_id": 1, "file_path": rom_file}}
+        state["installed_roms"] = {"1": _installed(rom_id=1, file_path=rom_file)}
         probe = FakePathProbe(paths={_RETRODECK_HOME, rom_file})
         service = _make_service(state=state, logger=logger, state_persister=state_persister, path_probe=probe)
         service.prune_stale_installed_roms()
@@ -113,11 +122,11 @@ class TestPruneStaleInstalledRoms:
         state = _make_state()
         rom_dir = "/run/media/deck/Emulation/retrodeck/roms/psx/FF7"
         state["installed_roms"] = {
-            "1": {
-                "rom_id": 1,
-                "file_path": f"{rom_dir}/FF7.m3u",  # file gone
-                "rom_dir": rom_dir,
-            },
+            "1": _installed(
+                rom_id=1,
+                file_path=f"{rom_dir}/FF7.m3u",  # file gone
+                rom_dir=rom_dir,
+            ),
         }
         probe = FakePathProbe(paths={_RETRODECK_HOME, rom_dir})
         service = _make_service(state=state, logger=logger, state_persister=state_persister, path_probe=probe)
@@ -130,7 +139,7 @@ class TestPruneStaleInstalledRoms:
         state = _make_state()
         state["retrodeck_home_path_previous"] = "/old/retrodeck"
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/old/retrodeck/roms/n64/zelda.z64"},
+            "1": _installed(rom_id=1, file_path="/old/retrodeck/roms/n64/zelda.z64"),
         }
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         with caplog.at_level(logging.INFO):
@@ -151,8 +160,8 @@ class TestPruneStaleInstalledRoms:
         state = _make_state()
         existing = "/run/media/deck/Emulation/retrodeck/roms/n64/keep.z64"
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": existing},
-            "2": {"rom_id": 2, "file_path": "/gone/dead.z64"},
+            "1": _installed(rom_id=1, file_path=existing),
+            "2": _installed(rom_id=2, file_path="/gone/dead.z64"),
         }
         probe = FakePathProbe(paths={_RETRODECK_HOME, existing})
         service = _make_service(state=state, logger=logger, state_persister=state_persister, path_probe=probe)
@@ -166,7 +175,7 @@ class TestPruneStaleInstalledRoms:
         state = _make_state()
         state["retrodeck_home_path_previous"] = "/foo"
         state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/foobar/x.z64"},
+            "1": _installed(rom_id=1, file_path="/foobar/x.z64"),
         }
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_installed_roms()
@@ -177,7 +186,7 @@ class TestPruneStaleInstalledRoms:
 class TestPruneStaleRegistry:
     def test_prune_missing_app_id(self, logger, state_persister):
         state = _make_state()
-        state["shortcut_registry"] = {"1": {"name": "Game"}}
+        state["shortcut_registry"] = {"1": _registry(name="Game")}
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_registry()
         assert "1" not in state["shortcut_registry"]
@@ -185,28 +194,28 @@ class TestPruneStaleRegistry:
 
     def test_prune_zero_app_id(self, logger, state_persister):
         state = _make_state()
-        state["shortcut_registry"] = {"1": {"app_id": 0, "name": "Game"}}
+        state["shortcut_registry"] = {"1": _registry(app_id=0, name="Game")}
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_registry()
         assert "1" not in state["shortcut_registry"]
 
     def test_prune_string_app_id(self, logger, state_persister):
         state = _make_state()
-        state["shortcut_registry"] = {"1": {"app_id": "42", "name": "Game"}}
+        state["shortcut_registry"] = {"1": _registry(app_id="42", name="Game")}
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_registry()
         assert "1" not in state["shortcut_registry"]
 
     def test_prune_none_app_id(self, logger, state_persister):
         state = _make_state()
-        state["shortcut_registry"] = {"1": {"app_id": None, "name": "Game"}}
+        state["shortcut_registry"] = {"1": _registry(app_id=None, name="Game")}
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_registry()
         assert "1" not in state["shortcut_registry"]
 
     def test_preserve_valid_app_id(self, logger, state_persister):
         state = _make_state()
-        state["shortcut_registry"] = {"1": {"app_id": 1234567890, "name": "Game"}}
+        state["shortcut_registry"] = {"1": _registry(app_id=1234567890, name="Game")}
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_registry()
         assert "1" in state["shortcut_registry"]
@@ -221,9 +230,9 @@ class TestPruneStaleRegistry:
     def test_mixed_prune_some_preserve_others(self, logger, state_persister):
         state = _make_state()
         state["shortcut_registry"] = {
-            "1": {"app_id": 100, "name": "Keep"},
-            "2": {"name": "Drop"},
-            "3": {"app_id": "stringy", "name": "Drop2"},
+            "1": _registry(app_id=100, name="Keep"),
+            "2": _registry(name="Drop"),
+            "3": _registry(app_id="stringy", name="Drop2"),
         }
         service = _make_service(state=state, logger=logger, state_persister=state_persister)
         service.prune_stale_registry()

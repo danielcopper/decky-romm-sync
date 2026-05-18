@@ -4,6 +4,8 @@ import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.emulator_tag import detect_core_change
 from domain.save_attribution import compute_uploaded_by_us
 from domain.save_status import compute_save_sync_display
@@ -43,7 +45,7 @@ class StatusServiceConfig:
     frontend.
     """
 
-    state: dict
+    state: PluginState
     state_svc: StateService
     sync_engine: SyncEngine
     rom_info: RomInfoService

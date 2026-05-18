@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.emulator_tag import build_emulator_tag
 
 if TYPE_CHECKING:
@@ -38,7 +40,7 @@ class SetupWizard:
     def __init__(
         self,
         *,
-        state: dict,
+        state: PluginState,
         state_svc: StateService,
         rom_info: RomInfoService,
         romm_api: RommSaveApi,

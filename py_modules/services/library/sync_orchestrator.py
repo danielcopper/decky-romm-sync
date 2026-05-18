@@ -18,6 +18,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import build_shortcuts_data
 from domain.sync_diff import (
@@ -81,7 +83,7 @@ class SyncOrchestratorConfig:
     reader in via ``set()`` once the reporter is built.
     """
 
-    state: dict
+    state: PluginState
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger

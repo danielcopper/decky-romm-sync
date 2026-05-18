@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.installed_roms import is_pending_migration_path
 
 if TYPE_CHECKING:
@@ -31,7 +33,7 @@ class StartupHealingServiceConfig:
     parameter budget and the service stays free of raw filesystem I/O.
     """
 
-    state: dict
+    state: PluginState
     logger: logging.Logger
     state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths

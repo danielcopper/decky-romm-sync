@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from domain.save_state import SaveSyncState
 
 if TYPE_CHECKING:
@@ -126,7 +128,7 @@ class SaveServiceConfig:
     romm_api: RommSyncApi
     retry: RetryStrategy
     settings: dict
-    state: dict
+    state: PluginState
     save_sync_state: SaveSyncState
     save_sync_state_persister: SaveSyncStatePersister
     save_file_store: SaveFileStore

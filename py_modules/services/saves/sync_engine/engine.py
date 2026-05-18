@@ -19,6 +19,8 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
 from services.saves.sync_engine.devices import DeviceRegistry
 from services.saves.sync_engine.matrix import MatrixExecutor, MatrixOutcome
@@ -59,7 +61,7 @@ class SyncEngineConfig:
     callbacks SyncEngine consults at the entry of every public flow.
     """
 
-    state: dict
+    state: PluginState
     state_svc: StateService
     rom_info: RomInfoService
     romm_api: RommSyncApi

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from models.state import InstalledRomEntry, MetadataCacheEntry, ShortcutRegistryEntry
+
 
 class RetryStrategy(Protocol):
     """HTTP retry wrapper pair consumed by SaveService and PlaytimeService."""
@@ -40,7 +42,7 @@ class AchievementsReader(Protocol):
 class MetadataExtractor(Protocol):
     """Metadata extraction and cache flushing consumed by LibraryService."""
 
-    def extract_metadata(self, rom: dict) -> dict: ...
+    def extract_metadata(self, rom: dict) -> MetadataCacheEntry: ...
 
     def mark_metadata_dirty(self) -> None: ...
 
@@ -61,7 +63,7 @@ class ArtworkManager(Protocol):
 
     def finalize_cover_path(self, grid: str | None, cover_path: str, app_id: int, rom_id_str: str) -> str: ...
 
-    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None: ...
+    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: ShortcutRegistryEntry) -> None: ...
 
 
 class ArtworkRemover(Protocol):
@@ -73,7 +75,7 @@ class ArtworkRemover(Protocol):
     only the single-entry deletion seam the removal flow needs.
     """
 
-    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: dict) -> None: ...
+    def remove_artwork_files(self, grid: str, rom_id: str | int, entry: ShortcutRegistryEntry) -> None: ...
 
 
 class LaunchGateRomLookup(Protocol):
@@ -92,12 +94,12 @@ class LaunchGateInstalledChecker(Protocol):
     """ROM-installed lookup consumed by LaunchGateService.
 
     The composition root satisfies this with ``DownloadService``'s
-    ``get_installed_rom``. Returns the installed-ROM metadata dict
+    ``get_installed_rom``. Returns the installed-ROM metadata entry
     when the ROM has been downloaded, ``None`` otherwise. The gate
     treats any falsy return as "not installed".
     """
 
-    def get_installed_rom(self, rom_id: int) -> dict | None: ...
+    def get_installed_rom(self, rom_id: int) -> InstalledRomEntry | None: ...
 
 
 class LaunchGateSaveStatusReader(Protocol):

@@ -16,6 +16,8 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState, SaveSortSettings
+
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
 
@@ -40,7 +42,7 @@ class RomInfoServiceConfig:
     RetroArch core-name provider, and the standard-library logger.
     """
 
-    state: dict
+    state: PluginState
     save_file_store: SaveFileStore
     retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
@@ -186,7 +188,7 @@ class RomInfoService:
                 results.append({"path": save_path, "filename": rom_name + ext})
         return results
 
-    def pending_sort_settings(self) -> dict | None:
+    def pending_sort_settings(self) -> SaveSortSettings | None:
         """Return previous save-sort settings if a migration is pending, else None.
 
         Rejects empty dicts to avoid the half-state where ``get_rom_save_info``'s

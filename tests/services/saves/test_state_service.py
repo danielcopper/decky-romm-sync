@@ -2,6 +2,9 @@
 
 import json
 import os
+from typing import cast
+
+from models.state import ShortcutRegistryEntry
 
 from domain.save_state import (
     PlaytimeEntry,
@@ -182,7 +185,7 @@ class TestStateManagement:
         svc, _ = make_service(tmp_path)
         svc._save_sync_state.saves["99"] = RomSaveState()
         svc._save_sync_state.playtime["99"] = PlaytimeEntry.from_dict({"total_seconds": 100})
-        svc._state["shortcut_registry"]["42"] = {}
+        svc._state["shortcut_registry"]["42"] = cast("ShortcutRegistryEntry", {})
 
         svc.prune_orphaned_state()
         assert "99" not in svc._save_sync_state.saves
@@ -191,7 +194,7 @@ class TestStateManagement:
     def test_prune_keeps_registered(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._save_sync_state.saves["42"] = RomSaveState()
-        svc._state["shortcut_registry"]["42"] = {}
+        svc._state["shortcut_registry"]["42"] = cast("ShortcutRegistryEntry", {})
 
         svc.prune_orphaned_state()
         assert "42" in svc._save_sync_state.saves

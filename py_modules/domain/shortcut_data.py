@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 
+from models.state import ShortcutRegistryEntry
+
 
 def build_shortcuts_data(roms: list[dict], plugin_dir: str) -> list[dict]:
     """Transform ROM list into shortcut data dicts for frontend AddShortcut calls."""
@@ -31,9 +33,9 @@ def build_shortcuts_data(roms: list[dict], plugin_dir: str) -> list[dict]:
     ]
 
 
-def build_registry_entry(pending: dict, app_id: int, cover_path: str) -> dict:
+def build_registry_entry(pending: dict, app_id: int, cover_path: str) -> ShortcutRegistryEntry:
     """Build a shortcut registry entry from pending sync data."""
-    entry = {
+    entry: ShortcutRegistryEntry = {
         "app_id": app_id,
         "name": pending.get("name", ""),
         "fs_name": pending.get("fs_name", ""),

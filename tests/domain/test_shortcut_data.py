@@ -102,9 +102,9 @@ class TestBuildRegistryEntry:
         assert result["platform_name"] == "N64"
         assert result["platform_slug"] == "n64"
         assert result["cover_path"] == "/grid/100001p.png"
-        assert result["igdb_id"] == 100
-        assert result["sgdb_id"] == 200
-        assert result["ra_id"] == 300
+        assert result.get("igdb_id") == 100
+        assert result.get("sgdb_id") == 200
+        assert result.get("ra_id") == 300
 
     def test_omits_none_meta_keys(self):
         pending = {

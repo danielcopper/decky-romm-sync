@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 from services.saves.slots.deletion import SlotDeleter
 from services.saves.slots.listing import SlotListing
 from services.saves.slots.setup import _NO_MIGRATION, SetupWizard
@@ -55,7 +57,7 @@ class SlotsServiceConfig:
     build the emulator tag for re-upload.
     """
 
-    state: dict
+    state: PluginState
     state_svc: StateService
     sync_engine: SyncEngine
     status_service: StatusService

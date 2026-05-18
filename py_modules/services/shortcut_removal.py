@@ -6,6 +6,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.state import PluginState
+
 if TYPE_CHECKING:
     import logging
 
@@ -29,7 +31,7 @@ class ShortcutRemovalServiceConfig:
 
     romm_api: RommPlatformReader
     steam_config: SteamConfigStore
-    state: dict
+    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     emit: EventEmitter
