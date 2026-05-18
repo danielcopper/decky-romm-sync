@@ -5,8 +5,7 @@ import { SlotPanel } from "./SlotPanel";
 import * as backend from "../../api/backend";
 import { toaster } from "@decky/api";
 import { showModal } from "@decky/ui";
-import type { SaveStatus, SaveSlotSummary, SlotSaveFile, SwitchSlotResponse } from "../../types";
-import type { SlotDeleteInfo, DeleteSlotResult } from "../../api/backend";
+import type { SaveStatus, SaveSlotSummary, SlotSaveFile } from "../../types";
 
 // showModal in the @decky/ui mock receives a React element created by
 // createElement(ConfirmModal, props). We capture that element so tests can
@@ -29,6 +28,7 @@ vi.mock("@decky/ui", () => {
       onClick?: () => void;
       disabled?: boolean;
     }) => createElement("button", { onClick, disabled }, children as never),
+    // Used transitively by InactiveSlotBody, which SlotPanel renders.
     Focusable: (p: AnyProps) => createElement("div", {}, p.children as never),
     showModal: vi.fn(),
   };
@@ -278,7 +278,7 @@ describe("SlotPanel", () => {
       vi.mocked(backend.switchSlot).mockResolvedValue({
         success: true,
         save_status: newStatus,
-      } as SwitchSlotResponse);
+      });
 
       const onSlotSwitched = vi.fn();
       const { container, getByText } = render(
@@ -294,25 +294,34 @@ describe("SlotPanel", () => {
     });
 
     it("shows the 'pending_uploads' error", async () => {
-      vi.mocked(backend.getSlotSaves).mockResolvedValue({
-        success: true,
-        slot: "default",
-        saves: [],
-      });
-      vi.mocked(backend.switchSlot).mockResolvedValue({
-        success: false,
-        reason: "pending_uploads",
-      });
+      vi.useFakeTimers();
+      try {
+        vi.mocked(backend.getSlotSaves).mockResolvedValue({
+          success: true,
+          slot: "default",
+          saves: [],
+        });
+        vi.mocked(backend.switchSlot).mockResolvedValue({
+          success: false,
+          reason: "pending_uploads",
+        });
 
-      const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
-      fireEvent.click(container.querySelector("button")!);
-      await flushAsync();
-      fireEvent.click(getByText("Activate Slot"));
-      await flushAsync();
-      await flushAsync();
-      expect(container.textContent).toContain(
-        "Sync your saves first — local changes haven't been uploaded",
-      );
+        const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
+        fireEvent.click(container.querySelector("button")!);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        fireEvent.click(getByText("Activate Slot"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(container.textContent).toContain(
+          "Sync your saves first — local changes haven't been uploaded",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("auto-clears the switchError after 5 seconds", async () => {
@@ -353,57 +362,84 @@ describe("SlotPanel", () => {
     });
 
     it("shows the 'server_unreachable' error", async () => {
-      vi.mocked(backend.getSlotSaves).mockResolvedValue({
-        success: true,
-        slot: "default",
-        saves: [],
-      });
-      vi.mocked(backend.switchSlot).mockResolvedValue({
-        success: false,
-        reason: "server_unreachable",
-      });
-      const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
-      fireEvent.click(container.querySelector("button")!);
-      await flushAsync();
-      fireEvent.click(getByText("Activate Slot"));
-      await flushAsync();
-      await flushAsync();
-      expect(container.textContent).toContain("Can't switch — RomM server is not reachable");
+      vi.useFakeTimers();
+      try {
+        vi.mocked(backend.getSlotSaves).mockResolvedValue({
+          success: true,
+          slot: "default",
+          saves: [],
+        });
+        vi.mocked(backend.switchSlot).mockResolvedValue({
+          success: false,
+          reason: "server_unreachable",
+        });
+        const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
+        fireEvent.click(container.querySelector("button")!);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        fireEvent.click(getByText("Activate Slot"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(container.textContent).toContain("Can't switch — RomM server is not reachable");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("shows the generic error on unknown reason", async () => {
-      vi.mocked(backend.getSlotSaves).mockResolvedValue({
-        success: true,
-        slot: "default",
-        saves: [],
-      });
-      vi.mocked(backend.switchSlot).mockResolvedValue({
-        success: false,
-        reason: "sync_disabled",
-      });
-      const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
-      fireEvent.click(container.querySelector("button")!);
-      await flushAsync();
-      fireEvent.click(getByText("Activate Slot"));
-      await flushAsync();
-      await flushAsync();
-      expect(container.textContent).toContain("Failed to switch slot");
+      vi.useFakeTimers();
+      try {
+        vi.mocked(backend.getSlotSaves).mockResolvedValue({
+          success: true,
+          slot: "default",
+          saves: [],
+        });
+        vi.mocked(backend.switchSlot).mockResolvedValue({
+          success: false,
+          reason: "sync_disabled",
+        });
+        const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
+        fireEvent.click(container.querySelector("button")!);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        fireEvent.click(getByText("Activate Slot"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(container.textContent).toContain("Failed to switch slot");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("catches thrown errors and surfaces an error line", async () => {
-      vi.mocked(backend.getSlotSaves).mockResolvedValue({
-        success: true,
-        slot: "default",
-        saves: [],
-      });
-      vi.mocked(backend.switchSlot).mockRejectedValue(new Error("boom"));
-      const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
-      fireEvent.click(container.querySelector("button")!);
-      await flushAsync();
-      fireEvent.click(getByText("Activate Slot"));
-      await flushAsync();
-      await flushAsync();
-      expect(container.textContent).toContain("An error occurred while switching slots");
+      vi.useFakeTimers();
+      try {
+        vi.mocked(backend.getSlotSaves).mockResolvedValue({
+          success: true,
+          slot: "default",
+          saves: [],
+        });
+        vi.mocked(backend.switchSlot).mockRejectedValue(new Error("boom"));
+        const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
+        fireEvent.click(container.querySelector("button")!);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        fireEvent.click(getByText("Activate Slot"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(container.textContent).toContain("An error occurred while switching slots");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -417,7 +453,7 @@ describe("SlotPanel", () => {
       vi.mocked(backend.getSlotDeleteInfo).mockResolvedValue({
         success: false,
         reason: "active_slot",
-      } as SlotDeleteInfo);
+      });
       const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
       fireEvent.click(container.querySelector("button")!);
       await flushAsync();
@@ -444,10 +480,10 @@ describe("SlotPanel", () => {
         source: "server",
         server_save_count: 3,
         local_file_count: 2,
-      } as SlotDeleteInfo);
+      });
       vi.mocked(backend.deleteSlot).mockResolvedValue({
         success: true,
-      } as DeleteSlotResult);
+      });
 
       const onSlotDeleted = vi.fn();
       const { container, getByText } = render(<SlotPanel {...defaultProps({ onSlotDeleted })} />);
@@ -487,7 +523,7 @@ describe("SlotPanel", () => {
         source: "local",
         server_save_count: 0,
         local_file_count: 1,
-      } as SlotDeleteInfo);
+      });
 
       const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
       fireEvent.click(container.querySelector("button")!);
@@ -512,11 +548,11 @@ describe("SlotPanel", () => {
         success: true,
         slot: "default",
         source: "local",
-      } as SlotDeleteInfo);
+      });
       vi.mocked(backend.deleteSlot).mockResolvedValue({
         success: false,
         message: "couldn't reach server",
-      } as DeleteSlotResult);
+      });
 
       const onSlotDeleted = vi.fn();
       const { container, getByText } = render(<SlotPanel {...defaultProps({ onSlotDeleted })} />);
@@ -544,7 +580,7 @@ describe("SlotPanel", () => {
         success: true,
         slot: "default",
         source: "local",
-      } as SlotDeleteInfo);
+      });
       vi.mocked(backend.deleteSlot).mockRejectedValue(new Error("network"));
 
       const { container, getByText } = render(<SlotPanel {...defaultProps()} />);

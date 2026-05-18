@@ -199,7 +199,7 @@ describe("VersionHistoryPanel", () => {
     expect(getByText("Restore")).toBeInTheDocument();
   });
 
-  it("disables Restore when offline", async () => {
+  it("Restore is enabled when not restoring and not offline", async () => {
     vi.mocked(backend.savesListFileVersions).mockResolvedValue({
       status: "ok",
       versions: [makeVersion()],

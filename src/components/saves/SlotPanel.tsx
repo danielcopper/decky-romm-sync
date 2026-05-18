@@ -4,7 +4,7 @@
  * flows; the parent SavesTab handles slot creation and the offline banner.
  */
 
-import { useState, useRef, createElement, FC } from "react";
+import { useState, useRef, useEffect, createElement, FC } from "react";
 import { ConfirmModal, DialogButton, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { getSlotSaves, switchSlot, debugLog, getSlotDeleteInfo, deleteSlot } from "../../api/backend";
@@ -80,6 +80,12 @@ export const SlotPanel: FC<SlotPanelProps> = ({
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const switchErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (switchErrorTimerRef.current) clearTimeout(switchErrorTimerRef.current);
+    };
+  }, []);
 
   const slotName = slot.slot;
 
