@@ -7,6 +7,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import FakePluginMetadataReader
 from fakes.fake_save_api import FakeSaveApi
 
 from domain.save_state import FileSyncState, RomSaveState
@@ -1102,3 +1103,17 @@ class TestBadPathDeleteSavesPartialFailure:
         # The failing file remains in place; the successful one is gone.
         assert bad_path in fake.files
         assert good_path not in fake.files
+
+
+class TestPluginVersionResolution:
+    """SaveService.__init__ resolves the plugin version exactly once."""
+
+    def test_reads_plugin_version_once_with_injected_plugin_dir(self, tmp_path):
+        """One read at construction, scoped to the injected plugin_dir."""
+        fake_reader = FakePluginMetadataReader(version="0.14.0")
+        plugin_dir = str(tmp_path / "custom-plugin-dir")
+
+        make_service(tmp_path, plugin_metadata=fake_reader, plugin_dir=plugin_dir)
+
+        assert fake_reader.read_count == 1
+        assert fake_reader.last_plugin_dir == plugin_dir
