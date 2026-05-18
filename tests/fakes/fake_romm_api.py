@@ -45,7 +45,7 @@ class FakeRommApi:
         # In-memory seeded data — tests mutate these directly.
         self.platforms: list[dict] = []
         self.roms: dict[int, dict] = {}
-        self.firmware_file_store: list[dict] = []
+        self.firmware_files: list[dict] = []
         self.collections: list[dict] = []
         self.virtual_collections: dict[str, list[dict]] = {}
         self.notes: dict[int, list[dict]] = {}
@@ -282,12 +282,12 @@ class FakeRommApi:
     def list_firmware(self) -> list[dict]:
         self._log("list_firmware")
         self._check_fail(self.list_firmware_side_effect)
-        return [dict(f) for f in self.firmware_file_store]
+        return [dict(f) for f in self.firmware_files]
 
     def get_firmware(self, firmware_id: int) -> dict:
         self._log("get_firmware", (firmware_id,))
         self._check_fail(self.get_firmware_side_effect)
-        for fw in self.firmware_file_store:
+        for fw in self.firmware_files:
             if fw.get("id") == firmware_id:
                 return dict(fw)
         return {"id": firmware_id}

@@ -27,7 +27,7 @@ class TestConstruction:
         api = FakeRommApi()
         assert api.platforms == []
         assert api.roms == {}
-        assert api.firmware_file_store == []
+        assert api.firmware_files == []
         assert api.collections == []
         assert api.virtual_collections == {}
         assert api.devices == []
