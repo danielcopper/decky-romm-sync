@@ -9,16 +9,20 @@ from __future__ import annotations
 
 
 def migrate_settings(data: dict) -> dict:
-    """Bring *data* from any older settings schema to the current version."""
-    version = data.get("version", 0)
+    """Bring *data* from any older settings schema to the current version.
+
+    Value semantics — the caller's dict is never mutated.
+    """
+    new_data = dict(data)
+    version = new_data.get("version", 0)
     if version < 1:
         # v0 → v1: rename deprecated boolean keys
-        if data.pop("disable_steam_input", None):
-            data["steam_input_mode"] = "force_off"
-        if data.pop("debug_logging", None):
-            data["log_level"] = "debug"
-        data["version"] = 1
-    return data
+        if new_data.pop("disable_steam_input", None):
+            new_data["steam_input_mode"] = "force_off"
+        if new_data.pop("debug_logging", None):
+            new_data["log_level"] = "debug"
+        new_data["version"] = 1
+    return new_data
 
 
 def migrate_state(data: dict) -> dict:

@@ -385,9 +385,9 @@ class TestShortcutRemovalCallableDelegation:
 
 class TestArtworkCallableDelegation:
     @pytest.mark.asyncio
-    async def test_get_artwork_base64_delegates_and_casts_id(self, plugin):
+    async def test_get_artwork_base64_delegates(self, plugin):
         plugin._artwork_service.get_artwork_base64 = AsyncMock(return_value={"base64": None})
-        result = await plugin.get_artwork_base64("42")  # str → int cast
+        result = await plugin.get_artwork_base64(42)
         plugin._artwork_service.get_artwork_base64.assert_awaited_once_with(42)
         assert result == {"base64": None}
 
@@ -406,7 +406,7 @@ class TestLifecycleCallableDelegation:
             reason: str
 
         plugin._launch_gate_service.evaluate = AsyncMock(return_value=Verdict(allowed=True, reason="ok"))
-        result = await plugin.evaluate_launch("12345")
+        result = await plugin.evaluate_launch(12345)
         plugin._launch_gate_service.evaluate.assert_awaited_once_with(12345)
         assert result == {"allowed": True, "reason": "ok"}
 
@@ -419,7 +419,7 @@ class TestLifecycleCallableDelegation:
             synced: bool
 
         plugin._session_lifecycle_service.finalize = AsyncMock(return_value=Outcome(synced=False))
-        result = await plugin.finalize_game_session("7")
+        result = await plugin.finalize_game_session(7)
         plugin._session_lifecycle_service.finalize.assert_awaited_once_with(7)
         assert result == {"synced": False}
 

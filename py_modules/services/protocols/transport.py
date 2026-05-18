@@ -294,6 +294,19 @@ class RommSyncApi(RommSaveApi, RommVersion, RommDeviceApi, Protocol):
     """RomM surface for save-sync — saves cluster + server identity + device registration."""
 
 
+class RommApi(
+    RommSyncApi,
+    RommLibraryApi,
+    RommConnectionApi,
+    RommAchievementsApi,
+    RommFirmwareApi,
+    RommPlaytimeApi,
+    RommSaveApi,
+    Protocol,
+):
+    """Umbrella Protocol composing all per-domain RomM API Protocols."""
+
+
 class SteamGridDbApi(Protocol):
     """SteamGridDB HTTP API — search, artwork fetch, key verification."""
 

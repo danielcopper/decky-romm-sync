@@ -282,7 +282,7 @@ class Plugin:
         return await self._shortcut_removal_service.report_removal_results(removed_rom_ids)
 
     async def get_artwork_base64(self, rom_id):
-        return await self._artwork_service.get_artwork_base64(int(rom_id))
+        return await self._artwork_service.get_artwork_base64(rom_id)
 
     @migration_blocked
     async def clear_sync_cache(self):
@@ -292,11 +292,11 @@ class Plugin:
         return self._sync_service.get_sync_stats()
 
     async def evaluate_launch(self, steam_app_id):
-        verdict = await self._launch_gate_service.evaluate(int(steam_app_id))
+        verdict = await self._launch_gate_service.evaluate(steam_app_id)
         return asdict(verdict)
 
     async def finalize_game_session(self, rom_id):
-        result = await self._session_lifecycle_service.finalize(int(rom_id))
+        result = await self._session_lifecycle_service.finalize(rom_id)
         return asdict(result)
 
     # ── Download delegation to DownloadService ──────────────

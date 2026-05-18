@@ -80,6 +80,7 @@ from services.protocols import (
     RetroArchSaveSortingProvider,
     RetroDeckPaths,
     RomFileAdapter,
+    RommApi,
     SaveFileAdapter,
     SaveSyncStatePersister,
     SettingsPersister,
@@ -122,7 +123,7 @@ class AdapterBundle:
     """Concrete I/O adapters wired into services."""
 
     http_adapter: RommHttpAdapter
-    romm_api: RommApiAdapter
+    romm_api: RommApi
     steam_config: SteamConfigProtocol
     sgdb_adapter: SteamGridDbAdapter
     cover_art_file_store: CoverArtFileStore
