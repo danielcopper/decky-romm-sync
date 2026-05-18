@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
-import { createElement, type ReactElement } from "react";
+import { createElement, type ComponentProps, type ReactElement } from "react";
 import { SavesTab } from "./SavesTab";
 import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
@@ -9,7 +9,17 @@ import type {
   SaveStatus,
   SaveSlotSummary,
   SaveFileStatus,
+  SwitchSlotResponse,
 } from "../types";
+// Type-only — vi.mock("./saves/SlotPanel", ...) below replaces the runtime
+// implementation, but the prop interface comes from the real component so
+// captured-prop assertions stay in sync as SlotPanel evolves.
+import type { SlotPanel } from "./saves/SlotPanel";
+import {
+  installDomEventListenerSpy,
+  uninstallDomEventListenerSpy,
+  domListenerCount,
+} from "../test-utils/dom-event-listener-spy";
 
 // showModal from the global @decky/ui mock receives a React element created via
 // createElement(NewSlotModal, props) or createElement(ConfirmModal, props).
@@ -39,19 +49,11 @@ vi.mock("./saves/NewSlotModal", () => ({
 // Stub SlotPanel — its own tests cover expand/collapse/activate/delete.
 // We capture props per render so tests can assert sort order, active flag,
 // saveStatus pass-through, and trigger the version-restored + slot-deleted
-// callbacks.
-interface CapturedSlotPanelProps {
-  romId: number;
-  slot: SaveSlotSummary;
-  isActive: boolean;
-  defaultExpanded: boolean;
-  saveStatus: SaveStatus | null;
-  conflicts: unknown[];
-  isOffline: boolean;
-  onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
-  onVersionRestored: () => void;
-  onSlotDeleted: () => void;
-}
+// callbacks. The captured-props type is derived from the real SlotPanel
+// component (via ComponentProps + type-only import) so any new prop on the
+// real component widens this type automatically — assertions missing the new
+// field surface as type-narrowing issues under strict TS.
+type CapturedSlotPanelProps = ComponentProps<typeof SlotPanel>;
 let capturedSlotPanelProps: CapturedSlotPanelProps[] = [];
 vi.mock("./saves/SlotPanel", () => ({
   SlotPanel: (p: CapturedSlotPanelProps) => {
@@ -150,6 +152,11 @@ describe("SavesTab", () => {
     vi.clearAllMocks();
     capturedSlotPanelProps = [];
     vi.mocked(getRommConnectionState).mockReturnValue("connected");
+    installDomEventListenerSpy();
+  });
+
+  afterEach(() => {
+    uninstallDomEventListenerSpy();
   });
 
   describe("loading state", () => {
@@ -207,17 +214,11 @@ describe("SavesTab", () => {
     });
 
     it("removes its connection-changed listener on unmount", () => {
-      const { unmount, container } = render(<SavesTab {...defaultProps()} />);
+      const before = domListenerCount("romm_connection_changed");
+      const { unmount } = render(<SavesTab {...defaultProps()} />);
+      expect(domListenerCount("romm_connection_changed")).toBe(before + 1);
       unmount();
-      // After unmount, dispatching the event must NOT throw a stale setState.
-      // happy-dom + RTL flag stale updates as test failures via console.error.
-      act(() => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }),
-        );
-      });
-      // No DOM remains, so the banner cannot appear.
-      expect(container.textContent).not.toContain("RomM is offline");
+      expect(domListenerCount("romm_connection_changed")).toBe(before);
     });
 
     it("forwards isOffline down to SlotPanel children", () => {
@@ -346,10 +347,12 @@ describe("SavesTab", () => {
       expect(active?.saveStatus).toBe(status);
       expect(active?.conflicts).toBe(conflicts);
       expect(active?.defaultExpanded).toBe(true);
+      expect(active?.romId).toBe(1);
       expect(inactive?.isActive).toBe(false);
       expect(inactive?.saveStatus).toBeNull();
       expect(inactive?.conflicts).toEqual([]);
       expect(inactive?.defaultExpanded).toBe(false);
+      expect(inactive?.romId).toBe(1);
     });
 
     it("synthesizes a placeholder for an active slot missing from availableSlots", () => {
@@ -615,27 +618,35 @@ describe("SavesTab", () => {
       }
     });
 
-    it("clears any pending 5s timer on unmount (no stale setState)", async () => {
+    it("clears any pending 5s timer on unmount", async () => {
       vi.useFakeTimers();
       try {
+        const setSpy = vi.spyOn(globalThis, "setTimeout");
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout");
         vi.mocked(backend.switchSlot).mockResolvedValue({
           success: false,
-          reason: "pending_uploads",
-        });
+          reason: "server_unreachable",
+        } as SwitchSlotResponse);
+
         const { getByText, unmount } = render(<SavesTab {...defaultProps()} />);
         fireEvent.click(getByText("+ New Slot"));
         await act(async () => {
           await newSlotModalSubmit()?.("named");
           await vi.advanceTimersByTimeAsync(0);
         });
+
+        // Capture the timer id of the most-recent 5000ms scheduling — that's
+        // the one the unmount cleanup must clear. Filtering by delay avoids
+        // happy-dom / React internal timers.
+        const scheduledIds = setSpy.mock.results
+          .filter((_, i) => setSpy.mock.calls[i]?.[1] === 5000)
+          .map((r) => r.value as ReturnType<typeof setTimeout>);
+        const expectedId = scheduledIds[scheduledIds.length - 1];
+        expect(expectedId).toBeDefined();
+
         unmount();
-        // If the cleanup did not clear the timer, advancing past 5s would
-        // queue a setState on an unmounted component — happy-dom + RTL logs
-        // that as an error, but doesn't throw. The cleanup useEffect we added
-        // is the visible guarantee here.
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(5001);
-        });
+
+        expect(clearSpy).toHaveBeenCalledWith(expectedId);
       } finally {
         vi.useRealTimers();
       }
@@ -662,17 +673,25 @@ describe("SavesTab", () => {
       }
     });
 
-    it("bumps versionHistoryKey on onVersionRestored (forces SlotPanel remount via key change)", () => {
-      const { rerender } = render(
-        <SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />,
+    it("re-renders SlotPanel children after onVersionRestored", () => {
+      // Render with two distinct slots so each SavesTab render produces 2
+      // captured-prop entries. The state bump in onVersionRestored triggers a
+      // re-render of all panels — the captured-props array grows by 2, not 1.
+      // The key-change behavior itself (panel-${slot}-${versionHistoryKey})
+      // forces a remount which resets SlotPanel-local state — that effect is
+      // verified manually in integration testing, not asserted here.
+      const slots = [makeSlot({ slot: "a" }), makeSlot({ slot: "b" })];
+      render(
+        <SavesTab
+          {...defaultProps({ activeSlot: "a", availableSlots: slots })}
+        />,
       );
       const initialCount = capturedSlotPanelProps.length;
+      expect(initialCount).toBe(2);
       act(() => {
         capturedSlotPanelProps[0]?.onVersionRestored?.();
       });
-      // Re-render to flush the state bump; the panel mounts again with a new key.
-      rerender(<SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />);
-      expect(capturedSlotPanelProps.length).toBeGreaterThan(initialCount);
+      expect(capturedSlotPanelProps.length).toBe(initialCount + 2);
     });
 
     it("dispatches romm_data_changed when a child SlotPanel calls onSlotDeleted", () => {
