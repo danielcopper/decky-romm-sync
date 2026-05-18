@@ -734,11 +734,14 @@ class TestUnloadHook:
 
     @pytest.mark.asyncio
     async def test_unload_calls_shutdown_on_sync_and_download(self, plugin):
-        # DownloadService.shutdown and MigrationService.shutdown are async;
-        # the bare-MagicMock default returns a non-awaitable.
+        # DownloadService.shutdown, MigrationService.shutdown, and
+        # SessionLifecycleService.shutdown are async; the bare-MagicMock
+        # default returns a non-awaitable.
         plugin._download_service.shutdown = AsyncMock()
         plugin._migration_service.shutdown = AsyncMock()
+        plugin._session_lifecycle_service.shutdown = AsyncMock()
         await plugin._unload()
         plugin._sync_service.shutdown.assert_called_once_with()
         plugin._download_service.shutdown.assert_awaited_once_with()
         plugin._migration_service.shutdown.assert_awaited_once_with()
+        plugin._session_lifecycle_service.shutdown.assert_awaited_once_with()

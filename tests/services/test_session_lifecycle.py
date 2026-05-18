@@ -644,3 +644,112 @@ class TestFinalizeResultShape:
                 save_sort={"pending": False},
             ),
         )
+
+
+class TestBackgroundTaskTracking:
+    """Coverage for the background-task tracking + ``shutdown()`` lifecycle.
+
+    ``finalize`` schedules the achievement refresh detached from its
+    return value via ``asyncio.create_task``. Without strong refs into
+    ``_background_tasks`` and a cancellation hook in ``shutdown()``,
+    those tasks leak across plugin unload. These tests pin the contract.
+    """
+
+    @pytest.mark.asyncio
+    async def test_spawned_task_added_to_background_set(self, logger):
+        """``finalize`` adds the achievement-sync task to ``_background_tasks``."""
+        # Block the achievement sync so the spawned task is observable as pending.
+        blocker = asyncio.Event()
+
+        class BlockingAchievementSync:
+            async def sync_achievements_after_session(self, rom_id: int) -> dict:
+                await blocker.wait()
+                return {"success": True}
+
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=FakePostExitSync(),
+            achievement_sync=BlockingAchievementSync(),  # type: ignore[arg-type]
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        await service.finalize(99)
+
+        assert len(service._background_tasks) == 1
+        (task,) = service._background_tasks
+        assert isinstance(task, asyncio.Task)
+
+        # Release the blocker and drain so no pending-task warning fires.
+        blocker.set()
+        await asyncio.gather(*service._background_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_done_callback_removes_task_on_natural_completion(self, logger):
+        """When the achievement-sync coro completes naturally, the done-callback prunes the set."""
+        completion = asyncio.Event()
+        achievements = FakeAchievementSync(completion_event=completion)
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=FakePostExitSync(),
+            achievement_sync=achievements,
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        await service.finalize(99)
+        assert len(service._background_tasks) == 1
+
+        # Yield until the spawned achievement coroutine finishes; the
+        # done-callback then discards the task from the set.
+        (task,) = service._background_tasks
+        await task
+
+        assert service._background_tasks == set()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_pending_tasks_and_empties_set(self, logger):
+        """``shutdown()`` cancels in-flight tasks and the set is empty after."""
+        # Block the achievement sync indefinitely via an unset Event so the
+        # cancellation is genuinely observable.
+        blocker = asyncio.Event()
+
+        class BlockingAchievementSync:
+            async def sync_achievements_after_session(self, rom_id: int) -> dict:
+                await blocker.wait()
+                return {"success": True}
+
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=FakePostExitSync(),
+            achievement_sync=BlockingAchievementSync(),  # type: ignore[arg-type]
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        await service.finalize(99)
+        assert len(service._background_tasks) == 1
+        (task,) = service._background_tasks
+
+        await service.shutdown()
+
+        assert task.cancelled()
+        assert service._background_tasks == set()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_with_empty_set_is_noop(self, logger):
+        """``shutdown()`` on an untouched service returns immediately."""
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=FakePostExitSync(),
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        assert service._background_tasks == set()
+
+        # Must not raise, must not block.
+        await service.shutdown()
+
+        assert service._background_tasks == set()

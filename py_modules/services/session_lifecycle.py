@@ -154,6 +154,18 @@ class SessionLifecycleService:
         # prunes finished entries to keep the set bounded.
         self._background_tasks: set[asyncio.Task] = set()
 
+    async def shutdown(self) -> None:
+        """Cancel any in-flight background tasks and await their completion.
+
+        Called from ``main._unload`` so detached achievement-refresh
+        coroutines do not leak across the plugin unload boundary. No-op
+        when no tasks are pending.
+        """
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+
     async def finalize(self, rom_id: int) -> SessionFinalizeResult:
         """Run the four end-of-session steps and return the combined verdict.
 
