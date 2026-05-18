@@ -1025,3 +1025,80 @@ class TestHasTrackedSave:
         assert svc.has_tracked_save(99) is True
         # Wrong rom_id misses cleanly.
         assert svc.has_tracked_save(100) is False
+
+
+class TestBadPathDeleteSavesPartialFailure:
+    """Coverage for the per-file ``except`` arm in ``_delete_saves_for_roms``.
+
+    Wires a ``FakeSaveFileAdapter`` into the service post-construction so
+    one targeted ``remove`` call raises ``OSError`` while the rest succeed.
+    """
+
+    @staticmethod
+    def _install_fake_save_file(svc, files: dict[str, bytes], remove_failures: set[str]):
+        """Replace the real ``SaveFileAdapter`` with a fake on both consumers.
+
+        The aggregate root and ``RomInfoService`` both hold the adapter
+        reference — both must point at the same fake so file discovery
+        and deletion run through the failure-injecting instance.
+        """
+        from conftest import FakeSaveFileAdapter
+
+        fake = FakeSaveFileAdapter(files=files)
+        # Mark each saves-dir as present so ``find_save_files`` walks them.
+        for path in files:
+            fake.dirs.add(os.path.dirname(path))
+        fake.remove_failures = set(remove_failures)
+        svc._save_file = fake
+        svc._rom_info._save_file = fake
+        return fake
+
+    @pytest.mark.asyncio
+    async def test_delete_local_saves_partial_failure_returns_error_response(self, tmp_path):
+        """One ``remove`` failure flips success=False but counts the rest."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+
+        saves_dir = str(tmp_path / "saves" / "gba")
+        good_path = os.path.join(saves_dir, "pokemon.srm")
+        bad_path = os.path.join(saves_dir, "pokemon.rtc")
+        fake = self._install_fake_save_file(
+            svc,
+            files={good_path: b"\x00" * 16, bad_path: b"\x01" * 16},
+            remove_failures={bad_path},
+        )
+
+        result = svc.delete_local_saves(42)
+
+        assert result["success"] is False
+        # The successful remove still counts.
+        assert result["deleted_count"] == 1
+        assert "1 error(s)" in result["message"]
+        # The failing path remains; the successful one is gone.
+        assert bad_path in fake.files
+        assert good_path not in fake.files
+
+    @pytest.mark.asyncio
+    async def test_delete_platform_saves_partial_failure_returns_error_response(self, tmp_path):
+        """One ``remove`` failure across the platform flips success=False."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="gba", file_name="game2.gba")
+
+        saves_dir = str(tmp_path / "saves" / "gba")
+        good_path = os.path.join(saves_dir, "game1.srm")
+        bad_path = os.path.join(saves_dir, "game2.srm")
+        fake = self._install_fake_save_file(
+            svc,
+            files={good_path: b"\x00" * 16, bad_path: b"\x01" * 16},
+            remove_failures={bad_path},
+        )
+
+        result = svc.delete_platform_saves("gba")
+
+        assert result["success"] is False
+        assert result["deleted_count"] == 1
+        assert "1 error(s)" in result["message"]
+        # The failing file remains in place; the successful one is gone.
+        assert bad_path in fake.files
+        assert good_path not in fake.files

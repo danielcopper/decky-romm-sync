@@ -2068,3 +2068,100 @@ class TestDeletePlatformBiosIOLogsWarnings:
         assert "scph5501.bin" in plugin._state["downloaded_bios"]
         # The successful file's state entry is cleared.
         assert "scph5502.bin" not in plugin._state["downloaded_bios"]
+
+
+class TestBadPathFirmwareCallables:
+    """Coverage for the three previously-untested firmware-callable error paths.
+
+    Each test wires a fresh ``FirmwareService`` against the seeded
+    ``FakeRommApi`` fixture instead of the plugin's ``MagicMock`` so the
+    failure injection runs through the real Protocol surface.
+    """
+
+    def _build_service(self, fake_romm_api, *, firmware_cache_persister=None):
+        """Build a fresh ``FirmwareService`` wired against the supplied fake API."""
+        import decky
+
+        if firmware_cache_persister is None:
+            firmware_cache_persister = FakeFirmwareCachePersister()
+        state = {
+            "shortcut_registry": {},
+            "installed_roms": {},
+            "downloaded_bios": {},
+            "retrodeck_home_path": "",
+        }
+        svc = FirmwareService(
+            config=FirmwareServiceConfig(
+                romm_api=fake_romm_api,
+                state=state,
+                loop=asyncio.get_event_loop(),
+                logger=decky.logger,
+                plugin_dir=decky.DECKY_PLUGIN_DIR,
+                clock=_make_clock(),
+                state_persister=MagicMock(),
+                firmware_cache_persister=firmware_cache_persister,
+                firmware_files=FakeFirmwareFileAdapter(),
+                retrodeck_paths=FakeRetroDeckPaths(),
+                core_info=FakeCoreInfoProvider(),
+            ),
+        )
+        svc.load_bios_registry()
+        return svc
+
+    def test_invalidate_cache_logs_warning_when_persist_fails(self, fake_romm_api, caplog):
+        """Persister raising ``OSError`` is swallowed with a warning log."""
+        import logging
+
+        persister = FakeFirmwareCachePersister()
+        persister.save_side_effect = OSError("disk full")
+        fw = self._build_service(fake_romm_api, firmware_cache_persister=persister)
+        fw._firmware_cache = [{"id": 1, "file_name": "bios.bin"}]
+        fw._firmware_cache_epoch = 1.0
+
+        with caplog.at_level(logging.WARNING):
+            fw.invalidate_firmware_cache()  # must not raise
+
+        # In-memory cache cleared regardless of persister failure.
+        assert fw._firmware_cache is None
+        assert fw._firmware_cache_epoch == 0
+        # The persister was attempted and produced a warning.
+        assert persister.save_count == 1
+        assert any("disk full" in record.getMessage() for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_download_all_firmware_returns_error_with_zero_when_list_fetch_fails(self, fake_romm_api, caplog):
+        """Initial ``list_firmware`` failure short-circuits with ``downloaded=0``."""
+        import logging
+
+        fw = self._build_service(fake_romm_api)
+        fw._loop = asyncio.get_event_loop()
+        fake_romm_api.fail_on_next(OSError("connection reset"))
+
+        with caplog.at_level(logging.ERROR):
+            result = await fw.download_all_firmware("dc")
+
+        assert result["success"] is False
+        assert result["downloaded"] == 0
+        assert "message" in result
+        # The cache was not populated by the failed fetch.
+        assert fw._firmware_cache is None
+
+    @pytest.mark.asyncio
+    async def test_download_required_firmware_returns_error_with_zero_when_list_fetch_fails(
+        self, fake_romm_api, caplog
+    ):
+        """Initial ``list_firmware`` failure short-circuits with ``downloaded=0``."""
+        import logging
+
+        fw = self._build_service(fake_romm_api)
+        fw._loop = asyncio.get_event_loop()
+        fake_romm_api.fail_on_next(OSError("connection reset"))
+
+        with caplog.at_level(logging.ERROR):
+            result = await fw.download_required_firmware("dc")
+
+        assert result["success"] is False
+        assert result["downloaded"] == 0
+        assert "message" in result
+        # The cache was not populated by the failed fetch.
+        assert fw._firmware_cache is None

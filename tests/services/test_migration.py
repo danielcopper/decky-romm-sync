@@ -1035,3 +1035,22 @@ class TestRefreshState:
         mig.detect_save_sort_change.assert_not_called()
         mig.get_migration_status.assert_not_called()
         mig.get_save_sort_migration_status.assert_not_called()
+
+
+class TestBadPathDismissSaveSortMigration:
+    """Coverage for the previously-untested ``dismiss_save_sort_migration`` callable."""
+
+    def test_dismiss_save_sort_migration_clears_state_and_persists(self, plugin):
+        """User dismissing the warning pops the marker and persists state once."""
+        plugin._state["save_sort_settings_previous"] = {
+            "sort_by_content": True,
+            "sort_by_core": False,
+        }
+        persister = plugin._migration_service._state_persister
+        saves_before = persister.save_count
+
+        result = plugin._migration_service.dismiss_save_sort_migration()
+
+        assert result == {"success": True}
+        assert "save_sort_settings_previous" not in plugin._state
+        assert persister.save_count == saves_before + 1

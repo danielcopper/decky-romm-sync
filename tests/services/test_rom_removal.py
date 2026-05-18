@@ -493,3 +493,30 @@ class TestDownloadQueueCleanup:
 
         result2 = await svc.uninstall_all_roms()
         assert result2["success"] is True
+
+
+class TestBadPathRemoveRom:
+    """Coverage for the previously-untested ``remove_rom`` exception handler."""
+
+    @pytest.mark.asyncio
+    async def test_remove_rom_handles_filesystem_failure(self, service, state, queue_cleanup, rom_files):
+        """``remove_tree`` OSError surfaces as a failure response with no eviction."""
+        rom_dir = f"{_ROMS_BASE}/psx/FF7"
+        rom_files.files[f"{rom_dir}/disc1.bin"] = b"\x00" * 100
+        rom_files.remove_tree_failures.add(rom_dir)
+
+        state["installed_roms"]["42"] = {
+            "rom_id": 42,
+            "file_path": f"{rom_dir}/FF7.m3u",
+            "rom_dir": rom_dir,
+            "system": "psx",
+        }
+
+        result = await service.remove_rom(42)
+
+        assert result["success"] is False
+        assert "Failed to delete ROM files" in result["message"]
+        # State entry remains because the IO helper raised before state mutation.
+        assert "42" in state["installed_roms"]
+        # No queue eviction on failure.
+        assert queue_cleanup.evicted == []
