@@ -12,6 +12,7 @@ from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_state_persister import FakeStatePersister
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.persistence import PersistenceAdapter, SettingsPersisterAdapter
@@ -32,7 +33,7 @@ def plugin():
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
-    p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
     # Default to "/tmp" so the prune guard sees an existing home in tests that
     # don't override it. Tests exercising the guard rebuild this with a
@@ -895,15 +896,7 @@ class TestMainStartupOrdering:
                 core_info_provider=MagicMock(),
             ),
             stores=StateBundle(
-                state={
-                    "shortcut_registry": {},
-                    "installed_roms": {},
-                    "last_sync": None,
-                    "sync_stats": {"platforms": 0, "roms": 0},
-                    "downloaded_bios": {},
-                    "retrodeck_home_path": "",
-                    "save_sort_settings": None,
-                },
+                state=make_default_plugin_state(),
                 settings={},
                 metadata_cache={},
                 save_sync_state=MagicMock(),

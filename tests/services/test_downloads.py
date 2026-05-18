@@ -11,6 +11,7 @@ from conftest import _make_testable_plugin
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.download_file import DownloadFileAdapter
 from adapters.download_queue import DownloadQueueAdapter
@@ -29,7 +30,7 @@ def plugin():
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
     p._resolve_system = MagicMock(side_effect=lambda slug, fs_slug=None: fs_slug or slug)
-    p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
 
     import decky

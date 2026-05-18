@@ -12,6 +12,7 @@ from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
+from models.state import make_default_plugin_state
 
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.save_file import SaveFileAdapter
@@ -46,7 +47,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         romm_api=fake,
         retry=_make_retry(),
         settings={"log_level": "debug"},
-        state={"shortcut_registry": {}, "installed_roms": {}},
+        state=make_default_plugin_state(),
         save_sync_state=SaveService.make_default_state(),
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
         save_file_store=save_file_store,

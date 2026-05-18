@@ -6,6 +6,7 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
+from models.state import PluginState, make_default_plugin_state
 
 from services.settings import SettingsService, SettingsServiceConfig
 
@@ -16,8 +17,8 @@ def settings() -> dict:
 
 
 @pytest.fixture
-def state() -> dict:
-    return {"shortcut_registry": {}}
+def state() -> PluginState:
+    return make_default_plugin_state()
 
 
 @pytest.fixture

@@ -8,6 +8,7 @@ from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_state_persister import FakeStatePersister
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.steam_config import SteamConfigAdapter
@@ -30,7 +31,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._romm_api = fake_romm_api
-    p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
 
     import decky
@@ -688,7 +689,7 @@ class TestDebugLoggerProtocolSeam:
         p = Plugin()
         p.settings = {"log_level": "debug", "steamgriddb_api_key": ""}
         p._romm_api = fake_romm_api
-        p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+        p._state = make_default_plugin_state()
         p._metadata_cache = {}
 
         captured: list[str] = []

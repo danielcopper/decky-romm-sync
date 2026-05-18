@@ -30,7 +30,7 @@ from fakes.fake_rom_file_store import FakeRomFileStore
 from fakes.fake_save_file_store import FakeSaveFileStore
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import ShortcutRegistryEntry
+from models.state import ShortcutRegistryEntry, make_default_plugin_state
 
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
@@ -137,13 +137,7 @@ class TestWireServices:
         settings = {}
         http_adapter = MagicMock(spec=RommHttpAdapter)
         steam_config = SteamConfigAdapter(user_home=str(tmp_path), logger=logger)
-        state = {
-            "shortcut_registry": {},
-            "installed_roms": {},
-            "last_sync": None,
-            "sync_stats": {},
-            "downloaded_bios": {},
-        }
+        state = make_default_plugin_state()
         romm_api = MagicMock(spec=RommApiAdapter)
         return {
             "http_adapter": http_adapter,
@@ -428,8 +422,9 @@ class TestWireServices:
         MigrationService must see that write through the same live dict.
         """
         deps = self._make_deps(tmp_path)
-        # The default mock returns (True, False); no prior state seeded.
-        assert "save_sort_settings" not in deps["state"]
+        # The default mock returns (True, False); no prior state seeded
+        # (the factory default for ``save_sort_settings`` is ``None``).
+        assert deps["state"]["save_sort_settings"] is None
         result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
 

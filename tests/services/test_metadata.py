@@ -10,6 +10,7 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_state_persister import FakeStatePersister
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.persistence import MetadataCachePersisterAdapter, PersistenceAdapter
@@ -27,7 +28,7 @@ def plugin():
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
-    p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
 
     import decky

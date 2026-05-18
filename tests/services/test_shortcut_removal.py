@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 # conftest.py patches decky before this import
 import decky
 import pytest
+from models.state import make_default_plugin_state
 
 from adapters.steam_config import SteamConfigAdapter
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
@@ -13,7 +14,7 @@ from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalSer
 
 @pytest.fixture
 def state():
-    return {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+    return make_default_plugin_state()
 
 
 @pytest.fixture

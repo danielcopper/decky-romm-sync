@@ -10,13 +10,14 @@ from unittest.mock import MagicMock
 import decky
 import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
+from models.state import make_default_plugin_state
 
 from services.artwork import ArtworkService, ArtworkServiceConfig
 
 
 @pytest.fixture
 def state():
-    return {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+    return make_default_plugin_state()
 
 
 @pytest.fixture

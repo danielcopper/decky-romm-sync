@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.romm.http import RommHttpAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -38,7 +39,7 @@ def plugin():
 
     p._http_adapter = RommHttpAdapter(p.settings, decky.DECKY_PLUGIN_DIR, logging.getLogger("test"))
     p._romm_api = MagicMock()
-    p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
 
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)

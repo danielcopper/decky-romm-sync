@@ -14,6 +14,7 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.migration_file import MigrationFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
@@ -39,12 +40,7 @@ def plugin(tmp_path):
     }
     p._http_adapter = RommHttpAdapter(p.settings, __import__("decky").DECKY_PLUGIN_DIR, logging.getLogger("test"))
     p._romm_api = MagicMock()
-    p._state = {
-        "shortcut_registry": {},
-        "installed_roms": {},
-        "last_sync": None,
-        "sync_stats": {},
-    }
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
 
     import decky

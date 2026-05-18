@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
-from models.state import PluginState, SaveSortSettings
+from models.state import PluginState, SaveSortSettings, make_default_plugin_state
 
 from adapters.migration_file import MigrationFileAdapter
 from services.migration import MigrationService, MigrationServiceConfig
@@ -40,15 +40,9 @@ def _make_service(
     Pass ``migration_file_store`` to swap the real ``MigrationFileAdapter``
     for a fake when a test needs failure injection.
     """
-    state: PluginState = {
-        "shortcut_registry": {},
-        "installed_roms": installed_roms or {},
-        "retrodeck_home_path": "",
-        "save_sort_settings": None,
-        "last_sync": None,
-        "sync_stats": {"platforms": 0, "roms": 0},
-        "downloaded_bios": {},
-    }
+    state: PluginState = make_default_plugin_state()
+    if installed_roms:
+        state["installed_roms"] = installed_roms
     if state_overrides:
         state.update(state_overrides)
 

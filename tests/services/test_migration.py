@@ -12,6 +12,7 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_state_persister import FakeStatePersister
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.migration_file import MigrationFileAdapter
@@ -46,14 +47,7 @@ def plugin(tmp_path, fake_romm_api):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
-    p._state = {
-        "shortcut_registry": {},
-        "installed_roms": {},
-        "last_sync": None,
-        "sync_stats": {},
-        "downloaded_bios": {},
-        "retrodeck_home_path": "",
-    }
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
 
     import decky

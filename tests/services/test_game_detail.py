@@ -15,6 +15,7 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
+from models.state import make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
@@ -39,13 +40,7 @@ def plugin(tmp_path):
         "enabled_platforms": {},
         "log_level": "warn",
     }
-    p._state = {
-        "shortcut_registry": {},
-        "installed_roms": {},
-        "last_sync": None,
-        "sync_stats": {},
-        "downloaded_bios": {},
-    }
+    p._state = make_default_plugin_state()
     p._metadata_cache = {}
 
     import decky

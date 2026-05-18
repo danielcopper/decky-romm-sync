@@ -16,6 +16,11 @@ from services.launch_gate import (
 )
 
 
+def _installed_rom(rom_id: int) -> InstalledRomEntry:
+    """Build a sparse InstalledRomEntry — this test only checks truthiness / rom_id."""
+    return cast("InstalledRomEntry", {"rom_id": rom_id})
+
+
 class FakeRomLookup:
     """In-memory ``LaunchGateRomLookup`` for tests."""
 
@@ -120,7 +125,7 @@ class TestEvaluateAllow:
     def test_installed_with_no_conflicts_allows(self, event_loop, logger):
         """ROM installed, save_status returns no conflicts → allow."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99, "name": "Game"}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(payload={"conflicts": []})
         service = _make_service(
             rom_lookup=rom_lookup,
@@ -139,7 +144,7 @@ class TestEvaluateAllow:
     def test_save_status_failure_no_tracked_saves_allows(self, event_loop, logger):
         """ROM installed, save_status raises, no tracked saves → allow (nothing to corrupt)."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(
             side_effect=RuntimeError("boom"),
             tracked_rom_ids=set(),
@@ -183,7 +188,7 @@ class TestEvaluateBlock:
     def test_save_conflict_blocks_with_resolve_toast(self, event_loop, logger):
         """ROM installed, conflicts non-empty → block, save_conflict."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(
             payload={
                 "conflicts": [
@@ -215,7 +220,7 @@ class TestEvaluateWarn:
     def test_save_status_failure_with_tracked_saves_warns(self, event_loop, logger, caplog):
         """ROM installed, save_status raises OSError, tracked saves present → warn."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(
             side_effect=OSError("network down"),
             tracked_rom_ids={99},
@@ -246,7 +251,7 @@ class TestEvaluateWarn:
     def test_save_status_failure_warn_when_only_slots_tracked(self, event_loop, logger):
         """``has_tracked_save`` returning True (e.g. slots-only entry) → warn."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(
             side_effect=RuntimeError("executor crash"),
             tracked_rom_ids={99},
@@ -268,7 +273,7 @@ class TestEvaluateEdgeCases:
     def test_save_status_missing_conflicts_key_allows(self, event_loop, logger):
         """Save status without ``conflicts`` key is treated as no conflicts."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(payload={"rom_id": 99, "files": []})
         service = _make_service(
             rom_lookup=rom_lookup,
@@ -284,7 +289,7 @@ class TestEvaluateEdgeCases:
     def test_save_status_conflicts_none_allows(self, event_loop, logger):
         """``conflicts`` explicitly None is treated as no conflicts."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(payload={"conflicts": None})
         service = _make_service(
             rom_lookup=rom_lookup,
@@ -300,7 +305,7 @@ class TestEvaluateEdgeCases:
     def test_save_status_empty_dict_allows(self, event_loop, logger):
         """An empty save-status dict (falsy save_status branch) is treated as no conflicts."""
         rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
-        installed_checker = FakeInstalledChecker(installed={99: cast("InstalledRomEntry", {"rom_id": 99})})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
         save_status_reader = FakeSaveStatusReader(payload={})
         service = _make_service(
             rom_lookup=rom_lookup,

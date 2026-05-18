@@ -297,6 +297,11 @@ def bootstrap(
     settings = persistence.load_settings()
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
+    # Persistence + migration round-trip through bare ``dict`` because
+    # ``load_state`` / ``migrate_state`` / ``load_metadata_cache`` predate the
+    # TypedDicts and operate on the on-disk JSON shape. Cast down to ``dict``
+    # at the boundary, cast up to ``PluginState`` / ``MetadataCache`` once the
+    # shape is in hand so the rest of bootstrap sees the typed dict.
     state = cast("PluginState", persistence.load_state(cast("dict", _default_state())))
     state = cast("PluginState", migrate_state(cast("dict", state)))
     metadata_cache = cast("MetadataCache", persistence.load_metadata_cache())
