@@ -73,6 +73,12 @@ export const SavesTab: FC<SavesTabProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (newSlotErrorTimerRef.current) clearTimeout(newSlotErrorTimerRef.current);
+    };
+  }, []);
+
   // --- Offline banner ---
   const offlineBanner = isOffline
     ? createElement("div", {
