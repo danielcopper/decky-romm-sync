@@ -14,75 +14,7 @@ import { showModal } from "@decky/ui";
 import { removeShortcut } from "../utils/steamShortcuts";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
-
-// Local @decky/ui re-mock — the global stub omits ButtonItem, Field, Spinner,
-// and ModalRoot, which DangerZone uses. We mirror SettingsPage's pattern while
-// keeping showModal a vi.fn so the call-capture flow still works. TextField +
-// ToggleField pass through value/onChange/checked so RTL fireEvent drives them.
-// NOTE: vi.mock factory is hoisted above all imports — `createElement` and any
-// helpers must be referenced inside the factory body, not via outer scope.
-vi.mock("@decky/ui", async () => {
-  const { createElement } = await import("react");
-  type AnyProps = Record<string, unknown> & { children?: unknown };
-  const passthrough = (tag: string) => (props: AnyProps) =>
-    createElement(tag, props, props.children as never);
-  return {
-    PanelSection: passthrough("section"),
-    PanelSectionRow: passthrough("div"),
-    ButtonItem: (
-      p: AnyProps & { onClick?: () => void; disabled?: boolean },
-    ) =>
-      createElement(
-        "button",
-        { onClick: p.onClick, disabled: p.disabled },
-        p.children as never,
-      ),
-    ConfirmModal: passthrough("div"),
-    Field: (p: AnyProps & { label?: unknown }) =>
-      createElement("div", { "data-testid": "field" }, p.label as never),
-    TextField: (
-      p: AnyProps & {
-        label?: string;
-        value?: string;
-        onChange?: (e: unknown) => void;
-      },
-    ) =>
-      createElement("input", {
-        "data-testid": "text-field",
-        value: p.value ?? "",
-        onChange: (e: unknown) => p.onChange?.(e),
-      }),
-    ToggleField: (
-      p: AnyProps & {
-        checked?: boolean;
-        onChange?: (v: boolean) => void;
-        label?: unknown;
-      },
-    ) =>
-      createElement(
-        "div",
-        {
-          "data-testid": "toggle",
-          "data-label": typeof p.label === "string" ? p.label : "",
-        },
-        createElement("input", {
-          type: "checkbox",
-          "data-testid": "toggle-input",
-          checked: p.checked ?? false,
-          onChange: (e: { target: { checked: boolean } }) =>
-            p.onChange?.(e.target.checked),
-        }),
-        typeof p.label === "string" ? p.label : null,
-      ),
-    Spinner: () => createElement("div", { "data-testid": "spinner" }),
-    ModalRoot: passthrough("div"),
-    DialogButton: (
-      p: AnyProps & { onClick?: () => void },
-    ) =>
-      createElement("button", { onClick: p.onClick }, p.children as never),
-    showModal: vi.fn(),
-  };
-});
+import { stubCollectionStore, stubAppStore } from "../test-utils/steamStubs";
 
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 vi.mock("../utils/steamShortcuts", () => ({ removeShortcut: vi.fn() }));
@@ -110,26 +42,6 @@ function makeOverview(id: number, name: string, useDisplay = false) {
   return useDisplay
     ? { strDisplayName: undefined, display_name: name, appid: id }
     : { strDisplayName: name, display_name: undefined, appid: id };
-}
-
-function stubAppStore(
-  overviews: Record<number, { strDisplayName?: string; display_name?: string }>,
-) {
-  vi.stubGlobal("appStore", {
-    GetAppOverviewByAppID: vi.fn(
-      (id: number) => overviews[id] ?? null,
-    ),
-    allApps: [],
-  });
-}
-
-function stubCollectionStore(appIds: number[]) {
-  vi.stubGlobal("collectionStore", {
-    deckDesktopApps: {
-      apps: new Map(appIds.map((id) => [id, {}])),
-    },
-    userCollections: [],
-  });
 }
 
 function lastShownModalProps<T = Record<string, unknown>>(): T | null {
@@ -303,6 +215,9 @@ describe("DangerZone", () => {
     });
 
     it("enumerates apps and resolves display names alphabetically", async () => {
+      // Intentionally not in alphabetical order — DangerZone.loadNonSteamApps
+      // sorts the list before setState. Opening the whitelist surfaces the
+      // toggle list in render order; we assert it matches the sorted order.
       stubCollectionStore([101, 102, 103]);
       stubAppStore({
         101: { strDisplayName: "Zebra App" },
@@ -310,12 +225,19 @@ describe("DangerZone", () => {
         103: { strDisplayName: "Mango App" },
       });
       const logSpy = vi.spyOn(backend, "logInfo").mockImplementation(() => {});
-      render(<DangerZone onBack={vi.fn()} />);
+      const { getByText, getAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       // logInfo fires with size — confirms enumeration ran.
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining("deckDesktopApps.apps size: 3"),
       );
+      // Open the whitelist so the per-app ToggleField rows render. The
+      // toggle <div> wraps the input + label text node; the parent's
+      // textContent gives us the visible label per row.
+      fireEvent.click(getByText("Configure Whitelist (0 protected)"));
+      const toggleRows = getAllByTestId("toggle");
+      const renderedNames = toggleRows.map((row) => row.textContent ?? "");
+      expect(renderedNames).toEqual(["Apple App", "Mango App", "Zebra App"]);
       logSpy.mockRestore();
     });
 
