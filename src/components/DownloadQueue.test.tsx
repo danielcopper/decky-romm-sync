@@ -13,8 +13,8 @@
 //
 // MUTATION CHECKS (by inspection):
 //   1. If clearInterval(pollRef.current) is removed from stopPolling, the
-//      "unmount stops polling" test fails — getDownloadState would be called
-//      again after unmount and tickSpy would record the extra invocation.
+//      "interval is cleared on unmount" test fails — clearIntervalSpy would
+//      not be called with the captured pollRef id after unmount.
 //   2. If setCleared(unclearRestarted(current)) is removed from pollTick,
 //      the "previously cleared rom restarting un-clears" test fails — a
 //      cleared rom_id that returns to "downloading" would stay hidden.
@@ -203,26 +203,42 @@ describe("DownloadQueue", () => {
       expect(op?.textContent).toBe("Ticked (Genesis)");
     });
 
-    it("interval is cleared on unmount — DOM does not update after teardown", async () => {
-      // Mutation guard: drop `clearInterval(pollRef.current)` from stopPolling
-      // and this test fails — the post-unmount tick would re-render new store
-      // contents into the detached container.
-      const { container, unmount } = render(
-        <DownloadQueue onBack={() => {}} />,
-      );
+    it("interval is cleared on unmount — clearInterval is invoked with the pollRef id", async () => {
+      // Spy on setInterval to capture the timer id assigned to pollRef, and
+      // on clearInterval to assert stopPolling runs it with that exact id.
+      // The prior `not.toContain("AfterUnmount")` assertion was vacuous:
+      // setLocalDownloads no-ops on unmounted components and the container
+      // is detached, so it passed whether or not clearInterval ran. A
+      // mutation that drops `clearInterval(pollRef.current)` from stopPolling
+      // now fails — clearIntervalSpy is never called with the captured id.
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+
+      const { unmount } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
-      expect(container.textContent).toContain("No downloads");
+
+      // startPolling calls setInterval(pollTick, 500). Pick out that id.
+      const pollIntervalIds = setIntervalSpy.mock.results
+        .filter((_, i) => setIntervalSpy.mock.calls[i][1] === 500)
+        .map((r) => r.value as ReturnType<typeof setInterval>);
+      const expectedId = pollIntervalIds[pollIntervalIds.length - 1];
+      expect(expectedId).toBeDefined();
+
+      // startPolling's leading stopPolling() runs before pollRef is set, so
+      // its clearInterval calls do nothing — capture the baseline regardless.
+      const callsBeforeUnmount = clearIntervalSpy.mock.calls.length;
 
       unmount();
 
-      // After unmount, push new state into the store and advance time.
-      setDownloads([makeItem({ rom_id: 8, rom_name: "AfterUnmount" })]);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000);
-      });
+      // After unmount, clearInterval must have been called with the id we
+      // captured from setInterval.
+      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(
+        callsBeforeUnmount,
+      );
+      expect(clearIntervalSpy).toHaveBeenCalledWith(expectedId);
 
-      // Container was detached; the last rendered content must not have changed.
-      expect(container.textContent).not.toContain("AfterUnmount");
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
     });
   });
 
