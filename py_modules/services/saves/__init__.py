@@ -9,6 +9,5 @@ RomM communication goes through Protocol-typed adapters; no ``import decky``
 
 from services.saves._config import SaveServiceConfig
 from services.saves.service import SaveService
-from services.saves.slots.service import _NO_MIGRATION
 
-__all__ = ["_NO_MIGRATION", "SaveService", "SaveServiceConfig"]
+__all__ = ["SaveService", "SaveServiceConfig"]
