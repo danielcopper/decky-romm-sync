@@ -975,6 +975,20 @@ def fake_romm_api():
     return FakeRommApi()
 
 
+@pytest.fixture
+def fake_steamgrid_db_api():
+    """Function-scoped ``FakeSteamGridDbApi`` instance.
+
+    Returns a fresh fake per test so seeded responses never leak
+    across tests. Construct without args — tests seed responses via
+    ``seed_igdb_lookup`` / ``seed_artwork`` / ``seed_raw_response`` /
+    ``seed_image_bytes`` / ``seed_verify_response``.
+    """
+    from fakes.fake_steamgrid_db_api import FakeSteamGridDbApi
+
+    return FakeSteamGridDbApi()
+
+
 @pytest.fixture(autouse=True)
 def _reset_decky_mock_paths():
     """Refresh per-test temp dirs on the mock decky module.

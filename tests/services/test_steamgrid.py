@@ -1,7 +1,6 @@
 import asyncio
 import http.client
 import os
-from unittest.mock import MagicMock
 
 import pytest
 from conftest import FakeSettingsPersister, FakeSgdbArtworkCache, FakeStatePersister
@@ -24,11 +23,10 @@ def sgdb_artwork_cache():
 
 
 @pytest.fixture
-def plugin(sgdb_artwork_cache):
+def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
-    p._http_adapter = MagicMock()
-    p._romm_api = MagicMock()
+    p._romm_api = fake_romm_api
     p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
     p._metadata_cache = {}
 
@@ -60,11 +58,13 @@ def plugin(sgdb_artwork_cache):
         ),
     )
 
-    sgdb_api = MagicMock()
+    # Bind the fake SGDB transport to the in-memory artwork cache so
+    # `download_image` writes land in the cache the service consults.
+    fake_steamgrid_db_api.bind_artwork_cache(sgdb_artwork_cache)
 
     p._sgdb_service = SteamGridService(
         config=SteamGridServiceConfig(
-            sgdb_api=sgdb_api,
+            sgdb_api=fake_steamgrid_db_api,
             romm_api=p._romm_api,
             steam_config=steam_config,
             sgdb_artwork_cache=sgdb_artwork_cache,
@@ -93,20 +93,20 @@ def _cached_path(cache: FakeSgdbArtworkCache, rom_id: int, asset_type: str) -> s
 
 class TestVerifySgdbApiKey:
     @pytest.mark.asyncio
-    async def test_valid_api_key(self, plugin):
+    async def test_valid_api_key(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.return_value = {"success": True}
+        fake_steamgrid_db_api.seed_verify_response({"success": True})
 
         result = await plugin.verify_sgdb_api_key("valid-key-123")
 
         assert result["success"] is True
         assert "valid" in result["message"].lower()
-        plugin._sgdb_service._sgdb_api.verify_api_key.assert_called_once_with("valid-key-123")
+        assert fake_steamgrid_db_api.verify_calls == ["valid-key-123"]
 
     @pytest.mark.asyncio
-    async def test_invalid_api_key_401(self, plugin):
+    async def test_invalid_api_key_401(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = SgdbApiError(401, "Unauthorized")
+        fake_steamgrid_db_api.verify_api_key_side_effect = SgdbApiError(401, "Unauthorized")
 
         result = await plugin.verify_sgdb_api_key("bad-key")
 
@@ -114,9 +114,9 @@ class TestVerifySgdbApiKey:
         assert "Invalid API key" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_invalid_api_key_403(self, plugin):
+    async def test_invalid_api_key_403(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = SgdbApiError(403, "Forbidden")
+        fake_steamgrid_db_api.verify_api_key_side_effect = SgdbApiError(403, "Forbidden")
 
         result = await plugin.verify_sgdb_api_key("bad-key")
 
@@ -124,27 +124,27 @@ class TestVerifySgdbApiKey:
         assert "Invalid API key" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_empty_string_falls_back_to_saved_key(self, plugin):
+    async def test_empty_string_falls_back_to_saved_key(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         plugin.settings["steamgriddb_api_key"] = "saved-key-456"
-        plugin._sgdb_service._sgdb_api.verify_api_key.return_value = {"success": True}
+        fake_steamgrid_db_api.seed_verify_response({"success": True})
 
         result = await plugin.verify_sgdb_api_key("")
 
         assert result["success"] is True
         # Verify it used the saved key
-        plugin._sgdb_service._sgdb_api.verify_api_key.assert_called_once_with("saved-key-456")
+        assert fake_steamgrid_db_api.verify_calls == ["saved-key-456"]
 
     @pytest.mark.asyncio
-    async def test_masked_value_falls_back_to_saved_key(self, plugin):
+    async def test_masked_value_falls_back_to_saved_key(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         plugin.settings["steamgriddb_api_key"] = "saved-key-789"
-        plugin._sgdb_service._sgdb_api.verify_api_key.return_value = {"success": True}
+        fake_steamgrid_db_api.seed_verify_response({"success": True})
 
         result = await plugin.verify_sgdb_api_key("••••")
 
         assert result["success"] is True
-        plugin._sgdb_service._sgdb_api.verify_api_key.assert_called_once_with("saved-key-789")
+        assert fake_steamgrid_db_api.verify_calls == ["saved-key-789"]
 
     @pytest.mark.asyncio
     async def test_no_key_configured(self, plugin):
@@ -162,9 +162,9 @@ class TestVerifySgdbApiKey:
         assert "No API key configured" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_network_error(self, plugin):
+    async def test_network_error(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = ConnectionError("DNS resolution failed")
+        fake_steamgrid_db_api.verify_api_key_side_effect = ConnectionError("DNS resolution failed")
 
         result = await plugin.verify_sgdb_api_key("some-key")
 
@@ -172,9 +172,9 @@ class TestVerifySgdbApiKey:
         assert "Connection failed" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_sgdb_rejects_key(self, plugin):
+    async def test_sgdb_rejects_key(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.return_value = {"success": False}
+        fake_steamgrid_db_api.seed_verify_response({"success": False})
 
         result = await plugin.verify_sgdb_api_key("rejected-key")
 
@@ -182,9 +182,9 @@ class TestVerifySgdbApiKey:
         assert "rejected" in result["message"].lower()
 
     @pytest.mark.asyncio
-    async def test_http_500_error(self, plugin):
+    async def test_http_500_error(self, plugin, fake_steamgrid_db_api):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = SgdbApiError(500, "Internal Server Error")
+        fake_steamgrid_db_api.verify_api_key_side_effect = SgdbApiError(500, "Internal Server Error")
 
         result = await plugin.verify_sgdb_api_key("some-key")
 
@@ -192,12 +192,12 @@ class TestVerifySgdbApiKey:
         assert "HTTP 500" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_legacy_urllib_http_error_still_handled(self, plugin):
+    async def test_legacy_urllib_http_error_still_handled(self, plugin, fake_steamgrid_db_api):
         """Defence-in-depth: a stray urllib.error.HTTPError should still be handled."""
         import urllib.error
 
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._sgdb_service._sgdb_api.verify_api_key.side_effect = urllib.error.HTTPError(
+        fake_steamgrid_db_api.verify_api_key_side_effect = urllib.error.HTTPError(
             "https://steamgriddb.com", 502, "Bad Gateway", http.client.HTTPMessage(), None
         )
 
@@ -243,9 +243,8 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_no_igdb_id_fetched_from_romm(self, plugin, sgdb_artwork_cache):
+    async def test_no_igdb_id_fetched_from_romm(self, plugin, sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
         import base64
-        from unittest.mock import patch
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -258,21 +257,14 @@ class TestGetSgdbArtworkBase64:
         }
 
         # RomM API returns igdb_id
-        romm_response = {"igdb_id": 1234}
+        fake_romm_api.roms[42] = {"id": 42, "igdb_id": 1234}
 
-        art_path = _cached_path(sgdb_artwork_cache, 42, "hero")
+        # SGDB resolves IGDB to game ID, then serves hero artwork.
+        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=9999)
+        fake_steamgrid_db_api.seed_artwork(9999, "hero", "https://example.com/hero.png")
+        fake_steamgrid_db_api.seed_image_bytes("https://example.com/hero.png", b"hero artwork")
 
-        def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
-            sgdb_artwork_cache.files[art_path] = b"hero artwork"
-            return art_path
-
-        svc = plugin._sgdb_service
-        with (
-            patch.object(plugin._romm_api, "get_rom", return_value=romm_response),
-            patch.object(svc, "_get_sgdb_game_id", return_value=9999),
-            patch.object(svc, "_download_sgdb_artwork", side_effect=fake_download_sgdb),
-        ):
-            result = await plugin.get_sgdb_artwork_base64(42, 1)
+        result = await plugin.get_sgdb_artwork_base64(42, 1)
 
         assert result["base64"] is not None
         assert result["no_api_key"] is False
@@ -281,9 +273,7 @@ class TestGetSgdbArtworkBase64:
         assert plugin._state["shortcut_registry"]["42"]["igdb_id"] == 1234
 
     @pytest.mark.asyncio
-    async def test_no_igdb_id_anywhere(self, plugin):
-        from unittest.mock import patch
-
+    async def test_no_igdb_id_anywhere(self, plugin, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
@@ -295,16 +285,15 @@ class TestGetSgdbArtworkBase64:
         }
 
         # RomM API also returns no igdb_id
-        with patch.object(plugin._romm_api, "get_rom", return_value={"igdb_id": None}):
-            result = await plugin.get_sgdb_artwork_base64(42, 1)
+        fake_romm_api.roms[42] = {"id": 42, "igdb_id": None}
+
+        result = await plugin.get_sgdb_artwork_base64(42, 1)
 
         assert result["base64"] is None
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_sgdb_game_lookup_no_match(self, plugin):
-        from unittest.mock import patch
-
+    async def test_sgdb_game_lookup_no_match(self, plugin, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
@@ -316,17 +305,16 @@ class TestGetSgdbArtworkBase64:
             "igdb_id": 1234,
         }
 
-        # SGDB lookup returns None (no matching game)
-        with patch.object(plugin._sgdb_service, "_get_sgdb_game_id", return_value=None):
-            result = await plugin.get_sgdb_artwork_base64(42, 1)
+        # SGDB lookup returns no match for this IGDB id
+        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=None)
+
+        result = await plugin.get_sgdb_artwork_base64(42, 1)
 
         assert result["base64"] is None
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_download_fails_returns_null(self, plugin):
-        from unittest.mock import patch
-
+    async def test_download_fails_returns_null(self, plugin, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
@@ -338,17 +326,18 @@ class TestGetSgdbArtworkBase64:
             "sgdb_id": 9999,
         }
 
-        # Download returns None (failed)
-        with patch.object(plugin._sgdb_service, "_download_sgdb_artwork", return_value=None):
-            result = await plugin.get_sgdb_artwork_base64(42, 1)
+        # SGDB returns a URL but the image download fails (CDN 5xx).
+        fake_steamgrid_db_api.seed_artwork(9999, "hero", "https://example.com/hero.png")
+        fake_steamgrid_db_api.download_image_return = False
+
+        result = await plugin.get_sgdb_artwork_base64(42, 1)
 
         assert result["base64"] is None
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_igdb_id_from_pending_sync(self, plugin, sgdb_artwork_cache):
+    async def test_igdb_id_from_pending_sync(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
         import base64
-        from unittest.mock import patch
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -360,40 +349,31 @@ class TestGetSgdbArtworkBase64:
             "igdb_id": 5678,
         }
 
-        art_path = _cached_path(sgdb_artwork_cache, 42, "logo")
+        # SGDB resolves and serves logo artwork.
+        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=5678, sgdb_id=9999)
+        fake_steamgrid_db_api.seed_artwork(9999, "logo", "https://example.com/logo.png")
+        fake_steamgrid_db_api.seed_image_bytes("https://example.com/logo.png", b"logo data")
 
-        def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
-            sgdb_artwork_cache.files[art_path] = b"logo data"
-            return art_path
-
-        svc = plugin._sgdb_service
-        with (
-            patch.object(svc, "_get_sgdb_game_id", return_value=9999),
-            patch.object(svc, "_download_sgdb_artwork", side_effect=fake_download_sgdb),
-        ):
-            result = await plugin.get_sgdb_artwork_base64(42, 2)  # 2 = logo
+        result = await plugin.get_sgdb_artwork_base64(42, 2)  # 2 = logo
 
         assert result["base64"] is not None
         assert base64.b64decode(result["base64"]) == b"logo data"
 
     @pytest.mark.asyncio
-    async def test_romm_api_fetch_fails_gracefully(self, plugin):
-        from unittest.mock import patch
-
+    async def test_romm_api_fetch_fails_gracefully(self, plugin, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
         # Not in registry or pending, RomM API fails
-        with patch.object(plugin._romm_api, "get_rom", side_effect=Exception("Connection refused")):
-            result = await plugin.get_sgdb_artwork_base64(42, 1)
+        fake_romm_api.get_rom_side_effect = Exception("Connection refused")
+
+        result = await plugin.get_sgdb_artwork_base64(42, 1)
 
         assert result["base64"] is None
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_sgdb_id_cached_in_registry(self, plugin, sgdb_artwork_cache):
-        from unittest.mock import patch
-
+    async def test_sgdb_id_cached_in_registry(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
@@ -406,22 +386,18 @@ class TestGetSgdbArtworkBase64:
             "sgdb_id": 9999,
         }
 
-        art_path = _cached_path(sgdb_artwork_cache, 42, "grid")
+        # Grid artwork available for the cached SGDB id; IGDB lookup
+        # would resolve to a different id if (incorrectly) consulted.
+        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=7777)
+        fake_steamgrid_db_api.seed_artwork(9999, "grid", "https://example.com/grid.png")
+        fake_steamgrid_db_api.seed_image_bytes("https://example.com/grid.png", b"grid data")
 
-        def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
-            assert sgdb_game_id == 9999  # Should use cached sgdb_id
-            sgdb_artwork_cache.files[art_path] = b"grid data"
-            return art_path
+        result = await plugin.get_sgdb_artwork_base64(42, 3)  # 3 = grid
 
-        svc = plugin._sgdb_service
-        # _get_sgdb_game_id should NOT be called since sgdb_id is cached
-        with (
-            patch.object(svc, "_get_sgdb_game_id") as mock_lookup,
-            patch.object(svc, "_download_sgdb_artwork", side_effect=fake_download_sgdb),
-        ):
-            result = await plugin.get_sgdb_artwork_base64(42, 3)  # 3 = grid
-
-        mock_lookup.assert_not_called()
+        # IGDB lookup must NOT be consulted when sgdb_id is cached.
+        assert not any(p.startswith("/games/igdb/") for p in fake_steamgrid_db_api.requested_paths)
+        # The artwork request must use the cached sgdb_id (9999), not 7777.
+        assert any("/grids/game/9999" in p for p in fake_steamgrid_db_api.requested_paths)
         assert result["base64"] is not None
 
 
@@ -450,10 +426,9 @@ class TestIconSupport:
         assert base64.b64decode(result["base64"]) == b"icon png data"
 
     @pytest.mark.asyncio
-    async def test_icon_download_from_sgdb(self, plugin, sgdb_artwork_cache):
+    async def test_icon_download_from_sgdb(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
         """Icon should be downloadable from SGDB icons endpoint."""
         import base64
-        from unittest.mock import patch
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
@@ -466,37 +441,28 @@ class TestIconSupport:
             "sgdb_id": 9999,
         }
 
-        art_path = _cached_path(sgdb_artwork_cache, 42, "icon")
+        fake_steamgrid_db_api.seed_artwork(9999, "icon", "https://example.com/icon.png")
+        fake_steamgrid_db_api.seed_image_bytes("https://example.com/icon.png", b"icon data")
 
-        def fake_download_sgdb(sgdb_game_id, rom_id, asset_type):
-            assert asset_type == "icon"
-            assert sgdb_game_id == 9999
-            sgdb_artwork_cache.files[art_path] = b"icon data"
-            return art_path
-
-        with patch.object(plugin._sgdb_service, "_download_sgdb_artwork", side_effect=fake_download_sgdb):
-            result = await plugin.get_sgdb_artwork_base64(42, 4)
+        result = await plugin.get_sgdb_artwork_base64(42, 4)
 
         assert result["base64"] is not None
         assert base64.b64decode(result["base64"]) == b"icon data"
+        # Verify the /icons/ endpoint was hit specifically.
+        assert any("/icons/game/9999" in p for p in fake_steamgrid_db_api.requested_paths)
 
-    def test_download_sgdb_artwork_icon_endpoint(self, plugin):
+    def test_download_sgdb_artwork_icon_endpoint(self, plugin, fake_steamgrid_db_api):
         """_download_sgdb_artwork should use /icons/ endpoint for icon type."""
-        # Track which SGDB path was requested
-        requested_paths = []
-
-        def fake_request(path):
-            requested_paths.append(path)
-            return {"success": True, "data": [{"url": "https://example.com/icon.png"}]}
-
-        plugin._sgdb_service._sgdb_api.request.side_effect = fake_request
-        plugin._sgdb_service._sgdb_api.download_image.return_value = True
+        fake_steamgrid_db_api.seed_artwork(9999, "icon", "https://example.com/icon.png")
+        # Don't seed image bytes — download_image_return defaults to True
+        # so the service returns the cached path without writing.
 
         svc = plugin._sgdb_service
         svc._download_sgdb_artwork(9999, 42, "icon")
 
-        assert len(requested_paths) == 1
-        assert "/icons/game/9999" in requested_paths[0]
+        # Exactly one /icons/game/9999 request should have been issued.
+        icon_requests = [p for p in fake_steamgrid_db_api.requested_paths if "/icons/game/9999" in p]
+        assert len(icon_requests) == 1
 
 
 class TestPruneOrphanedArtworkCache:
@@ -710,16 +676,13 @@ class TestDebugLoggerProtocolSeam:
     """
 
     @pytest.fixture
-    def plugin_with_captured_log(self, sgdb_artwork_cache):
+    def plugin_with_captured_log(self, sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
         """Plugin fixture where ``log_debug`` is a list-capturing fake."""
-        from unittest.mock import MagicMock as MM
-
         import decky
 
         p = Plugin()
         p.settings = {"log_level": "debug", "steamgriddb_api_key": ""}
-        p._http_adapter = MM()
-        p._romm_api = MM()
+        p._romm_api = fake_romm_api
         p._state = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None, "sync_stats": {}}
         p._metadata_cache = {}
 
@@ -751,9 +714,10 @@ class TestDebugLoggerProtocolSeam:
             ),
         )
 
+        fake_steamgrid_db_api.bind_artwork_cache(sgdb_artwork_cache)
         p._sgdb_service = SteamGridService(
             config=SteamGridServiceConfig(
-                sgdb_api=MM(),
+                sgdb_api=fake_steamgrid_db_api,
                 romm_api=p._romm_api,
                 steam_config=steam_config,
                 sgdb_artwork_cache=sgdb_artwork_cache,
@@ -830,47 +794,47 @@ class TestGetSgdbGameId:
     that protects the artwork pipeline from a transient SGDB outage.
     """
 
-    def test_returns_id_on_success(self, plugin):
-        plugin._sgdb_service._sgdb_api.request.return_value = {
-            "success": True,
-            "data": {"id": 9999},
-        }
+    def test_returns_id_on_success(self, plugin, fake_steamgrid_db_api):
+        fake_steamgrid_db_api.seed_raw_response(
+            "/games/igdb/1234",
+            {"success": True, "data": {"id": 9999}},
+        )
 
         result = plugin._sgdb_service._get_sgdb_game_id(1234)
 
         assert result == 9999
-        plugin._sgdb_service._sgdb_api.request.assert_called_once_with("/games/igdb/1234")
+        assert fake_steamgrid_db_api.requested_paths == ["/games/igdb/1234"]
 
-    def test_returns_none_when_success_false(self, plugin):
+    def test_returns_none_when_success_false(self, plugin, fake_steamgrid_db_api):
         """SGDB body with success=False (e.g. unknown IGDB id) → None."""
-        plugin._sgdb_service._sgdb_api.request.return_value = {
-            "success": False,
-            "data": {"id": 9999},
-        }
+        fake_steamgrid_db_api.seed_raw_response(
+            "/games/igdb/1234",
+            {"success": False, "data": {"id": 9999}},
+        )
 
         assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
 
-    def test_returns_none_when_data_missing(self, plugin):
+    def test_returns_none_when_data_missing(self, plugin, fake_steamgrid_db_api):
         """SGDB body lacking ``data`` (malformed) → None."""
-        plugin._sgdb_service._sgdb_api.request.return_value = {"success": True}
+        fake_steamgrid_db_api.seed_raw_response("/games/igdb/1234", {"success": True})
 
         assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
 
-    def test_returns_none_when_response_is_none(self, plugin):
+    def test_returns_none_when_response_is_none(self, plugin, fake_steamgrid_db_api):
         """Adapter returns ``None`` (e.g. empty body) → None."""
-        plugin._sgdb_service._sgdb_api.request.return_value = None
+        fake_steamgrid_db_api.seed_raw_response("/games/igdb/1234", None)
 
         assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
 
-    def test_sgdb_api_error_swallowed(self, plugin):
+    def test_sgdb_api_error_swallowed(self, plugin, fake_steamgrid_db_api):
         """``SgdbApiError`` (4xx/5xx) is logged and swallowed → None."""
-        plugin._sgdb_service._sgdb_api.request.side_effect = SgdbApiError(503, "Service Unavailable")
+        fake_steamgrid_db_api.request_side_effect = SgdbApiError(503, "Service Unavailable")
 
         assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
 
-    def test_network_error_swallowed(self, plugin):
+    def test_network_error_swallowed(self, plugin, fake_steamgrid_db_api):
         """Connection-level errors are logged and swallowed → None."""
-        plugin._sgdb_service._sgdb_api.request.side_effect = ConnectionError("connection refused")
+        fake_steamgrid_db_api.request_side_effect = ConnectionError("connection refused")
 
         assert plugin._sgdb_service._get_sgdb_game_id(1234) is None
 
@@ -884,14 +848,14 @@ class TestDownloadSgdbArtwork:
     ``except Exception`` net.
     """
 
-    def test_unsupported_asset_type_returns_none(self, plugin):
+    def test_unsupported_asset_type_returns_none(self, plugin, fake_steamgrid_db_api):
         """Unknown asset type → early ``None`` (no SGDB request issued)."""
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "no-such-asset-type")
 
         assert result is None
-        plugin._sgdb_service._sgdb_api.request.assert_not_called()
+        assert fake_steamgrid_db_api.requested_paths == []
 
-    def test_cache_hit_short_circuits(self, plugin, sgdb_artwork_cache):
+    def test_cache_hit_short_circuits(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
         """Pre-existing cache file → return cached path, no network call."""
         cached = _cached_path(sgdb_artwork_cache, 42, "hero")
         sgdb_artwork_cache.files[cached] = b"already cached"
@@ -899,76 +863,73 @@ class TestDownloadSgdbArtwork:
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
         assert result == cached
-        plugin._sgdb_service._sgdb_api.request.assert_not_called()
+        assert fake_steamgrid_db_api.requested_paths == []
 
-    def test_success_false_returns_none(self, plugin):
+    def test_success_false_returns_none(self, plugin, fake_steamgrid_db_api):
         """SGDB body with ``success=False`` → None."""
-        plugin._sgdb_service._sgdb_api.request.return_value = {
-            "success": False,
-            "data": [{"url": "https://example.com/hero.png"}],
-        }
+        fake_steamgrid_db_api.seed_raw_response(
+            "/heroes/game/9999",
+            {"success": False, "data": [{"url": "https://example.com/hero.png"}]},
+        )
 
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
         assert result is None
-        plugin._sgdb_service._sgdb_api.download_image.assert_not_called()
+        assert fake_steamgrid_db_api.downloaded == []
 
-    def test_empty_data_returns_none(self, plugin):
+    def test_empty_data_returns_none(self, plugin, fake_steamgrid_db_api):
         """SGDB body with empty ``data`` list → None (falsy short-circuit)."""
-        plugin._sgdb_service._sgdb_api.request.return_value = {"success": True, "data": []}
+        fake_steamgrid_db_api.seed_raw_response(
+            "/heroes/game/9999",
+            {"success": True, "data": []},
+        )
 
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
         assert result is None
-        plugin._sgdb_service._sgdb_api.download_image.assert_not_called()
+        assert fake_steamgrid_db_api.downloaded == []
 
-    def test_none_response_returns_none(self, plugin):
+    def test_none_response_returns_none(self, plugin, fake_steamgrid_db_api):
         """Adapter returns ``None`` → None (no image download)."""
-        plugin._sgdb_service._sgdb_api.request.return_value = None
+        fake_steamgrid_db_api.seed_raw_response("/heroes/game/9999", None)
 
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
         assert result is None
-        plugin._sgdb_service._sgdb_api.download_image.assert_not_called()
+        assert fake_steamgrid_db_api.downloaded == []
 
-    def test_download_image_failure_returns_none(self, plugin):
+    def test_download_image_failure_returns_none(self, plugin, fake_steamgrid_db_api):
         """``download_image`` returns False (e.g. 5xx on CDN) → None."""
-        plugin._sgdb_service._sgdb_api.request.return_value = {
-            "success": True,
-            "data": [{"url": "https://example.com/hero.png"}],
-        }
-        plugin._sgdb_service._sgdb_api.download_image.return_value = False
+        fake_steamgrid_db_api.seed_artwork(9999, "hero", "https://example.com/hero.png")
+        fake_steamgrid_db_api.download_image_return = False
 
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
         assert result is None
 
-    def test_sgdb_api_error_swallowed(self, plugin):
+    def test_sgdb_api_error_swallowed(self, plugin, fake_steamgrid_db_api):
         """``SgdbApiError`` raised by ``request`` is logged and swallowed."""
-        plugin._sgdb_service._sgdb_api.request.side_effect = SgdbApiError(500, "Internal Server Error")
+        fake_steamgrid_db_api.request_side_effect = SgdbApiError(500, "Internal Server Error")
 
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
         assert result is None
 
-    def test_malformed_data_key_error_swallowed(self, plugin):
+    def test_malformed_data_key_error_swallowed(self, plugin, fake_steamgrid_db_api):
         """Missing ``url`` in data entry → ``KeyError`` is logged and swallowed."""
-        plugin._sgdb_service._sgdb_api.request.return_value = {
-            "success": True,
-            "data": [{"id": 1}],  # no 'url' key
-        }
+        fake_steamgrid_db_api.seed_raw_response(
+            "/heroes/game/9999",
+            {"success": True, "data": [{"id": 1}]},  # no 'url' key
+        )
 
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
         assert result is None
 
-    def test_network_error_during_download_swallowed(self, plugin):
+    def test_network_error_during_download_swallowed(self, plugin, fake_steamgrid_db_api):
         """Connection-level error from ``download_image`` is swallowed."""
-        plugin._sgdb_service._sgdb_api.request.return_value = {
-            "success": True,
-            "data": [{"url": "https://example.com/hero.png"}],
-        }
-        plugin._sgdb_service._sgdb_api.download_image.side_effect = ConnectionError("connection refused")
+        fake_steamgrid_db_api.seed_artwork(9999, "hero", "https://example.com/hero.png")
+        fake_steamgrid_db_api.download_image_side_effect = ConnectionError("connection refused")
 
         result = plugin._sgdb_service._download_sgdb_artwork(9999, 42, "hero")
 
