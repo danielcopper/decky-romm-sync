@@ -58,8 +58,8 @@ class LibrarySyncStateBox:
     generation id used to invalidate stale background work after the
     run ends, the heartbeat timestamp, the live progress dict emitted
     to the frontend, and the apply-staging dicts populated during
-    ``sync_preview`` / ``sync_apply_delta`` and consumed by
-    ``report_sync_results``.
+    ``sync_preview`` / ``sync_apply_delta`` and consumed by the
+    per-unit pipeline.
     """
 
     sync_state: SyncState = SyncState.IDLE

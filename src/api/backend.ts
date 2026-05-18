@@ -85,7 +85,6 @@ export const removePlatformShortcuts = callable<[string], { success: boolean; ap
 export const removeAllShortcuts = callable<[], { success: boolean; message: string; removed_count: number; app_ids: number[]; rom_ids: (string | number)[] }>("remove_all_shortcuts");
 export const getArtworkBase64 = callable<[number], { base64: string | null }>("get_artwork_base64");
 export const getSgdbArtworkBase64 = callable<[number, number], { base64: string | null; no_api_key?: boolean }>("get_sgdb_artwork_base64");
-export const reportSyncResults = callable<[Record<string, number>, number[], boolean], { success: boolean }>("report_sync_results");
 export const reportUnitResults = callable<[Record<string, number>], { success: boolean; count: number }>("report_unit_results");
 export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>("report_removal_results");
 export const uninstallAllRoms = callable<[], { success: boolean; removed_count: number; errors: { rom_id: string; error: string }[] }>("uninstall_all_roms");

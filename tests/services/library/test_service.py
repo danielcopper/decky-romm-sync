@@ -781,64 +781,6 @@ class TestRemovePlatformShortcuts:
         assert result["platform_name"] == "Nintendo 64"
 
 
-class TestArtworkRenameOnSync:
-    """Tests for artwork rename in report_sync_results."""
-
-    @pytest.mark.asyncio
-    async def test_renames_staged_to_app_id(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        grid_dir = tmp_path / "grid"
-        grid_dir.mkdir()
-        plugin._steam_config.grid_dir = lambda: str(grid_dir)
-
-        # Create staged artwork
-        staging = grid_dir / "romm_1_cover.png"
-        staging.write_text("cover data")
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "cover_path": str(staging)},
-        }
-
-        await plugin.report_sync_results({"1": 100001}, [])
-
-        # Staging file should be gone, final file should exist
-        assert not staging.exists()
-        final = grid_dir / "100001p.png"
-        assert final.exists()
-        assert final.read_text() == "cover data"
-
-        # Registry should store the final path
-        entry = plugin._state["shortcut_registry"]["1"]
-        assert entry["cover_path"] == str(final)
-
-    @pytest.mark.asyncio
-    async def test_handles_already_final_artwork(self, plugin, tmp_path):
-        """If cover_path already points to the final file, don't error."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        grid_dir = tmp_path / "grid"
-        grid_dir.mkdir()
-        plugin._steam_config.grid_dir = lambda: str(grid_dir)
-
-        final = grid_dir / "100001p.png"
-        final.write_text("cover data")
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "cover_path": str(final)},
-        }
-
-        await plugin.report_sync_results({"1": 100001}, [])
-
-        assert final.exists()
-        entry = plugin._state["shortcut_registry"]["1"]
-        assert entry["cover_path"] == str(final)
-
-
 class TestRemovalCleansUpAppIdArtwork:
     """Tests for app_id-based artwork cleanup in report_removal_results."""
 
@@ -924,7 +866,7 @@ class TestReportRemovalSteamInputCleanup:
 class TestCollectionSyncEdgeCases:
     """Edge-case tests for the merged platform + collection sync engine.
 
-    Tests exercise classify_roms() and _report_sync_results_io() directly.
+    Tests exercise classify_roms() and _build_collection_app_ids() directly.
     """
 
     # ------------------------------------------------------------------
@@ -1043,89 +985,16 @@ class TestCollectionSyncEdgeCases:
         assert len(stale) == 0
 
     # ------------------------------------------------------------------
-    # Scenario 5: collection_create_platform_groups = False (default)
+    # Scenario 5/6: collection_create_platform_groups toggle via
+    # _build_collection_app_ids (kept helper used by per-unit path)
     # ------------------------------------------------------------------
-
-    def test_sc5_collection_rom_excluded_from_platform_groups_by_default(self, plugin):
-        """With toggle OFF, collection-only ROM B (PSX) is not included in platform_app_ids for PSX."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = False
-
-        # ROM A (id=1) came via GBA platform; ROM B (id=2) came via collection only (PSX)
-        svc._state["shortcut_registry"] = {
-            "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001, platform_slug="gba"),
-            "2": _make_registry_entry("ROM B", "PlayStation", app_id=1002, platform_slug="psx"),
-        }
-
-        # platform_rom_ids only contains ROM A (from platform fetch)
-        svc._pending_platform_rom_ids = {1}
-        svc._pending_collection_memberships = {"Favorites": [1, 2]}
-        svc._pending_sync = {
-            1: {
-                "name": "ROM A",
-                "platform_name": "Game Boy Advance",
-                "platform_slug": "gba",
-                "cover_path": "",
-            },
-            2: {
-                "name": "ROM B",
-                "platform_name": "PlayStation",
-                "platform_slug": "psx",
-                "cover_path": "",
-            },
-        }
-
-        platform_app_ids, _romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
-
-        assert "Game Boy Advance" in platform_app_ids
-        assert 1001 in platform_app_ids["Game Boy Advance"]
-        # PSX platform group should NOT be created because ROM B is collection-only
-        assert "PlayStation" not in platform_app_ids
-
-    # ------------------------------------------------------------------
-    # Scenario 6: collection_create_platform_groups = True
-    # ------------------------------------------------------------------
-
-    def test_sc6_collection_rom_included_in_platform_groups_when_toggle_on(self, plugin):
-        """With toggle ON, collection-only ROM B (PSX) IS included in platform_app_ids for PSX."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = True
-
-        svc._state["shortcut_registry"] = {
-            "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001, platform_slug="gba"),
-            "2": _make_registry_entry("ROM B", "PlayStation", app_id=1002, platform_slug="psx"),
-        }
-
-        svc._pending_platform_rom_ids = {1}
-        svc._pending_collection_memberships = {"Favorites": [1, 2]}
-        svc._pending_sync = {
-            1: {
-                "name": "ROM A",
-                "platform_name": "Game Boy Advance",
-                "platform_slug": "gba",
-                "cover_path": "",
-            },
-            2: {
-                "name": "ROM B",
-                "platform_name": "PlayStation",
-                "platform_slug": "psx",
-                "cover_path": "",
-            },
-        }
-
-        platform_app_ids, _romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
-
-        assert "Game Boy Advance" in platform_app_ids
-        assert 1001 in platform_app_ids["Game Boy Advance"]
-        # PSX platform group SHOULD exist because toggle is on
-        assert "PlayStation" in platform_app_ids
-        assert 1002 in platform_app_ids["PlayStation"]
 
     def test_sc5c_build_collection_app_ids_excludes_collection_only_roms(self, plugin):
         """_build_collection_app_ids respects the toggle.
 
-        Platform collection mapping is built from the full registry in report_sync_results.
-        collection-only ROMs must be excluded when the toggle is OFF.
+        Platform collection mapping is built from the full registry by
+        the per-unit finalisation path. Collection-only ROMs must be
+        excluded when the toggle is OFF.
         """
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = False
@@ -1165,21 +1034,21 @@ class TestCollectionSyncEdgeCases:
     # ------------------------------------------------------------------
 
     def test_sc7_rom_appears_in_both_platform_and_collection_app_ids(self, plugin):
-        """ROM A (in both GBA platform and Favorites collection) appears in both platform_app_ids
-        and romm_collection_app_ids after _report_sync_results_io."""
+        """ROM A (in both GBA platform and Favorites collection) appears in both
+        platform_app_ids and romm_collection_app_ids when built via
+        _build_collection_app_ids."""
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = False
 
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001, platform_slug="gba"),
         }
+        platform_rom_ids = {1}
+        collection_memberships = {"Favorites": [1]}
 
-        # ROM A came from platform
-        svc._pending_platform_rom_ids = {1}
-        svc._pending_collection_memberships = {"Favorites": [1]}
-        svc._pending_sync = {}
-
-        platform_app_ids, romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
+        platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
+            registry, platform_rom_ids, collection_memberships
+        )
 
         # Platform group for GBA exists (ROM A is a platform ROM)
         assert "Game Boy Advance" in platform_app_ids
@@ -1215,82 +1084,38 @@ class TestCollectionSyncEdgeCases:
         assert len(unchanged_ids) == 0
 
     # ------------------------------------------------------------------
-    # Additional edge cases for _report_sync_results_io
+    # Additional edge cases for _build_collection_app_ids
     # ------------------------------------------------------------------
 
-    def test_report_sync_clears_pending_state(self, plugin):
-        """_report_sync_results_io clears pending_sync, pending_collection_memberships,
-        and pending_platform_rom_ids after completion."""
-        svc = plugin._sync_service
-
-        svc._state["shortcut_registry"] = {}
-        svc._pending_sync = {1: {"name": "ROM A", "platform_name": "GBA", "cover_path": ""}}
-        svc._pending_collection_memberships = {"Favorites": [1]}
-        svc._pending_platform_rom_ids = {1}
-
-        svc._reporter._report_sync_results_io({}, [])
-
-        assert svc._pending_sync == {}
-        assert svc._pending_collection_memberships == {}
-        assert svc._pending_platform_rom_ids is None
-
-    def test_report_sync_collection_app_ids_empty_when_no_memberships(self, plugin):
+    def test_build_collection_app_ids_empty_when_no_memberships(self, plugin):
         """romm_collection_app_ids is empty when no collection memberships are set."""
         svc = plugin._sync_service
 
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("ROM A", "GBA", app_id=1001),
         }
-        svc._pending_platform_rom_ids = {1}
-        svc._pending_collection_memberships = {}
-        svc._pending_sync = {}
 
-        _platform_app_ids, romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
+        _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(registry, {1}, {})
 
         assert romm_collection_app_ids == {}
 
-    def test_report_sync_collection_app_ids_excludes_missing_registry_entries(self, plugin):
+    def test_build_collection_app_ids_excludes_missing_registry_entries(self, plugin):
         """romm_collection_app_ids skips rom_ids that have no registry entry."""
         svc = plugin._sync_service
 
         # Only ROM id=1 is in the registry; ROM id=99 is referenced in memberships but missing
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("ROM A", "GBA", app_id=1001),
         }
-        svc._pending_platform_rom_ids = {1}
-        svc._pending_collection_memberships = {"Favorites": [1, 99]}
-        svc._pending_sync = {}
 
-        _platform_app_ids, romm_collection_app_ids = svc._reporter._report_sync_results_io({}, [])
+        _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
+            registry, {1}, {"Favorites": [1, 99]}
+        )
 
         assert "Favorites" in romm_collection_app_ids
         assert 1001 in romm_collection_app_ids["Favorites"]
         # ROM 99 has no registry entry, so its app_id is not included
         assert len(romm_collection_app_ids["Favorites"]) == 1
-
-    def test_report_sync_platform_groups_include_newly_added_roms(self, plugin):
-        """ROMs added in this sync (via rom_id_to_app_id) appear in platform_app_ids."""
-        svc = plugin._sync_service
-        svc._settings["collection_create_platform_groups"] = False
-
-        # Registry is initially empty; the sync adds ROM A
-        svc._state["shortcut_registry"] = {}
-        svc._pending_platform_rom_ids = {1}
-        svc._pending_collection_memberships = {}
-        svc._pending_sync = {
-            1: {
-                "name": "ROM A",
-                "platform_name": "Game Boy Advance",
-                "platform_slug": "gba",
-                "cover_path": "",
-                "fs_name": "ROM A.zip",
-            }
-        }
-
-        platform_app_ids, _romm = svc._reporter._report_sync_results_io({"1": 1001}, [])
-
-        assert "Game Boy Advance" in platform_app_ids
-        assert 1001 in platform_app_ids["Game Boy Advance"]
 
     def test_classify_roms_new_when_not_in_registry(self, plugin):
         """ROMs not present in the registry at all are classified as new."""

@@ -12,85 +12,6 @@ from adapters.persistence import (
 # conftest.py patches decky before this import
 
 
-class TestReportSyncResults:
-    @pytest.mark.asyncio
-    async def test_updates_registry(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "cover_path": "/grid/abc.png"},
-            2: {"name": "Game B", "platform_name": "SNES", "cover_path": "/grid/def.png"},
-        }
-
-        result = await plugin.report_sync_results(
-            {"1": 100001, "2": 100002},
-            [],
-        )
-        assert result["success"] is True
-        assert "1" in plugin._state["shortcut_registry"]
-        assert plugin._state["shortcut_registry"]["1"]["app_id"] == 100001
-        assert plugin._state["shortcut_registry"]["1"]["name"] == "Game A"
-        assert plugin._state["shortcut_registry"]["1"]["platform_name"] == "N64"
-        assert "2" in plugin._state["shortcut_registry"]
-
-    @pytest.mark.asyncio
-    async def test_removes_stale_entries(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"]["99"] = {
-            "app_id": 99999,
-            "name": "Old Game",
-            "platform_name": "NES",
-        }
-        plugin._sync_service._pending_sync = {}
-
-        result = await plugin.report_sync_results({}, [99])
-        assert result["success"] is True
-        assert "99" not in plugin._state["shortcut_registry"]
-
-    @pytest.mark.asyncio
-    async def test_emits_sync_complete(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        decky.emit.reset_mock()
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "cover_path": ""},
-        }
-
-        await plugin.report_sync_results({"1": 100001}, [])
-        # emit called twice: sync_complete then sync_progress (done)
-        assert decky.emit.call_count == 2
-        sync_complete_call = decky.emit.call_args_list[0]
-        assert sync_complete_call[0][0] == "sync_complete"
-        assert sync_complete_call[0][1]["total_games"] == 1
-
-    @pytest.mark.asyncio
-    async def test_updates_last_sync(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {}
-        await plugin.report_sync_results({}, [])
-        assert plugin._state["last_sync"] is not None
-
-    @pytest.mark.asyncio
-    async def test_clears_pending_sync(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._sync_service._pending_sync = {1: {"name": "X", "platform_name": "Y", "cover_path": ""}}
-        await plugin.report_sync_results({"1": 1}, [])
-        assert plugin._sync_service._pending_sync == {}
-
-
 class TestGetSyncStats:
     @pytest.mark.asyncio
     async def test_computes_from_registry(self, plugin):
@@ -318,47 +239,6 @@ class TestClearSyncCache:
         result = plugin._sync_service.clear_sync_cache()
         assert result["success"] is True
         assert plugin._state["last_sync"] is None
-
-
-class TestReportSyncResultsCancelled:
-    """Tests for report_sync_results with cancelled=True — lines 773-788."""
-
-    @pytest.mark.asyncio
-    async def test_emits_cancelled_progress(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        decky.emit.reset_mock()
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "cover_path": ""},
-        }
-
-        await plugin.report_sync_results({"1": 100001}, [], cancelled=True)
-
-        # Find the sync_progress done emission
-        progress_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_progress"]
-        assert len(progress_calls) >= 1
-        last_progress = progress_calls[-1][0][1]
-        assert last_progress["running"] is False
-        assert "cancelled" in last_progress["message"].lower()
-
-    @pytest.mark.asyncio
-    async def test_emits_sync_complete_with_cancelled_flag(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        decky.emit.reset_mock()
-
-        plugin._sync_service._pending_sync = {
-            1: {"name": "Game A", "platform_name": "N64", "cover_path": ""},
-        }
-
-        await plugin.report_sync_results({"1": 100001}, [], cancelled=True)
-
-        complete_calls = [c for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
-        assert len(complete_calls) == 1
-        assert complete_calls[0][0][1]["cancelled"] is True
 
 
 class TestFinalizePerUnitRun:

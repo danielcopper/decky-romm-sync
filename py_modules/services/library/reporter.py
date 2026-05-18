@@ -1,9 +1,10 @@
 """Sync result reporter and registry-query sub-service.
 
-Owns the post-apply path: the frontend-driven ``report_sync_results``
-callback that finalises artwork file names, updates the shortcut
-registry, persists last-sync metadata, and emits the
-``sync_complete`` event. Also owns the registry-derived query
+Owns the post-apply path: the per-unit ``report_unit_results`` callback
+that finalises artwork file names and appends per-ROM registry entries,
+and the terminal ``finalize_per_unit_run`` step that builds the
+cross-unit collection mappings, persists last-sync metadata, and emits
+the ``sync_complete`` event. Also owns the registry-derived query
 methods (``get_registry_platforms``, ``get_sync_stats``,
 ``get_rom_by_steam_app_id``) and the ``clear_sync_cache`` reset.
 Anything that mutates the registry as a side-effect of a finished
@@ -119,102 +120,6 @@ class SyncReporter:
 
         return platform_app_ids, romm_collection_app_ids
 
-    def _report_sync_results_io(self, rom_id_to_app_id, removed_rom_ids):
-        """Sync helper for report_sync_results — artwork renames, state save in executor."""
-        grid = self._steam_config.grid_dir()
-        box = self._sync_state
-
-        for rom_id_str, app_id in rom_id_to_app_id.items():
-            pending = box.pending_sync.get(int(rom_id_str), {})
-            cover_path = self._finalize_cover_path(grid, pending.get("cover_path", ""), app_id, rom_id_str)
-            self._state["shortcut_registry"][rom_id_str] = self._build_registry_entry(pending, app_id, cover_path)
-
-        for rom_id in removed_rom_ids:
-            self._state["shortcut_registry"].pop(str(rom_id), None)
-
-        # Apply Steam Input mode for new shortcuts
-        steam_input_mode = self._settings.get("steam_input_mode", "default")
-        if steam_input_mode != "default" and rom_id_to_app_id:
-            try:
-                self._steam_config.set_steam_input_config(
-                    [int(aid) for aid in rom_id_to_app_id.values()], mode=steam_input_mode
-                )
-            except Exception as e:
-                self._logger.error(f"Failed to set Steam Input config: {e}")
-
-        # Capture pending state before clearing
-        pending_collection_memberships = box.pending_collection_memberships
-        pending_platform_rom_ids = box.pending_platform_rom_ids
-        box.pending_collection_memberships = {}
-        box.pending_platform_rom_ids = None
-        box.pending_sync = {}
-
-        # Build final collection mappings
-        platform_app_ids, romm_collection_app_ids = self._build_collection_app_ids(
-            self._state["shortcut_registry"],
-            pending_platform_rom_ids,
-            pending_collection_memberships,
-        )
-
-        # Save state with the actual synced platforms/collections
-        self._state["last_sync"] = self._clock.now().isoformat()
-        self._state["last_synced_collections"] = list(pending_collection_memberships.keys())
-        self._state["last_synced_platforms"] = list(platform_app_ids.keys())
-        self._state_persister.save_state()
-
-        return platform_app_ids, romm_collection_app_ids
-
-    async def report_sync_results(self, rom_id_to_app_id, removed_rom_ids, cancelled=False):
-        """Called by frontend after applying shortcuts via SteamClient."""
-        platform_app_ids, romm_collection_app_ids = await self._loop.run_in_executor(
-            None, self._report_sync_results_io, rom_id_to_app_id, removed_rom_ids
-        )
-
-        total = len(self._state["shortcut_registry"])
-        processed = len(rom_id_to_app_id)
-
-        if cancelled:
-            await self._emit(
-                "sync_complete",
-                {
-                    "platform_app_ids": platform_app_ids,
-                    "romm_collection_app_ids": romm_collection_app_ids,
-                    "total_games": processed,
-                    "cancelled": True,
-                },
-            )
-            await self._emit_progress(
-                "done",
-                current=processed,
-                total=total,
-                message=f"Sync cancelled: {processed} of {total} games processed",
-                running=False,
-            )
-            self._logger.info(f"Sync cancelled: {processed}/{total} games processed")
-        else:
-            await self._emit(
-                "sync_complete",
-                {
-                    "platform_app_ids": platform_app_ids,
-                    "romm_collection_app_ids": romm_collection_app_ids,
-                    "total_games": processed,
-                },
-            )
-            await self._emit_progress(
-                "done",
-                current=total,
-                total=total,
-                message=f"Sync complete: {total} games from {len(platform_app_ids)} platforms",
-                running=False,
-            )
-            self._logger.info(f"Sync results reported: {total} games")
-        self._sync_state.sync_state = SyncState.IDLE
-        # Invalidate the run's generation id — any in-flight per-unit
-        # waits that wake after this point see a stale id and exit
-        # without emitting a late "done".
-        self._sync_state.current_sync_id = None
-        return {"success": True}
-
     # ── Finalise per-unit run ────────────────────────────────────
 
     def _finalize_per_unit_run_io(
@@ -224,8 +129,7 @@ class SyncReporter:
     ) -> tuple[dict, dict[str, list]]:
         """Build collection app-id maps and persist last_sync metadata.
 
-        Mirrors the tail of ``_report_sync_results_io`` for the per-unit
-        path: by the time this runs, every per-unit ``report_unit_results``
+        By the time this runs, every per-unit ``report_unit_results``
         has already updated the registry, so we only need to build the
         cross-unit collection mappings and write the final
         ``last_sync`` / ``last_synced_*`` fields.

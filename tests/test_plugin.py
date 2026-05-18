@@ -681,7 +681,6 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_collections",
     "get_sync_progress",
     "sync_heartbeat",
-    "report_sync_results",
     "report_unit_results",
     "get_registry_platforms",
     "report_removal_results",
