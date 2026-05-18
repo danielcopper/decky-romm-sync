@@ -1,7 +1,10 @@
-"""Pure status DTO builders — no state, no I/O.
+"""Pure builders for the file-status DTO shape consumed by the saves UI.
 
-Anything that needs persisted state, network access, or file I/O does
-not belong here.
+Anything that derives status metadata from a sync action, the local
+file state, and the server-side save records — without touching disk,
+state, or network — belongs here. Code that needs the live
+:class:`SaveSyncState` aggregate, network calls, or file I/O belongs in
+``services/saves/status/``.
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ from domain.sync_action import Conflict, Download, Skip, Upload
 from lib.iso_time import parse_iso_to_epoch
 
 
-def _build_file_status(
+def build_file_status(
     filename: str,
     *,
     local_path: str | None,
@@ -63,7 +66,7 @@ def _build_file_status(
     }
 
 
-def _status_from_action(action: object) -> str:
+def status_from_action(action: object) -> str:
     """Map a ``SyncAction`` outcome to the legacy file-status string."""
     if isinstance(action, Skip):
         return "synced"
@@ -76,7 +79,7 @@ def _status_from_action(action: object) -> str:
     return "synced"
 
 
-def _resolve_chosen_server(action: object, candidates: list[dict]) -> dict | None:
+def resolve_chosen_server(action: object, candidates: list[dict]) -> dict | None:
     """Pick the server-save dict to display alongside the file-status row.
 
     - ``Download`` and ``Conflict`` carry the chosen save explicitly on the

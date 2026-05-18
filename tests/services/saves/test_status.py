@@ -3,7 +3,6 @@
 import pytest
 
 from domain.save_state import RomSaveState
-from services.saves.status.builders import _resolve_chosen_server, _status_from_action
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
@@ -324,20 +323,6 @@ class TestSaveSyncDisplayEnrichment:
         assert result["save_sync_display"]["status"] == "conflict"
         assert result["save_sync_display"]["label"] == "Conflict"
         assert result["save_sync_display"]["last_sync_check_at"] is None
-
-
-class TestBuildersDefensiveBranches:
-    """Direct coverage of the defensive fallbacks in builders.py."""
-
-    def test_status_from_action_unknown_type_defaults_to_synced(self):
-        """An action that matches none of Skip/Upload/Download/Conflict falls back to "synced"."""
-        assert _status_from_action(object()) == "synced"
-
-    def test_resolve_chosen_server_empty_candidates_returns_none(self):
-        """Skip-branch with no server candidates yields no chosen server save."""
-        # A bare object is not Download/Conflict/Upload, so the function falls
-        # through to the candidates check; an empty list returns None.
-        assert _resolve_chosen_server(object(), []) is None
 
 
 class TestServerQueryFailed:

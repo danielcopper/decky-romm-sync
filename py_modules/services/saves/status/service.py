@@ -9,13 +9,13 @@ from models.state import PluginState
 from domain.emulator_tag import detect_core_change
 from domain.save_attribution import compute_uploaded_by_us
 from domain.save_status import compute_save_sync_display
+from domain.save_status_builders import (
+    build_file_status,
+    resolve_chosen_server,
+    status_from_action,
+)
 from domain.sync_action import Conflict, Skip
 from lib.iso_time import parse_iso_to_epoch
-from services.saves.status.builders import (
-    _build_file_status,
-    _resolve_chosen_server,
-    _status_from_action,
-)
 
 if TYPE_CHECKING:
     import asyncio
@@ -90,8 +90,8 @@ class StatusService:
         ``Conflict``; otherwise ``None``.
         """
         action = outcome.action
-        chosen_server = _resolve_chosen_server(action, outcome.server_candidates)
-        status_entry = _build_file_status(
+        chosen_server = resolve_chosen_server(action, outcome.server_candidates)
+        status_entry = build_file_status(
             outcome.filename,
             local_path=outcome.local_path,
             local_hash=outcome.local_hash,
@@ -99,7 +99,7 @@ class StatusService:
             local_size=outcome.local_size,
             server=chosen_server,
             last_sync_at=outcome.file_state.last_sync_at or None,
-            status=_status_from_action(action),
+            status=status_from_action(action),
             server_device_id=server_device_id,
             uploaded_by_us=compute_uploaded_by_us(chosen_server, own_upload_ids),
         )
