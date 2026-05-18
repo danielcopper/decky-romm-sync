@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-class FakeHostnameProvider:
+class FakeHostnameReader:
     """In-memory ``HostnameReader`` for tests.
 
     Returns the ``hostname`` value configured at construction. Tests

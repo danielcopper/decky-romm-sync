@@ -631,9 +631,9 @@ class TestPollDownloadRequestsMigrationPause:
         plugin._download_service._sleeper = _CancellingSleeper()
 
         # Track whether the request file IO was invoked via the queue adapter.
-        from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
+        from fakes.fake_download_queue_store import FakeDownloadQueueStore
 
-        tracking_queue = FakeDownloadQueueAdapter()
+        tracking_queue = FakeDownloadQueueStore()
         plugin._download_service._download_queue_io = tracking_queue
 
         with pytest.raises(asyncio.CancelledError):
@@ -2293,7 +2293,7 @@ class TestPollDownloadRequestsLoopBody:
     async def test_dispatches_queued_request_to_start_download(self, plugin, tmp_path):
         from unittest.mock import AsyncMock, patch
 
-        from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
+        from fakes.fake_download_queue_store import FakeDownloadQueueStore
 
         plugin._download_service._runtime_dir = str(tmp_path)
         # No migration pending — must not block the loop body.
@@ -2312,7 +2312,7 @@ class TestPollDownloadRequestsLoopBody:
 
         plugin._download_service._sleeper = _CancellingSleeper()
 
-        tracking_queue = FakeDownloadQueueAdapter(entries=[{"rom_id": 42}, {"rom_id": 99}, {"no_rom_id": True}])
+        tracking_queue = FakeDownloadQueueStore(entries=[{"rom_id": 42}, {"rom_id": 99}, {"no_rom_id": True}])
         plugin._download_service._download_queue_io = tracking_queue
         plugin._download_service._loop = asyncio.get_event_loop()
 
@@ -2331,7 +2331,7 @@ class TestPollDownloadRequestsLoopBody:
     async def test_empty_poll_continues_without_dispatch(self, plugin, tmp_path):
         from unittest.mock import AsyncMock, patch
 
-        from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
+        from fakes.fake_download_queue_store import FakeDownloadQueueStore
 
         plugin._download_service._runtime_dir = str(tmp_path)
         plugin._download_service._is_retrodeck_migration_pending = lambda: False
@@ -2347,7 +2347,7 @@ class TestPollDownloadRequestsLoopBody:
 
         plugin._download_service._sleeper = _CancellingSleeper()
 
-        tracking_queue = FakeDownloadQueueAdapter(entries=[])
+        tracking_queue = FakeDownloadQueueStore(entries=[])
         plugin._download_service._download_queue_io = tracking_queue
         plugin._download_service._loop = asyncio.get_event_loop()
 

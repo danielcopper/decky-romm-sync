@@ -18,12 +18,12 @@ from bootstrap import (
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_download_file_store import FakeDownloadFileStore
-from fakes.fake_download_queue_adapter import FakeDownloadQueueAdapter
+from fakes.fake_download_queue_store import FakeDownloadQueueStore
 from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
-from fakes.fake_hostname_provider import FakeHostnameProvider
+from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_migration_file_store import FakeMigrationFileStore
-from fakes.fake_path_probe import FakePathProbe
+from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_rom_file_store import FakeRomFileStore
@@ -195,13 +195,13 @@ class TestWireServices:
             "cover_art_file_store": FakeCoverArtFileStore(),
             "sgdb_artwork_cache": FakeSgdbArtworkCache(),
             "download_file_store": FakeDownloadFileStore(),
-            "download_queue": FakeDownloadQueueAdapter(),
+            "download_queue": FakeDownloadQueueStore(),
             "firmware_file_store": FakeFirmwareFileStore(),
             "migration_file_store": FakeMigrationFileStore(),
             "rom_file_store": FakeRomFileStore(),
             "save_file_store": FakeSaveFileStore(),
             "gamelist_editor": MagicMock(),
-            "path_probe": FakePathProbe(),
+            "path_probe": FakePathExistsReader(),
             "state": state,
             "settings": settings,
             "metadata_cache": {},
@@ -214,7 +214,7 @@ class TestWireServices:
             "clock": FakeClock(),
             "uuid_gen": FakeUuidGen(),
             "sleeper": FakeSleeper(),
-            "hostname_provider": FakeHostnameProvider(),
+            "hostname_provider": FakeHostnameReader(),
             "min_required_version": (4, 8, 1),
             "retrodeck_paths": FakeRetroDeckPaths(
                 saves=str(tmp_path / "saves"),

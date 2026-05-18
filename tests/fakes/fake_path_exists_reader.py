@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-class FakePathProbe:
+class FakePathExistsReader:
     """In-memory ``PathExistsReader`` for tests.
 
     Backed by a ``set[str]`` of paths that report as existing. Tests

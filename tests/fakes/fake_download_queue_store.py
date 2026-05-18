@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-class FakeDownloadQueueAdapter:
+class FakeDownloadQueueStore:
     """In-memory ``DownloadQueueStore`` for tests.
 
     Backed by a single ``entries`` list so ``poll_and_clear`` is

@@ -7,7 +7,7 @@ from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
-from fakes.fake_path_probe import FakePathProbe
+from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from models.state import InstalledRomEntry, PluginState, ShortcutRegistryEntry, make_default_plugin_state
 
@@ -46,9 +46,9 @@ def _make_service(
     logger: logging.Logger,
     state_persister: MagicMock,
     retrodeck_home: str = _RETRODECK_HOME,
-    path_probe: FakePathProbe | None = None,
+    path_probe: FakePathExistsReader | None = None,
 ) -> StartupHealingService:
-    probe = path_probe if path_probe is not None else FakePathProbe(paths={retrodeck_home})
+    probe = path_probe if path_probe is not None else FakePathExistsReader(paths={retrodeck_home})
     return StartupHealingService(
         config=StartupHealingServiceConfig(
             state=state,
@@ -72,7 +72,7 @@ class TestPruneStaleInstalledRoms:
             state=state,
             logger=logger,
             state_persister=state_persister,
-            path_probe=FakePathProbe(),
+            path_probe=FakePathExistsReader(),
         )
         with caplog.at_level(logging.INFO):
             service.prune_stale_installed_roms()
@@ -91,7 +91,7 @@ class TestPruneStaleInstalledRoms:
             logger=logger,
             state_persister=state_persister,
             retrodeck_home="",
-            path_probe=FakePathProbe(),
+            path_probe=FakePathExistsReader(),
         )
         service.prune_stale_installed_roms()
         assert "1" in state["installed_roms"]
@@ -111,7 +111,7 @@ class TestPruneStaleInstalledRoms:
         state = _make_state()
         rom_file = "/run/media/deck/Emulation/retrodeck/roms/n64/game.z64"
         state["installed_roms"] = {"1": _installed(rom_id=1, file_path=rom_file)}
-        probe = FakePathProbe(paths={_RETRODECK_HOME, rom_file})
+        probe = FakePathExistsReader(paths={_RETRODECK_HOME, rom_file})
         service = _make_service(state=state, logger=logger, state_persister=state_persister, path_probe=probe)
         service.prune_stale_installed_roms()
         assert "1" in state["installed_roms"]
@@ -128,7 +128,7 @@ class TestPruneStaleInstalledRoms:
                 rom_dir=rom_dir,
             ),
         }
-        probe = FakePathProbe(paths={_RETRODECK_HOME, rom_dir})
+        probe = FakePathExistsReader(paths={_RETRODECK_HOME, rom_dir})
         service = _make_service(state=state, logger=logger, state_persister=state_persister, path_probe=probe)
         service.prune_stale_installed_roms()
         assert "1" in state["installed_roms"]
@@ -163,7 +163,7 @@ class TestPruneStaleInstalledRoms:
             "1": _installed(rom_id=1, file_path=existing),
             "2": _installed(rom_id=2, file_path="/gone/dead.z64"),
         }
-        probe = FakePathProbe(paths={_RETRODECK_HOME, existing})
+        probe = FakePathExistsReader(paths={_RETRODECK_HOME, existing})
         service = _make_service(state=state, logger=logger, state_persister=state_persister, path_probe=probe)
         service.prune_stale_installed_roms()
         assert "1" in state["installed_roms"]
