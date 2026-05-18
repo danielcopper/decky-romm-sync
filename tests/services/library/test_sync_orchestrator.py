@@ -123,30 +123,6 @@ async def _fake_wait_set_event(_unit, event):
     return {}
 
 
-def _prefetch_result(
-    *,
-    prefetched=None,
-    all_roms=None,
-    shortcuts_data=None,
-    collection_memberships=None,
-    platform_rom_ids=None,
-):
-    """Build the 5-tuple returned by ``LibraryFetcher.prefetch_all_units``.
-
-    Retained for the few preview tests where the real fetcher cannot
-    produce the exact branch the test wants (e.g. forced cancellation
-    or a synthetic error). Most tests now drive ``prefetch_all_units``
-    end-to-end via seeded ``FakeRommApi`` state.
-    """
-    return (
-        prefetched or [],
-        all_roms or [],
-        shortcuts_data or [],
-        collection_memberships or {},
-        platform_rom_ids if platform_rom_ids is not None else set(),
-    )
-
-
 def _platform_prefetched(name="N64", slug="n64", roms=None, skipped=True):
     """Build a single platform ``PrefetchedUnit`` for tests that seed the
     apply-side cache directly (e.g. ``sync_apply_delta`` dispatch)."""
