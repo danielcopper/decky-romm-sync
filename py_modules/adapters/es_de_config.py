@@ -270,11 +270,11 @@ class CoreResolver:
         if not os.path.exists(gamelist_path):
             return None
 
-        raw = GamelistXmlEditor.read_gamelist_raw(gamelist_path)
+        raw = GamelistXmlEditorAdapter.read_gamelist_raw(gamelist_path)
         if not raw:
             return None
 
-        parsed = GamelistXmlEditor.parse_gamelist_preserving(raw)
+        parsed = GamelistXmlEditorAdapter.parse_gamelist_preserving(raw)
         if not parsed:
             return None
 
@@ -501,14 +501,14 @@ class CoreResolver:
 
 
 # ---------------------------------------------------------------------------
-# GamelistXmlEditor — gamelist.xml read/write operations
+# GamelistXmlEditorAdapter — gamelist.xml read/write operations
 # ---------------------------------------------------------------------------
 
 
-class GamelistXmlEditor:
+class GamelistXmlEditorAdapter:
     """Writes per-system and per-game core overrides into ES-DE's gamelist.xml.
 
-    Implements ``GamelistXmlEditorProtocol`` structurally. Reads
+    Implements ``GamelistXmlEditor`` Protocol structurally. Reads
     happen through :class:`CoreResolver`; this class only writes.
     """
 
@@ -623,7 +623,7 @@ class GamelistXmlEditor:
         """Build an XML attribute string from a dict."""
         parts = []
         for k, v in attrs.items():
-            parts.append(f' {k}="{GamelistXmlEditor.escape_xml(v)}"')
+            parts.append(f' {k}="{GamelistXmlEditorAdapter.escape_xml(v)}"')
         return "".join(parts)
 
     @staticmethod
@@ -635,10 +635,10 @@ class GamelistXmlEditor:
             state["game_xml_parts"] = []
             state["game_path"] = None
             state["game_altemulator"] = None
-            attr_str = GamelistXmlEditor._build_attr_str(attrs)
+            attr_str = GamelistXmlEditorAdapter._build_attr_str(attrs)
             state["game_xml_parts"].append(f"<game{attr_str}>")
         elif state["in_game"]:
-            attr_str = GamelistXmlEditor._build_attr_str(attrs)
+            attr_str = GamelistXmlEditorAdapter._build_attr_str(attrs)
             state["game_xml_parts"].append(f"<{name}{attr_str}>")
 
     @staticmethod
@@ -660,7 +660,7 @@ class GamelistXmlEditor:
             state["in_game"] = False
         else:
             if state["text"]:
-                state["game_xml_parts"].append(GamelistXmlEditor.escape_xml(state["text"]))
+                state["game_xml_parts"].append(GamelistXmlEditorAdapter.escape_xml(state["text"]))
             state["game_xml_parts"].append(f"</{name}>")
             if name == "path":
                 state["game_path"] = text
@@ -699,10 +699,10 @@ class GamelistXmlEditor:
         def start_element(name, attrs):
             state["path"].append(name)
             state["text"] = ""
-            GamelistXmlEditor._handle_game_start(state, name, attrs)
+            GamelistXmlEditorAdapter._handle_game_start(state, name, attrs)
 
         def end_element(name):
-            if not GamelistXmlEditor._handle_game_end(state, result, name):
+            if not GamelistXmlEditorAdapter._handle_game_end(state, result, name):
                 # Outside game: look for alternativeEmulator/label
                 text = state["text"].strip()
                 if (
@@ -744,7 +744,7 @@ class GamelistXmlEditor:
         """
         parts = ['<?xml version="1.0"?>\n<gameList>']
         if alt_label:
-            escaped = GamelistXmlEditor.escape_xml(alt_label)
+            escaped = GamelistXmlEditorAdapter.escape_xml(alt_label)
             parts.append(f"\n  <alternativeEmulator>\n    <label>{escaped}</label>\n  </alternativeEmulator>")
         for game_xml in games_xml_list:
             parts.append(f"\n  {game_xml}")
@@ -763,7 +763,7 @@ class GamelistXmlEditor:
                 return
             if state["skip_altemulator"] or name == "game":
                 return
-            attr_str = GamelistXmlEditor._build_attr_str(attrs)
+            attr_str = GamelistXmlEditorAdapter._build_attr_str(attrs)
             elements.append(("open", f"<{name}{attr_str}>"))
 
         return start_element
@@ -787,7 +787,7 @@ class GamelistXmlEditor:
                 state["text"] = ""
                 return
             if state["text"]:
-                elements.append(("text", GamelistXmlEditor.escape_xml(state["text"])))
+                elements.append(("text", GamelistXmlEditorAdapter.escape_xml(state["text"])))
             elements.append(("close", f"</{name}>"))
             state["path"].pop()
             state["text"] = ""
@@ -810,8 +810,8 @@ class GamelistXmlEditor:
         state = {"path": [], "text": "", "skip_altemulator": False}
 
         parser = expat.ParserCreate()
-        parser.StartElementHandler = GamelistXmlEditor._rebuild_start_handler(state, elements)
-        parser.EndElementHandler = GamelistXmlEditor._rebuild_end_handler(state, elements)
+        parser.StartElementHandler = GamelistXmlEditorAdapter._rebuild_start_handler(state, elements)
+        parser.EndElementHandler = GamelistXmlEditorAdapter._rebuild_end_handler(state, elements)
 
         def char_data(data):
             if not state["skip_altemulator"]:
@@ -829,6 +829,6 @@ class GamelistXmlEditor:
         for _, data in elements:
             parts.append(data)
         if core_label:
-            parts.append(f"<altemulator>{GamelistXmlEditor.escape_xml(core_label)}</altemulator>")
+            parts.append(f"<altemulator>{GamelistXmlEditorAdapter.escape_xml(core_label)}</altemulator>")
         parts.append("</game>")
         return "".join(parts)

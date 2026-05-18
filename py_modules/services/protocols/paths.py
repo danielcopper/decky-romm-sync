@@ -4,7 +4,7 @@ Services query the host RetroDECK/RetroArch/ES-DE environment through
 these Protocols: filesystem path getters (saves, roms, BIOS,
 RetroDECK home), platform-to-system resolution, RetroArch save sorting
 toggles, and RetroArch core lookups for ES-DE configured systems.
-``GamelistXmlEditorProtocol`` is the matching write seam for ES-DE
+``GamelistXmlEditor`` is the matching write seam for ES-DE
 per-system / per-game core overrides — paired with ``CoreInfoProvider``
 which owns the read side.
 """
@@ -71,7 +71,7 @@ class CoreInfoProvider(Protocol):
     def reset_cache(self) -> None: ...
 
 
-class GamelistXmlEditorProtocol(Protocol):
+class GamelistXmlEditor(Protocol):
     """Write seam for ES-DE per-system / per-game core overrides.
 
     Lets ``main.py`` callables mutate ``gamelist.xml`` without

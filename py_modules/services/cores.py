@@ -6,7 +6,7 @@ toggling the system-wide default, and pinning a per-game core all
 live here; the cross-service BIOS recheck that follows a write is
 also scheduled from this service.
 
-XML reads/writes happen via the injected ``GamelistXmlEditorProtocol``
+XML reads/writes happen via the injected ``GamelistXmlEditor``
 and ``CoreInfoProvider`` adapters; the on-executor scheduling and the
 cross-service BIOS recheck are this service's concern.
 """
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         BiosChecker,
         CoreInfoProvider,
-        GamelistXmlEditorProtocol,
+        GamelistXmlEditor,
         RetroDeckPaths,
     )
 
@@ -41,7 +41,7 @@ class CoreServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     core_info: CoreInfoProvider
-    gamelist_editor: GamelistXmlEditorProtocol
+    gamelist_editor: GamelistXmlEditor
     retrodeck_paths: RetroDeckPaths
     bios_checker: BiosChecker
 

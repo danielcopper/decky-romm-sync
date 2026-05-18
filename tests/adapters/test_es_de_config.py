@@ -1,4 +1,4 @@
-"""Tests for adapters/es_de_config — CoreResolver and GamelistXmlEditor."""
+"""Tests for adapters/es_de_config — CoreResolver and GamelistXmlEditorAdapter."""
 
 import logging
 import os
@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 
 from adapters import es_de_config as es_de_config_mod
-from adapters.es_de_config import CoreResolver, GamelistXmlEditor
+from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
 
 # conftest.py patches decky before this import.
 # main.py adds py_modules to sys.path (provides vdf, etc.).
@@ -27,8 +27,8 @@ def _make_resolver(get_retrodeck_home=None) -> CoreResolver:
     )
 
 
-def _make_editor() -> GamelistXmlEditor:
-    return GamelistXmlEditor(logger=_TEST_LOGGER)
+def _make_editor() -> GamelistXmlEditorAdapter:
+    return GamelistXmlEditorAdapter(logger=_TEST_LOGGER)
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def resolver() -> CoreResolver:
 
 
 @pytest.fixture
-def editor() -> GamelistXmlEditor:
+def editor() -> GamelistXmlEditorAdapter:
     return _make_editor()
 
 

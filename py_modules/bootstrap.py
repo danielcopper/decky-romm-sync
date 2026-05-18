@@ -22,7 +22,7 @@ from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
 from adapters.download_queue import DownloadQueueAdapter
-from adapters.es_de_config import CoreResolver, GamelistXmlEditor
+from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
 from adapters.migration_file import MigrationFileAdapter
@@ -74,7 +74,7 @@ from services.protocols import (
     EventEmitter,
     FirmwareCachePersister,
     FirmwareFileStore,
-    GamelistXmlEditorProtocol,
+    GamelistXmlEditor,
     HostnameProvider,
     MetadataCachePersister,
     MigrationFileStore,
@@ -130,7 +130,7 @@ class AdapterBundle:
     migration_file_store: MigrationFileStore
     rom_file_store: RomFileStore
     save_file_store: SaveFileStore
-    gamelist_editor: GamelistXmlEditorProtocol
+    gamelist_editor: GamelistXmlEditor
     path_probe: PathExistsProbe
     core_info_provider: CoreInfoProvider
 
@@ -289,7 +289,7 @@ def bootstrap(
         logger=logger,
         get_retrodeck_home=retrodeck_paths.retrodeck_home,
     )
-    gamelist_editor = GamelistXmlEditor(logger=logger)
+    gamelist_editor = GamelistXmlEditorAdapter(logger=logger)
 
     persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
     firmware_cache_persister = FirmwareCachePersisterAdapter(persistence)

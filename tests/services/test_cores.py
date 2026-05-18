@@ -13,7 +13,7 @@ from services.cores import CoreService, CoreServiceConfig
 
 
 class FakeGamelistEditor:
-    """In-memory ``GamelistXmlEditorProtocol`` for tests."""
+    """In-memory ``GamelistXmlEditor`` for tests."""
 
     def __init__(self) -> None:
         self.system_calls: list[tuple[str, str, str | None]] = []
