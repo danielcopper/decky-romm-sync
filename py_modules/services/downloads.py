@@ -9,6 +9,7 @@ filesystem I/O is delegated to the ``DownloadFileAdapter`` and
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -85,9 +86,32 @@ class DownloadService:
         self._download_in_progress: set = set()
         self._download_queue: dict = {}
         self._download_tasks: dict = {}
+        self._poll_task: asyncio.Task | None = None
 
-    def shutdown(self) -> None:
-        """Cancel all active downloads and clear task tracking."""
+    def start(self) -> None:
+        """Spawn the background ``poll_download_requests`` task.
+
+        Owns the task handle so :meth:`shutdown` can cancel it on
+        unload. Idempotent: a second call while a poll task is already
+        running is a no-op.
+        """
+        if self._poll_task is not None and not self._poll_task.done():
+            return
+        self._poll_task = self._loop.create_task(self.poll_download_requests())
+
+    async def shutdown(self) -> None:
+        """Cancel the background poll task and all active downloads.
+
+        Awaits the poll task so the loop fully exits before unload
+        returns; per-ROM download tasks are cancelled fire-and-forget
+        (their ``finally`` clauses run on the event loop after this
+        method returns, which is acceptable on plugin unload).
+        """
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._poll_task
+            self._poll_task = None
         for task in self._download_tasks.values():
             task.cancel()
         self._download_tasks.clear()

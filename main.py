@@ -170,35 +170,12 @@ class Plugin:
 
         # ── 6. Background tasks ─────────────────────────────────────────────
         self._migration_service.detect_save_sort_change()
-        self.loop.create_task(self._download_service.poll_download_requests())
+        self._download_service.start()
         decky.logger.info("RomM Sync plugin loaded")
-
-    async def migrate_retrodeck_files(self, conflict_strategy=None):
-        """Delegate to MigrationService."""
-        return await self._migration_service.migrate_retrodeck_files(conflict_strategy)
-
-    async def get_migration_status(self):
-        """Delegate to MigrationService."""
-        return await self._migration_service.get_migration_status()
-
-    async def get_save_sort_migration_status(self):
-        return await self._migration_service.get_save_sort_migration_status()
-
-    async def migrate_save_sort_files(self, conflict_strategy=None):
-        return await self._migration_service.migrate_save_sort_files(conflict_strategy)
-
-    async def dismiss_save_sort_migration(self):
-        return self._migration_service.dismiss_save_sort_migration()
-
-    async def dismiss_retrodeck_migration(self):
-        return self._migration_service.dismiss_retrodeck_migration()
-
-    async def refresh_migration_state(self):
-        return await self._migration_service.refresh_state()
 
     async def _unload(self):  # Decky lifecycle — must be async
         self._sync_service.shutdown()
-        self._download_service.shutdown()
+        await self._download_service.shutdown()
         decky.logger.info("RomM Sync plugin unloaded")
 
     # ── Callables ──────────────────────────────────────────────────────
@@ -216,7 +193,7 @@ class Plugin:
         self._settings_service.frontend_log(level, message)
 
     async def debug_log(self, message):
-        await self.frontend_log("debug", message)
+        self._settings_service.frontend_log("debug", message)
 
     async def save_log_level(self, level):
         return self._settings_service.save_log_level(level)
@@ -496,3 +473,26 @@ class Plugin:
 
     async def get_achievement_progress(self, rom_id):
         return await self._achievements_service.get_achievement_progress(rom_id)
+
+    # ── Migration delegation to MigrationService ──────────────
+
+    async def migrate_retrodeck_files(self, conflict_strategy=None):
+        return await self._migration_service.migrate_retrodeck_files(conflict_strategy)
+
+    async def get_migration_status(self):
+        return await self._migration_service.get_migration_status()
+
+    async def get_save_sort_migration_status(self):
+        return await self._migration_service.get_save_sort_migration_status()
+
+    async def migrate_save_sort_files(self, conflict_strategy=None):
+        return await self._migration_service.migrate_save_sort_files(conflict_strategy)
+
+    async def dismiss_save_sort_migration(self):
+        return self._migration_service.dismiss_save_sort_migration()
+
+    async def dismiss_retrodeck_migration(self):
+        return self._migration_service.dismiss_retrodeck_migration()
+
+    async def refresh_migration_state(self):
+        return await self._migration_service.refresh_state()

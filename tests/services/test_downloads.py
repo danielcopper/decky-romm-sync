@@ -2130,22 +2130,127 @@ class TestStartDownloadCreateTaskFailure:
 class TestShutdown:
     """Tests for DownloadService.shutdown — cancel active tasks + clear tracking."""
 
-    def test_shutdown_cancels_active_tasks_and_clears(self, plugin):
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_active_tasks_and_clears(self, plugin):
         task_a = MagicMock()
         task_b = MagicMock()
         plugin._download_service._download_tasks[1] = task_a
         plugin._download_service._download_tasks[2] = task_b
 
-        plugin._download_service.shutdown()
+        await plugin._download_service.shutdown()
 
         task_a.cancel.assert_called_once_with()
         task_b.cancel.assert_called_once_with()
         assert plugin._download_service._download_tasks == {}
 
-    def test_shutdown_no_tasks_is_noop(self, plugin):
+    @pytest.mark.asyncio
+    async def test_shutdown_no_tasks_is_noop(self, plugin):
         # No tasks registered — must not raise.
-        plugin._download_service.shutdown()
+        await plugin._download_service.shutdown()
         assert plugin._download_service._download_tasks == {}
+
+
+class TestStartShutdownLifecycle:
+    """Tests for DownloadService.start / shutdown — poll-task ownership.
+
+    The service owns its background ``poll_download_requests`` task so
+    ``main._unload`` can cancel it via ``await shutdown()``. Covers the
+    spawn, idempotent re-spawn, await-cancellation, and combined
+    shutdown-with-active-downloads paths.
+    """
+
+    @pytest.mark.asyncio
+    async def test_start_spawns_poll_task(self, plugin):
+        plugin._download_service._loop = asyncio.get_event_loop()
+        # Stub the poll coroutine so we don't run the real polling
+        # loop — we only care that start() owns the task handle.
+
+        async def _noop_poll():
+            await asyncio.sleep(0.01)
+
+        plugin._download_service.poll_download_requests = _noop_poll  # type: ignore[method-assign]
+
+        assert plugin._download_service._poll_task is None
+        plugin._download_service.start()
+        assert plugin._download_service._poll_task is not None
+        assert isinstance(plugin._download_service._poll_task, asyncio.Task)
+
+        # Let the stub task finish so the loop has nothing pending.
+        await plugin._download_service._poll_task
+
+    @pytest.mark.asyncio
+    async def test_start_is_idempotent_when_task_running(self, plugin):
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        async def _long_poll():
+            await asyncio.sleep(5)
+
+        plugin._download_service.poll_download_requests = _long_poll  # type: ignore[method-assign]
+
+        plugin._download_service.start()
+        first_task = plugin._download_service._poll_task
+        plugin._download_service.start()
+        second_task = plugin._download_service._poll_task
+
+        assert first_task is second_task
+
+        # Clean up — cancel + await to let the loop tear down without
+        # an unawaited-task warning.
+        await plugin._download_service.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_start_after_previous_task_done_spawns_new(self, plugin):
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        async def _quick_poll():
+            return None
+
+        plugin._download_service.poll_download_requests = _quick_poll  # type: ignore[method-assign]
+
+        plugin._download_service.start()
+        first_task = plugin._download_service._poll_task
+        assert first_task is not None
+        await first_task
+
+        plugin._download_service.start()
+        second_task = plugin._download_service._poll_task
+        assert second_task is not None
+        assert second_task is not first_task
+
+        await second_task
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_poll_task_and_awaits_exit(self, plugin):
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        async def _long_poll():
+            await asyncio.sleep(30)
+
+        plugin._download_service.poll_download_requests = _long_poll  # type: ignore[method-assign]
+
+        plugin._download_service.start()
+        poll_task = plugin._download_service._poll_task
+        assert poll_task is not None
+        assert not poll_task.done()
+
+        await plugin._download_service.shutdown()
+
+        assert poll_task.done()
+        assert poll_task.cancelled()
+        assert plugin._download_service._poll_task is None
+
+    @pytest.mark.asyncio
+    async def test_shutdown_handles_missing_poll_task(self, plugin):
+        # Never called start() — shutdown must still tear down per-ROM
+        # tasks without touching the missing poll handle.
+        task_a = MagicMock()
+        plugin._download_service._download_tasks[7] = task_a
+
+        await plugin._download_service.shutdown()
+
+        task_a.cancel.assert_called_once_with()
+        assert plugin._download_service._download_tasks == {}
+        assert plugin._download_service._poll_task is None
 
 
 class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
