@@ -56,7 +56,7 @@ from services.protocols.infra import (
     DownloadQueueCleanup,
     EventEmitter,
     HostnameReader,
-    PathExistsProbe,
+    PathExistsReader,
     PendingSyncReader,
 )
 from services.protocols.paths import (
@@ -121,7 +121,7 @@ __all__ = [
     "MetadataExtractor",
     "MigrationFileStore",
     "MigrationPendingFn",
-    "PathExistsProbe",
+    "PathExistsReader",
     "PendingSyncReader",
     "PluginMetadataReader",
     "RetroArchConfigReader",

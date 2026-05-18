@@ -20,7 +20,7 @@ from domain.installed_roms import is_pending_migration_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import PathExistsProbe, RetroDeckPaths, StatePersister
+    from services.protocols import PathExistsReader, RetroDeckPaths, StatePersister
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,7 @@ class StartupHealingServiceConfig:
     logger: logging.Logger
     state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths
-    path_probe: PathExistsProbe
+    path_probe: PathExistsReader
 
 
 class StartupHealingService:

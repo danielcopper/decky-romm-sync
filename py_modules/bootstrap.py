@@ -78,7 +78,7 @@ from services.protocols import (
     HostnameReader,
     MetadataCachePersister,
     MigrationFileStore,
-    PathExistsProbe,
+    PathExistsReader,
     PluginMetadataReader,
     RetroArchSaveSortingProvider,
     RetroDeckPaths,
@@ -131,7 +131,7 @@ class AdapterBundle:
     rom_file_store: RomFileStore
     save_file_store: SaveFileStore
     gamelist_editor: GamelistXmlEditor
-    path_probe: PathExistsProbe
+    path_probe: PathExistsReader
     core_info_provider: CoreInfoProvider
 
 

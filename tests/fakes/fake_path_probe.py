@@ -1,10 +1,10 @@
-"""In-memory ``PathExistsProbe`` implementation for service tests."""
+"""In-memory ``PathExistsReader`` implementation for service tests."""
 
 from __future__ import annotations
 
 
 class FakePathProbe:
-    """In-memory ``PathExistsProbe`` for tests.
+    """In-memory ``PathExistsReader`` for tests.
 
     Backed by a ``set[str]`` of paths that report as existing. Tests
     pre-populate ``paths`` directly to stage what the probe should

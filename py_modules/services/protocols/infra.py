@@ -37,7 +37,7 @@ class HostnameReader(Protocol):
         ...
 
 
-class PathExistsProbe(Protocol):
+class PathExistsReader(Protocol):
     """Generic filesystem existence probe.
 
     Used by services that need to check whether a path is currently
