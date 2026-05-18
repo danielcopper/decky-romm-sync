@@ -19,13 +19,13 @@ from lib.errors import error_response
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable
 
     from services.protocols import (
         Clock,
         DownloadFileAdapter,
         DownloadQueueAdapter,
         EventEmitter,
+        MigrationPendingFn,
         RetroDeckPaths,
         RommRomReader,
         Sleeper,
@@ -60,7 +60,7 @@ class DownloadServiceConfig:
     sleeper: Sleeper
     state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths | None = None
-    is_retrodeck_migration_pending: Callable[[], bool] | None = None
+    is_retrodeck_migration_pending: MigrationPendingFn | None = None
 
 
 class DownloadService:

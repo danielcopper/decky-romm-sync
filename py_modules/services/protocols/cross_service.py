@@ -172,7 +172,7 @@ class SessionMigrationReader(Protocol):
     def is_retrodeck_migration_pending(self) -> bool: ...
 
 
-class SaveSortChangeDetector(Protocol):
+class SaveSortChangeFn(Protocol):
     """Save-sort-change refresh consumed by SaveService.
 
     The composition root satisfies this with
@@ -185,7 +185,7 @@ class SaveSortChangeDetector(Protocol):
     def __call__(self) -> None: ...
 
 
-class RetroDeckMigrationGate(Protocol):
+class MigrationPendingFn(Protocol):
     """Pending-RetroDECK-migration check consumed by SaveService.
 
     The composition root satisfies this with

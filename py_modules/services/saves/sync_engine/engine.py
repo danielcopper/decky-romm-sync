@@ -26,16 +26,17 @@ from services.saves.sync_engine.rollback import RollbackOrchestrator
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable
 
     from services.protocols import (
         Clock,
         CoreResolverFn,
         DebugLogger,
         HostnameProvider,
+        MigrationPendingFn,
         RetryStrategy,
         RommSyncApi,
         SaveFileAdapter,
+        SaveSortChangeFn,
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.state import StateService
@@ -71,8 +72,8 @@ class SyncEngineConfig:
     get_active_core: CoreResolverFn
     hostname_provider: HostnameProvider
     plugin_version: str
-    detect_sort_change: Callable[[], None] | None
-    is_retrodeck_migration_pending: Callable[[], bool] | None
+    detect_sort_change: SaveSortChangeFn | None
+    is_retrodeck_migration_pending: MigrationPendingFn | None
 
 
 class SyncEngine:

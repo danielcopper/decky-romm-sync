@@ -23,13 +23,13 @@ if TYPE_CHECKING:
         DebugLogger,
         EventEmitter,
         HostnameProvider,
+        MigrationPendingFn,
         PluginMetadataReader,
-        RetroDeckMigrationGate,
         RetroDeckPaths,
         RetryStrategy,
         RommSyncApi,
         SaveFileAdapter,
-        SaveSortChangeDetector,
+        SaveSortChangeFn,
         SaveSyncStatePersister,
     )
 
@@ -145,5 +145,5 @@ class SaveServiceConfig:
     plugin_dir: str
     get_core_name: CoreNameProviderFn | None = None
     emit: EventEmitter | None = None
-    detect_sort_change: SaveSortChangeDetector | None = None
-    is_retrodeck_migration_pending: RetroDeckMigrationGate | None = None
+    detect_sort_change: SaveSortChangeFn | None = None
+    is_retrodeck_migration_pending: MigrationPendingFn | None = None
