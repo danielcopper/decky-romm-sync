@@ -2,10 +2,12 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { createElement } from "react";
+import { resetDeckyEventBus } from "./test-utils/decky-api-mock";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  resetDeckyEventBus();
 });
 
 // Steam Deck ambient globals — minimal stubs; individual tests refine via vi.mocked.
@@ -34,11 +36,20 @@ vi.stubGlobal("collectionStore", { userCollections: [] });
 
 // @decky/api — callable returns a vi.fn that resolves to undefined by default.
 // Tests opt into specific behavior via vi.mocked(<callable>).mockResolvedValue(...).
-vi.mock("@decky/api", () => ({
-  callable: <T,>(_name: string) => vi.fn().mockResolvedValue(undefined) as unknown as T,
-  toaster: { toast: vi.fn() },
-  definePlugin: (fn: unknown) => fn,
-}));
+// addEventListener / removeEventListener route through the in-memory event bus
+// in src/test-utils/decky-api-mock.ts so tests can drive Decky-loader events
+// via emitDeckyEvent(). Async factory + dynamic import is required because
+// vi.mock factories are hoisted above top-level imports.
+vi.mock("@decky/api", async () => {
+  const bus = await import("./test-utils/decky-api-mock");
+  return {
+    callable: <T,>(_name: string) => vi.fn().mockResolvedValue(undefined) as unknown as T,
+    toaster: { toast: vi.fn() },
+    definePlugin: (fn: unknown) => fn,
+    addEventListener: bus.mockAddEventListener,
+    removeEventListener: bus.mockRemoveEventListener,
+  };
+});
 
 // @decky/ui — explicit pass-through stubs. Auto-mock yields undefined components
 // and breaks RTL render() with "Element type is invalid".
@@ -69,6 +80,17 @@ vi.mock("@decky/ui", () => {
       }),
     Dropdown: passthrough("select"),
     showModal: vi.fn(),
+    showContextMenu: vi.fn(),
+    Menu: passthrough("div"),
+    MenuItem: ({ children, onClick }: AnyProps) =>
+      createElement("button", { onClick }, children as never),
     Router: { CloseSideMenus: vi.fn(), Navigate: vi.fn() },
+    // findSP locates Steam's <SteamRoot> iframe document for stylesheet
+    // injection. Tests run in happy-dom — no Steam, no iframe — so the
+    // safe stub returns undefined and the consumer's `!sp?.window?.document`
+    // guard short-circuits any DOM mutation.
+    findSP: vi.fn(() => undefined),
+    appActionButtonClasses: undefined,
+    basicAppDetailsSectionStylerClasses: undefined,
   };
 });

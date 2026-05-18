@@ -13,6 +13,7 @@ export default defineConfig({
       exclude: [
         "src/**/*.{test,spec}.{ts,tsx}",
         "src/test-setup.ts",
+        "src/test-utils/**",
         // Aligned with sonar-project.properties `sonar.coverage.exclusions`.
         "src/types/**",
         "src/index.tsx",

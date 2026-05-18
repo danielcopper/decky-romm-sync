@@ -50,7 +50,7 @@ export default tseslint.config(
   {
     // Vitest globals (describe/it/expect/vi/...) are injected at runtime via
     // vitest.config.ts `globals: true` + tsconfig "types": ["vitest/globals"].
-    files: ["src/**/*.{test,spec}.{ts,tsx}", "src/test-setup.ts"],
+    files: ["src/**/*.{test,spec}.{ts,tsx}", "src/test-setup.ts", "src/test-utils/**/*.ts"],
     languageOptions: {
       globals: { ...globals.vitest },
     },

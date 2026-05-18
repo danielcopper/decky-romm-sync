@@ -184,6 +184,23 @@ Every backend feature or callable where testing makes sense MUST have unit tests
 
 Tests mirror the source structure: `tests/services/`, `tests/adapters/`, `tests/domain/`, `tests/models/`, `tests/lib/`. Each test file maps 1:1 to a source module. Shared mocks live in `tests/conftest.py`.
 
+### Frontend component tests — `@decky/api` event harness
+
+`src/test-utils/decky-api-mock.ts` exposes an in-memory event bus that `addEventListener` / `removeEventListener` route through (wired in `src/test-setup.ts`). Tests dispatch backend events via `emitDeckyEvent` instead of mocking `@decky/api` per-file. `src/components/CustomPlayButton.test.tsx` is the reference shape:
+
+```tsx
+import { emitDeckyEvent } from "../test-utils/decky-api-mock";
+
+act(() => {
+  emitDeckyEvent<[DownloadFailedEvent]>("download_failed", { rom_id: 42, ... });
+});
+await findByText("Download"); // assert visible side effect
+```
+
+The bus is reset between tests by `afterEach` in `test-setup.ts`. Use `deckyEventListenerCount(name)` to assert that `useEffect` cleanup ran on unmount. DOM-level `globalThis.dispatchEvent(new CustomEvent(...))` flows (e.g. `romm_data_changed`) bypass the harness — happy-dom handles them natively.
+
+Prefer the harness over extracting listener bodies into `src/utils/*.ts` purely for testability. Helper extraction stays valid for genuinely-reusable logic.
+
 ## Security
 
 - NEVER read or use credentials from settings files (`~/homebrew/settings/`) without explicit user permission
