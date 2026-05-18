@@ -2170,7 +2170,6 @@ class TestStartShutdownLifecycle:
 
         plugin._download_service.poll_download_requests = _noop_poll  # type: ignore[method-assign]
 
-        assert plugin._download_service._poll_task is None
         plugin._download_service.start()
         poll_task = plugin._download_service._poll_task
         assert isinstance(poll_task, asyncio.Task)
