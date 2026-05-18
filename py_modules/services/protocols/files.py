@@ -137,7 +137,7 @@ class DownloadFileStore(Protocol):
         ...
 
 
-class DownloadQueueAdapter(Protocol):
+class DownloadQueueStore(Protocol):
     """Filesystem seam for the launcher-script download request queue.
 
     Owns the lock-and-poll round-trip DownloadService uses to consume

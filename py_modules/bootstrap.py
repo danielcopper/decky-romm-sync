@@ -21,7 +21,7 @@ from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
-from adapters.download_queue import DownloadQueueAdapter as DownloadQueueAdapterImpl
+from adapters.download_queue import DownloadQueueAdapter
 from adapters.es_de_config import CoreResolver, GamelistXmlEditor
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
@@ -70,7 +70,7 @@ from services.protocols import (
     CoverArtFileStore,
     DebugLogger,
     DownloadFileStore,
-    DownloadQueueAdapter,
+    DownloadQueueStore,
     EventEmitter,
     FirmwareCachePersister,
     FirmwareFileStore,
@@ -125,7 +125,7 @@ class AdapterBundle:
     cover_art_file_store: CoverArtFileStore
     sgdb_artwork_cache: SgdbArtworkCache
     download_file_store: DownloadFileStore
-    download_queue: DownloadQueueAdapter
+    download_queue: DownloadQueueStore
     firmware_file_store: FirmwareFileStore
     migration_file_store: MigrationFileStore
     rom_file_store: RomFileStore
@@ -321,7 +321,7 @@ def bootstrap(
     cover_art_file_store = CoverArtFileStoreAdapter()
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
     download_file_store = DownloadFileAdapter()
-    download_queue = DownloadQueueAdapterImpl()
+    download_queue = DownloadQueueAdapter()
     firmware_file_store = FirmwareFileAdapter()
     migration_file_store = MigrationFileAdapter()
     rom_file_store = RomFileAdapter()

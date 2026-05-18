@@ -1,10 +1,10 @@
-"""In-memory ``DownloadQueueAdapter`` implementation for service tests."""
+"""In-memory ``DownloadQueueStore`` implementation for service tests."""
 
 from __future__ import annotations
 
 
 class FakeDownloadQueueAdapter:
-    """In-memory ``DownloadQueueAdapter`` for tests.
+    """In-memory ``DownloadQueueStore`` for tests.
 
     Backed by a single ``entries`` list so ``poll_and_clear`` is
     deterministic. Tests pre-populate ``entries`` to stage queued

@@ -4,7 +4,7 @@ Owns the lock-and-poll round-trip used by DownloadService to consume
 queued ROM-download requests written by the RetroDECK launcher script.
 Path construction and request dispatch remain a service concern; this
 adapter exposes only the read-and-clear seam declared by
-``services.protocols.DownloadQueueAdapter``.
+``services.protocols.DownloadQueueStore``.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import json
 class DownloadQueueAdapter:
     """Synchronous lock-and-poll over the download request file.
 
-    Implements the ``DownloadQueueAdapter`` Protocol. Methods are
+    Implements the ``DownloadQueueStore`` Protocol. Methods are
     synchronous — services that call from an async context offload via
     ``loop.run_in_executor``.
     """

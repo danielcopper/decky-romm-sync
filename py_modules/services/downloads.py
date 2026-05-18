@@ -3,7 +3,7 @@
 Handles ROM downloads (single and multi-file), disk space checks,
 download queue management, and partial download cleanup. All raw
 filesystem I/O is delegated to the ``DownloadFileStore`` and
-``DownloadQueueAdapter`` Protocols.
+``DownloadQueueStore`` Protocols.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         Clock,
         DownloadFileStore,
-        DownloadQueueAdapter,
+        DownloadQueueStore,
         EventEmitter,
         MigrationPendingFn,
         RetroDeckPaths,
@@ -52,7 +52,7 @@ class DownloadServiceConfig:
     romm_api: RommRomReader
     state: PluginState
     download_file_store: DownloadFileStore
-    download_queue: DownloadQueueAdapter
+    download_queue: DownloadQueueStore
     resolve_system: SystemResolver
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
