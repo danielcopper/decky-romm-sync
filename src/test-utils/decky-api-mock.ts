@@ -12,11 +12,13 @@
  *
  *   import { emitDeckyEvent } from "../test-utils/decky-api-mock";
  *
- *   await act(async () => {
+ *   act(() => {
  *     emitDeckyEvent<[DownloadFailedEvent]>("download_failed", {
  *       rom_id: 1, rom_name: "X", platform_name: "PSX", error_message: "boom",
  *     });
  *   });
+ *
+ * Use `await act(async () => {...})` only if a listener under test is itself async.
  *
  * `resetDeckyEventBus()` is called automatically in the global `afterEach`,
  * so tests do not need to clean up listeners manually.

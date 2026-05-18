@@ -202,7 +202,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       },
     );
 
-    /* istanbul ignore next -- listener-wiring; logic tested in src/utils/downloadFailure.test.ts */
+    /* istanbul ignore next -- delegation line; end-to-end wiring tested in CustomPlayButton.test.tsx */
     const failedListener = addEventListener<[DownloadFailedEvent]>(
       "download_failed",
       // The global listener in index.tsx owns the failure toast; here we only
