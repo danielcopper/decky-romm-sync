@@ -24,6 +24,7 @@ from conftest import (
     FakeHostnameProvider,
     FakeMigrationFileAdapter,
     FakePathProbe,
+    FakePluginMetadataReader,
     FakeRetroDeckPaths,
     FakeRomFileAdapter,
     FakeSaveFileAdapter,
@@ -188,6 +189,7 @@ class TestWireServices:
             "core_info_provider": FakeCoreInfoProvider(),
             "save_sync_state_persister": MagicMock(load=MagicMock(return_value=None), save=MagicMock()),
             "log_debug": MagicMock(),
+            "plugin_metadata": FakePluginMetadataReader(version="0.14.0"),
         }
 
     @staticmethod
@@ -238,6 +240,7 @@ class TestWireServices:
                 firmware_cache_persister=deps["firmware_cache_persister"],
                 save_sync_state_persister=deps["save_sync_state_persister"],
                 log_debug=deps["log_debug"],
+                plugin_metadata=deps["plugin_metadata"],
             ),
             min_required_version=deps["min_required_version"],
         )

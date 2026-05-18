@@ -76,6 +76,7 @@ from services.protocols import (
     MetadataCachePersister,
     MigrationFileAdapter,
     PathExistsProbe,
+    PluginMetadataReader,
     RetroArchSaveSortingProvider,
     RetroDeckPaths,
     RomFileAdapter,
@@ -175,6 +176,7 @@ class CallbackBundle:
     firmware_cache_persister: FirmwareCachePersister
     save_sync_state_persister: SaveSyncStatePersister
     log_debug: DebugLogger
+    plugin_metadata: PluginMetadataReader
 
 
 @dataclass(frozen=True)
@@ -322,6 +324,7 @@ def bootstrap(
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
+    plugin_metadata = PluginMetadataAdapter()
     save_sync_state = SaveService.make_default_state()
 
     adapters = AdapterBundle(
@@ -357,6 +360,7 @@ def bootstrap(
         firmware_cache_persister=firmware_cache_persister,
         save_sync_state_persister=save_sync_state_persister,
         log_debug=debug_logger,
+        plugin_metadata=plugin_metadata,
     )
     runtime_adapters = RuntimeAdaptersBundle(
         clock=clock,
@@ -395,8 +399,6 @@ def wire_services(cfg: WiringConfig) -> dict:
     bios_files_index_binding: LateBinding[dict] = LateBinding("bios_files_index")
     pending_sync_binding: LateBinding[dict] = LateBinding("pending_sync")
 
-    plugin_metadata = PluginMetadataAdapter()
-
     # MigrationService is constructed before SaveService so that
     # save_sync_service can receive a bound reference to
     # ``migration_service.detect_save_sort_change``. SaveService must observe
@@ -433,7 +435,8 @@ def wire_services(cfg: WiringConfig) -> dict:
         hostname_provider=cfg.runtime.hostname_provider,
         log_debug=cfg.callbacks.log_debug,
         get_core_name=cfg.callbacks.get_core_name,
-        plugin_version=plugin_metadata.read_version(cfg.runtime.plugin_dir),
+        plugin_metadata=cfg.callbacks.plugin_metadata,
+        plugin_dir=cfg.runtime.plugin_dir,
         emit=cfg.runtime.emit,
         # SaveService must observe fresh sort state before computing saves_dir (#238).
         detect_sort_change=migration_service.detect_save_sort_change,

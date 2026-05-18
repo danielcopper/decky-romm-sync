@@ -917,6 +917,7 @@ class TestMainStartupOrdering:
                 firmware_cache_persister=MagicMock(),
                 save_sync_state_persister=MagicMock(),
                 log_debug=MagicMock(),
+                plugin_metadata=MagicMock(),
             ),
             runtime_adapters=RuntimeAdaptersBundle(
                 clock=MagicMock(),

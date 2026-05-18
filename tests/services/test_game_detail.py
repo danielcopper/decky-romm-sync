@@ -10,6 +10,7 @@ from conftest import (
     FakeCoreInfoProvider,
     FakeFirmwareCachePersister,
     FakeHostnameProvider,
+    FakePluginMetadataReader,
     FakeRetroDeckPaths,
     _make_retry,
     _make_testable_plugin,
@@ -105,7 +106,8 @@ def plugin(tmp_path):
             get_active_core=lambda system_name, rom_filename=None: (None, None),
             hostname_provider=FakeHostnameProvider(),
             log_debug=p._log_debug,
-            plugin_version="0.14.0",
+            plugin_metadata=FakePluginMetadataReader(version="0.14.0"),
+            plugin_dir=str(tmp_path / "plugin"),
         ),
     )
     p._save_sync_service.init_state()

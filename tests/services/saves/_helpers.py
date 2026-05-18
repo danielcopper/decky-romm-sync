@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from conftest import FakeHostnameProvider, FakeRetroDeckPaths, _make_retry
+from conftest import FakeHostnameProvider, FakePluginMetadataReader, FakeRetroDeckPaths, _make_retry
 from fakes.fake_save_api import FakeSaveApi
 from fakes.system_time import FakeClock
 
@@ -53,7 +53,8 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         get_active_core=lambda system_name, rom_filename=None: (None, None),
         hostname_provider=FakeHostnameProvider(),
         log_debug=lambda _msg: None,
-        plugin_version="0.14.0",
+        plugin_metadata=FakePluginMetadataReader(version="0.14.0"),
+        plugin_dir=str(tmp_path / "plugin"),
         emit=emit,
     )
     config_kwargs.update(overrides)

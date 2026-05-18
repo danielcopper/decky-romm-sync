@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         DebugLogger,
         EventEmitter,
         HostnameProvider,
+        PluginMetadataReader,
         RetroDeckPaths,
         RetryStrategy,
         RommSyncApi,
@@ -91,8 +92,13 @@ class SaveServiceConfig:
         resolution fails at runtime, SaveService warns and falls back
         to the parent directory path; see
         ``_resolve_retroarch_corename``.
-    plugin_version:
-        Plugin version string used in user-agent and emitted events.
+    plugin_metadata:
+        ``PluginMetadataReader`` Protocol seam — read once during
+        :meth:`SaveService.__init__` to resolve the declared plugin
+        version forwarded into user-agent strings and emitted events.
+    plugin_dir:
+        Plugin install directory (``decky.DECKY_PLUGIN_DIR``) passed to
+        :meth:`PluginMetadataReader.read_version`.
     emit:
         Optional event emitter for pushing save-sync progress to the
         frontend. ``None`` disables emission (used in unit tests).
@@ -134,7 +140,8 @@ class SaveServiceConfig:
     get_active_core: CoreResolverFn
     hostname_provider: HostnameProvider
     log_debug: DebugLogger
-    plugin_version: str
+    plugin_metadata: PluginMetadataReader
+    plugin_dir: str
     get_core_name: CoreNameProviderFn | None = None
     emit: EventEmitter | None = None
     detect_sort_change: Callable[[], None] | None = None

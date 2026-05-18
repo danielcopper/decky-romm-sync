@@ -44,6 +44,9 @@ class SaveService:
         self._config = config
         self._state = config.state
         self._save_file = config.save_file
+        # Resolve plugin version once at construction; SyncEngine and any
+        # other consumer receive the resolved string, not the Protocol.
+        plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
 
         self._state_svc = StateService(
             config=StateServiceConfig(
@@ -81,7 +84,7 @@ class SaveService:
                 log_debug=config.log_debug,
                 get_active_core=config.get_active_core,
                 hostname_provider=config.hostname_provider,
-                plugin_version=config.plugin_version,
+                plugin_version=plugin_version,
                 detect_sort_change=config.detect_sort_change,
                 is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,
             ),
