@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
-import { createElement, type ChangeEvent } from "react";
+import { createElement, type ChangeEvent, type ReactElement } from "react";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
@@ -12,10 +12,10 @@ import {
 } from "../utils/saveSetup";
 import type { SaveSetupInfo } from "../types";
 
-// Local @decky/ui re-mock — the global stub renders DialogButton without
-// `disabled` forwarding, which we need for the "Track button disabled while
-// confirming" assertion. ConfirmModal is captured by showModal calls; the
-// element's `.props` carries onOK + children which tests drive directly.
+// Local @decky/ui re-mock — gives ConfirmModal an inline OK button so RTL can
+// render-and-click the in-tree CustomSlotModal (which owns its own input state
+// and is therefore mounted via a sub-render). Modals passed directly through
+// showModal are still driven via their captured-element `.props.onOK`.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 interface ConfirmModalProps {
   onOK?: () => void | Promise<void>;
@@ -31,8 +31,20 @@ interface TextFieldProps {
 }
 
 vi.mock("@decky/ui", () => {
-  const ConfirmModal = (p: AnyProps) =>
-    createElement("div", { "data-testid": "confirm-modal" }, p.children as never);
+  // ConfirmModal renders an OK button so tests can drive the in-tree custom
+  // slot modal (CustomSlotModal owns its own state and is mounted via RTL).
+  // Modals passed *through* showModal still expose their onOK via the captured
+  // showModal mock-call element — confirmModalPropsAt(...) handles that path.
+  const ConfirmModal = (
+    p: AnyProps & { onOK?: () => void | Promise<void> },
+  ) =>
+    createElement("div", { "data-testid": "confirm-modal" },
+      createElement("button", {
+        "data-testid": "confirm-modal-ok",
+        onClick: () => { void p.onOK?.(); },
+      }, "OK"),
+      p.children as never,
+    );
   return {
     ConfirmModal,
     DialogButton: ({
@@ -73,31 +85,20 @@ function makeSetupInfo(overrides: Partial<SaveSetupInfo> = {}): SaveSetupInfo {
   };
 }
 
-function lastConfirmModalProps(): ConfirmModalProps | null {
-  const calls = vi.mocked(showModal).mock.calls;
-  if (calls.length === 0) return null;
-  const el = calls[calls.length - 1]?.[0] as { props?: ConfirmModalProps } | undefined;
-  return el?.props ?? null;
-}
-
 function confirmModalPropsAt(idx: number): ConfirmModalProps | null {
   const calls = vi.mocked(showModal).mock.calls;
   const el = calls[idx]?.[0] as { props?: ConfirmModalProps } | undefined;
   return el?.props ?? null;
 }
 
-// Pull the TextField child out of a ConfirmModal call's element. The wizard
-// passes the TextField as the third arg to createElement(ConfirmModal, props,
-// textFieldElement), so it lives as the modal element's `.props.children`.
-function textFieldOnChangeAt(idx: number):
-  | ((e: ChangeEvent<HTMLInputElement>) => void)
-  | undefined {
+// Fetch the React element that was passed to the n-th showModal call. The
+// custom-slot flow's first call passes a CustomSlotModal element (a local FC
+// in SlotSetupWizard.tsx) — to drive its internal text-field state we have
+// to render that element in its own RTL sub-tree.
+function modalElementAt(idx: number): ReactElement | null {
   const calls = vi.mocked(showModal).mock.calls;
-  const el = calls[idx]?.[0] as { props?: { children?: unknown } } | undefined;
-  const child = el?.props?.children as
-    | { props?: TextFieldProps }
-    | undefined;
-  return child?.props?.onChange;
+  const el = calls[idx]?.[0] as ReactElement | undefined;
+  return el ?? null;
 }
 
 function defaultProps(
@@ -595,7 +596,7 @@ describe("SlotSetupWizard", () => {
   });
 
   describe("Custom slot modal", () => {
-    it("opens a ConfirmModal when 'Custom slot...' is clicked", async () => {
+    it("opens the CustomSlotModal (titled 'Custom Slot Name') when 'Custom slot...' is clicked", async () => {
       const info = makeSetupInfo({ server_slots: [] });
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(
         async (_r, deps) => { deps.setInfo(info); },
@@ -605,17 +606,23 @@ describe("SlotSetupWizard", () => {
 
       fireEvent.click(getByText("Custom slot..."));
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
-      expect(lastConfirmModalProps()?.strTitle).toBe("Custom Slot Name");
+
+      // CustomSlotModal is a local FC — to assert the title we render the
+      // captured element in its own RTL tree. The mocked ConfirmModal exposes
+      // its strTitle via the rendered children sequence (textContent includes
+      // the OK label only; we drive the modal via the captured element below).
+      const modal = modalElementAt(0);
+      if (!modal) throw new Error("CustomSlotModal element not captured");
+      const sub = render(<>{modal}</>);
+      // The TextField mock renders an input with the bound value.
+      expect(sub.getByTestId("text-field")).not.toBeNull();
+      sub.unmount();
     });
 
-    it("captures the customSlot value at modal-open time when computing the trimmed slot", async () => {
-      // Source quirk: the ConfirmModal element is built once at click-time and
-      // its onOK closes over the customSlot value present in that render. The
-      // TextField inside the modal does call setCustomSlot, but the closure on
-      // onOK keeps reading the original (empty) value, so the trimmed branch
-      // can never hit the "non-empty" path through TextField interaction alone.
-      // Documenting current behavior; treat as a source bug to surface in the
-      // PR report rather than fix here.
+    it("submits the typed slot via handleConfirm when the user types a name and OKs", async () => {
+      // Mutation guard: this test fails against the previous source where the
+      // outer onClick's closure captured an empty customSlot. The CustomSlotModal
+      // FC now owns its own input state, so the typed value reaches handleConfirm.
       const info = makeSetupInfo({ server_slots: [] });
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(
         async (_r, deps) => { deps.setInfo(info); },
@@ -626,26 +633,52 @@ describe("SlotSetupWizard", () => {
       await flushAsync();
 
       fireEvent.click(getByText("Custom slot..."));
-      // Fire the TextField onChange — proves the wizard wires it.
-      const onChange = textFieldOnChangeAt(0);
-      if (!onChange) throw new Error("TextField onChange not captured");
+      const modal = modalElementAt(0);
+      if (!modal) throw new Error("CustomSlotModal element not captured");
+
+      const sub = render(<>{modal}</>);
       await act(async () => {
-        onChange({ target: { value: "anything" } } as ChangeEvent<HTMLInputElement>);
+        fireEvent.change(sub.getByTestId("text-field"), { target: { value: "myslot" } });
+      });
+      await act(async () => {
+        fireEvent.click(sub.getByTestId("confirm-modal-ok"));
+        await Promise.resolve();
       });
 
-      await act(async () => {
-        await lastConfirmModalProps()?.onOK?.();
-      });
-
-      // Because the captured customSlot is still "", the legacy-mode confirm
-      // path is what actually runs — confirmSlotChoice is NOT called yet.
-      // The nested legacy modal is the second showModal call.
-      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalled();
-      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(2);
-      expect(confirmModalPropsAt(1)?.strTitle).toBe("Use Legacy Mode?");
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(21, "myslot", null);
+      // Non-empty submit must NOT open the legacy-mode prompt.
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      sub.unmount();
     });
 
-    it("opens the legacy-mode ConfirmModal when the user OKs with an empty trim", async () => {
+    it("trims whitespace around the typed slot before passing it to handleConfirm", async () => {
+      const info = makeSetupInfo({ server_slots: [] });
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
+        async (_r, deps) => { deps.setInfo(info); },
+      );
+      const { getByText } = render(
+        <SlotSetupWizard {...defaultProps({ romId: 3 })} />,
+      );
+      await flushAsync();
+
+      fireEvent.click(getByText("Custom slot..."));
+      const modal = modalElementAt(0);
+      if (!modal) throw new Error("CustomSlotModal element not captured");
+
+      const sub = render(<>{modal}</>);
+      await act(async () => {
+        fireEvent.change(sub.getByTestId("text-field"), { target: { value: "  padded  " } });
+      });
+      await act(async () => {
+        fireEvent.click(sub.getByTestId("confirm-modal-ok"));
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(3, "padded", null);
+      sub.unmount();
+    });
+
+    it("opens the legacy-mode ConfirmModal when the user OKs with an empty input", async () => {
       const info = makeSetupInfo({ server_slots: [] });
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(
         async (_r, deps) => { deps.setInfo(info); },
@@ -654,20 +687,26 @@ describe("SlotSetupWizard", () => {
       await flushAsync();
 
       fireEvent.click(getByText("Custom slot..."));
-      // Don't type anything — customSlot stays "".
+      const modal = modalElementAt(0);
+      if (!modal) throw new Error("CustomSlotModal element not captured");
+
+      const sub = render(<>{modal}</>);
+      // Don't type anything — value stays "".
       await act(async () => {
-        await confirmModalPropsAt(0)?.onOK?.();
+        fireEvent.click(sub.getByTestId("confirm-modal-ok"));
+        await Promise.resolve();
       });
 
-      // Now there are two showModal calls — index 0 is the custom-slot modal,
-      // index 1 is the nested legacy-mode confirm.
+      // Now there are two showModal calls — index 0 is the CustomSlotModal,
+      // index 1 is the nested legacy-mode ConfirmModal (passed directly).
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(2);
       const legacy = confirmModalPropsAt(1);
       expect(legacy?.strTitle).toBe("Use Legacy Mode?");
       expect(legacy?.strDescription).toContain("Legacy mode");
+      sub.unmount();
     });
 
-    it("calls handleConfirm('') when the user OKs the nested legacy-mode confirm", async () => {
+    it("calls handleConfirm('') when the user types whitespace and OKs the nested legacy-mode confirm", async () => {
       const info = makeSetupInfo({ server_slots: [] });
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(
         async (_r, deps) => { deps.setInfo(info); },
@@ -678,19 +717,24 @@ describe("SlotSetupWizard", () => {
       await flushAsync();
 
       fireEvent.click(getByText("Custom slot..."));
-      // Type whitespace — still trims to empty.
-      const onChange = textFieldOnChangeAt(0);
+      const modal = modalElementAt(0);
+      if (!modal) throw new Error("CustomSlotModal element not captured");
+
+      const sub = render(<>{modal}</>);
+      // Type whitespace — trims to empty, routes through legacy-mode prompt.
       await act(async () => {
-        onChange?.({ target: { value: "   " } } as ChangeEvent<HTMLInputElement>);
+        fireEvent.change(sub.getByTestId("text-field"), { target: { value: "   " } });
       });
       await act(async () => {
-        await confirmModalPropsAt(0)?.onOK?.();
+        fireEvent.click(sub.getByTestId("confirm-modal-ok"));
+        await Promise.resolve();
       });
       await act(async () => {
         await confirmModalPropsAt(1)?.onOK?.();
       });
 
       expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(7, "", null);
+      sub.unmount();
     });
   });
 
@@ -699,9 +743,7 @@ describe("SlotSetupWizard", () => {
       // handleConfirm always pairs setConfirming(true) with setError(null), so
       // the (loading || (confirming && !error)) guard at the top of render
       // wins — the wizard collapses to the loading-style view and the action
-      // buttons aren't rendered at all. (The `disabled={confirming}` props on
-      // each DialogButton are defensive but never observable through this
-      // code path.)
+      // buttons aren't rendered at all.
       const info = makeSetupInfo({
         default_slot: "fresh",
         server_slots: [

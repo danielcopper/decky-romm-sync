@@ -61,11 +61,30 @@ function getWizardDescription(info: SaveSetupInfo): string {
   return "Choose a save slot to get started.";
 }
 
+const CustomSlotModal: FC<{
+  closeModal?: () => void;
+  onSubmit: (name: string) => void;
+}> = ({ closeModal, onSubmit }) => {
+  const [value, setValue] = useState("");
+  return createElement(ConfirmModal, {
+    closeModal,
+    strTitle: "Custom Slot Name",
+    bDisableBackgroundDismiss: true,
+    onOK: () => { onSubmit(value.trim()); },
+  },
+    createElement(TextField, {
+      focusOnMount: true,
+      label: "Slot Name",
+      value,
+      onChange: (e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
+    }),
+  );
+};
+
 export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete }) => {
   const [info, setInfo] = useState<SaveSetupInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
-  const [customSlot, setCustomSlot] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -227,7 +246,6 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           </div>
           <DialogButton
             style={btnStyle}
-            disabled={confirming}
             onClick={() => handleConfirm(s.slot ?? defaultSlot)}
             onFocus={scrollFocusedToCenter}
           >
@@ -257,7 +275,6 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       <div key="default-btn" style={{ marginBottom: "6px" }}>
         <DialogButton
           style={btnPrimaryStyle}
-          disabled={confirming}
           onClick={() => handleConfirm(defaultSlot)}
           onFocus={scrollFocusedToCenter}
         >
@@ -271,15 +288,11 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
     <div key="custom-toggle">
       <DialogButton
         style={btnStyle}
-        disabled={confirming}
         onFocus={scrollFocusedToCenter}
         onClick={() => {
           showModal(
-            createElement(ConfirmModal, {
-              strTitle: "Custom Slot Name",
-              bDisableBackgroundDismiss: true,
-              onOK: () => {
-                const trimmed = customSlot.trim();
+            createElement(CustomSlotModal, {
+              onSubmit: (trimmed: string) => {
                 if (trimmed) {
                   handleConfirm(trimmed);
                 } else {
@@ -293,14 +306,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
                   );
                 }
               },
-            },
-              createElement(TextField, {
-                focusOnMount: true,
-                label: "Slot Name",
-                value: customSlot,
-                onChange: (e: ChangeEvent<HTMLInputElement>) => setCustomSlot(e.target.value),
-              }),
-            ),
+            }),
           );
         }}
       >
