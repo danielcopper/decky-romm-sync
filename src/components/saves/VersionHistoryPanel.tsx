@@ -95,7 +95,12 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         setVersions(null);
         setExpanded(false);
         onRestored();
-      } else if (result.status === "not_found") {
+      } else if (result.status === "rom_not_installed") {
+        // Distinct from ``version_deleted``: the chosen version may well
+        // still exist on the server; the local ROM install is what's gone
+        // (uninstalled between version-list load and restore tap).
+        toaster.toast({ title: "RomM Sync", body: "ROM is no longer installed locally. Reinstall and try again." });
+      } else if (result.status === "version_deleted") {
         toaster.toast({ title: "RomM Sync", body: "This version no longer exists on the server" });
       } else if (result.status === "server_unreachable") {
         // Distinct from ``not_found``: the version may well still exist;

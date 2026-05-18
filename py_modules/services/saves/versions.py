@@ -179,7 +179,7 @@ class VersionsService:
             None,
         )
         if target_save is None:
-            return {"status": "not_found"}
+            return {"status": "version_deleted"}
 
         saves_dir = info["saves_dir"]
         system = info["system"]
@@ -238,14 +238,19 @@ class VersionsService:
 
         Returns a status dict:
         - ``{"status": "ok"}`` on success.
-        - ``{"status": "not_found"}`` if the ROM is not installed or the
-          chosen save id is no longer on the server (genuinely deleted —
-          the ``list_saves`` call succeeded and the id was absent).
+        - ``{"status": "rom_not_installed"}`` if the ROM is not installed
+          locally. The frontend distinguishes this from
+          ``version_deleted`` so it can prompt the user to reinstall the
+          ROM rather than telling them the version is gone from the
+          server.
+        - ``{"status": "version_deleted"}`` if the chosen save id is no
+          longer on the server (genuinely deleted — the ``list_saves``
+          call succeeded and the id was absent).
         - ``{"status": "server_unreachable", "error": ...}`` if the
           post-preflight ``list_saves`` call failed (network, server,
           auth, etc.). The frontend distinguishes this from
-          ``not_found`` so it can show a retry affordance instead of
-          "version no longer on the server".
+          ``version_deleted`` so it can show a retry affordance instead
+          of "version no longer on the server".
         - ``{"status": "conflict_blocked", "conflicts": [...]}`` if the
           pre-flight surfaced a conflict on the currently-tracked save.
           The frontend resolves it via the standard conflict modal.
@@ -265,7 +270,7 @@ class VersionsService:
         async with self._sync_engine._rom_lock(rom_id):
             info = self._rom_info.get_rom_save_info(rom_id)
             if not info:
-                return {"status": "not_found"}
+                return {"status": "rom_not_installed"}
 
             # Matrix pre-flight: get the tracked save in sync first, or surface
             # a conflict that the user must resolve before any switch can run.

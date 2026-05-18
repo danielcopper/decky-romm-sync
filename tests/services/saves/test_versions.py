@@ -287,17 +287,26 @@ class TestRollbackToVersion:
         )
 
     @pytest.mark.asyncio
-    async def test_returns_not_found_when_rom_not_installed(self, tmp_path):
-        """Returns not_found when the ROM is not in installed_roms."""
+    async def test_returns_rom_not_installed_when_rom_uninstalled(self, tmp_path):
+        """Returns rom_not_installed (NOT version_deleted) when the ROM
+        isn't in ``installed_roms``.
+
+        The two cases used to collide on ``not_found``; the frontend then
+        told the user the version was gone from the server when in fact
+        the local ROM install was what disappeared. This test pins the
+        split so a regression to the conflated status would fail.
+        """
         svc, _fake = make_service(tmp_path)
 
         # rom 999 is not installed
         result = await svc.rollback_to_version(999, "default", 50)
-        assert result == {"status": "not_found"}
+        assert result == {"status": "rom_not_installed"}
+        # Regression guard: must NOT collide with the genuinely-deleted case.
+        assert result["status"] != "version_deleted"
 
     @pytest.mark.asyncio
-    async def test_returns_not_found_when_save_id_missing(self, tmp_path):
-        """Returns not_found when target save_id is not in the server response."""
+    async def test_returns_version_deleted_when_save_id_missing(self, tmp_path):
+        """Returns version_deleted when target save_id is not in the server response."""
         svc, fake = make_service(tmp_path)
 
         _create_save(tmp_path)
@@ -306,7 +315,7 @@ class TestRollbackToVersion:
         fake.saves[100] = self._tracked_save(100)
         # Request save_id=999, which doesn't exist
         result = await svc.rollback_to_version(42, "default", 999)
-        assert result == {"status": "not_found"}
+        assert result == {"status": "version_deleted"}
 
     @pytest.mark.asyncio
     async def test_proceeds_even_with_newer_foreign_save(self, tmp_path):
@@ -521,7 +530,7 @@ class TestRollbackToVersion:
         assert result["status"] == "server_unreachable"
         assert "unreachable" in result.get("error", "").lower()
         # Critical: must NOT collide with the "genuinely deleted" case.
-        assert result["status"] != "not_found"
+        assert result["status"] != "version_deleted"
 
     # ------------------------------------------------------------------
     # Cross-device propagation: rollback re-PUTs target so it becomes

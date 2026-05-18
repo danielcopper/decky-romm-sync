@@ -285,7 +285,8 @@ export interface SaveVersionEntry {
 
 export type RollbackStatus =
   | { status: "ok" }
-  | { status: "not_found" }
+  | { status: "rom_not_installed" }
+  | { status: "version_deleted" }
   | { status: "unsupported" }
   | { status: "server_unreachable"; error: string }
   | { status: "conflict_blocked"; conflicts: SyncConflict[] }
