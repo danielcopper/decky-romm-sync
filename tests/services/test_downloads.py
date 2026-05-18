@@ -2172,11 +2172,11 @@ class TestStartShutdownLifecycle:
 
         assert plugin._download_service._poll_task is None
         plugin._download_service.start()
-        assert plugin._download_service._poll_task is not None
-        assert isinstance(plugin._download_service._poll_task, asyncio.Task)
+        poll_task = plugin._download_service._poll_task
+        assert isinstance(poll_task, asyncio.Task)
 
         # Let the stub task finish so the loop has nothing pending.
-        await plugin._download_service._poll_task
+        await poll_task
 
     @pytest.mark.asyncio
     async def test_start_is_idempotent_when_task_running(self, plugin):
