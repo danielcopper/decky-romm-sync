@@ -145,8 +145,8 @@ describe("SteamGridDBSection", () => {
 
     it("omits the status row when sgdbStatus is empty", () => {
       const { getAllByTestId } = render(<SteamGridDBSection {...defaultProps()} />);
-      // Only 2 Fields when no status row: API Key + (no status). Confirm no
-      // accidental status leak.
+      // Only the "API Key" Field renders when sgdbStatus is empty (Verify is
+      // a ButtonItem, not a Field). Confirm no accidental empty-label leak.
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels.filter((l) => l === "")).toHaveLength(0);
     });

@@ -386,8 +386,9 @@ describe("SaveSyncSection", () => {
     it("omits the status Field when empty", () => {
       const { getAllByTestId } = render(<SaveSyncSection {...defaultProps()} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
-      // No syncStatus label among the rendered fields.
-      expect(labels).not.toContain("Synced");
+      // Catches the regression where the `{syncStatus && ...}` guard is
+      // dropped and the Field renders with an empty label.
+      expect(labels.filter((l) => l === "")).toHaveLength(0);
     });
   });
 });
