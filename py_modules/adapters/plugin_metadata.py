@@ -1,9 +1,10 @@
 """Concrete ``PluginMetadataReader`` adapter — reads ``package.json``.
 
-Owns the raw ``open()`` + ``json.load()`` round-trip bootstrap formerly
-performed inline. A missing or malformed ``package.json`` is not a
-hard failure — bootstrap must keep wiring services even when the
-metadata read fails, so the adapter returns the documented fallback.
+Owns the raw ``open()`` + ``json.load()`` round-trip behind the
+``PluginMetadataReader`` Protocol. A missing or malformed
+``package.json`` is not a hard failure — bootstrap must keep wiring
+services even when the metadata read fails, so the adapter returns the
+documented fallback.
 """
 
 from __future__ import annotations

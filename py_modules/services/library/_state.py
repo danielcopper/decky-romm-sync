@@ -4,8 +4,8 @@ Owned by :class:`LibraryService`; each sub-service receives a reference
 so they can coordinate without back-refs to the façade. The contract:
 sub-services mutate the box's fields directly (it is the single source
 of truth for in-flight sync run state); the façade exposes property
-accessors over the box so external callers see the same shape that
-preceded the decomposition.
+accessors over the box so external callers see a flat shape rather
+than reaching through ``service._state.x``.
 """
 
 from __future__ import annotations

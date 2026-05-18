@@ -23,11 +23,10 @@ class SystemResolver(Protocol):
 class RetroDeckPaths(Protocol):
     """Bundled accessor for the four RetroDECK runtime directory paths.
 
-    Replaces the four single-method ``*Provider`` Protocols, each of
-    which had the same ``def __call__(self) -> str`` shape — making
-    them structurally interchangeable and silently swappable at the
-    call site. Distinct method names give the type checker enough
-    information to flag a saves-for-bios mix-up.
+    Distinct method names per path are deliberate: a single
+    ``def __call__(self) -> str`` shape would make a saves-for-bios
+    mix-up silently type-check at the call site. Separate names give
+    the type checker enough information to flag it.
     """
 
     def saves_path(self) -> str: ...

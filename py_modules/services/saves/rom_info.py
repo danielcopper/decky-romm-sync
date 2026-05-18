@@ -7,7 +7,7 @@ filesystem + path-algebra responsibility — no RomM I/O, no state
 mutation. Shared by SlotsService, SyncEngine, and StatusService; reads
 about whether a save-sort migration is pending live here too because
 they share ``_get_rom_save_info``'s decision to honour the previous
-layout while a migration is in flight (#238).
+layout while a migration is in flight.
 """
 
 from __future__ import annotations

@@ -48,10 +48,11 @@ class VersionsServiceConfig:
 
 
 class VersionsService:
-    """Save version history reads and rollback orchestration.
+    """Aggregate root for the module's contract.
 
-    Coordinates the rollback flow but does not perform file or server
-    writes — those go through SyncEngine / LocalSavesAdapter.
+    Per-ROM lock acquisition and atomic save-state persistence are
+    delegated to the injected ``SyncEngine`` / ``StateService``; this
+    class owns the rollback orchestration on top of them.
     """
 
     def __init__(self, *, config: VersionsServiceConfig) -> None:

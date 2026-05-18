@@ -44,8 +44,8 @@ class SessionFinalizeSyncResult:
     scenario" — for example a successful sync that uploaded nothing.
     ``conflicts_toast`` is the second, additive toast fired when the
     sync surfaces unresolved conflicts; ``None`` when there are no
-    conflicts. Pre-rendering the conflict string here matches the
-    previous frontend ``notifyConflicts`` output byte-for-byte.
+    conflicts. Conflict-string rendering lives here so the frontend
+    receives a ready-to-display body.
     """
 
     offline: bool
@@ -79,11 +79,11 @@ class SessionFinalizeResult:
     leaves Steam's playtime display untouched. ``sync`` is always
     present; its fields encode whatever action the frontend still
     needs to take (toast, event dispatch). ``migration`` is ``None``
-    when the migration-state refresh raised — matching the pre-PR
-    frontend behavior where a refresh failure logged a warning and
-    left the migration stores untouched (any stale ``pending`` badge
-    keeps showing). When the refresh succeeds, ``migration`` carries
-    the two typed status payloads the frontend feeds into its stores.
+    when the migration-state refresh raised — the frontend then leaves
+    the migration stores untouched (any stale ``pending`` badge keeps
+    showing) and logs the failure backend-side. When the refresh
+    succeeds, ``migration`` carries the two typed status payloads the
+    frontend feeds into its stores.
     """
 
     total_seconds: int | None
@@ -112,10 +112,10 @@ class SessionLifecycleServiceConfig:
 def _render_sync_toast(*, offline: bool, success: bool, synced: int | None) -> tuple[str | None, str | None]:
     """Map the raw post-exit-sync flags onto the (title, body) toast pair.
 
-    Mirrors the pre-PR frontend branching exactly: offline wins over
-    success, success-with-uploads renders the synced toast, a successful
-    no-op produces no toast at all, and any non-success/non-offline
-    state falls through to the failure toast.
+    Branching: offline wins over success, success-with-uploads renders
+    the synced toast, a successful no-op produces no toast at all, and
+    any non-success/non-offline state falls through to the failure
+    toast.
     """
     if offline:
         return _TOAST_TITLE, _TOAST_BODY_OFFLINE
@@ -129,8 +129,7 @@ def _render_sync_toast(*, offline: bool, success: bool, synced: int | None) -> t
 def _render_conflicts_toast(conflicts: list[dict]) -> str | None:
     """Render the additive "N save conflict(s) need resolution" body.
 
-    Matches the pre-PR frontend ``notifyConflicts`` output byte-for-byte:
-    singular when ``count == 1``, plural otherwise. Returns ``None``
+    Singular when ``count == 1``, plural otherwise. Returns ``None``
     when there are no conflicts so the frontend skips the second toast.
     """
     count = len(conflicts)
@@ -227,11 +226,10 @@ class SessionLifecycleService:
     async def _build_sync_result(self, rom_id: int) -> SessionFinalizeSyncResult:
         """Run post-exit sync and render the resulting toast strings.
 
-        Mirrors the ``@migration_blocked`` decorator's gate: when a
-        RetroDECK migration is pending the destructive post-exit sync is
-        skipped and rendered as the standard "failed to sync saves
-        after exit" toast — the same outcome the pre-PR flow produced
-        when the decorator returned ``blocked_by_migration``.
+        Honours the ``@migration_blocked`` gate: when a RetroDECK
+        migration is pending the destructive post-exit sync is skipped
+        and rendered as the standard "failed to sync saves after exit"
+        toast.
         """
         if self._migration_reader.is_retrodeck_migration_pending():
             return SessionFinalizeSyncResult(
@@ -283,9 +281,8 @@ class SessionLifecycleService:
 
         Returns ``None`` on refresh failure (exception or non-dict
         payload) — the frontend then leaves the migration stores
-        untouched, matching the pre-PR ``refreshMigrationState().catch``
-        behavior where a failure logged a warning without clearing any
-        stale ``pending`` badge.
+        untouched (any stale ``pending`` badge keeps showing) and the
+        failure is logged backend-side.
         """
         try:
             payload = await self._migration_reader.refresh_state()

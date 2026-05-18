@@ -2,9 +2,10 @@
 
 Adapter construction lives here so ``main.py`` only deals with the
 Decky lifecycle and the callable surface. ``bootstrap()`` also loads
-and migrates settings as part of adapter wiring so ``RommHttpAdapter``
-binds the live, migrated dict in a single pass; that same dict is
-returned for the caller to keep as its source of truth.
+and migrates settings as part of adapter wiring so adapters that bind
+a live mutable settings dict (such as ``RommHttpAdapter``) bind the
+migrated dict in a single pass; that same dict is returned for the
+caller to keep as its source of truth.
 """
 
 from __future__ import annotations
