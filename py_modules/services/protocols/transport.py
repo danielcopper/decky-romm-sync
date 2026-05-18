@@ -301,7 +301,6 @@ class RommApi(
     RommAchievementsApi,
     RommFirmwareApi,
     RommPlaytimeApi,
-    RommSaveApi,
     Protocol,
 ):
     """Umbrella Protocol composing all per-domain RomM API Protocols."""

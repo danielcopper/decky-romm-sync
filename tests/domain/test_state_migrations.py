@@ -83,6 +83,12 @@ class TestMigrateSettings:
         result2 = migrate_settings(result1.copy())
         assert result1 == result2
 
+    def test_migrate_settings_does_not_mutate_caller_dict(self):
+        data = {"version": 0, "disable_steam_input": True, "debug_logging": True}
+        original = dict(data)
+        migrate_settings(data)
+        assert data == original
+
 
 class TestMigrateState:
     def test_migrate_state_passthrough(self):
