@@ -142,6 +142,7 @@ class Plugin:
     async def _unload(self):  # Decky lifecycle — must be async
         self._sync_service.shutdown()
         await self._download_service.shutdown()
+        await self._migration_service.shutdown()
         decky.logger.info("RomM Sync plugin unloaded")
 
     # ── Callables ──────────────────────────────────────────────────────

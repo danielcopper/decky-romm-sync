@@ -72,6 +72,35 @@ class MigrationService:
         self._get_retroarch_save_sorting = config.get_retroarch_save_sorting
         self._get_active_core = config.get_active_core
         self._get_core_name = config.get_core_name
+        # Strong refs to in-flight background tasks. ``loop.create_task``
+        # alone is not enough — without a strong ref, the loop is free to
+        # garbage-collect the task before it completes. ``add_done_callback``
+        # prunes finished entries to keep the set bounded.
+        self._background_tasks: set[asyncio.Task] = set()
+
+    def _spawn_background_task(self, coro) -> asyncio.Task:
+        """Schedule ``coro`` on the plugin loop and track the task for shutdown.
+
+        Wraps ``loop.create_task`` so the resulting task is retained in
+        ``_background_tasks`` until completion. ``shutdown()`` cancels any
+        still-pending entries on plugin unload.
+        """
+        task = self._loop.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    async def shutdown(self) -> None:
+        """Cancel any in-flight background tasks and await their completion.
+
+        Called from ``main._unload`` so RetroDECK path-change notification
+        coroutines do not leak across the plugin unload boundary. No-op
+        when no tasks are pending.
+        """
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     def detect_retrodeck_path_change(self) -> None:
         """Check if RetroDECK home path changed since last run."""
@@ -104,7 +133,7 @@ class MigrationService:
             self._logger.info(f"RetroDECK home reverted to previous path; clearing migration marker: {current_home}")
             # Notify the frontend so any pending migration UI can dismiss itself.
             # ``cleared: True`` lets the listener distinguish from the path-change emit.
-            self._loop.create_task(
+            self._spawn_background_task(
                 self._emit(
                     "retrodeck_path_changed",
                     {
@@ -123,7 +152,7 @@ class MigrationService:
         self._state["retrodeck_home_path"] = current_home
         self._state_persister.save_state()
         self._logger.warning(f"RetroDECK home path changed: {old_home} -> {current_home}")
-        self._loop.create_task(
+        self._spawn_background_task(
             self._emit(
                 "retrodeck_path_changed",
                 {

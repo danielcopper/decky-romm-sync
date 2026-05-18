@@ -1097,3 +1097,96 @@ class TestBadPathDismissSaveSortMigration:
         assert result == {"success": True}
         assert "save_sort_settings_previous" not in plugin._state
         assert persister.save_count == saves_before + 1
+
+
+class TestBackgroundTaskTracking:
+    """Coverage for the background-task tracking + ``shutdown()`` lifecycle.
+
+    The path-change detection schedules a ``retrodeck_path_changed`` emit
+    via ``loop.create_task``. Without strong refs into ``_background_tasks``
+    and a cancellation hook in ``shutdown()``, those tasks leak across
+    plugin unload. These tests pin the contract.
+    """
+
+    @pytest.mark.asyncio
+    async def test_spawned_task_added_to_background_set(self, plugin, tmp_path):
+        """``detect_retrodeck_path_change`` adds its emit task to the set."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old_retrodeck")
+        new_home = str(tmp_path / "new_retrodeck")
+        os.makedirs(new_home, exist_ok=True)
+
+        plugin._state["retrodeck_home_path"] = old_home
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=new_home)
+
+        assert plugin._migration_service._background_tasks == set()
+
+        plugin._migration_service.detect_retrodeck_path_change()
+
+        # The spawned task must be tracked before any await yields control.
+        assert len(plugin._migration_service._background_tasks) == 1
+        (task,) = plugin._migration_service._background_tasks
+        assert isinstance(task, asyncio.Task)
+
+        # Drain so no pending-task warning fires at loop teardown.
+        await asyncio.gather(*plugin._migration_service._background_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_done_callback_removes_task_on_natural_completion(self, plugin, tmp_path):
+        """When the spawned coro completes naturally, the done-callback prunes the set."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old_retrodeck")
+        new_home = str(tmp_path / "new_retrodeck")
+        os.makedirs(new_home, exist_ok=True)
+
+        plugin._state["retrodeck_home_path"] = old_home
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=new_home)
+
+        plugin._migration_service.detect_retrodeck_path_change()
+        assert len(plugin._migration_service._background_tasks) == 1
+
+        # Yield until the spawned emit coroutine finishes; the done-callback
+        # then discards the task from the set.
+        (task,) = plugin._migration_service._background_tasks
+        await task
+
+        assert plugin._migration_service._background_tasks == set()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_pending_tasks_and_empties_set(self, plugin):
+        """``shutdown()`` cancels in-flight tasks and the set is empty after."""
+        loop = asyncio.get_event_loop()
+        plugin._migration_service._loop = loop
+
+        # Spawn a task that blocks forever via an unset Event.
+        blocker = asyncio.Event()
+
+        async def _block_forever() -> None:
+            await blocker.wait()
+
+        plugin._migration_service._spawn_background_task(_block_forever())
+        assert len(plugin._migration_service._background_tasks) == 1
+        (task,) = plugin._migration_service._background_tasks
+
+        await plugin._migration_service.shutdown()
+
+        assert task.cancelled()
+        assert plugin._migration_service._background_tasks == set()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_with_empty_set_is_noop(self, plugin):
+        """``shutdown()`` on an untouched service returns immediately."""
+        assert plugin._migration_service._background_tasks == set()
+
+        # Must not raise, must not block.
+        await plugin._migration_service.shutdown()
+
+        assert plugin._migration_service._background_tasks == set()
