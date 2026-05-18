@@ -8,9 +8,8 @@ import { createElement, FC } from "react";
 import { DialogButton, Focusable } from "@decky/ui";
 import type { SlotSaveFile } from "../../types";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
+import { MUTED_COLOR } from "./helpers";
 import { renderServerSaveRow } from "./ServerSaveRow";
-
-const MUTED_COLOR = "#8f98a0";
 
 export interface InactiveSlotBodyProps {
   loadingSlot: boolean;

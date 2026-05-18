@@ -7,7 +7,7 @@
 import type { DeviceSyncInfo, SaveStatus, SyncConflict } from "../../types";
 import type { SlotDeleteInfo } from "../../api/backend";
 
-const MUTED_COLOR = "#8f98a0";
+export const MUTED_COLOR = "#8f98a0";
 
 /** Display a slot name, using "(no slot)" for null/empty values */
 export function displaySlot(slot: string | null | undefined): string {

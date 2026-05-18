@@ -11,12 +11,10 @@ import { getSlotSaves, switchSlot, debugLog, getSlotDeleteInfo, deleteSlot } fro
 import type { SlotDeleteInfo } from "../../api/backend";
 import type { SaveStatus, SyncConflict, SaveSlotSummary, SlotSaveFile, SwitchSlotResponse } from "../../types";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
-import { computeSyncSummary, displaySlot, slotDeleteFailureToast } from "./helpers";
+import { MUTED_COLOR, computeSyncSummary, displaySlot, slotDeleteFailureToast } from "./helpers";
 import { renderSaveFileRow } from "./SaveFileRow";
 import { InactiveSlotBody } from "./InactiveSlotBody";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
-
-const MUTED_COLOR = "#8f98a0";
 
 function renderActiveSlotBody(
   saveStatus: SaveStatus | null,

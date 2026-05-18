@@ -16,6 +16,7 @@ import { switchSlot, debugLog } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import type { SaveStatus, SyncConflict, SaveSlotSummary } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
+import { MUTED_COLOR } from "./saves/helpers";
 import { NewSlotModal } from "./saves/NewSlotModal";
 import { SlotPanel } from "./saves/SlotPanel";
 import { renderSaveFileRow } from "./saves/SaveFileRow";
@@ -29,8 +30,6 @@ interface SavesTabProps {
   slotsLoading: boolean;
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
 }
-
-const MUTED_COLOR = "#8f98a0";
 
 export const SavesTab: FC<SavesTabProps> = ({
   romId,
