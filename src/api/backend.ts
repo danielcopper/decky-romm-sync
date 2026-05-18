@@ -141,7 +141,7 @@ export interface ListDevicesResponse {
 export const listDevices = callable<[], ListDevicesResponse>("list_devices");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
 export const preLaunchSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[] }>("pre_launch_sync");
-export const syncRomSaves = callable<[number], { success: boolean; message: string; synced: number; errors?: string[] }>("sync_rom_saves");
+export const syncRomSaves = callable<[number], { success: boolean; message: string; synced: number; errors?: string[]; conflicts?: SyncConflict[] }>("sync_rom_saves");
 export const syncAllSaves = callable<[], { success: boolean; message: string; synced: number; conflicts: number }>("sync_all_saves");
 export const resolveSyncConflict = callable<
   [number, string, number, "keep_local" | "use_server"],

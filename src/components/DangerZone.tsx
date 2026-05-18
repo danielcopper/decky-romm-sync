@@ -147,7 +147,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             setActionStatus("Failed to delete saves");
           }
         },
-      } as any),
+      }),
     );
   };
 
@@ -557,7 +557,7 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         if (typeof appStore !== "undefined") {
           const overview = appStore.GetAppOverviewByAppID(appId);
           if (overview) {
-            name = (overview as any).strDisplayName || (overview as any).display_name || name;
+            name = overview.strDisplayName || overview.display_name || name;
           }
         }
         apps.push({ appId, name });

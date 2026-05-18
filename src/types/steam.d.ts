@@ -21,7 +21,7 @@ declare var SteamClient: {
     ClearCustomArtworkForApp(appId: number, assetType: number): Promise<void>;
     RegisterForAppDetails(
       appId: number,
-      callback: (details: any) => void,
+      callback: (details: SteamAppDetails) => void,
     ): { unregister: () => void };
     RunGame(gameId: string | number, launchId: string, param2: number, param3: number): void;
     TerminateApp(appId: number, force: boolean): void;
@@ -41,6 +41,14 @@ declare var SteamClient: {
     RegisterForOnResumeFromSuspend(callback: () => void): { unregister: () => void };
   };
 };
+
+interface SteamAppDetails {
+  // The two launch-options fields the runtime exposes — keys vary by Steam
+  // build, so we accept either. Anything else is intentionally untyped here:
+  // consumers should narrow before reading.
+  strLaunchOptions?: string;
+  LaunchOptions?: string;
+}
 
 interface SteamPerClientData {
   clientid: string;
@@ -112,3 +120,15 @@ declare var appDetailsStore: {
 declare var appDetailsCache: {
   SetCachedDataForApp(appId: number, key: string, num: number, data: any): void;
 };
+
+interface MobxGlobals {
+  /** Mobx safety gate — flipped true around state mutations on Steam's stores. */
+  allowStateChanges: boolean;
+}
+
+/**
+ * Steam injects mobx onto the page; `__mobxGlobals` is the singleton state
+ * holder. Declared on `globalThis` so callers can read it without an
+ * unchecked cast.
+ */
+declare var __mobxGlobals: MobxGlobals | undefined;

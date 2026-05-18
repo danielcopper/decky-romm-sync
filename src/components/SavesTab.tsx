@@ -107,7 +107,7 @@ export const SavesTab: FC<SavesTabProps> = ({
 
   // --- Loading state ---
   if (slotsLoading) {
-    return createElement(Focusable as any, { noFocusRing: true },
+    return createElement(Focusable, { noFocusRing: true },
       offlineBanner,
       createElement("div", { style: { fontSize: "13px", color: "#8f98a0", padding: "8px 0" } },
         "Loading slots..."),
@@ -199,7 +199,7 @@ export const SavesTab: FC<SavesTabProps> = ({
     }
   }
 
-  return createElement(Focusable as any, {
+  return createElement(Focusable, {
     noFocusRing: true,
     style: { display: "flex", flexDirection: "column" as const, gap: "0" },
   },

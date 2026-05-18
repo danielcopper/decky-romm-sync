@@ -41,7 +41,7 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
 function getLaunchOptions(appId: number): Promise<string | null> {
   return new Promise((resolve) => {
     let resolved = false;
-    const reg = SteamClient.Apps.RegisterForAppDetails(appId, (details: any) => {
+    const reg = SteamClient.Apps.RegisterForAppDetails(appId, (details) => {
       if (!resolved) {
         resolved = true;
         reg.unregister();

@@ -438,7 +438,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       const result = await syncRomSaves(info.romId);
       if (result.success) {
         const n = result.synced ?? 0;
-        const c = (result as any).conflicts?.length ?? 0;
+        const c = result.conflicts?.length ?? 0;
         let label: string;
         if (n === 0) {
           label = "no files updated";
@@ -540,7 +540,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             setActionPending(null);
           }
         },
-      } as any),
+      }),
     );
   };
 
@@ -704,7 +704,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           "--romm-sparkle-left": pos.left,
           "--romm-sparkle-delay": `${sparkleDelays[i]}s`,
           "--romm-sparkle-dur": `${sparkleDurs[i]}s`,
-        } as any,
+        } satisfies CSSPropertiesWithVars,
       }),
     ) : [];
 
@@ -787,7 +787,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       background: "rgba(14, 20, 27, 0.33)",
       boxSizing: "border-box",
     },
-  } as any,
+  },
     // Play button on the left
     createElement(CustomPlayButton, { appId }),
     // Info items row
@@ -819,7 +819,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         onClick: showRomMMenu,
         onFocus: scrollToTop,
         title: "RomM Actions",
-      } as any,
+      },
         createElement(FaGamepad, { size: 18, color: "#553e98" }),
       ),
       // Core selection button (only when multiple cores available)
@@ -830,7 +830,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           onClick: showCoreMenu,
           onFocus: scrollToTop,
           title: "Emulator Core",
-        } as any,
+        },
           createElement(FaMicrochip, { size: 18, color: info.activeCoreIsDefault ? "#8f98a0" : "#d4a72c" }),
         ),
       ] : []),
@@ -840,7 +840,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         onClick: showSteamMenu,
         onFocus: scrollToTop,
         title: "Steam Properties",
-      } as any,
+      },
         createElement(FaCog, { size: 18, color: "#8f98a0" }),
       ),
     ),

@@ -229,7 +229,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             style={btnStyle}
             disabled={confirming}
             onClick={() => handleConfirm(s.slot ?? defaultSlot)}
-            {...{ onFocus: scrollFocusedToCenter } as any}
+            onFocus={scrollFocusedToCenter}
           >
             Track
           </DialogButton>
@@ -259,7 +259,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           style={btnPrimaryStyle}
           disabled={confirming}
           onClick={() => handleConfirm(defaultSlot)}
-          {...{ onFocus: scrollFocusedToCenter } as any}
+          onFocus={scrollFocusedToCenter}
         >
           Use slot &lsquo;{defaultSlot}&rsquo;
         </DialogButton>
@@ -272,7 +272,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       <DialogButton
         style={btnStyle}
         disabled={confirming}
-        {...{ onFocus: scrollFocusedToCenter } as any}
+        onFocus={scrollFocusedToCenter}
         onClick={() => {
           showModal(
             createElement(ConfirmModal, {
@@ -299,7 +299,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
                 label: "Slot Name",
                 value: customSlot,
                 onChange: (e: ChangeEvent<HTMLInputElement>) => setCustomSlot(e.target.value),
-              } as any),
+              }),
             ),
           );
         }}

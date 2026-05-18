@@ -83,7 +83,7 @@ export function renderSaveFileRow(
     }
   }
 
-  return createElement(DialogButton as any, {
+  return createElement(DialogButton, {
     key: f.filename,
     style: {
       background: "transparent",

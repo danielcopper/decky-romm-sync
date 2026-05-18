@@ -512,7 +512,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
    *  Styled to look like a content section, not a button.
    *  Steam's outer scroll container auto-scrolls to focused elements. */
   const section = (key: string, title: string | null, ...children: (ReturnType<typeof createElement> | null)[]) =>
-    createElement(DialogButton as any, {
+    createElement(DialogButton, {
       key,
       className: "romm-panel-section",
       style: {
@@ -810,13 +810,13 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     { id: "bios", label: "BIOS", visible: !!state.biosStatus },
   ];
 
-  const tabBar = createElement(Focusable as any, {
+  const tabBar = createElement(Focusable, {
     className: "romm-tab-bar",
     "flow-children": "right",
     "data-romm": "true",
   },
     ...tabs.filter((t) => t.visible).map((t) =>
-      createElement(DialogButton as any, {
+      createElement(DialogButton, {
         key: `tab-${t.id}`,
         className: `romm-tab ${state.activeTab === t.id ? "romm-tab-active" : ""}`,
         onClick: () => setState((prev) => ({ ...prev, activeTab: t.id })),
@@ -939,14 +939,14 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
                       "--romm-sparkle-left": sp.left,
                       "--romm-sparkle-delay": `${sp.delay.toFixed(1)}s`,
                       "--romm-sparkle-dur": `${sp.dur.toFixed(1)}s`,
-                    } as any,
+                    } satisfies CSSPropertiesWithVars,
                   }),
                 ),
               ),
             )
           : imgEl;
 
-        return createElement(DialogButton as any, {
+        return createElement(DialogButton, {
           key: `cheevo-${a.ra_id}`,
           className: rowClasses,
           noFocusRing: false,
@@ -1069,7 +1069,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
             detail: { type: "save_sync", rom_id: state.romId },
           }));
         },
-      } as any);
+      });
     } else {
       activeTabContent = createElement(SavesTab, {
         romId,
@@ -1098,7 +1098,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   return createElement("div", { "data-romm": "true" },
     saveSortWarning,
     tabBar,
-    createElement(Focusable as any, {
+    createElement(Focusable, {
       noFocusRing: true,
       className: "romm-tab-content",
       style: { paddingBottom: "48px" },

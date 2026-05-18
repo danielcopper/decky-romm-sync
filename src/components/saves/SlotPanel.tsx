@@ -195,7 +195,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
     : createElement("span", { key: "src", className: "romm-slot-badge romm-slot-badge-server" }, "server");
 
   // --- Slot header ---
-  const headerEl = createElement(DialogButton as any, {
+  const headerEl = createElement(DialogButton, {
     key: "header",
     className: "romm-slot-header",
     style: {

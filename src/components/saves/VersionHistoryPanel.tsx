@@ -173,7 +173,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         }, v.file_name),
       ),
       // Restore button (fixed right, disabled when offline)
-      createElement(DialogButton as any, {
+      createElement(DialogButton, {
         style: {
           padding: "2px 8px",
           minWidth: "auto",
@@ -208,7 +208,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         createElement("span", {
           style: { fontSize: "11px", color: "#c46161", fontStyle: "italic" as const },
         }, loadError),
-        createElement(DialogButton as any, {
+        createElement(DialogButton, {
           style: { padding: "2px 8px", minWidth: "auto", fontSize: "11px", width: "auto", flexShrink: 0 },
           noFocusRing: false,
           onFocus: scrollFocusedToCenter,
@@ -229,7 +229,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
     style: { marginTop: "4px", marginLeft: "8px" },
   },
     // Expander toggle
-    createElement(DialogButton as any, {
+    createElement(DialogButton, {
       style: {
         background: "transparent",
         border: "none",

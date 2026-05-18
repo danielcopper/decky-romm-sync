@@ -23,6 +23,6 @@ export const NewSlotModal: FC<{
       label: "Slot Name",
       value,
       onChange: (e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value),
-    } as any),
+    }),
   );
 };

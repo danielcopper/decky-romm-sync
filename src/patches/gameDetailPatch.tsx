@@ -1,3 +1,12 @@
+/**
+ * React-tree patch that swaps Steam's native app-details overview panel for
+ * our RomMPlaySection + RomMGameInfoPanel pair on RomM shortcuts. Everything
+ * here walks Steam's internal React tree — node shapes are dynamic and shift
+ * between Steam builds, so `any` is the honest type. Per #617, narrowing
+ * predicates here buy almost no safety for several lines of churn per site,
+ * so the file is exempt from `@typescript-eslint/no-explicit-any`.
+ */
+
 import { createElement } from "react";
 import { routerHook } from "@decky/api";
 import {
@@ -24,6 +33,7 @@ let treeDumped = false;
  * Anonymous function components surface as "(anonymous fn)" so they remain
  * distinguishable from the string fallback.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
 function resolveTypeName(node: any): string {
   if (typeof node?.type === "string") return node.type;
   if (typeof node?.type === "function") return "(anonymous fn)";
@@ -35,6 +45,7 @@ function resolveTypeName(node: any): string {
  * Useful for diagnosing tree structure changes after Steam updates.
  * Runs once per appId to avoid log spam on re-renders.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
 function deepTreeDump(node: any, depth: number, index: number, prefix: string): void {
   if (depth > 5) return;
   if (node == null || typeof node !== "object") return;
@@ -72,9 +83,11 @@ function deepTreeDump(node: any, depth: number, index: number, prefix: string): 
  * Locate the InnerContainer node in Steam's app-details React subtree.
  * Returns the matched node (with an array `children` prop) or null/undefined.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
 function findInsertionPoint(ret: any): any {
   return findInReactTree(
     ret,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
     (x: any) =>
       Array.isArray(x?.props?.children) &&
       x?.props?.className?.includes(appDetailsClasses.InnerContainer),
@@ -86,6 +99,7 @@ function findInsertionPoint(ret: any): any {
  * children. Identified by children whose props carry details + overview +
  * bFastRender. Returns -1 if not found.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
 function findNativeOverviewIndex(children: any[]): number {
   for (let i = 0; i < children.length; i++) {
     const cp = children[i]?.props?.children?.props || {};
@@ -101,6 +115,7 @@ function findNativeOverviewIndex(children: any[]): number {
  * per plugin load (guarded by module-level `treeDumped`). No-op when the
  * appId is not a RomM shortcut.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
 function dumpTree(container: any, appId: number): void {
   if (!rommAppIds.has(appId) || treeDumped) return;
   treeDumped = true;
@@ -120,6 +135,7 @@ function dumpTree(container: any, appId: number): void {
   if (psContainerClass) {
     const psFound = findInReactTree(
       container,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
       (x: any) => x?.props?.className?.includes?.(psContainerClass),
     );
     debugLog(`findInReactTree(playSectionClasses.Container): ${psFound ? "FOUND" : "NOT FOUND"}`);
@@ -131,6 +147,7 @@ function dumpTree(container: any, appId: number): void {
   if (bpsClass) {
     const bpsFound = findInReactTree(
       container,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
       (x: any) => x?.props?.className?.includes?.(bpsClass),
     );
     debugLog(`findInReactTree(basicAppDetailsSectionStylerClasses.PlaySection): ${bpsFound ? "FOUND" : "NOT FOUND"}`);
@@ -152,18 +169,23 @@ let gamePatch: RoutePatch | null = null;
 export function registerGameDetailPatch() {
   gamePatch = routerHook.addPatch(
     "/library/app/:appid",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
     (tree: any) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
       const routeProps = findInReactTree(tree, (x: any) => x?.renderFunc);
       if (routeProps) {
         const patchHandler = createReactTreePatcher(
           [
             // Navigate to the node whose children carry the overview prop
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
             (node: any) =>
               findInReactTree(
                 node,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
                 (x: any) => x?.props?.children?.props?.overview,
               )?.props?.children,
           ],
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
           (_args: unknown[], ret?: any) => {
             const container = findInsertionPoint(ret);
             if (typeof container !== "object" || !container) {
@@ -173,6 +195,7 @@ export function registerGameDetailPatch() {
             // Extract appId from the overview object higher up in the tree
             const overviewNode = findInReactTree(
               ret,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
               (x: any) => x?.props?.overview?.appid,
             );
             const appId: number | undefined =
@@ -196,6 +219,7 @@ export function registerGameDetailPatch() {
 
               // Deduplication: don't inject if already present
               const alreadyHasPlayBtn = children.some(
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
                 (c: any) => c?.key === "romm-play-section",
               );
               if (!alreadyHasPlayBtn) {
