@@ -3,6 +3,7 @@ import { DialogButton, ConfirmModal, TextField, showModal } from "@decky/ui";
 import { getSaveSetupInfo, confirmSlotChoice, logError } from "../api/backend";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { applyWizardInitialSetupResult, applyWizardRetrySetupResult } from "../utils/saveSetup";
+import { formatBytes } from "../utils/formatters";
 import type { SaveSetupInfo } from "../types";
 
 interface SlotSetupWizardProps {
@@ -13,12 +14,6 @@ interface SlotSetupWizardProps {
 function displaySlot(slot: string | null): string {
   if (slot === null || slot === "") return "(no slot)";
   return slot;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTimestamp(iso: string | null): string {
@@ -198,7 +193,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           >
             <span className="romm-status-dot" style={{ backgroundColor: "#5ba32b" }} />
             <span style={{ color: "#fff" }}>{f.filename}</span>
-            <span className="romm-panel-muted">{formatSize(f.size)}</span>
+            <span className="romm-panel-muted">{formatBytes(f.size)}</span>
           </div>
         ))}
       </div>,
