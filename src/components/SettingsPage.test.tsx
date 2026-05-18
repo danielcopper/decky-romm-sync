@@ -1,3 +1,10 @@
+// CATCH-REJECTION ASSERTION RULE (applies to all orchestration shell tests):
+// Every catch block with a setX(...) side effect MUST have its side effect
+// asserted in the test (status string, captured prop on a child, logError
+// spy, etc.). Only truly-`/* ignore */` catches (no state change, no log
+// call) are exempt — and even then, prefer dropping the test over keeping
+// one with zero expects.
+
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { createElement, type ComponentProps, type ReactElement } from "react";
@@ -331,9 +338,13 @@ describe("SettingsPage", () => {
         save_sync_enabled: true,
       });
       vi.mocked(backend.ensureDeviceRegistered).mockRejectedValue(new Error("net"));
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       expect(capturedSaveSync[capturedSaveSync.length - 1]?.deviceInfo).toBeNull();
+      // Catch is `.catch(() => {})` — rejection must NOT escape to logError.
+      expect(logSpy).not.toHaveBeenCalled();
+      logSpy.mockRestore();
     });
 
     it("logs the failure when getSaveSyncSettings rejects", async () => {
@@ -543,7 +554,7 @@ describe("SettingsPage", () => {
       );
     });
 
-    it("handleAllowInsecureSslChange swallows a rejection without throwing", async () => {
+    it("handleAllowInsecureSslChange surfaces 'Failed to save settings' on rejection", async () => {
       vi.mocked(backend.saveSettings).mockRejectedValue(new Error("ssl"));
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
@@ -553,8 +564,11 @@ describe("SettingsPage", () => {
         conn?.onAllowInsecureSslChange(true);
         await Promise.resolve();
       });
-      // No throw, that's enough — no observable state assertion needed beyond
-      // not crashing the component.
+
+      // The .catch sets setStatus("Failed to save settings") — assert it
+      // surfaced via ConnectionSection.status (mirrors the handleTest throw test).
+      const last = capturedConnection[capturedConnection.length - 1];
+      expect(last?.status).toBe("Failed to save settings");
     });
   });
 
@@ -657,7 +671,7 @@ describe("SettingsPage", () => {
       }
     });
 
-    it("dispatches romm_data_changed with save_sync_enabled=false and clears registeredDevices on disable", async () => {
+    it("dispatches romm_data_changed with save_sync_enabled=false on disable", async () => {
       // Start enabled so that toggle-off path runs
       vi.mocked(backend.getSaveSyncSettings).mockResolvedValue({
         ...defaultSaveSyncSettings(),
@@ -680,15 +694,54 @@ describe("SettingsPage", () => {
         expect(ev.detail).toEqual({
           type: "save_sync_settings", save_sync_enabled: false,
         });
-        // Registered-devices section disappears after disable
-        const d = capturedDevices[capturedDevices.length - 1];
-        // After disable: registeredDevices is null; section is unmounted.
-        // Just assert via captured-state that the latest SaveSync render
-        // doesn't carry an enabled flag.
-        expect(d).toBeDefined();
       } finally {
         globalThis.removeEventListener("romm_data_changed", listener);
       }
+    });
+
+    it("clears registeredDevices on disable (probed via re-enable with a stalled listDevices)", async () => {
+      // Mount enabled so that the initial listDevices populates
+      // registeredDevices to [] (a non-null value).
+      vi.mocked(backend.getSaveSyncSettings).mockResolvedValue({
+        ...defaultSaveSyncSettings(),
+        save_sync_enabled: true,
+      });
+      vi.mocked(backend.updateSaveSyncSettings).mockResolvedValue({ success: true });
+      vi.mocked(backend.listDevices).mockResolvedValue({ success: true, devices: [] });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      // Sanity: before disable, devices section is mounted with [] (non-null).
+      const preDisable = capturedDevices[capturedDevices.length - 1];
+      expect(preDisable?.registeredDevices).toEqual([]);
+
+      // Disable — this should run setRegisteredDevices(null).
+      await act(async () => {
+        await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+          save_sync_enabled: false,
+        });
+      });
+
+      // Now re-enable, but stall listDevices so devicesLoading stays true and
+      // the section mounts immediately (guard: enabled && (loading || devices !== null)).
+      // The captured registeredDevices prop on this mount reveals whether
+      // setRegisteredDevices(null) ran during the disable step:
+      //   - If line 194 ran  → registeredDevices is null
+      //   - If line 194 did NOT run → registeredDevices is still []
+      vi.mocked(backend.listDevices).mockImplementation(
+        () => new Promise(() => { /* stall */ }),
+      );
+      await act(async () => {
+        await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+          save_sync_enabled: true,
+        });
+      });
+
+      // Probe: the most recent RegisteredDevicesSection render (during the
+      // loading state of the second loadDevices call) must see null.
+      const postReEnable = capturedDevices[capturedDevices.length - 1];
+      expect(postReEnable?.devicesLoading).toBe(true);
+      expect(postReEnable?.registeredDevices).toBeNull();
     });
 
     it("logs the failure when updateSaveSyncSettings rejects", async () => {
