@@ -170,3 +170,27 @@ class SessionMigrationReader(Protocol):
     async def refresh_state(self) -> dict: ...
 
     def is_retrodeck_migration_pending(self) -> bool: ...
+
+
+class SaveSortChangeDetector(Protocol):
+    """Save-sort-change refresh consumed by SaveService.
+
+    The composition root satisfies this with
+    ``MigrationService.detect_save_sort_change``. SaveService invokes
+    this at the entry point of ``pre_launch_sync`` and
+    ``post_exit_sync`` to refresh save-sort state from the live
+    RetroArch config before computing ``saves_dir`` (#238).
+    """
+
+    def __call__(self) -> None: ...
+
+
+class RetroDeckMigrationGate(Protocol):
+    """Pending-RetroDECK-migration check consumed by SaveService.
+
+    The composition root satisfies this with
+    ``MigrationService.is_retrodeck_migration_pending``. SaveService
+    gates destructive operations on this signal.
+    """
+
+    def __call__(self) -> bool: ...
