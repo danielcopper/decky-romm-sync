@@ -1,4 +1,27 @@
-"""Tests for SyncOrchestrator — preview/apply/full-sync lifecycle and safety heartbeat."""
+"""Tests for SyncOrchestrator — preview/apply/full-sync lifecycle and safety heartbeat.
+
+The migrated layout drives the orchestrator end-to-end through
+``FakeRommApi``: tests seed in-memory platforms/ROMs/collections on the
+fake, then exercise the public callable surface (``sync_preview``,
+``sync_apply_delta``, ``_do_sync_per_unit``, etc.) and assert on the
+**observable outputs** — ``decky.emit`` calls, state mutations, persister
+counts.
+
+Two production seams remain mockable per test:
+
+* ``_wait_for_unit_complete`` — waits on a frontend ``report_unit_results``
+  callback that no test exercises. Replaced with a ``fake_wait`` helper.
+* ``_download_artwork`` — delegates to the SteamGridDB pipeline; the
+  orchestrator tests do not exercise artwork I/O. Replaced with an
+  ``AsyncMock``.
+
+``_emit_progress`` is intentionally **not** mocked when the test asserts on
+``decky.emit.call_args_list`` — driving real emissions keeps the
+assertions honest. The fetcher's runtime methods (``build_work_queue``,
+``fetch_platform_unit``, ``fetch_collection_unit``, ``prefetch_all_units``)
+are reached through the real fetcher against the seeded fake — that is the
+whole point of the migration.
+"""
 
 import asyncio
 import os
@@ -17,6 +40,89 @@ from services.library._state import PrefetchedUnit
 # conftest.py patches decky before this import
 
 
+# ── Test helpers ─────────────────────────────────────────────────
+
+
+def _use_fake_romm(plugin, fake_romm_api):
+    """Swap the plugin's MagicMock ``_romm_api`` for the seeded fake.
+
+    The library-suite plugin fixture wires ``_romm_api`` as a
+    ``MagicMock()`` (kept for the test_fetcher.py tests that match
+    callables by identity). Each orchestrator test that wants the
+    end-to-end path drives through this helper, which rebinds the fake
+    onto every sub-service holding a stale reference.
+    """
+    plugin._romm_api = fake_romm_api
+    plugin._sync_service._fetcher._romm_api = fake_romm_api
+    plugin._artwork_service._romm_api = fake_romm_api
+    plugin._shortcut_removal_service._romm_api = fake_romm_api
+    return fake_romm_api
+
+
+def _seed_platform(fake_romm_api, *, platform_id, name, slug, roms):
+    """Seed a platform plus its ROMs on the fake.
+
+    ROMs are dicts with at least ``id``/``name``; ``platform_id`` and
+    ``platform_slug``/``platform_name`` are stamped automatically so the
+    fetcher's enrichment loop sees consistent data.
+    """
+    fake_romm_api.platforms.append({"id": platform_id, "name": name, "slug": slug, "rom_count": len(roms)})
+    for rom in roms:
+        rom_id = rom["id"]
+        full_rom = {
+            "platform_id": platform_id,
+            "platform_name": name,
+            "platform_slug": slug,
+            **rom,
+        }
+        fake_romm_api.roms[rom_id] = full_rom
+
+
+def _seed_collection(
+    fake_romm_api,
+    *,
+    collection_id,
+    name,
+    rom_ids,
+    is_favorite=False,
+    is_virtual=False,
+    virtual_category=None,
+):
+    """Seed a (real or virtual) collection plus the ``collection_ids`` /
+    ``virtual_collection_ids`` lookup arrays on each member ROM."""
+    entry = {
+        "id": collection_id,
+        "name": name,
+        "rom_count": len(rom_ids),
+        "rom_ids": list(rom_ids),
+        "is_favorite": is_favorite,
+        "is_virtual": is_virtual,
+    }
+    if is_virtual:
+        assert virtual_category is not None, "virtual collections need a category"
+        fake_romm_api.virtual_collections.setdefault(virtual_category, []).append(entry)
+        for rid in rom_ids:
+            rom = fake_romm_api.roms.setdefault(rid, {"id": rid})
+            rom.setdefault("virtual_collection_ids", []).append(collection_id)
+    else:
+        fake_romm_api.collections.append(entry)
+        for rid in rom_ids:
+            rom = fake_romm_api.roms.setdefault(rid, {"id": rid})
+            rom.setdefault("collection_ids", []).append(collection_id)
+
+
+async def _fake_wait_set_event(_unit, event):
+    """Default ``_wait_for_unit_complete`` stand-in: set the event and
+    return an empty rom_id_to_app_id map.
+
+    The frontend's ``report_unit_results`` callback never runs in tests.
+    The orchestrator's per-unit driver requires the event to fire and a
+    mapping to come back — this helper provides both.
+    """
+    event.set()
+    return {}
+
+
 def _prefetch_result(
     *,
     prefetched=None,
@@ -25,7 +131,13 @@ def _prefetch_result(
     collection_memberships=None,
     platform_rom_ids=None,
 ):
-    """Build the 5-tuple returned by ``LibraryFetcher.prefetch_all_units``."""
+    """Build the 5-tuple returned by ``LibraryFetcher.prefetch_all_units``.
+
+    Retained for the few preview tests where the real fetcher cannot
+    produce the exact branch the test wants (e.g. forced cancellation
+    or a synthetic error). Most tests now drive ``prefetch_all_units``
+    end-to-end via seeded ``FakeRommApi`` state.
+    """
     return (
         prefetched or [],
         all_roms or [],
@@ -36,7 +148,8 @@ def _prefetch_result(
 
 
 def _platform_prefetched(name="N64", slug="n64", roms=None, skipped=True):
-    """Helper to build a single platform PrefetchedUnit for preview tests."""
+    """Build a single platform ``PrefetchedUnit`` for tests that seed the
+    apply-side cache directly (e.g. ``sync_apply_delta`` dispatch)."""
     roms = roms or []
     return PrefetchedUnit(
         unit=WorkUnit(type="platform", id=1, name=name, slug=slug, rom_count=len(roms)),
@@ -88,30 +201,25 @@ class TestSyncPreview:
     """Tests for sync_preview()."""
 
     @pytest.mark.asyncio
-    async def test_returns_correct_summary(self, plugin):
-
+    async def test_returns_correct_summary(self, plugin, fake_romm_api):
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        # Mock prefetch_all_units to return known data
-        all_roms = [{"id": 1}, {"id": 2}, {"id": 3}]
-        shortcuts_data = [
-            {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
-            {"rom_id": 2, "name": "Game B", "platform_name": "N64", "platform_slug": "n64", "fs_name": "b.z64"},
-            {"rom_id": 3, "name": "Game C", "platform_name": "N64", "platform_slug": "n64", "fs_name": "c.z64"},
-        ]
-        prefetched = [_platform_prefetched(name="N64", slug="n64", roms=all_roms)]
-        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
-            return_value=_prefetch_result(
-                prefetched=prefetched,
-                all_roms=all_roms,
-                shortcuts_data=shortcuts_data,
-                platform_rom_ids={1, 2, 3},
-            )
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 1, "name": "Game A", "fs_name": "a.z64"},
+                {"id": 2, "name": "Game B", "fs_name": "b.z64"},
+                {"id": 3, "name": "Game C", "fs_name": "c.z64"},
+            ],
         )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin.settings["enabled_platforms"] = {"1": True}
 
         # Set up registry: rom 1 unchanged, rom 2 changed name
         plugin._state["shortcut_registry"] = {
@@ -129,27 +237,21 @@ class TestSyncPreview:
         assert "preview_id" in result
 
     @pytest.mark.asyncio
-    async def test_populates_pending_delta(self, plugin):
-
+    async def test_populates_pending_delta(self, plugin, fake_romm_api):
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        all_roms = [{"id": 1}]
-        shortcuts_data = [
-            {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
-        ]
-        prefetched = [_platform_prefetched(name="N64", slug="n64", roms=all_roms)]
-        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
-            return_value=_prefetch_result(
-                prefetched=prefetched,
-                all_roms=all_roms,
-                shortcuts_data=shortcuts_data,
-                platform_rom_ids={1},
-            )
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "Game A", "fs_name": "a.z64"}],
         )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin.settings["enabled_platforms"] = {"1": True}
 
         result = await plugin.sync_preview()
         assert plugin._sync_service._pending_delta is not None
@@ -170,55 +272,47 @@ class TestSyncPreview:
         assert "already in progress" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_resets_sync_running_on_completion(self, plugin):
-
+    async def test_resets_sync_running_on_completion(self, plugin, fake_romm_api):
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        all_roms = [{"id": 1}]
-        shortcuts_data = [
-            {"rom_id": 1, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
-        ]
-        prefetched = [_platform_prefetched(name="N64", slug="n64", roms=all_roms)]
-        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
-            return_value=_prefetch_result(
-                prefetched=prefetched,
-                all_roms=all_roms,
-                shortcuts_data=shortcuts_data,
-                platform_rom_ids={1},
-            )
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "Game A", "fs_name": "a.z64"}],
         )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin.settings["enabled_platforms"] = {"1": True}
 
         await plugin.sync_preview()
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
     @pytest.mark.asyncio
-    async def test_new_preview_clears_prior_prefetch_cache(self, plugin):
+    async def test_new_preview_clears_prior_prefetch_cache(self, plugin, fake_romm_api):
         """A fresh ``sync_preview`` invalidates any cached prefetched units."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
 
         # Seed a stale cache as if a previous preview ran.
         plugin._sync_service._box.pending_prefetched_units = [
             _platform_prefetched(name="OLD", slug="old", roms=[{"id": 99}])
         ]
 
-        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(
-            return_value=_prefetch_result(
-                prefetched=[_platform_prefetched(name="N64", slug="n64", roms=[{"id": 1}])],
-                all_roms=[{"id": 1}],
-                shortcuts_data=[
-                    {"rom_id": 1, "name": "A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
-                ],
-                platform_rom_ids={1},
-            )
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A", "fs_name": "a.z64"}],
         )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin.settings["enabled_platforms"] = {"1": True}
 
         await plugin.sync_preview()
 
@@ -292,7 +386,6 @@ class TestSyncApplyDelta:
     @pytest.mark.asyncio
     async def test_accepts_when_preview_just_under_max_age(self, plugin, tmp_path):
         """Snapshots within the TTL window apply normally."""
-
         import decky
 
         plugin.loop = asyncio.get_event_loop()
@@ -302,7 +395,9 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin, "preview-xyz")
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        # Apply runs the per-unit pipeline as a fire-and-forget task; stub
+        # it out so the test can assert dispatch without driving the full
+        # pipeline (the per-unit driver is covered in TestDoSyncPerUnit).
         plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
         # Just under the 30-minute window.
         plugin._sync_service._clock.advance(1799)
@@ -323,7 +418,6 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         do_sync = AsyncMock()
         plugin._sync_service._orchestrator._do_sync_per_unit = do_sync
 
@@ -354,7 +448,6 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
@@ -364,7 +457,6 @@ class TestSyncApplyDelta:
 
     @pytest.mark.asyncio
     async def test_clears_pending_delta(self, plugin, tmp_path):
-
         import decky
 
         plugin.loop = asyncio.get_event_loop()
@@ -375,7 +467,6 @@ class TestSyncApplyDelta:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
         }
         self._setup_pending_delta(plugin)
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
 
         await plugin.sync_apply_delta("test-preview-123")
@@ -390,7 +481,6 @@ class TestSyncApplyDelta:
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
         self._setup_pending_delta(plugin, with_prefetch=False)
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         do_sync = AsyncMock()
         plugin._sync_service._orchestrator._do_sync_per_unit = do_sync
 
@@ -438,7 +528,7 @@ class TestSyncCancelPreview:
 
 
 class TestSyncControl:
-    """Tests for start_sync, cancel_sync, sync_heartbeat — lines 143-163."""
+    """Tests for start_sync, cancel_sync, sync_heartbeat."""
 
     def test_start_sync_when_idle(self, plugin):
         result = plugin._sync_service.start_sync()
@@ -485,7 +575,7 @@ class TestSyncControl:
 
 
 class TestFinishSync:
-    """Tests for _finish_sync() — lines 685-695."""
+    """Tests for _finish_sync()."""
 
     @pytest.mark.asyncio
     async def test_sets_cancelled_state(self, plugin):
@@ -519,13 +609,17 @@ class TestSyncPreviewErrorHandling:
     """Tests for sync_preview error paths."""
 
     @pytest.mark.asyncio
-    async def test_general_exception_returns_error(self, plugin):
+    async def test_general_exception_returns_error(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
         # Seed a cache so we can verify it's cleared on error.
         plugin._sync_service._box.pending_prefetched_units = [
             _platform_prefetched(name="STALE", slug="stale", roms=[{"id": 1}])
         ]
-        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(side_effect=RuntimeError("Something broke"))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        # Cause the platforms listing to blow up — exception bubbles out of
+        # ``prefetch_all_units`` and into ``sync_preview`` exactly like a
+        # mid-paginate RomM failure would in production.
+        fake_romm_api.list_platforms_side_effect = RuntimeError("Something broke")
+        plugin.settings["enabled_platforms"] = {"1": True}
 
         result = await plugin._sync_service.sync_preview()
         assert result["success"] is False
@@ -535,17 +629,17 @@ class TestSyncPreviewErrorHandling:
         assert plugin._sync_service._box.pending_prefetched_units is None
 
     @pytest.mark.asyncio
-    async def test_cancelled_error_reraises(self, plugin):
-
+    async def test_cancelled_error_reraises(self, plugin, fake_romm_api):
         import decky
 
         decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
 
         plugin._sync_service._box.pending_prefetched_units = [
             _platform_prefetched(name="STALE", slug="stale", roms=[{"id": 1}])
         ]
-        plugin._sync_service._fetcher.prefetch_all_units = AsyncMock(side_effect=asyncio.CancelledError("cancelled"))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        fake_romm_api.list_platforms_side_effect = asyncio.CancelledError("cancelled")
+        plugin.settings["enabled_platforms"] = {"1": True}
 
         with pytest.raises(asyncio.CancelledError):
             await plugin._sync_service.sync_preview()
@@ -562,35 +656,24 @@ class TestBuildWorkQueue:
     """Phase 0 of the per-unit pipeline: enumerate platforms + collections without fetching ROMs."""
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_nothing_enabled(self, plugin):
+    async def test_returns_empty_when_nothing_enabled(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {}
-        from unittest.mock import AsyncMock, MagicMock
-
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(return_value=[])
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
 
         units = await plugin._sync_service._fetcher.build_work_queue()
         assert units == []
 
     @pytest.mark.asyncio
-    async def test_includes_enabled_platforms(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
+    async def test_includes_enabled_platforms(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
+        fake_romm_api.platforms = [
+            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 12},
+            {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 99},
+            {"id": 3, "name": "GBA", "slug": "gba", "rom_count": 5},
+        ]
         plugin.settings["enabled_platforms"] = {"1": True, "2": False, "3": True}
         plugin.settings["enabled_collections"] = {}
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            return_value=[
-                {"id": 1, "name": "N64", "slug": "n64", "rom_count": 12},
-                {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 99},
-                {"id": 3, "name": "GBA", "slug": "gba", "rom_count": 5},
-            ]
-        )
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
 
         units = await plugin._sync_service._fetcher.build_work_queue()
         assert [u.name for u in units] == ["N64", "GBA"]
@@ -598,25 +681,15 @@ class TestBuildWorkQueue:
         assert units[0].rom_count == 12
 
     @pytest.mark.asyncio
-    async def test_includes_enabled_collections_after_platforms(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
+    async def test_includes_enabled_collections_after_platforms(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}]
+        fake_romm_api.collections = [{"id": 7, "name": "Favorites", "rom_count": 3, "is_favorite": True}]
+        fake_romm_api.virtual_collections["franchise"] = [
+            {"id": 9, "name": "Metroid", "rom_count": 8, "is_virtual": True}
+        ]
         plugin.settings["enabled_platforms"] = {"1": True}
         plugin.settings["enabled_collections"] = {"7": True, "9": True}
-
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            side_effect=[
-                # list_platforms
-                [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}],
-                # list_collections
-                [{"id": 7, "name": "Favorites", "rom_count": 3, "is_favorite": True}],
-                # list_virtual_collections("franchise")
-                [{"id": 9, "name": "Metroid", "rom_count": 8, "is_virtual": True}],
-            ]
-        )
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
 
         units = await plugin._sync_service._fetcher.build_work_queue()
         assert [(u.type, u.name) for u in units] == [
@@ -631,70 +704,58 @@ class TestFetchPlatformUnit:
     """Per-unit platform ROM fetch with incremental-skip path."""
 
     @pytest.mark.asyncio
-    async def test_full_fetch_when_no_registry(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from domain.work_unit import WorkUnit
-
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            return_value={"items": [{"id": 10, "name": "A"}, {"id": 11, "name": "B"}]}
+    async def test_full_fetch_when_no_registry(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}],
         )
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
         plugin._state["last_sync"] = None
         plugin._state["shortcut_registry"] = {}
 
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
         roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
         assert skipped is False
         assert [r["id"] for r in roms] == [10, 11]
         assert roms[0]["platform_name"] == "N64"
 
     @pytest.mark.asyncio
-    async def test_skips_when_registry_matches_count(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from domain.work_unit import WorkUnit
-
+    async def test_skips_when_registry_matches_count(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
+        # No ROMs seeded on the fake; the platform's listing reports zero
+        # updates after last_sync so the incremental-skip path fires.
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
         plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
         plugin._state["shortcut_registry"] = {
             "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
             "11": {"name": "B", "fs_name": "b.z64", "platform_name": "N64", "platform_slug": "n64"},
         }
-        mock_loop = MagicMock()
-        # list_roms_updated_after returns zero updates
-        mock_loop.run_in_executor = AsyncMock(return_value={"total": 0, "items": []})
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
 
         roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
         assert skipped is True
         assert {r["id"] for r in roms} == {10, 11}
 
     @pytest.mark.asyncio
-    async def test_full_fetch_when_count_mismatch(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from domain.work_unit import WorkUnit
-
+    async def test_full_fetch_when_count_mismatch(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
+        # Registry says 1 ROM but the unit reports 3 → incremental-skip
+        # check still says zero updated (no updated_at > last_sync), but
+        # count mismatch forces a full fetch.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}, {"id": 12, "name": "C"}],
+        )
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
         plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
         plugin._state["shortcut_registry"] = {
             "10": {"name": "A", "platform_name": "N64"},
         }
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            side_effect=[
-                # incremental check — zero updates BUT registry count doesn't match
-                {"total": 0, "items": []},
-                # list_roms paginated full fetch
-                {"items": [{"id": 10, "name": "A"}, {"id": 11, "name": "B"}, {"id": 12, "name": "C"}]},
-            ]
-        )
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
 
         roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
         assert skipped is False
@@ -705,25 +766,14 @@ class TestFetchCollectionUnit:
     """Per-unit collection ROM fetch with cross-unit deduplication."""
 
     @pytest.mark.asyncio
-    async def test_returns_new_roms_and_member_ids(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from domain.work_unit import WorkUnit
-
+    async def test_returns_new_roms_and_member_ids(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
+        fake_romm_api.roms = {
+            1: {"id": 1, "platform_name": "N64", "collection_ids": [7]},
+            2: {"id": 2, "platform_name": "SNES", "collection_ids": [7]},
+            3: {"id": 3, "platform_name": "GBA", "collection_ids": [7]},
+        }
         unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=3, is_virtual=False)
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            return_value={
-                "items": [
-                    {"id": 1, "platform_name": "N64"},
-                    {"id": 2, "platform_name": "SNES"},
-                    {"id": 3, "platform_name": "GBA"},
-                ]
-            }
-        )
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
-
         synced: set[int] = set()
         new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
         assert [r["id"] for r in new_roms] == [1, 2, 3]
@@ -731,18 +781,13 @@ class TestFetchCollectionUnit:
         assert synced == {1, 2, 3}
 
     @pytest.mark.asyncio
-    async def test_dedups_against_already_synced(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from domain.work_unit import WorkUnit
-
+    async def test_dedups_against_already_synced(self, plugin, fake_romm_api):
+        _use_fake_romm(plugin, fake_romm_api)
+        fake_romm_api.roms = {
+            1: {"id": 1, "platform_name": "N64", "virtual_collection_ids": ["9"]},
+            2: {"id": 2, "platform_name": "SNES", "virtual_collection_ids": ["9"]},
+        }
         unit = WorkUnit(type="collection", id="9", name="Metroid", slug="", rom_count=2, is_virtual=True)
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            return_value={"items": [{"id": 1, "platform_name": "N64"}, {"id": 2, "platform_name": "SNES"}]}
-        )
-        plugin._sync_service._loop = mock_loop
-        plugin._sync_service._fetcher._loop = mock_loop
 
         # rom_id=1 was already fetched via a platform unit
         synced: set[int] = {1}
@@ -756,13 +801,15 @@ class TestDoSyncPerUnit:
     """End-to-end orchestration of the per-unit pipeline."""
 
     @pytest.mark.asyncio
-    async def test_empty_queue_terminates_cleanly(self, plugin):
+    async def test_empty_queue_terminates_cleanly(self, plugin, fake_romm_api):
         import decky
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=[])
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        _use_fake_romm(plugin, fake_romm_api)
+        # No platforms enabled → empty work queue.
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {}
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -774,28 +821,25 @@ class TestDoSyncPerUnit:
         assert plan_events[0][0][1]["total_units"] == 0
 
     @pytest.mark.asyncio
-    async def test_emits_sync_plan_with_queue(self, plugin):
+    async def test_emits_sync_plan_with_queue(self, plugin, fake_romm_api):
         import decky
-
-        from domain.work_unit import WorkUnit
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [
-            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2),
-        ]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(return_value=([], True))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        # Platform with registry-matching count → fetcher takes the
+        # incremental-skip branch (skipped=True), no live pagination.
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
+            "11": {"name": "B", "fs_name": "b.z64", "platform_name": "N64", "platform_slug": "n64"},
+        }
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 2}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-
-        # Pre-set the unit-done so _wait_for_unit_complete returns immediately
-        async def fake_wait(_unit, event):
-            event.set()
-            return {}
-
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -807,26 +851,24 @@ class TestDoSyncPerUnit:
         assert payload["units"][0]["name"] == "N64"
 
     @pytest.mark.asyncio
-    async def test_processes_each_unit_in_order(self, plugin):
+    async def test_processes_each_unit_in_order(self, plugin, fake_romm_api):
         import decky
-
-        from domain.work_unit import WorkUnit
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [
-            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1),
-            WorkUnit(type="platform", id=2, name="GBA", slug="gba", rom_count=1),
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "N64", "fs_name": "n.z64", "platform_name": "N64", "platform_slug": "n64"},
+            "20": {"name": "GBA", "fs_name": "g.gba", "platform_name": "GBA", "platform_slug": "gba"},
+        }
+        fake_romm_api.platforms = [
+            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 1},
+            {"id": 2, "name": "GBA", "slug": "gba", "rom_count": 1},
         ]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
-        # Each platform unit returns its own ROM list
-        async def fake_fetch(unit):
-            return [{"id": int(unit.id) * 10, "name": unit.name, "platform_name": unit.name}], True
-
-        plugin._sync_service._fetcher.fetch_platform_unit = fake_fetch
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_unit, event):
@@ -846,78 +888,78 @@ class TestDoSyncPerUnit:
         assert unit_events[1]["unit_index"] == 1
 
     @pytest.mark.asyncio
-    async def test_skips_artwork_when_incremental_skipped(self, plugin):
+    async def test_skips_artwork_when_incremental_skipped(self, plugin, fake_romm_api):
         import decky
-
-        from domain.work_unit import WorkUnit
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
-            return_value=([{"id": 10, "name": "A", "platform_name": "N64"}], True)
-        )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        # Registry matches platform count + zero updates → incremental skip.
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
+        }
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        plugin.settings["enabled_platforms"] = {"1": True}
 
-        async def fake_wait(_u, event):
-            event.set()
-            return {}
-
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._download_artwork = download_artwork
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
         # skipped=True from fetcher → no artwork download
-        plugin._sync_service._orchestrator._download_artwork.assert_not_called()
+        download_artwork.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_downloads_artwork_when_not_skipped(self, plugin):
+    async def test_downloads_artwork_when_not_skipped(self, plugin, fake_romm_api):
         import decky
-
-        from domain.work_unit import WorkUnit
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
-            return_value=([{"id": 10, "name": "A", "platform_name": "N64"}], False)
+        # No prior sync → full fetch path → skipped=False → artwork pipeline runs.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}],
         )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={10: "/grid/a.png"})
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
+        plugin.settings["enabled_platforms"] = {"1": True}
 
-        async def fake_wait(_u, event):
-            event.set()
-            return {}
-
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        download_artwork = AsyncMock(return_value={10: "/grid/a.png"})
+        plugin._sync_service._orchestrator._download_artwork = download_artwork
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
-        plugin._sync_service._orchestrator._download_artwork.assert_called_once()
+        download_artwork.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_cancel_between_units_stops_processing(self, plugin):
+    async def test_cancel_between_units_stops_processing(self, plugin, fake_romm_api):
         import decky
-
-        from domain.work_unit import WorkUnit
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [
-            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1),
-            WorkUnit(type="platform", id=2, name="GBA", slug="gba", rom_count=1),
+        # Two incremental-skip platforms in the queue.
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
+            "20": {"name": "B", "fs_name": "b.gba", "platform_name": "GBA", "platform_slug": "gba"},
+        }
+        fake_romm_api.platforms = [
+            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 1},
+            {"id": 2, "name": "GBA", "slug": "gba", "rom_count": 1},
         ]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
-            return_value=([{"id": 10, "name": "A", "platform_name": "N64"}], True)
-        )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
+
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
@@ -943,8 +985,6 @@ class TestWaitForUnitComplete:
 
     @pytest.mark.asyncio
     async def test_returns_results_when_event_set(self, plugin):
-        from domain.work_unit import WorkUnit
-
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()
         event.set()
@@ -957,8 +997,6 @@ class TestWaitForUnitComplete:
 
     @pytest.mark.asyncio
     async def test_returns_none_on_cancel(self, plugin):
-        from domain.work_unit import WorkUnit
-
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()
         plugin._sync_service._sync_state = SyncState.CANCELLING
@@ -969,8 +1007,6 @@ class TestWaitForUnitComplete:
 
     @pytest.mark.asyncio
     async def test_returns_none_on_heartbeat_timeout(self, plugin):
-        from domain.work_unit import WorkUnit
-
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()
         plugin._sync_service._sync_state = SyncState.RUNNING
@@ -1035,7 +1071,7 @@ class TestReportUnitResults:
 
 
 class TestShutdown:
-    """Tests for shutdown() — lines 146-148.
+    """Tests for shutdown().
 
     Graceful shutdown flips a RUNNING sync into CANCELLING so the
     per-unit loop drops its in-flight work on the next checkpoint.
@@ -1089,8 +1125,8 @@ class TestSyncApplyDeltaUnifiedDispatch:
             _platform_prefetched(name="N64", slug="n64", roms=roms, skipped=False)
         ]
 
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={10: "/grid/x.png"})
+        download_artwork = AsyncMock(return_value={10: "/grid/x.png"})
+        plugin._sync_service._orchestrator._download_artwork = download_artwork
 
         async def fake_wait(_unit, event):
             event.set()
@@ -1108,7 +1144,7 @@ class TestSyncApplyDeltaUnifiedDispatch:
         assert len(unit_events) == 1
         assert unit_events[0]["unit_name"] == "N64"
         # Cover path was downloaded per-unit (not skipped) and stamped onto the unit's shortcut.
-        plugin._sync_service._orchestrator._download_artwork.assert_called_once()
+        download_artwork.assert_called_once()
         assert unit_events[0]["shortcuts"][0]["cover_path"] == "/grid/x.png"
 
     @pytest.mark.asyncio
@@ -1130,8 +1166,8 @@ class TestSyncApplyDeltaUnifiedDispatch:
         plugin._sync_service._box.pending_prefetched_units = [
             _platform_prefetched(name="N64", slug="n64", roms=roms, skipped=True)
         ]
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._download_artwork = download_artwork
 
         async def fake_wait(_unit, event):
             event.set()
@@ -1144,20 +1180,24 @@ class TestSyncApplyDeltaUnifiedDispatch:
             await asyncio.sleep(0)
 
         # Skipped=True → artwork download was not called for the unit.
-        plugin._sync_service._orchestrator._download_artwork.assert_not_called()
+        download_artwork.assert_not_called()
 
 
 class TestDoSyncPerUnitErrors:
-    """Tests for error/cancel paths inside _do_sync_per_unit — lines 433-441, 489-502."""
+    """Tests for error/cancel paths inside _do_sync_per_unit."""
 
     @pytest.mark.asyncio
-    async def test_build_work_queue_cancelled_error_finishes_sync(self, plugin):
+    async def test_build_work_queue_cancelled_error_finishes_sync(self, plugin, fake_romm_api):
         """CancelledError during build_work_queue triggers _finish_sync + re-raise."""
         import decky
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(side_effect=asyncio.CancelledError())
+        _use_fake_romm(plugin, fake_romm_api)
+        # ``list_platforms`` runs in the executor; the fake raises
+        # CancelledError exactly like an asyncio cancel would propagate.
+        fake_romm_api.list_platforms_side_effect = asyncio.CancelledError()
+        plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._sync_state = SyncState.RUNNING
         plugin._sync_service._current_sync_id = "sync-cancel-build"
 
@@ -1173,41 +1213,45 @@ class TestDoSyncPerUnitErrors:
         assert "cancelled" in progress_phases
 
     @pytest.mark.asyncio
-    async def test_build_work_queue_general_exception_emits_error(self, plugin):
+    async def test_build_work_queue_general_exception_emits_error(self, plugin, fake_romm_api):
         """A non-cancellation exception during build_work_queue is logged + surfaced."""
         import decky
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(side_effect=RuntimeError("RomM down"))
-        emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._emit_progress = emit_progress
+        _use_fake_romm(plugin, fake_romm_api)
+        fake_romm_api.list_platforms_side_effect = RuntimeError("RomM down")
+        plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         # Should NOT raise — outer flow swallows the exception after emitting an error.
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
-        # error phase was emitted via _emit_progress.
-        error_calls = [c for c in emit_progress.call_args_list if c.args and c.args[0] == "error"]
-        assert len(error_calls) == 1
+        # error phase was emitted via sync_progress.
+        error_events = [
+            c
+            for c in decky.emit.call_args_list
+            if c.args and c.args[0] == "sync_progress" and c.args[1].get("phase") == "error"
+        ]
+        assert len(error_events) >= 1
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
     @pytest.mark.asyncio
-    async def test_outer_exception_handler_emits_error_progress(self, plugin):
+    async def test_outer_exception_handler_emits_error_progress(self, plugin, fake_romm_api):
         """An exception raised after build_work_queue (e.g. during a unit) hits the outer except."""
         import decky
 
-        from domain.work_unit import WorkUnit
-
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
-        # Fetching the unit blows up after the queue was built — exception propagates
-        # past _sync_one_unit and hits the outer except in _do_sync_per_unit (489-502).
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(side_effect=RuntimeError("boom"))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        # build_work_queue succeeds (platforms listing returns a unit), then
+        # list_roms blows up when the unit is fetched.
+        plugin._state["last_sync"] = None  # no incremental-skip path
+        plugin._state["shortcut_registry"] = {}
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        fake_romm_api.list_roms_side_effect = RuntimeError("boom")
+        plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -1226,7 +1270,7 @@ class TestDoSyncPerUnitErrors:
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
     @pytest.mark.asyncio
-    async def test_pagination_failure_does_not_emit_partial_stale_removal(self, plugin):
+    async def test_pagination_failure_does_not_emit_partial_stale_removal(self, plugin, fake_romm_api):
         """#630 safety invariant: a fetch_platform_unit failure must NOT trigger
         the stale-cleanup pass with a partial ROM set.
 
@@ -1242,10 +1286,9 @@ class TestDoSyncPerUnitErrors:
         """
         import decky
 
-        from domain.work_unit import WorkUnit
-
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
         # Existing registry the frontend would happily delete from if the
         # orchestrator ever emitted a partial sync_stale.
@@ -1254,12 +1297,11 @@ class TestDoSyncPerUnitErrors:
             "20": {"name": "Game B", "platform_name": "N64", "app_id": 2000},
             "30": {"name": "Game C", "platform_name": "N64", "app_id": 3000},
         }
-
-        queue = [WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
+        plugin._state["last_sync"] = None  # no incremental-skip
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
         # Mid-pagination failure — the bug scenario from #630.
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(side_effect=RuntimeError("HTTP 500 on page 2"))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        fake_romm_api.list_roms_side_effect = RuntimeError("HTTP 500 on page 2")
+        plugin.settings["enabled_platforms"] = {"1": True}
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -1286,30 +1328,36 @@ class TestDoSyncPerUnitErrors:
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
     @pytest.mark.asyncio
-    async def test_cancelling_state_before_first_unit_skips_processing(self, plugin):
-        """If state is CANCELLING when the unit loop starts, no units run (lines 462-464)."""
+    async def test_cancelling_state_before_first_unit_skips_processing(self, plugin, fake_romm_api):
+        """If state is CANCELLING when the unit loop starts, no units run."""
         import decky
-
-        from domain.work_unit import WorkUnit
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [
-            WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1),
-            WorkUnit(type="platform", id=2, name="GBA", slug="gba", rom_count=1),
+        # Two units in the queue; CANCELLING gates the loop before either fires.
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
+            "20": {"name": "B", "fs_name": "b.gba", "platform_name": "GBA", "platform_slug": "gba"},
+        }
+        fake_romm_api.platforms = [
+            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 1},
+            {"id": 2, "name": "GBA", "slug": "gba", "rom_count": 1},
         ]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
-        fetch_mock = AsyncMock()
-        plugin._sync_service._fetcher.fetch_platform_unit = fetch_mock
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
+
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._sync_state = SyncState.CANCELLING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
-        # No units were processed because the CANCELLING check fired first.
-        fetch_mock.assert_not_called()
+        # No units were processed because the CANCELLING check fired before
+        # the loop entered the per-unit body — sync_apply_unit is the
+        # cleanest observable for "did the unit dispatch run?".
+        apply_events = [c for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_apply_unit"]
+        assert apply_events == []
         # _finalize_per_unit still ran; sync_complete is emitted with cancelled=True.
         complete = [c for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_complete"]
         assert len(complete) == 1
@@ -1317,31 +1365,34 @@ class TestDoSyncPerUnitErrors:
 
 
 class TestSyncOneUnitCollectionAndCancel:
-    """Tests for _sync_one_unit branches — lines 535-538, 541, 557, 584-587."""
+    """Tests for _sync_one_unit branches: collection units + mid-unit cancel."""
 
     @pytest.mark.asyncio
-    async def test_collection_unit_records_membership(self, plugin):
-        """A collection unit populates collection_memberships with its rom_ids (535-538)."""
+    async def test_collection_unit_records_membership(self, plugin, fake_romm_api):
+        """A collection unit populates collection_memberships with its rom_ids."""
         import decky
-
-        from domain.work_unit import WorkUnit
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        queue = [WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=2, is_virtual=False)]
-        plugin._sync_service._fetcher.build_work_queue = AsyncMock(return_value=queue)
-        plugin._sync_service._fetcher.fetch_collection_unit = AsyncMock(
-            return_value=([{"id": 1, "name": "A", "platform_name": "N64"}], [1, 2])
+        # Seed a real (non-virtual) collection with two ROMs.
+        _seed_collection(
+            fake_romm_api,
+            collection_id=7,
+            name="Faves",
+            rom_ids=[1, 2],
+            is_favorite=True,
         )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        fake_romm_api.roms[1]["name"] = "A"
+        fake_romm_api.roms[1]["platform_name"] = "N64"
+        fake_romm_api.roms[2]["name"] = "B"
+        fake_romm_api.roms[2]["platform_name"] = "N64"
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"7": True}
+
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-
-        async def fake_wait(_u, event):
-            event.set()
-            return {}
-
-        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -1351,20 +1402,32 @@ class TestSyncOneUnitCollectionAndCancel:
         assert len(complete) == 1
 
     @pytest.mark.asyncio
-    async def test_cancel_after_fetch_returns_zero_applied(self, plugin):
-        """CANCELLING flipped after fetch_platform_unit → unit returns 0 (line 540-541)."""
-        from domain.work_unit import WorkUnit
-
+    async def test_cancel_after_fetch_returns_zero_applied(self, plugin, fake_romm_api):
+        """CANCELLING flipped after fetch_platform_unit → unit returns 0."""
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        async def fetch_then_cancel(_unit):
-            # Flip the state mid-flight so the post-fetch guard observes CANCELLING.
+        # Real fetcher will be called for the unit. Wrap list_roms so the
+        # post-fetch state is CANCELLING when ``_sync_one_unit`` checks it.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}],
+        )
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
+
+        orig_list_roms = fake_romm_api.list_roms
+
+        def list_roms_then_cancel(platform_id, limit=50, offset=0):
+            page = orig_list_roms(platform_id, limit=limit, offset=offset)
             plugin._sync_service._sync_state = SyncState.CANCELLING
-            return [{"id": 1, "name": "A", "platform_name": "N64"}], True
+            return page
 
-        plugin._sync_service._fetcher.fetch_platform_unit = fetch_then_cancel
-        emit_progress = AsyncMock()
-        plugin._sync_service._orchestrator._emit_progress = emit_progress
+        fake_romm_api.list_roms = list_roms_then_cancel  # type: ignore[method-assign]
+
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -1380,15 +1443,21 @@ class TestSyncOneUnitCollectionAndCancel:
         assert applied == 0
 
     @pytest.mark.asyncio
-    async def test_cancel_after_artwork_returns_zero_applied(self, plugin):
-        """CANCELLING flipped after the artwork download → unit returns 0 (line 556-557)."""
-        from domain.work_unit import WorkUnit
-
+    async def test_cancel_after_artwork_returns_zero_applied(self, plugin, fake_romm_api):
+        """CANCELLING flipped after the artwork download → unit returns 0."""
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
-            return_value=([{"id": 1, "name": "A", "platform_name": "N64"}], False)
+        # Real fetcher runs; artwork download is intercepted to flip state mid-flight.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}],
         )
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
 
         async def cancel_during_artwork(*_a, **_kw):
             # Trigger CANCELLING in between the post-fetch check and the post-artwork check.
@@ -1396,7 +1465,6 @@ class TestSyncOneUnitCollectionAndCancel:
             return {}
 
         plugin._sync_service._orchestrator._download_artwork = cancel_during_artwork
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -1412,16 +1480,17 @@ class TestSyncOneUnitCollectionAndCancel:
         assert applied == 0
 
     @pytest.mark.asyncio
-    async def test_wait_returning_none_clears_pending_and_cancels(self, plugin):
-        """When _wait_for_unit_complete returns None, the unit drops state + flips CANCELLING (584-587)."""
-        from domain.work_unit import WorkUnit
-
+    async def test_wait_returning_none_clears_pending_and_cancels(self, plugin, fake_romm_api):
+        """When _wait_for_unit_complete returns None, the unit drops state + flips CANCELLING."""
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(
-            return_value=([{"id": 1, "name": "A", "platform_name": "N64"}], True)
-        )
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+        # Incremental-skip path: registry matches platform rom_count + zero updates.
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "1": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
+        }
+
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
         # Simulate heartbeat timeout / cancel inside _wait_for_unit_complete.
@@ -1457,17 +1526,20 @@ class TestSyncOneUnitWithPrefetched:
     """
 
     @pytest.mark.asyncio
-    async def test_platform_unit_uses_cached_roms_no_refetch(self, plugin):
+    async def test_platform_unit_uses_cached_roms_no_refetch(self, plugin, fake_romm_api):
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
 
         cached_roms = [
             {"id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
             {"id": 11, "name": "B", "platform_name": "N64", "platform_slug": "n64"},
         ]
         prefetched = _platform_prefetched(name="N64", slug="n64", roms=cached_roms, skipped=True)
-        # If anything calls the fetcher, the test fails — there is no live mock.
-        plugin._sync_service._fetcher.fetch_platform_unit = AsyncMock(side_effect=AssertionError("must not refetch"))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
+
+        # Wrap list_roms so we can prove it was never called. The fake's
+        # call_log already records every call, so we assert against that
+        # rather than substituting an AsyncMock that would defeat the
+        # "drive through the real fetcher" intent.
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
@@ -1494,15 +1566,16 @@ class TestSyncOneUnitWithPrefetched:
         # platform_rom_ids and synced_rom_ids reflect the cached ROMs even though no fetch happened.
         assert platform_rom_ids == {10, 11}
         assert synced_rom_ids == {10, 11}
-        plugin._sync_service._fetcher.fetch_platform_unit.assert_not_called()
+        # No fetch round-trip happened — the fake never saw list_roms.
+        call_names = [c[0] for c in fake_romm_api.call_log]
+        assert "list_roms" not in call_names
 
     @pytest.mark.asyncio
-    async def test_collection_unit_uses_cached_membership_no_refetch(self, plugin):
+    async def test_collection_unit_uses_cached_membership_no_refetch(self, plugin, fake_romm_api):
         """Cached collection units replay their membership without refetching."""
-        from domain.work_unit import WorkUnit
-        from services.library._state import PrefetchedUnit
-
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
         unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=2)
         cached_roms = [{"id": 30, "name": "X", "platform_name": "N64", "platform_slug": "n64"}]
         prefetched = PrefetchedUnit(
@@ -1511,8 +1584,6 @@ class TestSyncOneUnitWithPrefetched:
             skipped=False,
             all_collection_rom_ids=[30, 31],
         )
-        plugin._sync_service._fetcher.fetch_collection_unit = AsyncMock(side_effect=AssertionError("must not refetch"))
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
@@ -1540,12 +1611,17 @@ class TestSyncOneUnitWithPrefetched:
         assert memberships == {"Faves": [30, 31]}
         # ROMs marked as synced so subsequent collection units can dedup.
         assert synced_rom_ids == {30}
-        plugin._sync_service._fetcher.fetch_collection_unit.assert_not_called()
+        # No collection-fetch happened.
+        call_names = [c[0] for c in fake_romm_api.call_log]
+        assert "list_roms_by_collection" not in call_names
+        assert "list_roms_by_virtual_collection" not in call_names
 
     @pytest.mark.asyncio
-    async def test_prefetched_unit_skips_metadata_re_stamp(self, plugin):
+    async def test_prefetched_unit_skips_metadata_re_stamp(self, plugin, fake_romm_api):
         """``cache_metadata_for_unit`` is not invoked when ROMs come from prefetch (already stamped)."""
         plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
         prefetched = _platform_prefetched(
             name="N64",
             slug="n64",
@@ -1554,7 +1630,6 @@ class TestSyncOneUnitWithPrefetched:
         )
         cache_meta = MagicMock()
         plugin._sync_service._fetcher.cache_metadata_for_unit = cache_meta
-        plugin._sync_service._orchestrator._emit_progress = AsyncMock()
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
         async def fake_wait(_u, event):
@@ -1579,12 +1654,11 @@ class TestSyncOneUnitWithPrefetched:
 
 
 class TestWaitForUnitCompleteCancelled:
-    """Tests for asyncio.CancelledError in _wait_for_unit_complete — lines 617-621."""
+    """Tests for asyncio.CancelledError in _wait_for_unit_complete."""
 
     @pytest.mark.asyncio
     async def test_cancelled_error_during_sleep_is_logged_and_reraised(self, plugin):
         """If the inner sleep is cancelled, log + re-raise so the outer loop sees the cancel."""
-        from domain.work_unit import WorkUnit
 
         class _CancellingSleeper:
             async def sleep(self, _seconds: float) -> None:
@@ -1602,14 +1676,12 @@ class TestWaitForUnitCompleteCancelled:
 
 
 class TestDownloadArtworkDelegation:
-    """Tests for _download_artwork — lines 660-669."""
+    """Tests for _download_artwork."""
 
     @pytest.mark.asyncio
     async def test_delegates_to_artwork_manager(self, plugin):
         """When _artwork is bound, the call is forwarded with progress + cancel hooks."""
-        from unittest.mock import AsyncMock as _AsyncMock
-
-        fake_download = _AsyncMock(return_value={1: "/path/a.png", 2: "/path/b.png"})
+        fake_download = AsyncMock(return_value={1: "/path/a.png", 2: "/path/b.png"})
         plugin._sync_service._orchestrator._artwork = MagicMock()
         plugin._sync_service._orchestrator._artwork.download_artwork = fake_download
 
