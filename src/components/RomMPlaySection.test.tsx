@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, act } from "@testing-library/react";
-import { createElement, type ReactElement } from "react";
+import { createElement, type ComponentProps, type ReactElement } from "react";
 import { RomMPlaySection } from "./RomMPlaySection";
 import * as backend from "../api/backend";
 import { showContextMenu, showModal } from "@decky/ui";
@@ -30,6 +30,11 @@ import * as playSectionUtils from "../utils/playSection";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
 
+// Type-only import — vi.mock("./CustomPlayButton", ...) below replaces the
+// runtime impl, but pinning the captured-props shape to the real component
+// keeps assertions in sync as the child's prop interface evolves.
+import type { CustomPlayButton } from "./CustomPlayButton";
+
 // ----- Sibling hook mocks -----
 vi.mock("./VersionErrorCard", () => ({
   useVersionError: vi.fn(() => null),
@@ -39,11 +44,11 @@ vi.mock("./MigrationBlockedPage", () => ({
 }));
 
 // ----- CustomPlayButton — capture props per render -----
-interface CapturedPlayButton { appId: number }
+type CapturedPlayButton = ComponentProps<typeof CustomPlayButton>;
 const capturedPlayButton: CapturedPlayButton[] = [];
 vi.mock("./CustomPlayButton", () => ({
-  CustomPlayButton: (props: { appId: number }) => {
-    capturedPlayButton.push({ appId: props.appId });
+  CustomPlayButton: (props: CapturedPlayButton) => {
+    capturedPlayButton.push(props);
     return createElement("div", {
       "data-testid": "play-button",
       "data-appid": props.appId,
@@ -207,6 +212,7 @@ describe("RomMPlaySection", () => {
     testAppId++;
     installDomEventListenerSpy();
 
+    // resetAllMocks wipes module-mock impls — re-stub below.
     // Default sibling-hook stubs — no version error, no migration pending.
     vi.mocked(useVersionError).mockReturnValue(null);
     vi.mocked(useMigrationStatus).mockReturnValue({ pending: false });
@@ -371,7 +377,20 @@ describe("RomMPlaySection", () => {
         expect.any(Boolean),
         expect.any(Function),
       );
-      expect(playSectionUtils.extractBiosInfo).toHaveBeenCalled();
+      // Assert exact arg shape: (cached.bios_status, cached.bios_level, cached.bios_label).
+      // Catches arg-order regressions that a bare .toHaveBeenCalled() would miss.
+      expect(playSectionUtils.extractBiosInfo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          platform_slug: "snes",
+          active_core_label: "Snes9x",
+        }),
+        "ok",
+        "OK",
+      );
+      // resolveSaveSyncLabel is called with the cached save_sync_display.
+      expect(playSectionUtils.resolveSaveSyncLabel).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "synced", label: "label" }),
+      );
     });
 
     it("triggers applyArtwork (4 SGDB calls) on first visit when not already applied", async () => {
@@ -422,19 +441,46 @@ describe("RomMPlaySection", () => {
       );
     });
 
-    it("logs via debugLog when applyArtwork's auto-apply rejects (covers the .catch branch)", async () => {
+    it("logs 'Auto-artwork error' via debugLog when SteamClient.SetCustomArtworkForApp rejects on auto-apply", async () => {
+      // SGDB returns a real base64 so applyArtwork progresses past the
+      // per-call .catch swallowers into SetCustomArtworkForApp — which then
+      // rejects, surfacing the outer `.catch((e) => debugLog(...))` at the
+      // applyArtwork(...).then(...).catch(...) site in loadCached.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 50,
       });
-      vi.mocked(backend.getSgdbArtworkBase64).mockRejectedValue(new Error("net"));
+      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
+        base64: "AAAA",
+        no_api_key: false,
+      });
+      vi.stubGlobal("SteamClient", {
+        Apps: {
+          SetCustomArtworkForApp: vi.fn().mockRejectedValue(new Error("boom")),
+          OpenAppSettingsDialog: vi.fn(),
+        },
+      });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      // Each per-call .catch returns the safe object; applyArtwork resolves to 0.
-      // No debugLog from inside applyArtwork itself — but the loadCached catch
-      // wraps only the outer flow. This test asserts that the inner .catch
-      // executes without throwing.
-      expect(vi.mocked(backend.getSgdbArtworkBase64)).toHaveBeenCalledTimes(4);
+      await flushAsync();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+        expect.stringContaining("Auto-artwork error"),
+      );
+    });
+
+    it("logs 'Background metadata fetch error' via debugLog when background getRomMetadata rejects", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 99,
+        stale_fields: ["metadata"],
+      });
+      vi.mocked(backend.getRomMetadata).mockRejectedValue(new Error("net"));
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      await flushAsync();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+        expect.stringContaining("Background metadata fetch error"),
+      );
     });
   });
 
@@ -726,7 +772,7 @@ describe("RomMPlaySection", () => {
         found: true,
         rom_id: 55,
       });
-      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+      const fetchedSaveStatus = {
         rom_id: 55,
         files: [],
         playtime: {
@@ -737,7 +783,9 @@ describe("RomMPlaySection", () => {
         },
         device_id: "d",
         last_sync_check_at: null,
-      });
+        save_sync_display: { status: "synced" as const, label: "from-fetch", last_sync_check_at: null },
+      };
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(fetchedSaveStatus);
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
@@ -753,7 +801,12 @@ describe("RomMPlaySection", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledWith(55);
-      expect(vi.mocked(playSectionUtils.applySaveSyncDisplay)).toHaveBeenCalled();
+      // Assert exact arg shape: (saveStatus.save_sync_display, saveStatus).
+      // Bare .toHaveBeenCalled() would pass even with the wrong arguments.
+      expect(vi.mocked(playSectionUtils.applySaveSyncDisplay)).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "synced", label: "from-fetch" }),
+        fetchedSaveStatus,
+      );
     });
 
     it("save_sync_settings: enabled=true with no rom_id → skips getSaveStatus", async () => {
@@ -922,30 +975,39 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       vi.mocked(backend.getSaveStatus).mockClear();
+      vi.mocked(playSectionUtils.applySaveSyncDisplay).mockClear();
+      const inlineSaveStatus = {
+        rom_id: 33,
+        files: [],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+        save_sync_display: { status: "synced" as const, label: "inline-label", last_sync_check_at: null },
+      };
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
             detail: {
               type: "save_sync",
               rom_id: 33,
-              save_status: {
-                rom_id: 33,
-                files: [],
-                playtime: {
-                  total_seconds: 0,
-                  session_count: 0,
-                  last_session_start: null,
-                  last_session_duration_sec: null,
-                },
-                device_id: "d",
-                last_sync_check_at: null,
-              },
+              save_status: inlineSaveStatus,
             },
           }),
         );
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
+      // applySaveSyncDisplay receives the inline save_status — not a fetched one.
+      // Catches a wiring regression that would route through getSaveStatus instead.
+      expect(vi.mocked(playSectionUtils.applySaveSyncDisplay)).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "synced", label: "inline-label" }),
+        inlineSaveStatus,
+      );
     });
 
     it("unknown detail.type → no-op (no fetch, no throw)", async () => {
@@ -965,31 +1027,31 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(backend.getBiosStatus)).not.toHaveBeenCalled();
     });
 
-    it("malformed event (no detail) → caught + debugLog'd", async () => {
+    it("dispatch handler throw → onDataChanged outer try/catch fires debugLog", async () => {
+      // Drive the outer try/catch in onDataChanged by routing through the
+      // core_changed branch (no inline .catch on getBiosStatus) and making
+      // getBiosStatus reject. The throw escapes handleCoreChange, propagates
+      // to onDataChanged's catch, and surfaces via debugLog.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 33,
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      // Force the handler to throw by dispatching with a save_sync type but
-      // making getSaveStatus throw. The handler's outer try/catch should fire
-      // and call debugLog.
-      vi.mocked(backend.getSaveStatus).mockRejectedValue(new Error("handler-boom"));
+      vi.mocked(backend.getBiosStatus).mockRejectedValue(new Error("handler-boom"));
       vi.mocked(backend.debugLog).mockClear();
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
-            detail: { type: "save_sync", rom_id: 33 },
+            detail: { type: "core_changed", platform_slug: "snes" },
           }),
         );
         await Promise.resolve();
         await Promise.resolve();
       });
-      // The save-sync handler swallows the getSaveStatus throw via .catch (returns null);
-      // confirm it doesn't error out — no debugLog from onDataChanged outer catch.
-      // (Test asserts non-error path.)
-      expect(vi.mocked(playSectionUtils.applySaveSyncDisplay)).toHaveBeenCalled();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+        expect.stringContaining("onDataChanged error"),
+      );
     });
 
     it("save_sync rom_id absent and no romIdRef → early return", async () => {

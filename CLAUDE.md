@@ -212,6 +212,8 @@ The bus is reset between tests by `afterEach` in `test-setup.ts`. Use `deckyEven
 
 Prefer the harness over extracting listener bodies into `src/utils/*.ts` purely for testability. Helper extraction stays valid for genuinely-reusable logic.
 
+**Catch coverage assertions must be non-vacuous.** Tests that claim `.catch` coverage MUST assert the post-catch state — the fallback return value, the toast body, the `debugLog` message, the surfaced status string. Asserting only that the rejecting call was invoked is vacuous: it passes with or without the `.catch` because the rejection happens after the call returns. If you can't observe the catch's side effect, the catch either needs an observable effect or the test isn't earning its coverage.
+
 ## Security
 
 - NEVER read or use credentials from settings files (`~/homebrew/settings/`) without explicit user permission
