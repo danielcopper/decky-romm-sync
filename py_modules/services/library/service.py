@@ -335,9 +335,6 @@ class LibraryService:
     def cancel_sync(self):
         return self._orchestrator.cancel_sync()
 
-    def get_sync_progress(self):
-        return self._box.sync_progress
-
     def sync_heartbeat(self):
         return self._orchestrator.sync_heartbeat()
 

@@ -679,7 +679,6 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_available_cores",
     "get_platforms",
     "get_collections",
-    "get_sync_progress",
     "sync_heartbeat",
     "report_unit_results",
     "get_registry_platforms",
@@ -718,7 +717,6 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # Playtime queries.
     "record_session_start",
     "record_session_end",
-    "get_server_playtime",
     "get_all_playtime",
     # SteamGridDB / Steam shortcut artwork (Steam-side, not retrodeck).
     "get_sgdb_artwork_base64",

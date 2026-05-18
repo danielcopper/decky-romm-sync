@@ -112,17 +112,6 @@ class DownloadService:
         for rid in terminal_ids[:excess]:
             del self._download_queue[rid]
 
-    def clear_completed_downloads(self):
-        """Remove all completed/failed/cancelled items from the download queue."""
-        terminal_ids = [
-            rid
-            for rid, item in self._download_queue.items()
-            if item.get("status") in ("completed", "failed", "cancelled")
-        ]
-        for rid in terminal_ids:
-            del self._download_queue[rid]
-        return {"success": True, "removed": len(terminal_ids)}
-
     def _remove_tmp_files(self, paths: list[str]) -> int:
         """Remove each path in *paths*, logging a warning on per-file failure.
 

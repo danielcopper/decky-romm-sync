@@ -223,35 +223,6 @@ class PlaytimeService:
         except (ValueError, TypeError):
             return {"success": False, "message": "Failed to calculate session duration"}
 
-    async def get_server_playtime(self, rom_id: int) -> dict:
-        """Read playtime from RomM server notes for a ROM."""
-        rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
-
-        local_entry = self._save_sync_state.playtime.get(rom_id_str)
-        local_seconds = local_entry.total_seconds if local_entry else 0
-
-        server_seconds = 0
-        try:
-            note = await self._loop.run_in_executor(
-                None,
-                lambda: self._retry.with_retry(self._get_playtime_note, rom_id),
-            )
-            if note:
-                server_data = self._parse_playtime_note_content(note.get("content", ""))
-                if server_data:
-                    server_seconds = int(server_data.get("seconds", 0))
-        except Exception as e:
-            self._log_debug(f"Failed to read server playtime for rom {rom_id}: {e}")
-
-        return {
-            "rom_id": rom_id,
-            "local_seconds": local_seconds,
-            "server_seconds": server_seconds,
-            "total_seconds": max(local_seconds, server_seconds),
-            "session_count": local_entry.session_count if local_entry else 0,
-        }
-
     def get_all_playtime(self) -> dict:
         """Return all local playtime entries keyed by rom_id string."""
         return {"playtime": {rid: pe.to_dict() for rid, pe in self._save_sync_state.playtime.items()}}

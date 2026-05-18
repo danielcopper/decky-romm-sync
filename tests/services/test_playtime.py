@@ -200,36 +200,6 @@ class TestSyncPlaytime:
 
 class TestGetPlaytime:
     @pytest.mark.asyncio
-    async def test_get_server_playtime(self):
-        svc, fake, state, _ = make_service()
-        state.playtime["42"] = PlaytimeEntry(total_seconds=100, session_count=2)
-
-        fake.notes[42] = [
-            {
-                "id": 2000,
-                "rom_id": 42,
-                "title": "romm-sync:playtime",
-                "content": json.dumps({"seconds": 200}),
-                "is_public": False,
-            }
-        ]
-
-        result = await svc.get_server_playtime(42)
-        assert result["local_seconds"] == 100
-        assert result["server_seconds"] == 200
-        assert result["total_seconds"] == 200  # max(100, 200)
-
-    @pytest.mark.asyncio
-    async def test_get_server_playtime_no_note(self):
-        svc, _, state, _ = make_service()
-        state.playtime["42"] = PlaytimeEntry(total_seconds=50, session_count=1)
-
-        result = await svc.get_server_playtime(42)
-        assert result["local_seconds"] == 50
-        assert result["server_seconds"] == 0
-        assert result["total_seconds"] == 50
-
-    @pytest.mark.asyncio
     async def test_get_all_playtime(self):
         svc, _, state, _ = make_service()
         state.playtime["42"] = PlaytimeEntry(total_seconds=100)
@@ -281,17 +251,6 @@ class TestPlaytimeNotes:
 
 
 class TestEdgeCases:
-    @pytest.mark.asyncio
-    async def test_api_error_on_server_playtime(self):
-        svc, fake, state, _ = make_service()
-        state.playtime["42"] = PlaytimeEntry(total_seconds=100, session_count=1)
-        fake.fail_on_next(RommApiError("Server down"))
-
-        result = await svc.get_server_playtime(42)
-        # Should still return local data
-        assert result["local_seconds"] == 100
-        assert result["server_seconds"] == 0
-
     @pytest.mark.asyncio
     async def test_sync_playtime_error_logged_not_raised(self):
         svc, fake, state, _ = make_service()

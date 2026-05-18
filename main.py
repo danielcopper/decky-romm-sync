@@ -307,9 +307,6 @@ class Plugin:
     async def cancel_sync(self):
         return self._sync_service.cancel_sync()
 
-    async def get_sync_progress(self):
-        return self._sync_service.get_sync_progress()
-
     async def sync_heartbeat(self):
         return self._sync_service.sync_heartbeat()
 
@@ -370,10 +367,6 @@ class Plugin:
 
     async def get_download_queue(self):
         return self._download_service.get_download_queue()
-
-    @migration_blocked
-    async def clear_completed_downloads(self):
-        return self._download_service.clear_completed_downloads()
 
     async def get_installed_rom(self, rom_id):
         return self._download_service.get_installed_rom(rom_id)
@@ -467,9 +460,6 @@ class Plugin:
 
     async def record_session_start(self, rom_id):
         return self._playtime_service.record_session_start(rom_id)
-
-    async def get_server_playtime(self, rom_id):
-        return await self._playtime_service.get_server_playtime(rom_id)
 
     async def get_all_playtime(self):
         return self._playtime_service.get_all_playtime()

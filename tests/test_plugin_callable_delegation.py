@@ -311,13 +311,6 @@ class TestLibrarySyncCallableDelegation:
         assert result == {"started": True}
 
     @pytest.mark.asyncio
-    async def test_get_sync_progress_delegates(self, plugin):
-        plugin._sync_service.get_sync_progress.return_value = {"percent": 50}
-        result = await plugin.get_sync_progress()
-        plugin._sync_service.get_sync_progress.assert_called_once_with()
-        assert result == {"percent": 50}
-
-    @pytest.mark.asyncio
     async def test_sync_heartbeat_delegates(self, plugin):
         plugin._sync_service.sync_heartbeat.return_value = {"alive": True}
         result = await plugin.sync_heartbeat()
@@ -455,13 +448,6 @@ class TestDownloadCallableDelegation:
         result = await plugin.get_download_queue()
         plugin._download_service.get_download_queue.assert_called_once_with()
         assert result == []
-
-    @pytest.mark.asyncio
-    async def test_clear_completed_downloads_delegates(self, plugin):
-        plugin._download_service.clear_completed_downloads.return_value = {"cleared": 2}
-        result = await plugin.clear_completed_downloads()
-        plugin._download_service.clear_completed_downloads.assert_called_once_with()
-        assert result == {"cleared": 2}
 
     @pytest.mark.asyncio
     async def test_get_installed_rom_delegates(self, plugin):
@@ -656,18 +642,6 @@ class TestGameDetailCallableDelegation:
         result = await plugin.get_cached_game_detail("12345")
         plugin._game_detail_service.get_cached_game_detail.assert_called_once_with("12345")
         assert result == {"detail": "x"}
-
-
-# ── Playtime callables ─────────────────────────────────────────────────
-
-
-class TestPlaytimeCallableDelegation:
-    @pytest.mark.asyncio
-    async def test_get_server_playtime_delegates(self, plugin):
-        plugin._playtime_service.get_server_playtime = AsyncMock(return_value={"total": 60})
-        result = await plugin.get_server_playtime(42)
-        plugin._playtime_service.get_server_playtime.assert_awaited_once_with(42)
-        assert result == {"total": 60}
 
 
 # ── Error-propagation tests ────────────────────────────────────────────

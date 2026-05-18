@@ -2127,45 +2127,6 @@ class TestStartDownloadCreateTaskFailure:
         assert 42 not in plugin._download_service._download_in_progress
 
 
-class TestClearCompletedDownloads:
-    @pytest.mark.asyncio
-    async def test_removes_all_terminal_items(self, plugin):
-        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "completed"}
-        plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "failed"}
-        plugin._download_service._download_queue[3] = {"rom_id": 3, "status": "cancelled"}
-        result = await plugin.clear_completed_downloads()
-        assert result["success"] is True
-        assert result["removed"] == 3
-        assert len(plugin._download_service._download_queue) == 0
-
-    @pytest.mark.asyncio
-    async def test_keeps_active_downloads(self, plugin):
-        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "downloading"}
-        plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "completed"}
-        plugin._download_service._download_queue[3] = {"rom_id": 3, "status": "downloading"}
-        result = await plugin.clear_completed_downloads()
-        assert result["success"] is True
-        assert result["removed"] == 1
-        assert len(plugin._download_service._download_queue) == 2
-        assert 1 in plugin._download_service._download_queue
-        assert 3 in plugin._download_service._download_queue
-
-    @pytest.mark.asyncio
-    async def test_empty_queue(self, plugin):
-        result = await plugin.clear_completed_downloads()
-        assert result["success"] is True
-        assert result["removed"] == 0
-
-    @pytest.mark.asyncio
-    async def test_only_active_items(self, plugin):
-        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "downloading"}
-        plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "downloading"}
-        result = await plugin.clear_completed_downloads()
-        assert result["success"] is True
-        assert result["removed"] == 0
-        assert len(plugin._download_service._download_queue) == 2
-
-
 class TestShutdown:
     """Tests for DownloadService.shutdown — cancel active tasks + clear tracking."""
 

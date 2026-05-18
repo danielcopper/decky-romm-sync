@@ -438,7 +438,7 @@ class TestSyncCancelPreview:
 
 
 class TestSyncControl:
-    """Tests for start_sync, cancel_sync, get_sync_progress, sync_heartbeat — lines 143-163."""
+    """Tests for start_sync, cancel_sync, sync_heartbeat — lines 143-163."""
 
     def test_start_sync_when_idle(self, plugin):
         result = plugin._sync_service.start_sync()
@@ -474,11 +474,6 @@ class TestSyncControl:
         result = plugin._sync_service.cancel_sync()
         assert result["success"] is True
         assert "No sync" in result["message"]
-
-    def test_get_sync_progress(self, plugin):
-        result = plugin._sync_service.get_sync_progress()
-        assert "running" in result
-        assert "phase" in result
 
     def test_sync_heartbeat(self, plugin):
         old = plugin._sync_service._sync_last_heartbeat
