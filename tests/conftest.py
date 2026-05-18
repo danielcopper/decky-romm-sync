@@ -934,6 +934,19 @@ class FakeRetroDeckPaths:
         return self.home
 
 
+@pytest.fixture
+def fake_romm_api():
+    """Function-scoped ``FakeRommApi`` instance.
+
+    Returns a fresh fake per test so seeded state never leaks across
+    tests. Construct without args — tests seed ``platforms`` / ``roms``
+    / ``firmware_files`` / etc. directly on the returned instance.
+    """
+    from fakes.fake_romm_api import FakeRommApi
+
+    return FakeRommApi()
+
+
 @pytest.fixture(autouse=True)
 def _reset_decky_mock_paths():
     """Refresh per-test temp dirs on the mock decky module.
