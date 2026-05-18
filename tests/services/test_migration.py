@@ -1,7 +1,7 @@
 import asyncio
 import os
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
@@ -26,8 +26,24 @@ from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 
 
+class RecordingEmitter:
+    """Append-only emit recorder usable as an ``EventEmitter``.
+
+    Stores ``(event_name, args)`` tuples in ``calls`` so tests can assert
+    on the observable emit contract without resorting to ``MagicMock``.
+    The call signature mirrors the ``EventEmitter`` Protocol exactly so
+    basedpyright accepts the fake wherever ``EventEmitter`` is expected.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def __call__(self, event: str, /, *args: object) -> None:
+        self.calls.append((event, args))
+
+
 @pytest.fixture
-def plugin(tmp_path):
+def plugin(tmp_path, fake_romm_api):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
@@ -47,12 +63,12 @@ def plugin(tmp_path):
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
-    p._romm_api = MagicMock()
+    p._romm_api = fake_romm_api
     p._state_persister = FakeStatePersister()
     p._settings_persister = FakeSettingsPersister()
     p._firmware_service = FirmwareService(
         config=FirmwareServiceConfig(
-            romm_api=p._romm_api,
+            romm_api=fake_romm_api,
             state=p._state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
@@ -69,7 +85,7 @@ def plugin(tmp_path):
 
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
-            romm_api=p._romm_api,
+            romm_api=fake_romm_api,
             steam_config=steam_config,
             state=p._state,
             settings=p.settings,
@@ -87,6 +103,15 @@ def plugin(tmp_path):
         ),
     )
 
+    def _no_active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+        return (None, None)
+
+    def _no_core_name(core_so: str) -> str | None:
+        return None
+
+    def _default_save_sorting() -> tuple[bool, bool]:
+        return (True, False)
+
     p._migration_service = MigrationService(
         config=MigrationServiceConfig(
             migration_files=MigrationFileAdapter(),
@@ -94,12 +119,12 @@ def plugin(tmp_path):
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             state_persister=p._state_persister,
-            emit=decky.emit,
+            emit=RecordingEmitter(),
             get_bios_files_index=lambda: p._firmware_service.bios_files_index,
             retrodeck_paths=FakeRetroDeckPaths(),
-            get_retroarch_save_sorting=MagicMock(return_value=(True, False)),
-            get_active_core=MagicMock(return_value=(None, None)),
-            get_core_name=MagicMock(return_value=None),
+            get_retroarch_save_sorting=_default_save_sorting,
+            get_active_core=_no_active_core,
+            get_core_name=_no_core_name,
         ),
     )
     return p
@@ -113,18 +138,36 @@ async def _set_event_loop(plugin):
     plugin._migration_service._loop = loop
 
 
+class _RecordingLoop:
+    """Drop-in loop substitute that captures and immediately closes scheduled coroutines.
+
+    Mirrors what the original tests built ad-hoc with ``MagicMock`` for
+    ``loop.create_task``: schedule receives the coroutine and stores it
+    (closing it so no pending-task warning fires), and the count is
+    inspectable via ``len(tasks)``. Use this when a test wants to assert
+    *whether* a coroutine was scheduled without actually pumping the
+    event loop.
+    """
+
+    def __init__(self) -> None:
+        self.tasks: list[object] = []
+
+    def create_task(self, coro):
+        coro.close()
+        self.tasks.append(coro)
+        return None
+
+
 class TestPathChangeDetection:
     def test_first_run_stores_path(self, plugin, tmp_path):
         """First run (empty stored path) stores current path, no event."""
-        from unittest.mock import MagicMock
-
         import decky
 
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
 
-        mock_loop = MagicMock()
-        plugin._migration_service._loop = mock_loop
+        loop = _RecordingLoop()
+        plugin._migration_service._loop = loop
 
         fake_home = str(tmp_path / "retrodeck")
         os.makedirs(fake_home, exist_ok=True)
@@ -134,12 +177,11 @@ class TestPathChangeDetection:
 
         assert plugin._state["retrodeck_home_path"] == fake_home
         # No event emitted on first run
-        mock_loop.create_task.assert_not_called()
+        assert loop.tasks == []
+        assert plugin._migration_service._emit.calls == []
 
     def test_no_change_no_notification(self, plugin, tmp_path):
         """Same path as stored — no event, no state change."""
-        from unittest.mock import MagicMock
-
         import decky
 
         decky.DECKY_USER_HOME = str(tmp_path)
@@ -148,18 +190,17 @@ class TestPathChangeDetection:
         fake_home = str(tmp_path / "retrodeck")
         os.makedirs(fake_home, exist_ok=True)
         plugin._state["retrodeck_home_path"] = fake_home
-        mock_loop = MagicMock()
-        plugin._migration_service._loop = mock_loop
+        loop = _RecordingLoop()
+        plugin._migration_service._loop = loop
 
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=fake_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
-        mock_loop.create_task.assert_not_called()
+        assert loop.tasks == []
+        assert plugin._migration_service._emit.calls == []
 
     def test_path_change_emits_event(self, plugin, tmp_path):
         """Path changed — stores both old and new, emits event."""
-        from unittest.mock import MagicMock
-
         import decky
 
         decky.DECKY_USER_HOME = str(tmp_path)
@@ -170,39 +211,30 @@ class TestPathChangeDetection:
         os.makedirs(new_home, exist_ok=True)
 
         plugin._state["retrodeck_home_path"] = old_home
-        mock_loop = MagicMock()
-        _create_task_calls = []
-
-        def _close_coro_task(coro):
-            coro.close()
-            _create_task_calls.append(coro)
-            return MagicMock()
-
-        mock_loop.create_task = _close_coro_task
-        plugin._migration_service._loop = mock_loop
+        loop = _RecordingLoop()
+        plugin._migration_service._loop = loop
 
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=new_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
         assert plugin._state["retrodeck_home_path"] == new_home
         assert plugin._state["retrodeck_home_path_previous"] == old_home
-        assert len(_create_task_calls) == 1
+        assert len(loop.tasks) == 1
 
     def test_empty_current_home_no_action(self, plugin, tmp_path):
         """If ``retrodeck_paths`` returns empty string, do nothing."""
-        from unittest.mock import MagicMock
-
         import decky
 
         decky.DECKY_USER_HOME = str(tmp_path)
 
-        mock_loop = MagicMock()
-        plugin._migration_service._loop = mock_loop
+        loop = _RecordingLoop()
+        plugin._migration_service._loop = loop
 
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home="")
         plugin._migration_service.detect_retrodeck_path_change()
 
-        mock_loop.create_task.assert_not_called()
+        assert loop.tasks == []
+        assert plugin._migration_service._emit.calls == []
         assert plugin._state["retrodeck_home_path"] == ""
 
     def test_detect_path_change_auto_clears_when_reverted_to_previous(self, plugin, tmp_path):
@@ -219,8 +251,8 @@ class TestPathChangeDetection:
         plugin._state["retrodeck_home_path"] = new_home
         plugin._state["retrodeck_home_path_previous"] = old_home
 
-        mock_loop = MagicMock()
-        plugin._migration_service._loop = mock_loop
+        loop = _RecordingLoop()
+        plugin._migration_service._loop = loop
 
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=old_home)
         plugin._migration_service.detect_retrodeck_path_change()
@@ -228,7 +260,7 @@ class TestPathChangeDetection:
         assert plugin._state["retrodeck_home_path"] == old_home
         assert "retrodeck_home_path_previous" not in plugin._state
 
-    def test_detect_path_change_auto_clear_emits_cleared_event(self, plugin, tmp_path):
+    async def test_detect_path_change_auto_clear_emits_cleared_event(self, plugin, tmp_path):
         """Auto-clear MUST emit retrodeck_path_changed with cleared=True so the
         frontend listener can dismiss any pending migration UI."""
         import decky
@@ -243,37 +275,19 @@ class TestPathChangeDetection:
         plugin._state["retrodeck_home_path"] = new_home
         plugin._state["retrodeck_home_path_previous"] = old_home
 
-        mock_loop = MagicMock()
-        emitted: list = []
-
-        def _capture_task(coro):
-            # Drive the coroutine to capture what was emitted, then close it.
-            try:
-                coro.send(None)
-            except StopIteration as e:
-                emitted.append(("returned", e.value))
-            except BaseException as e:
-                emitted.append(("raised", e))
-            coro.close()
-            return MagicMock()
-
-        mock_loop.create_task = _capture_task
-        plugin._migration_service._loop = mock_loop
-
-        # Replace _emit with a sync recorder so the coroutine resolves cleanly.
-        emit_calls: list = []
-
-        async def fake_emit(event, payload):
-            emit_calls.append((event, payload))
-
-        plugin._migration_service._emit = fake_emit  # type: ignore[method-assign]
-
         plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=old_home)
         plugin._migration_service.detect_retrodeck_path_change()
 
+        # ``create_task`` schedules the emit coroutine on the running loop —
+        # yield once so the scheduled coroutine runs and the emitter records.
+        await asyncio.sleep(0)
+
+        emit_calls = plugin._migration_service._emit.calls
         assert len(emit_calls) == 1
-        event, payload = emit_calls[0]
+        event, args = emit_calls[0]
         assert event == "retrodeck_path_changed"
+        payload = args[0]
+        assert isinstance(payload, dict)
         assert payload["cleared"] is True
         assert payload["old_path"] == old_home
         assert payload["new_path"] == old_home
@@ -822,11 +836,12 @@ class TestDetectSaveSortChangeThreadSafety:
         # Initial state: a populated OLD layout. Detect should observe a
         # change and emit ``save_sort_changed``.
         plugin._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
-        plugin._migration_service._get_retroarch_save_sorting = MagicMock(return_value=(True, True))
+        plugin._migration_service._get_retroarch_save_sorting = lambda: (True, True)
 
-        # Capture emit calls. Use an asyncio.Queue so the test can await
-        # the emission from the loop thread regardless of which thread
-        # scheduled it.
+        # Use an ``asyncio.Queue``-backed emitter so the test can await the
+        # emission from the loop thread regardless of which thread scheduled
+        # it. We swap in a queue-aware ``EventEmitter`` rather than reading
+        # the recorder fixture because we need an awaitable barrier.
         emit_queue: asyncio.Queue = asyncio.Queue()
 
         async def fake_emit(event_name: str, payload: dict) -> None:
@@ -866,20 +881,22 @@ class TestMigrationFailureInjection:
     """
 
     def _make_service(self, fake_files, **overrides):
-        defaults = {
+        import decky
+
+        defaults: dict = {
             "state": {
                 "installed_roms": {},
                 "downloaded_bios": {},
             },
             "loop": asyncio.get_event_loop(),
-            "logger": MagicMock(),
+            "logger": decky.logger,
             "state_persister": FakeStatePersister(),
-            "emit": MagicMock(),
+            "emit": RecordingEmitter(),
             "get_bios_files_index": lambda: {},
             "retrodeck_paths": FakeRetroDeckPaths(),
-            "get_retroarch_save_sorting": MagicMock(return_value=(False, False)),
-            "get_active_core": MagicMock(return_value=(None, None)),
-            "get_core_name": MagicMock(return_value=None),
+            "get_retroarch_save_sorting": lambda: (False, False),
+            "get_active_core": lambda system, rom_filename: (None, None),
+            "get_core_name": lambda core_so: None,
         }
         defaults.update(overrides)
         return MigrationService(
@@ -936,11 +953,12 @@ class TestMigrationFailureInjection:
 
         counts: dict[str, int] = {}
         errors: list = []
+        state_updates: list[str] = []
         service._resolve_save_sort_conflict(
             label="gba/game.srm",
             old_path=old_path,
             new_path=new_path,
-            state_updater=MagicMock(),
+            state_updater=lambda: state_updates.append("called"),
             counts=counts,
             count_key="save",
             errors=errors,
@@ -949,6 +967,8 @@ class TestMigrationFailureInjection:
         assert len(errors) == 1
         assert "gba/game.srm" in errors[0]
         assert counts.get("save", 0) == 0
+        # Failure path must not invoke the state updater.
+        assert state_updates == []
 
     def test_remove_failure_records_save_sort_orphan_cleanup_error(self):
         """``OSError`` from ``remove`` during save-sort newest-wins cleanup is captured."""
@@ -966,11 +986,12 @@ class TestMigrationFailureInjection:
 
         counts: dict[str, int] = {}
         errors: list = []
+        state_updates: list[str] = []
         service._resolve_save_sort_conflict(
             label="gba/game.srm",
             old_path=old_path,
             new_path=new_path,
-            state_updater=MagicMock(),
+            state_updater=lambda: state_updates.append("called"),
             counts=counts,
             count_key="save",
             errors=errors,
@@ -979,15 +1000,23 @@ class TestMigrationFailureInjection:
         assert len(errors) == 1
         assert "gba/game.srm" in errors[0]
         assert counts.get("save", 0) == 0
+        # Failure path must not invoke the state updater.
+        assert state_updates == []
 
 
 class TestRefreshState:
-    """Tests for ``MigrationService.refresh_state``."""
+    """Tests for ``MigrationService.refresh_state``.
+
+    These tests exercise the orchestration contract: ``refresh_state``
+    drives ``detect_retrodeck_path_change`` then ``detect_save_sort_change``
+    then composes their status outputs. The detect/status methods are
+    patched directly because the test is about *how* refresh_state wires
+    them together, not what they observe — this is the small carve-out
+    called out in the issue scope.
+    """
 
     @pytest.mark.asyncio
     async def test_calls_both_detect_methods_and_returns_combined_status(self, plugin):
-        from unittest.mock import AsyncMock
-
         mig = plugin._migration_service
         mig.detect_retrodeck_path_change = MagicMock()
         mig.detect_save_sort_change = MagicMock()
@@ -1005,8 +1034,6 @@ class TestRefreshState:
 
     @pytest.mark.asyncio
     async def test_detect_order_preserved(self, plugin):
-        from unittest.mock import AsyncMock
-
         mig = plugin._migration_service
         manager = MagicMock()
         mig.detect_retrodeck_path_change = manager.detect_retrodeck_path_change
@@ -1021,8 +1048,6 @@ class TestRefreshState:
 
     @pytest.mark.asyncio
     async def test_short_circuits_when_first_detect_raises(self, plugin):
-        from unittest.mock import AsyncMock
-
         mig = plugin._migration_service
         mig.detect_retrodeck_path_change = MagicMock(side_effect=RuntimeError("boom"))
         mig.detect_save_sort_change = MagicMock()
