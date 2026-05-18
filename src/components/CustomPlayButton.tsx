@@ -268,23 +268,32 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // Save-slot tracking gate. Delegates branch handling to applyLaunchGateSetupOutcome
   // so the per-outcome side effects (toast + saves-tab switch vs auto-confirm) stay
   // testable without rendering this component.
+  //
+  // The try only guards the network call (getSaveSetupInfo). Post-result branching
+  // (resolveSaveSetupOutcome + applyLaunchGateSetupOutcome) sits OUTSIDE the try so
+  // that an exception in a side-effect callback (toast / dispatchEvent / confirm)
+  // cannot silently flip "abort" → "proceed" — the abort-propagation bug pattern
+  // #619 was opened to prevent.
   const ensureTrackingConfigured = async (rid: number): Promise<"proceed" | "abort"> => {
     const trackingResult = await isSaveTrackingConfigured(rid).catch(() => ({ configured: true }));
     if (trackingResult.configured) return "proceed";
+
+    let setupInfo;
     try {
-      const setupInfo = await getSaveSetupInfo(rid);
-      const outcome = resolveSaveSetupOutcome(setupInfo);
-      return applyLaunchGateSetupOutcome(outcome, {
-        rid,
-        confirmSlotChoice,
-        toast: (body) => toaster.toast({ title: "RomM Save Sync", body }),
-        dispatchSavesTab: () =>
-          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } })),
-      });
+      setupInfo = await getSaveSetupInfo(rid);
     } catch {
-      // If check fails, proceed with launch anyway
+      // Network/backend failure — defer to launch rather than blocking the user.
       return "proceed";
     }
+
+    const outcome = resolveSaveSetupOutcome(setupInfo);
+    return applyLaunchGateSetupOutcome(outcome, {
+      rid,
+      confirmSlotChoice,
+      toast: (body) => toaster.toast({ title: "RomM Save Sync", body }),
+      dispatchSavesTab: () =>
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } })),
+    });
   };
 
   // Detects emulator core change since last launch; if changed, surfaces the

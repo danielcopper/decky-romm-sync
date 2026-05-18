@@ -109,6 +109,35 @@ describe("applyLaunchGateSetupOutcome", () => {
     expect(deps.dispatchSavesTab).toHaveBeenCalledOnce();
     expect(deps.confirmSlotChoice).not.toHaveBeenCalled();
   });
+
+  it("propagates a toast-callback exception on server_unreachable instead of swallowing it", async () => {
+    // Regression guard for #619: if the launch-gate caller wraps this helper in
+    // a try/catch that returns "proceed" on any error, swallowing the toast
+    // exception would silently flip an abort decision into a launch. Surfacing
+    // the throw forces the caller to keep its try shape narrow (network call
+    // only) — see CustomPlayButton.ensureTrackingConfigured.
+    const deps = makeLaunchGateDeps({
+      toast: vi.fn().mockImplementation(() => {
+        throw new Error("toast boom");
+      }),
+    });
+    await expect(
+      applyLaunchGateSetupOutcome({ kind: "server_unreachable" }, deps),
+    ).rejects.toThrow("toast boom");
+  });
+
+  it("propagates a dispatchSavesTab exception on needs_user_choice instead of swallowing it", async () => {
+    // Same guarantee on the user-choice branch — a broken event dispatch must
+    // surface, not silently become a launch.
+    const deps = makeLaunchGateDeps({
+      dispatchSavesTab: vi.fn().mockImplementation(() => {
+        throw new Error("dispatch boom");
+      }),
+    });
+    await expect(
+      applyLaunchGateSetupOutcome({ kind: "needs_user_choice" }, deps),
+    ).rejects.toThrow("dispatch boom");
+  });
 });
 
 function makeWizardDeps(overrides: Partial<WizardSetupDeps> = {}): WizardSetupDeps {
