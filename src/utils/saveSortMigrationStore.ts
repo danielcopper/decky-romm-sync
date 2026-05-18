@@ -11,7 +11,7 @@
  *   - MainPage.tsx, SettingsPage.tsx, RomMGameInfoPanel.tsx
  */
 
-import type { SaveSortMigrationStatus } from "../api/backend";
+import type { SaveSortMigrationStatus } from "../types";
 
 let _status: SaveSortMigrationStatus = { pending: false };
 let _listeners: Array<() => void> = [];

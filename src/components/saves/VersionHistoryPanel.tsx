@@ -8,7 +8,7 @@ import { useState, createElement, FC } from "react";
 import { DialogButton } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { debugLog, savesListFileVersions, savesRollbackToVersion } from "../../api/backend";
-import type { SaveVersionEntry, RollbackStatus, ListFileVersionsResult } from "../../api/backend";
+import type { SaveVersionEntry, RollbackStatus, ListFileVersionsResult } from "../../types";
 import { showSyncConflictModal } from "../SyncConflictModal";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
 import { formatBytes, formatTimestamp } from "../../utils/formatters";

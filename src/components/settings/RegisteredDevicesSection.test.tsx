@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render } from "@testing-library/react";
 import { createElement } from "react";
 import { RegisteredDevicesSection } from "./RegisteredDevicesSection";
-import type { RegisteredDevice } from "../../api/backend";
+import type { RegisteredDevice } from "../../types";
 
 // Local re-mock: Field renders both label+description so we can assert the
 // pipe-separated parts string. PanelSection/PanelSectionRow are pass-through.

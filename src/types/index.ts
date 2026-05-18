@@ -12,3 +12,5 @@ export * from "./downloads";
 export * from "./firmware";
 export * from "./saves";
 export * from "./achievements";
+export * from "./migration";
+export * from "./devices";

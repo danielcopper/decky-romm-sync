@@ -9,8 +9,7 @@ import {
   slotDeleteFailureToast,
   statusLabel,
 } from "./helpers";
-import type { DeviceSyncInfo, SaveStatus, SyncConflict } from "../../types";
-import type { SlotDeleteInfo } from "../../api/backend";
+import type { DeviceSyncInfo, SaveStatus, SyncConflict, SlotDeleteInfo } from "../../types";
 
 describe("displaySlot", () => {
   it("returns '(no slot)' for null", () => {

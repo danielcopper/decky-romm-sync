@@ -11,7 +11,7 @@
  *   - MainPage.tsx and ConnectionSettings.tsx
  */
 
-import type { MigrationStatus } from "../api/backend";
+import type { MigrationStatus } from "../types";
 
 let _migration: MigrationStatus = { pending: false };
 let _listeners: Array<() => void> = [];

@@ -10,6 +10,7 @@ import { render, fireEvent, act } from "@testing-library/react";
 import { createElement, type ComponentProps, type ReactElement } from "react";
 import { SettingsPage } from "./SettingsPage";
 import * as backend from "../api/backend";
+import type { SaveSortMigrationStatus, RegisteredDevice } from "../types";
 import { showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import {
@@ -122,10 +123,10 @@ vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 // Mock the saveSortMigrationStore — own listener list + state so tests can
 // drive the subscribe/unsubscribe + state-change flow deterministically.
 const saveSortListeners: Array<() => void> = [];
-let currentSortState: backend.SaveSortMigrationStatus = { pending: false };
+let currentSortState: SaveSortMigrationStatus = { pending: false };
 vi.mock("../utils/saveSortMigrationStore", () => ({
   getSaveSortMigrationState: vi.fn(() => currentSortState),
-  setSaveSortMigrationStatus: vi.fn((s: backend.SaveSortMigrationStatus) => {
+  setSaveSortMigrationStatus: vi.fn((s: SaveSortMigrationStatus) => {
     currentSortState = s;
     saveSortListeners.forEach((fn) => fn());
   }),
@@ -361,7 +362,7 @@ describe("SettingsPage", () => {
 
   describe("initial mount — getSaveSortMigrationStatus", () => {
     it("forwards a pending status into the store and into local state", async () => {
-      const pending: backend.SaveSortMigrationStatus = {
+      const pending: SaveSortMigrationStatus = {
         pending: true,
         old_settings: { sort_by_content: true, sort_by_core: false },
         new_settings: { sort_by_content: false, sort_by_core: false },
@@ -399,7 +400,7 @@ describe("SettingsPage", () => {
         ...defaultSaveSyncSettings(),
         save_sync_enabled: true,
       });
-      const devices: backend.RegisteredDevice[] = [{
+      const devices: RegisteredDevice[] = [{
         id: "x", name: "X", platform: null, client: null, client_version: null,
         last_seen: null, created_at: "", is_current_device: false,
       }];

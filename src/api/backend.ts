@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse, LaunchVerdict } from "../types";
+import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse, LaunchVerdict, SlotDeleteInfo, DeleteSlotResult, MigrationStatus, MigrationResult, SaveSortMigrationStatus, RollbackStatus, ListFileVersionsResult, ListDevicesResponse } from "../types";
 
 export interface BackendResult {
   success: boolean;
@@ -113,31 +113,6 @@ export const saveShortcutIcon = callable<[number, string], { success: boolean }>
 // Save sync callables
 export const ensureDeviceRegistered = callable<[], { success: boolean; device_id: string; device_name: string }>("ensure_device_registered");
 
-export interface RegisteredDevice {
-  id: string;
-  name: string | null;
-  platform: string | null;
-  client: string | null;
-  client_version: string | null;
-  last_seen: string | null;
-  created_at: string;
-  is_current_device: boolean;
-  user_id?: number;
-  ip_address?: string | null;
-  mac_address?: string | null;
-  hostname?: string | null;
-  sync_mode?: string | null;
-  sync_enabled?: boolean;
-  updated_at?: string | null;
-}
-
-export interface ListDevicesResponse {
-  success: boolean;
-  devices: RegisteredDevice[];
-  disabled?: boolean;
-  error?: string;
-}
-
 export const listDevices = callable<[], ListDevicesResponse>("list_devices");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
 export const preLaunchSync = callable<[number], { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[] }>("pre_launch_sync");
@@ -154,29 +129,6 @@ export const getSaveSlots = callable<[number], { success: boolean; slots: SaveSl
 export const getSlotSaves = callable<[number, string], SlotSavesResponse>("get_slot_saves");
 export const switchSlot = callable<[number, string], SwitchSlotResponse>("switch_slot");
 
-export interface SlotDeleteInfo {
-  success: boolean;
-  slot?: string;
-  source?: "server" | "local";
-  server_save_count?: number;
-  server_save_ids?: number[];
-  local_file_count?: number;
-  local_filenames?: string[];
-  is_active?: boolean;
-  // Coarse failure category for routing (e.g. "server_unreachable",
-  // "not_found", "not_installed", "disabled", "active_slot").
-  reason?: string;
-  message?: string;
-}
-
-export interface DeleteSlotResult {
-  success: boolean;
-  deleted_server_saves?: number;
-  cleaned_files?: number;
-  reason?: string;
-  message?: string;
-}
-
 export const getSlotDeleteInfo = callable<[number, string], SlotDeleteInfo>("get_slot_delete_info");
 export const deleteSlot = callable<[number, string], DeleteSlotResult>("delete_slot");
 
@@ -189,47 +141,9 @@ export const checkCoreChange = callable<[number], { changed: boolean; old_core?:
 export const getAllPlaytime = callable<[], { playtime: Record<string, { total_seconds: number; session_count: number }> }>("get_all_playtime");
 
 // RetroDECK path migration
-export interface MigrationStatus {
-  pending: boolean;
-  old_path?: string;
-  new_path?: string;
-  roms_count?: number;
-  bios_count?: number;
-  saves_count?: number;
-}
-
-interface ConflictDetail {
-  filename: string;
-  old_path: string;
-  old_size: number;
-  old_mtime: string;
-  new_path: string;
-  new_size: number;
-  new_mtime: string;
-}
-
-export interface MigrationResult {
-  success: boolean;
-  message: string;
-  needs_confirmation?: boolean;
-  conflict_count?: number;
-  conflicts?: string[] | ConflictDetail[];
-  roms_moved?: number;
-  bios_moved?: number;
-  saves_moved?: number;
-  errors?: string[];
-}
-
 export const getMigrationStatus = callable<[], MigrationStatus>("get_migration_status");
 export const migrateRetroDeckFiles = callable<[string | null], MigrationResult>("migrate_retrodeck_files");
 export const dismissRetrodeckMigration = callable<[], { success: boolean }>("dismiss_retrodeck_migration");
-
-export interface SaveSortMigrationStatus {
-  pending: boolean;
-  old_settings?: { sort_by_content: boolean; sort_by_core: boolean };
-  new_settings?: { sort_by_content: boolean; sort_by_core: boolean };
-  saves_count?: number;
-}
 
 export const getSaveSortMigrationStatus = callable<[], SaveSortMigrationStatus>("get_save_sort_migration_status");
 export const migrateSaveSortFiles = callable<[string | null], MigrationResult>("migrate_save_sort_files");
@@ -272,30 +186,6 @@ export const deletePlatformSaves = callable<[string], { success: boolean; delete
 export const deletePlatformBios = callable<[string], { success: boolean; deleted_count: number; message: string }>("delete_platform_bios");
 
 // Save version history callables
-export interface SaveVersionEntry {
-  id: number;
-  file_name: string;
-  emulator: string | null;
-  updated_at: string;
-  file_size_bytes: number | null;
-  device_syncs: Array<{ device_id: string; device_name: string; is_current: boolean; last_synced_at: string | null }>;
-  uploaded_by_us?: boolean | null;
-}
-
-export type RollbackStatus =
-  | { status: "ok" }
-  | { status: "rom_not_installed" }
-  | { status: "version_deleted" }
-  | { status: "unsupported" }
-  | { status: "server_unreachable"; message: string }
-  | { status: "conflict_blocked"; conflicts: SyncConflict[] }
-  | { status: "preflight_failed"; errors: string[] }
-  | { status: "put_failed"; message: string };
-
-export type ListFileVersionsResult =
-  | { status: "ok"; versions: SaveVersionEntry[] }
-  | { status: "server_unreachable"; message: string };
-
 export const savesListFileVersions = callable<[number, string, string], ListFileVersionsResult>("saves_list_file_versions");
 export const savesRollbackToVersion = callable<[number, string, number], RollbackStatus>("saves_rollback_to_version");
 

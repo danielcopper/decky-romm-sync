@@ -27,7 +27,7 @@ import {
   dismissSaveSortMigration,
   logError,
 } from "../api/backend";
-import type { SaveSortMigrationStatus, RegisteredDevice } from "../api/backend";
+import type { SaveSortMigrationStatus, RegisteredDevice } from "../types";
 import { getSaveSortMigrationState, setSaveSortMigrationStatus as setStoreSaveSortStatus, clearSaveSortMigration, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
 import { scrollToTop } from "../utils/scrollHelpers";
 import type { SaveSyncSettings as SaveSyncSettingsType, RetroArchInputCheck } from "../types";

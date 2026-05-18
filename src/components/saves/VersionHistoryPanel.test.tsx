@@ -5,7 +5,7 @@ import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import * as backend from "../../api/backend";
 import { toaster } from "@decky/api";
 import { showSyncConflictModal } from "../SyncConflictModal";
-import type { SaveVersionEntry, RollbackStatus } from "../../api/backend";
+import type { SaveVersionEntry, RollbackStatus } from "../../types";
 
 // Override the global DialogButton stub so it forwards `disabled` and we can
 // assert it. The global stub only wires onClick.

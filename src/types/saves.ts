@@ -146,3 +146,50 @@ export interface SaveSetupInfo {
   // call sites that route on the boolean rather than the enum.
   server_query_failed?: boolean;
 }
+
+export interface SlotDeleteInfo {
+  success: boolean;
+  slot?: string;
+  source?: "server" | "local";
+  server_save_count?: number;
+  server_save_ids?: number[];
+  local_file_count?: number;
+  local_filenames?: string[];
+  is_active?: boolean;
+  // Coarse failure category for routing (e.g. "server_unreachable",
+  // "not_found", "not_installed", "disabled", "active_slot").
+  reason?: string;
+  message?: string;
+}
+
+export interface DeleteSlotResult {
+  success: boolean;
+  deleted_server_saves?: number;
+  cleaned_files?: number;
+  reason?: string;
+  message?: string;
+}
+
+export interface SaveVersionEntry {
+  id: number;
+  file_name: string;
+  emulator: string | null;
+  updated_at: string;
+  file_size_bytes: number | null;
+  device_syncs: Array<{ device_id: string; device_name: string; is_current: boolean; last_synced_at: string | null }>;
+  uploaded_by_us?: boolean | null;
+}
+
+export type RollbackStatus =
+  | { status: "ok" }
+  | { status: "rom_not_installed" }
+  | { status: "version_deleted" }
+  | { status: "unsupported" }
+  | { status: "server_unreachable"; message: string }
+  | { status: "conflict_blocked"; conflicts: SyncConflict[] }
+  | { status: "preflight_failed"; errors: string[] }
+  | { status: "put_failed"; message: string };
+
+export type ListFileVersionsResult =
+  | { status: "ok"; versions: SaveVersionEntry[] }
+  | { status: "server_unreachable"; message: string };

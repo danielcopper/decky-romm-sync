@@ -12,7 +12,7 @@ import {
   migrateRetroDeckFiles,
   dismissRetrodeckMigration,
 } from "../api/backend";
-import type { MigrationStatus } from "../api/backend";
+import type { MigrationStatus } from "../types";
 import {
   getMigrationState,
   onMigrationChange,

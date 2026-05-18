@@ -37,7 +37,7 @@ import { setVersionError } from "../utils/connectionState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
-import type { MigrationStatus } from "../api/backend";
+import type { MigrationStatus } from "../types";
 
 type Page = "settings" | "library" | "data" | "downloads";
 

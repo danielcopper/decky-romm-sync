@@ -7,7 +7,7 @@
 
 import { FC } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, Field } from "@decky/ui";
-import type { SaveSortMigrationStatus } from "../../api/backend";
+import type { SaveSortMigrationStatus } from "../../types";
 import { sortLabel } from "./helpers";
 
 interface SaveSortMigrationSectionProps {

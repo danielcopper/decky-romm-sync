@@ -6,7 +6,7 @@
 
 import { FC } from "react";
 import { PanelSection, PanelSectionRow, Field } from "@decky/ui";
-import type { RegisteredDevice } from "../../api/backend";
+import type { RegisteredDevice } from "../../types";
 import { formatRelativeTime } from "./helpers";
 
 interface RegisteredDevicesSectionProps {

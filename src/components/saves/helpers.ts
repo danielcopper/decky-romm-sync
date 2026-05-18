@@ -4,8 +4,7 @@
  * belongs here; rendering helpers live alongside their components.
  */
 
-import type { DeviceSyncInfo, SaveStatus, SyncConflict } from "../../types";
-import type { SlotDeleteInfo } from "../../api/backend";
+import type { DeviceSyncInfo, SaveStatus, SyncConflict, SlotDeleteInfo } from "../../types";
 
 export const MUTED_COLOR = "#8f98a0";
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { createElement } from "react";
 import { SaveSortMigrationSection } from "./SaveSortMigrationSection";
-import type { SaveSortMigrationStatus } from "../../api/backend";
+import type { SaveSortMigrationStatus } from "../../types";
 
 // Local re-mock: ButtonItem must forward `disabled` so we can assert the
 // disabled state while migrating.

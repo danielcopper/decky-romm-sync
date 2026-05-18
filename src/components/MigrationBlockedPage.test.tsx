@@ -19,7 +19,7 @@ import {
   getMigrationState,
 } from "../utils/migrationStore";
 import * as migrationStore from "../utils/migrationStore";
-import type { MigrationStatus, MigrationResult } from "../api/backend";
+import type { MigrationStatus, MigrationResult } from "../types";
 // Type-only — vi.mock("./MigrationConflictModal") below replaces the runtime
 // impl; the captured-props type stays pinned to the real component.
 import type { MigrationConflictModal } from "./MigrationConflictModal";

@@ -23,7 +23,7 @@ import {
   domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
 import { useVersionError } from "./VersionErrorCard";
-import type { MigrationStatus, SaveSortMigrationStatus } from "../api/backend";
+import type { MigrationStatus, SaveSortMigrationStatus } from "../types";
 
 // Type-only imports — vi.mock(...) below replaces the runtime impl, but
 // pinning captured-props shapes to the real component keeps assertions in
