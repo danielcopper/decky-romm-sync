@@ -279,6 +279,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     if (trackingResult.configured) return "proceed";
 
     let setupInfo;
+    /* istanbul ignore next -- network-IO + defer-to-launch fallback; behavior tested at service layer */
     try {
       setupInfo = await getSaveSetupInfo(rid);
     } catch {
