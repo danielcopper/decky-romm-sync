@@ -732,8 +732,16 @@ describe("RomMGameInfoPanel", () => {
     });
 
     it("save_sync_settings enabled=true with getSaveStatus rejection → falls back to null updatedStatus (non-vacuous .catch)", async () => {
-      await mountWithRomId(55);
+      // Configure save tracking so SavesTab (not SlotSetupWizard) renders
+      // after we switch tabs — gives us a captured-props observable on the
+      // resulting saveStatus state.
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+        configured: true,
+        active_slot: "main",
+      });
+      const { container } = await mountWithRomId(55);
       vi.mocked(backend.getSaveStatus).mockRejectedValue(new Error("net"));
+      capturedSavesTab.length = 0;
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
@@ -744,18 +752,67 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       // Rejection didn't crash the panel and didn't surface debugLog
-      // (the inline .catch swallows). The handler completed and saveSyncEnabled
-      // remains true (SAVES tab still rendered).
+      // (the inline .catch swallows).
       expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
         expect.stringContaining("onDataChanged error"),
       );
+      // Fallback observable: saveSyncEnabled stays true (SAVES tab still
+      // rendered) AND saveStatus is set to the null fallback. Switch to
+      // saves tab to capture SavesTab props.
+      expect(container.textContent).toContain("SAVES");
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
+        );
+        await Promise.resolve();
+      });
+      const latest = capturedSavesTab[capturedSavesTab.length - 1];
+      expect(latest?.saveStatus).toBeNull();
     });
 
-    it("save_sync: matching rom_id → fetches getSaveStatus + refreshSlotState", async () => {
+    it("save_sync: matching rom_id → fetches getSaveStatus + refreshSlotState and updates saveStatus state", async () => {
+      // Configure save tracking up front so SavesTab (not SlotSetupWizard)
+      // renders after we switch tabs — gives us a captured-props observable
+      // on the resulting saveStatus state.
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+        configured: true,
+        active_slot: "main",
+      });
       await mountWithRomId(33);
       vi.mocked(backend.getSaveStatus).mockClear();
       vi.mocked(backend.isSaveTrackingConfigured).mockClear();
       vi.mocked(backend.getSaveSlots).mockClear();
+      // Distinguishable payload so we can prove the state propagated.
+      const dispatchedStatus = {
+        rom_id: 33,
+        files: [
+          {
+            filename: "FROM_DISPATCH.srm",
+            status: "skip" as const,
+            local_path: null,
+            local_hash: null,
+            local_mtime: null,
+            local_size: null,
+            server_save_id: null,
+            server_file_name: null,
+            server_emulator: null,
+            server_updated_at: null,
+            server_size: null,
+            last_sync_at: null,
+          },
+        ],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+        conflicts: [],
+      };
+      vi.mocked(backend.getSaveStatus).mockResolvedValue(dispatchedStatus);
+      capturedSavesTab.length = 0;
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
@@ -768,6 +825,19 @@ describe("RomMGameInfoPanel", () => {
       expect(vi.mocked(backend.getSaveStatus)).toHaveBeenCalledWith(33);
       expect(vi.mocked(backend.isSaveTrackingConfigured)).toHaveBeenCalledWith(33);
       expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledWith(33);
+      // Switch to the saves tab and assert SavesTab received the updated
+      // saveStatus — the dispatch handler's setState call is the only path
+      // that gets this payload onto SavesTab props. If the handler's
+      // `setState((prev) => ({ ..., saveStatus: updatedStatus, ... }))` is
+      // dropped, this assertion fails.
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
+        );
+        await Promise.resolve();
+      });
+      const latest = capturedSavesTab[capturedSavesTab.length - 1];
+      expect(latest?.saveStatus?.files[0]?.filename).toBe("FROM_DISPATCH.srm");
     });
 
     it("save_sync: mismatching rom_id → early return", async () => {
@@ -877,7 +947,11 @@ describe("RomMGameInfoPanel", () => {
     });
 
     it("bios: checkPlatformBios rejection → falls back to { needs_bios: false } (non-vacuous .catch)", async () => {
-      await mountWithRomId(60);
+      // Mount without bios_status so biosStatus starts null and the BIOS
+      // tab is NOT visible — the assertion that it STAYS hidden after the
+      // rejection is the fallback-state observable.
+      const { container } = await mountWithRomId(60);
+      expect(container.textContent).not.toContain("BIOS");
       vi.mocked(backend.checkPlatformBios).mockRejectedValue(new Error("net"));
       await act(async () => {
         globalThis.dispatchEvent(
@@ -889,25 +963,33 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       // The outer try/catch did not fire — inline .catch swallowed and
-      // produced { needs_bios: false }, which means biosStatus stays null.
+      // produced { needs_bios: false }, which means biosStatus stays null
+      // (the handler's setState resolves the ternary to null) and the
+      // BIOS tab remains hidden.
       expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
         expect.stringContaining("onDataChanged error"),
       );
+      expect(container.textContent).not.toContain("BIOS");
     });
 
-    it("core_changed: invalidates cache + re-fetches getCachedGameDetail", async () => {
-      await mountWithRomId(60);
+    it("core_changed: invalidates cache + re-fetches getCachedGameDetail and updates biosStatus state", async () => {
+      // Mount without bios_status so the initial state.biosStatus is null
+      // and the BIOS tab is NOT visible. Then dispatch core_changed with a
+      // cache response that DOES carry bios_status — the handler's setState
+      // call is the only path that surfaces the BIOS tab.
+      const { container } = await mountWithRomId(60);
+      expect(container.textContent).not.toContain("BIOS");
       vi.mocked(cachedStore.invalidateCachedGameDetail).mockClear();
       vi.mocked(cachedStore.getCachedGameDetail).mockClear();
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 60,
         bios_status: {
-          needs_bios: true,
           platform_slug: "snes",
           server_count: 1,
           local_count: 1,
           all_downloaded: true,
+          active_core_label: "FROM_CORE_CHANGED",
         } as never,
         metadata: {} as never,
         stale_fields: [],
@@ -925,14 +1007,47 @@ describe("RomMGameInfoPanel", () => {
         testAppId,
       );
       expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalled();
+      // biosStatus now non-null → BIOS tab visible. Removing the
+      // handler's `setState((prev) => ({ ..., biosStatus }))` line
+      // makes this assertion fail.
+      expect(container.textContent).toContain("BIOS");
+      // Switch to the BIOS tab and assert the new active_core_label
+      // reached the rendered Emulator column.
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }),
+        );
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("FROM_CORE_CHANGED");
     });
 
     it("core_changed: cache returns found=false → no state mutation", async () => {
-      await mountWithRomId(60);
+      // Mount with a bios_status on the cache so biosStatus starts non-null
+      // (BIOS tab visible). After a found=false core_changed re-fetch, the
+      // handler should early-return — biosStatus must NOT be reset.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 60,
+        save_sync_enabled: true,
+        bios_status: {
+          platform_slug: "snes",
+          server_count: 1,
+          local_count: 1,
+          all_downloaded: true,
+          active_core_label: "INITIAL_CORE",
+        } as never,
+        metadata: {} as never,
+        stale_fields: [],
+      });
+      const view = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(view.container.textContent).toContain("BIOS");
+      // Second resolve: found=false. The handler's early-return means
+      // biosStatus is NOT touched.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValueOnce({
         found: false,
       });
-      // No throw, no crash.
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
@@ -942,17 +1057,30 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Outer catch did NOT fire.
+      // Outer catch did NOT fire …
       expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
         expect.stringContaining("onDataChanged error"),
       );
+      // … and biosStatus is unchanged from the initial value (BIOS tab
+      // still visible and the INITIAL_CORE label still reaches the BIOS
+      // section after a tab switch).
+      expect(view.container.textContent).toContain("BIOS");
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }),
+        );
+        await Promise.resolve();
+      });
+      expect(view.container.textContent).toContain("INITIAL_CORE");
     });
 
-    it("metadata: matching rom_id → getRomMetadata + updates state", async () => {
-      await mountWithRomId(70);
+    it("metadata: matching rom_id → getRomMetadata + updates metadata state", async () => {
+      const { container } = await mountWithRomId(70);
       vi.mocked(backend.getRomMetadata).mockClear();
+      // Distinguishable summary so we can prove the new metadata reached
+      // the Game Info render via the handler's setState call.
       vi.mocked(backend.getRomMetadata).mockResolvedValue({
-        summary: "Updated summary",
+        summary: "FROM_DISPATCH_METADATA",
         genres: [],
         companies: [],
         first_release_date: null,
@@ -971,6 +1099,11 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getRomMetadata)).toHaveBeenCalledWith(70);
+      // The summary text in the Game Info section is fed directly from
+      // state.metadata.summary. Dropping the handler's
+      // `setState((prev) => ({ ..., metadata: meta }))` line makes this
+      // assertion fail.
+      expect(container.textContent).toContain("FROM_DISPATCH_METADATA");
     });
 
     it("metadata: mismatching rom_id → early return", async () => {
@@ -1390,6 +1523,105 @@ describe("RomMGameInfoPanel", () => {
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
         expect.stringContaining("Failed to load achievements"),
       );
+    });
+
+    it("achievements tab: no refetch on second activation (achievementsLoadedRef guard)", async () => {
+      // First activation fires getAchievements + getAchievementProgress
+      // exactly once each. Switching away and back must NOT trigger a
+      // second fetch — the achievementsLoadedRef guard short-circuits the
+      // lazy-load effect. Removing the
+      // `if (achievementsLoadedRef.current) return;` line makes the
+      // toHaveBeenCalledTimes(1) assertion fail.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 88,
+        ra_id: 42,
+        metadata: {} as never,
+        stale_fields: [],
+      });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      // First activation → triggers the lazy-load.
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", {
+            detail: { tab: "achievements" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getAchievements)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledTimes(1);
+      // Switch away …
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "info" } }),
+        );
+        await Promise.resolve();
+      });
+      // … and back. Guard should prevent a second fetch.
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", {
+            detail: { tab: "achievements" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getAchievements)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledTimes(1);
+    });
+
+    it("saves tab: no refetch on second activation (slotsLoadedRef guard)", async () => {
+      // The Saves tab's lazy-load effect calls getSaveSlots and is guarded
+      // by slotsLoadedRef. (Note: refreshSlotState from loadData also calls
+      // getSaveSlots on mount and is NOT guarded — we clear the mock after
+      // the first tab activation so the assertion only sees lazy-load
+      // calls.) Removing the `if (slotsLoadedRef.current) return;` line
+      // makes the toHaveBeenCalledTimes(0) assertion below fail.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 77,
+        save_sync_enabled: true,
+        metadata: {} as never,
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+        configured: true,
+        active_slot: "main",
+      });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      // First activation → lazy-load fires getSaveSlots (in addition to
+      // the mount-time refreshSlotState call already absorbed above).
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Clear the call log — we want the second-activation assertion to
+      // reflect only the post-clear period.
+      vi.mocked(backend.getSaveSlots).mockClear();
+      // Switch away …
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "info" } }),
+        );
+        await Promise.resolve();
+      });
+      // … and back. Guard should prevent a second fetch.
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledTimes(0);
     });
 
     it("saves tab: slotConfirmed=false → SlotSetupWizard renders", async () => {
@@ -1893,6 +2125,12 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       // Without installedRom, the ROM File section is not rendered.
       expect(container.textContent).not.toContain("ROM File");
+      // And the rejection didn't bubble to loadData's outer catch (the
+      // inline .catch swallowed it). Removing the inline `.catch(() => {})`
+      // from refreshInstalledRomInBackground makes this assertion fail.
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
+        expect.stringContaining("loadData error"),
+      );
     });
 
     it("background metadata fetch rejection → metadata stays at cached value (silent .catch)", async () => {
