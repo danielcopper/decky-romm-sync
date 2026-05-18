@@ -37,6 +37,7 @@ import {
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
 import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, SyncConflict, Achievement, AchievementProgress, EarnedAchievement, SaveSlotSummary } from "../types";
+import type { RommDataChangedDetail } from "../types/events";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -339,7 +340,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
-    const handleSaveSyncSettingsChange = async (detail: any) => {
+    const handleSaveSyncSettingsChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>) => {
       const enabled = detail.save_sync_enabled;
       if (!enabled) {
         setState((prev) => ({ ...prev, saveSyncEnabled: false }));
@@ -357,7 +358,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       }));
     };
 
-    const handleSaveSyncChange = async (detail: any) => {
+    const handleSaveSyncChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync" }>) => {
       if (detail.rom_id && detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
       if (!romId) return;
@@ -372,7 +373,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       refreshSlotState(romId, setState);
     };
 
-    const handleBiosChange = async (detail: any) => {
+    const handleBiosChange = async (detail: Extract<RommDataChangedDetail, { type: "bios" }>) => {
       if (!detail.platform_slug) return;
       const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus => ({ needs_bios: false }));
       setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null }));
@@ -393,7 +394,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       setState((prev) => ({ ...prev, biosStatus }));
     };
 
-    const handleMetadataChange = async (detail: any) => {
+    const handleMetadataChange = async (detail: Extract<RommDataChangedDetail, { type: "metadata" }>) => {
       if (detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
       if (!romId) return;

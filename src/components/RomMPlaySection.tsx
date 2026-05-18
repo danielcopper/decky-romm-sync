@@ -45,6 +45,7 @@ import {
   debugLog,
 } from "../api/backend";
 import type { AvailableCore, BiosStatus, SaveStatus } from "../types";
+import type { RommDataChangedDetail } from "../types/events";
 import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
 import {
   applySaveSyncDisplay,
@@ -256,8 +257,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
-    const handleSaveSyncSettingsChange = async (detail: any) => {
-      const enabled = detail.save_sync_enabled as boolean;
+    const handleSaveSyncSettingsChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>) => {
+      const enabled = detail.save_sync_enabled;
       if (enabled) {
         const rid = romIdRef.current;
         if (rid) {
@@ -293,7 +294,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       }));
     };
 
-    const handleSaveSyncChange = async (detail: any) => {
+    const handleSaveSyncChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync" }>) => {
       const romId = romIdRef.current ?? detail.rom_id;
       if (!romId) return;
       // If event specifies a rom_id, skip if it's not for this game

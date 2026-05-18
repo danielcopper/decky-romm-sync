@@ -32,10 +32,11 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
       ],
-      // Downgraded to warn — 56 occurrences across the codebase, mostly in
-      // Steam-UI patching code where the upstream API is genuinely untyped.
-      // Cleanup tracked in #617. Promote back to error when zero.
-      "@typescript-eslint/no-explicit-any": "warn",
+      // Promoted back to error in #617 cleanup. Untyped sites that genuinely
+      // need `any` (Steam internal React tree walking in src/patches/) carry
+      // an inline `// eslint-disable-next-line @typescript-eslint/no-explicit-any`
+      // with a documented reason.
+      "@typescript-eslint/no-explicit-any": "error",
     },
   },
   {
