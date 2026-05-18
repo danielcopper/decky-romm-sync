@@ -1,7 +1,11 @@
-"""AchievementsService — RetroAchievements data fetching via RomM server.
+"""AchievementsService — RetroAchievements data surfacing for the QAM.
 
-Owns the achievements cache and handles achievement list fetching,
-user progress tracking, and post-session refresh.
+Owns the in-memory achievements cache and every read the game-detail
+panel runs against it: per-ROM achievement lists, the user-progress
+snapshot, and the post-session refresh that keeps cached completion
+counts in step with the RomM server after a play session. HTTP traffic
+flows through ``RommAchievementsApi``; cache shape, invalidation
+policy, and the pure progress extraction live here.
 """
 
 from __future__ import annotations

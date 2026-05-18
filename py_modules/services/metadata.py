@@ -1,8 +1,10 @@
-"""MetadataService — ROM metadata caching.
+"""MetadataService — ROM metadata cache ownership.
 
-Handles ROM metadata extraction, caching (with periodic flush),
-and app_id→rom_id mapping. Metadata is populated during sync via
-the list API and served from cache on demand (no detail API calls).
+Owns the in-memory ROM metadata cache: the canonical shape, the
+``app_id -> rom_id`` mapping the launcher uses to resolve session
+ROMs, and the periodic-flush policy that lands the cache on disk via
+``MetadataCachePersister``. The cache is populated from RomM list
+responses; ad-hoc detail HTTP calls are not this service's concern.
 """
 
 from __future__ import annotations

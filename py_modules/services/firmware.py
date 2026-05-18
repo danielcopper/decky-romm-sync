@@ -1,7 +1,12 @@
-"""FirmwareService — BIOS/firmware management.
+"""FirmwareService — BIOS/firmware registry orchestration.
 
-Handles BIOS registry loading, firmware status checks, downloads,
-deletion, and per-core filtering for RetroArch emulators.
+Owns the BIOS registry lifecycle and every status-bearing query the
+QAM panel runs against it: presence checks per system or core,
+deletion, and reads of cached server-side firmware metadata. Raw
+filesystem I/O is delegated to the ``FirmwareFileStore`` Protocol and
+HTTP traffic flows through ``RommFirmwareApi``; the registry shape,
+caching policy, and per-core filtering logic remain this service's
+responsibility.
 """
 
 from __future__ import annotations

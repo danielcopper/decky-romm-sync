@@ -1,9 +1,12 @@
 """DownloadService — ROM download orchestration.
 
-Handles ROM downloads (single and multi-file), disk space checks,
-download queue management, and partial download cleanup. All raw
-filesystem I/O is delegated to the ``DownloadFileStore`` and
-``DownloadQueueStore`` Protocols.
+Owns every step between a frontend download request and a ROM
+landing on disk: disk-space pre-flight, single-file and multi-file
+downloads, ZIP extraction, partial-download cleanup, and the
+launcher-script queue that surfaces frontend-initiated requests.
+Raw filesystem I/O flows through the ``DownloadFileStore`` and
+``DownloadQueueStore`` Protocols; HTTP traffic flows through
+``RommRomReader``.
 """
 
 from __future__ import annotations
