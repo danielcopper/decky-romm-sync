@@ -3,6 +3,7 @@ import { render, renderHook, act } from "@testing-library/react";
 import { createElement, type ComponentProps } from "react";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { setVersionError } from "../utils/connectionState";
+import * as connectionState from "../utils/connectionState";
 import type { WarningCard } from "./WarningCard";
 
 // Capture the props passed to WarningCard so the FC tests can assert the
@@ -72,16 +73,23 @@ describe("useVersionError hook", () => {
     expect(result.current).toBe("new err");
   });
 
-  it("unsubscribes on unmount — later setVersionError must not crash or re-render", () => {
-    setVersionError(null);
-    const { result, unmount } = renderHook(() => useVersionError());
-    expect(result.current).toBeNull();
+  it("unsubscribes on unmount — useEffect cleanup invokes the returned unsubscribe", () => {
+    // Spy on onVersionErrorChange so the test owns the unsubscribe callback.
+    // The "updates after mount" test above covers the subscribe-then-callback
+    // path; this test isolates the cleanup invocation. Asserting unsubSpy
+    // was called proves the hook returns its unsubscribe from useEffect — a
+    // mutation that drops the return (e.g. `useEffect(() => { onX(setErr); }, [])`)
+    // fails this test, where the prior `not.toThrow()` pattern passed
+    // vacuously under React 19's silent no-op-on-unmounted-setState.
+    const unsubSpy = vi.fn();
+    vi.spyOn(connectionState, "onVersionErrorChange").mockImplementation((cb) => {
+      void cb;
+      return unsubSpy;
+    });
+
+    const { unmount } = renderHook(() => useVersionError());
+    expect(unsubSpy).not.toHaveBeenCalled();
     unmount();
-    // If the listener weren't removed, the store would still call setErr on
-    // an unmounted hook. setVersionError must succeed without throwing —
-    // happy-dom would otherwise surface the unmounted-update warning here.
-    expect(() => {
-      setVersionError("after unmount");
-    }).not.toThrow();
+    expect(unsubSpy).toHaveBeenCalledTimes(1);
   });
 });

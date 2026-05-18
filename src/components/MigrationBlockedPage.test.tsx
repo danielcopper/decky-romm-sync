@@ -18,6 +18,7 @@ import {
   clearMigration,
   getMigrationState,
 } from "../utils/migrationStore";
+import * as migrationStore from "../utils/migrationStore";
 import type { MigrationStatus, MigrationResult } from "../api/backend";
 // Type-only — vi.mock("./MigrationConflictModal") below replaces the runtime
 // impl; the captured-props type stays pinned to the real component.
@@ -466,12 +467,23 @@ describe("useMigrationStatus hook", () => {
     expect(result.current).toEqual({ pending: false });
   });
 
-  it("unsubscribes on unmount — later setMigrationStatus must not crash", () => {
-    const { result, unmount } = renderHook(() => useMigrationStatus());
-    expect(result.current).toEqual({ pending: false });
+  it("unsubscribes on unmount — useEffect cleanup invokes the returned unsubscribe", () => {
+    // Spy on onMigrationChange so the test owns the unsubscribe callback.
+    // The "updates after mount" tests above cover the subscribe-then-callback
+    // path; this test isolates the cleanup invocation. Asserting unsubSpy
+    // was called proves the hook returns its unsubscribe from useEffect — a
+    // mutation that drops the return fails this test, where the prior
+    // `not.toThrow()` pattern passed vacuously under React 19's silent
+    // no-op-on-unmounted-setState.
+    const unsubSpy = vi.fn();
+    vi.spyOn(migrationStore, "onMigrationChange").mockImplementation((cb) => {
+      void cb;
+      return unsubSpy;
+    });
+
+    const { unmount } = renderHook(() => useMigrationStatus());
+    expect(unsubSpy).not.toHaveBeenCalled();
     unmount();
-    expect(() => {
-      setMigrationStatus({ pending: true });
-    }).not.toThrow();
+    expect(unsubSpy).toHaveBeenCalledTimes(1);
   });
 });
