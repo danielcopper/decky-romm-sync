@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         DebugLogger,
-        HostnameProvider,
+        HostnameReader,
         RetryStrategy,
         RommSyncApi,
     )
@@ -63,7 +63,7 @@ class DeviceRegistry:
         self,
         *,
         loop: asyncio.AbstractEventLoop,
-        hostname_provider: HostnameProvider,
+        hostname_provider: HostnameReader,
     ) -> dict:
         """Ensure this device is registered with the RomM server for save sync tracking."""
         if not self._state_svc.is_save_sync_enabled():

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
         CoreResolverFn,
         DebugLogger,
         EventEmitter,
-        HostnameProvider,
+        HostnameReader,
         MigrationPendingFn,
         PluginMetadataReader,
         RetroDeckPaths,
@@ -80,7 +80,7 @@ class SaveServiceConfig:
         unresolved. This is an ES-DE question (``which core runs this
         ROM?``).
     hostname_provider:
-        ``HostnameProvider`` Protocol seam — supplies the local device
+        ``HostnameReader`` Protocol seam — supplies the local device
         hostname used as the registered device name during initial
         server-side device registration.
     get_core_name:
@@ -137,7 +137,7 @@ class SaveServiceConfig:
     clock: Clock
     retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
-    hostname_provider: HostnameProvider
+    hostname_provider: HostnameReader
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
     plugin_dir: str

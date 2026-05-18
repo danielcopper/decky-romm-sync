@@ -24,7 +24,7 @@ class DebugLogger(Protocol):
     def __call__(self, msg: str) -> None: ...
 
 
-class HostnameProvider(Protocol):
+class HostnameReader(Protocol):
     """Local device hostname source.
 
     Services consume this Protocol instead of ``socket.gethostname``

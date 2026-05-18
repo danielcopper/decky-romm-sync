@@ -33,7 +33,7 @@ if TYPE_CHECKING:
         Clock,
         CoreResolverFn,
         DebugLogger,
-        HostnameProvider,
+        HostnameReader,
         MigrationPendingFn,
         RetryStrategy,
         RommSyncApi,
@@ -72,7 +72,7 @@ class SyncEngineConfig:
     save_file_store: SaveFileStore
     log_debug: DebugLogger
     get_active_core: CoreResolverFn
-    hostname_provider: HostnameProvider
+    hostname_provider: HostnameReader
     plugin_version: str
     detect_sort_change: SaveSortChangeFn
     is_retrodeck_migration_pending: MigrationPendingFn

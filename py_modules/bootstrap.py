@@ -75,7 +75,7 @@ from services.protocols import (
     FirmwareCachePersister,
     FirmwareFileStore,
     GamelistXmlEditor,
-    HostnameProvider,
+    HostnameReader,
     MetadataCachePersister,
     MigrationFileStore,
     PathExistsProbe,
@@ -157,7 +157,7 @@ class RuntimeBundle:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
-    hostname_provider: HostnameProvider
+    hostname_provider: HostnameReader
 
 
 @dataclass(frozen=True)
@@ -178,7 +178,7 @@ class CallbackBundle:
 
 @dataclass(frozen=True)
 class RuntimeAdaptersBundle:
-    """Concrete adapters for the Clock/UuidGen/Sleeper/HostnameProvider seams.
+    """Concrete adapters for the Clock/UuidGen/Sleeper/HostnameReader seams.
 
     Bootstrap owns adapter instantiation, but the ``RuntimeBundle``
     handed to ``wire_services`` also needs runtime-only state ``main.py``
@@ -190,7 +190,7 @@ class RuntimeAdaptersBundle:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
-    hostname_provider: HostnameProvider
+    hostname_provider: HostnameReader
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-"""Hostname adapter — concrete ``HostnameProvider`` Protocol implementation.
+"""Hostname adapter — concrete ``HostnameReader`` Protocol implementation.
 
 Wraps :func:`socket.gethostname` so services can stay free of direct
 ``socket`` imports for the sole purpose of reading the local hostname.
@@ -10,7 +10,7 @@ import socket
 
 
 class HostnameAdapter:
-    """Real ``HostnameProvider`` backed by :func:`socket.gethostname`."""
+    """Real ``HostnameReader`` backed by :func:`socket.gethostname`."""
 
     def get(self) -> str:
         return socket.gethostname()
