@@ -145,16 +145,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     }
   }, [activeTab]);
 
-  // Load BIOS data lazily on first switch to BIOS tab
-  useEffect(() => {
-    if (activeTab === "bios" && !biosLoaded.current) {
-      biosLoaded.current = true;
-      // eslint-disable-next-line react-hooks/immutability -- TODO(#617): hoist refreshBios as function decl or move call after definition
-      refreshBios();
-    }
-  }, [activeTab]);
-
-  const refreshBios = async () => {
+  async function refreshBios() {
     setBiosLoading(true);
     setBiosError("");
     try {
@@ -169,7 +160,15 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
       setBiosError(`Failed to fetch firmware status: ${e}`);
     }
     setBiosLoading(false);
-  };
+  }
+
+  // Load BIOS data lazily on first switch to BIOS tab
+  useEffect(() => {
+    if (activeTab === "bios" && !biosLoaded.current) {
+      biosLoaded.current = true;
+      refreshBios();
+    }
+  }, [activeTab]);
 
   // --- Platforms tab handlers ---
   const handleToggle = async (id: number, enabled: boolean) => {
