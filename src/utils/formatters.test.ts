@@ -1,11 +1,40 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
+  formatBytes,
   formatLastPlayed,
   formatPlaytime,
   formatTimestamp,
   formatTimeAgo,
   formatUninstallStatus,
 } from "./formatters";
+
+describe("formatBytes", () => {
+  it("returns empty string for null", () => {
+    expect(formatBytes(null)).toBe("");
+  });
+
+  it("formats values under 1 KB as 'N B'", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1023)).toBe("1023 B");
+  });
+
+  it("formats values under 1 MB as 'N.N KB'", () => {
+    expect(formatBytes(1024)).toBe("1.0 KB");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+    expect(formatBytes(1024 * 1024 - 1)).toBe("1024.0 KB");
+  });
+
+  it("formats values under 1 GB as 'N.N MB'", () => {
+    expect(formatBytes(1024 * 1024)).toBe("1.0 MB");
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+  });
+
+  it("formats values 1 GB and up as 'N.NN GB'", () => {
+    expect(formatBytes(1024 * 1024 * 1024)).toBe("1.00 GB");
+    expect(formatBytes(2.5 * 1024 * 1024 * 1024)).toBe("2.50 GB");
+  });
+});
 
 describe("formatTimestamp", () => {
   it("returns 'unknown' for null", () => {

@@ -103,11 +103,11 @@ describe("SyncConflictModal", () => {
       expect(container.textContent).toContain("unknown");
     });
 
-    it("renders bytes as 'X.X B' below 1024", () => {
+    it("renders bytes as 'X B' below 1024", () => {
       void showSyncConflictModal(makeConflict({ local_size: 500, server_size: 1023 }));
       const { container } = render(lastShownElement());
-      expect(container.textContent).toContain("500.0 B");
-      expect(container.textContent).toContain("1023.0 B");
+      expect(container.textContent).toContain("500 B");
+      expect(container.textContent).toContain("1023 B");
     });
 
     it("renders bytes as 'X.X KB' for exact 1024", () => {

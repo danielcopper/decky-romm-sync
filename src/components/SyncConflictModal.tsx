@@ -2,7 +2,7 @@ import { FC, useState } from "react";
 import { ModalRoot, DialogButton, showModal } from "@decky/ui";
 import { resolveSyncConflict, logError } from "../api/backend";
 import type { SyncConflict } from "../types";
-import { formatTimestamp } from "../utils/formatters";
+import { formatBytes, formatTimestamp } from "../utils/formatters";
 
 type SyncConflictAction = "keep_local" | "use_server";
 export type SyncConflictResolution = SyncConflictAction | "cancel";
@@ -15,12 +15,10 @@ interface SyncConflictModalProps {
   errorMessage?: string | null;
 }
 
-function formatBytes(bytes: number | null): string {
+/** "unknown" when bytes is null or 0 — otherwise the shared byte formatter output. */
+function formatSize(bytes: number | null): string {
   if (bytes == null || bytes === 0) return "unknown";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+  return formatBytes(bytes);
 }
 
 /**
@@ -80,7 +78,7 @@ const SyncConflictModal: FC<SyncConflictModalProps> = ({
             Your local save
           </div>
           <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)", marginBottom: "2px" }}>
-            {formatBytes(conflict.local_size)} · modified {formatTimestamp(conflict.local_mtime)}
+            {formatSize(conflict.local_size)} · modified {formatTimestamp(conflict.local_mtime)}
           </div>
           <div style={{ marginTop: "8px" }}>
             <DialogButton
@@ -104,7 +102,7 @@ const SyncConflictModal: FC<SyncConflictModalProps> = ({
             Server save (id={conflict.server_save_id})
           </div>
           <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)", marginBottom: "2px" }}>
-            {formatBytes(conflict.server_size)} · uploaded {formatTimestamp(conflict.server_updated_at)}
+            {formatSize(conflict.server_size)} · uploaded {formatTimestamp(conflict.server_updated_at)}
           </div>
           <div style={{ marginTop: "8px" }}>
             <DialogButton

@@ -11,8 +11,8 @@ import { debugLog, savesListFileVersions, savesRollbackToVersion } from "../../a
 import type { SaveVersionEntry, RollbackStatus, ListFileVersionsResult } from "../../api/backend";
 import { showSyncConflictModal } from "../SyncConflictModal";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
-import { formatTimestamp } from "../../utils/formatters";
-import { formatAttributionSegment, formatBytes, formatRelativeTime, pickLastSyncer } from "./helpers";
+import { formatBytes, formatTimestamp } from "../../utils/formatters";
+import { formatAttributionSegment, formatRelativeTime, pickLastSyncer } from "./helpers";
 
 interface VersionHistoryPanelProps {
   romId: number;

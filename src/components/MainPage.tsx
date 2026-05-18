@@ -26,6 +26,7 @@ import {
   refreshMigrationState,
   logError,
 } from "../api/backend";
+import { formatBytes } from "../utils/formatters";
 import { getSyncProgress } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
@@ -42,13 +43,6 @@ type Page = "settings" | "library" | "data" | "downloads";
 
 interface MainPageProps {
   onNavigate: (page: Page) => void;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function formatChanges(pairs: [number, string][]): string {

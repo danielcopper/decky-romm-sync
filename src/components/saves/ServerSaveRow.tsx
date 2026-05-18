@@ -5,7 +5,8 @@
 
 import { createElement } from "react";
 import type { SlotSaveFile } from "../../types";
-import { formatBytes, formatRelativeTime } from "./helpers";
+import { formatBytes } from "../../utils/formatters";
+import { formatRelativeTime } from "./helpers";
 
 export function renderServerSaveRow(f: SlotSaveFile): ReturnType<typeof createElement> {
   const details: string[] = [];

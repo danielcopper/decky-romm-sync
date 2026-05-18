@@ -20,6 +20,15 @@ export function formatLastPlayed(timestamp: number): string {
   return `${day}. ${month}. ${year}`;
 }
 
+/** Format a byte count as a human-readable string (e.g. "12.4 KB", "1.23 GB"). Empty string for null. */
+export function formatBytes(bytes: number | null): string {
+  if (bytes == null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 /** Format a duration in minutes as a compact playtime string. */
 export function formatPlaytime(minutes: number): string {
   if (!minutes || minutes <= 0) return "None";

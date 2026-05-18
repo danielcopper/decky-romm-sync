@@ -8,19 +8,12 @@ import {
 } from "@decky/ui";
 import { getDownloadQueue, cancelDownload } from "../api/backend";
 import { getDownloadState, setDownloads } from "../utils/downloadStore";
+import { formatBytes } from "../utils/formatters";
 import { scrollToTop } from "../utils/scrollHelpers";
 import type { DownloadItem } from "../types";
 
 interface DownloadQueueProps {
   onBack: () => void;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function formatFinishedDescription(item: DownloadItem): string {

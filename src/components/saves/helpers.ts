@@ -15,14 +15,6 @@ export function displaySlot(slot: string | null | undefined): string {
   return slot;
 }
 
-/** Format a byte count as a human-readable string (e.g. "12.4 KB") */
-export function formatBytes(bytes: number | null): string {
-  if (bytes == null) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 /** Format a relative time string (e.g. "5m ago", "2h ago") from an ISO string */
 export function formatRelativeTime(isoStr: string | null): string {
   if (!isoStr) return "";

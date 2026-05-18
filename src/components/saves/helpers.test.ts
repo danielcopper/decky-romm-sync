@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   computeSyncSummary,
   displaySlot,
-  formatBytes,
   formatRelativeTime,
   pickLastSyncer,
   attributionLabel,
@@ -28,29 +27,6 @@ describe("displaySlot", () => {
 
   it("returns the slot name as-is for non-empty input", () => {
     expect(displaySlot("speedrun")).toBe("speedrun");
-  });
-});
-
-describe("formatBytes", () => {
-  it("returns empty string for null", () => {
-    expect(formatBytes(null)).toBe("");
-  });
-
-  it("formats values under 1 KB as 'N B'", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatBytes(512)).toBe("512 B");
-    expect(formatBytes(1023)).toBe("1023 B");
-  });
-
-  it("formats values under 1 MB as 'N.N KB'", () => {
-    expect(formatBytes(1024)).toBe("1.0 KB");
-    expect(formatBytes(2048)).toBe("2.0 KB");
-    expect(formatBytes(1024 * 1024 - 1)).toBe("1024.0 KB");
-  });
-
-  it("formats values 1 MB and up as 'N.N MB'", () => {
-    expect(formatBytes(1024 * 1024)).toBe("1.0 MB");
-    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
   });
 });
 
