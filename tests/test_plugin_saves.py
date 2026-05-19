@@ -18,6 +18,7 @@ from models.state import make_default_plugin_state
 
 from adapters.migration_file import MigrationFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -66,6 +67,7 @@ def plugin(tmp_path):
             sleeper=FakeSleeper(),
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
+            registry_store=RegistryStoreAdapter(state=p._state, logger=decky.logger),
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),

@@ -29,8 +29,8 @@ from typing import NotRequired, TypedDict
 class ShortcutRegistryEntry(TypedDict):
     """One ROM's Steam-shortcut binding inside ``shortcut_registry``.
 
-    Keyed by ``rom_id`` (string). Required fields are written by
-    :func:`domain.shortcut_data.build_registry_entry` during sync;
+    Keyed by ``rom_id`` (string). Required fields are written through
+    :class:`models.registry_patches.RegistrySyncApplyPatch` during sync;
     optional ID fields are written on demand by SteamGridService and
     on-the-fly RomM lookups.
     """
@@ -165,8 +165,6 @@ class MetadataCacheEntry(TypedDict):
 
 # Service-facing metadata cache contract. The on-disk JSON also carries a
 # persistence-layer ``version: int`` key; only adapters/persistence.py
-# reads/writes that field, and services never iterate the cache (only
-# ``.get(rom_id_str)`` / ``[rom_id_str] = entry``), so a homogeneous
-# ``dict[str, MetadataCacheEntry]`` is the honest contract at the service
-# boundary.
+# reads/writes that field, so a homogeneous ``dict[str, MetadataCacheEntry]``
+# is the honest contract at the service boundary.
 MetadataCache = dict[str, MetadataCacheEntry]

@@ -16,6 +16,7 @@ from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.persistence import PersistenceAdapter, SettingsPersisterAdapter
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -53,6 +54,7 @@ def plugin():
     p._state_persister = FakeStatePersister()
     p._settings_persister = FakeSettingsPersister()
     p._metadata_cache_persister = FakeMetadataCachePersister()
+    p._registry_store = RegistryStoreAdapter(state=p._state, logger=decky.logger)
 
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
@@ -70,6 +72,7 @@ def plugin():
             sleeper=FakeSleeper(),
             state_persister=p._state_persister,
             settings_persister=p._settings_persister,
+            registry_store=p._registry_store,
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
@@ -88,6 +91,7 @@ def plugin():
             logger=decky.logger,
             state_persister=FakeStatePersister(),
             settings_persister=FakeSettingsPersister(),
+            registry_store=p._registry_store,
             get_pending_sync=lambda: p._sync_service._pending_sync,
             log_debug=p._log_debug,
         ),
@@ -118,6 +122,7 @@ def plugin():
             state=p._state,
             logger=decky.logger,
             state_persister=p._state_persister,
+            registry_store=p._registry_store,
             retrodeck_paths=p._retrodeck_paths,
             path_probe=FakePathExistsReader(),
         ),
@@ -910,6 +915,8 @@ class TestMainStartupOrdering:
                 metadata_cache_persister=MagicMock(),
                 firmware_cache_persister=MagicMock(),
                 save_sync_state_persister=MagicMock(),
+                registry_store=MagicMock(),
+                metadata_store=MagicMock(),
                 log_debug=MagicMock(),
                 plugin_metadata=MagicMock(),
             ),

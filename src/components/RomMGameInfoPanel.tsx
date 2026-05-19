@@ -402,6 +402,17 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       setState((prev) => ({ ...prev, metadata: meta }));
     };
 
+    const handleCoverRefreshed = async (detail: Extract<RommDataChangedDetail, { type: "cover_refreshed" }>) => {
+      if (detail.rom_id !== romIdRef.current) return;
+      const romId = romIdRef.current;
+      if (!romId) return;
+      // Re-fetch the cover image. Backend has already patched the registry's
+      // cover_path; getArtworkBase64 will now resolve the freshly-downloaded
+      // file. Catch swallowed because the .then handles the success path —
+      // the rejection branch surfaces via the empty-cover render.
+      await refreshCoverArtInBackground(romId, () => cancelled, setState);
+    };
+
     const onDataChanged = async (e: Event) => {
       try {
         const detail = (e as CustomEvent).detail;
@@ -412,6 +423,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
           case "bios": await handleBiosChange(detail); break;
           case "core_changed": await handleCoreChange(); break;
           case "metadata": await handleMetadataChange(detail); break;
+          case "cover_refreshed": await handleCoverRefreshed(detail); break;
         }
       } catch (err) {
         debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`);

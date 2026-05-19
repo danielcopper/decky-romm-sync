@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, cast
 
 from models.metadata import RomMetadata
+from models.metadata_patches import MetadataStampPatch
 from models.state import MetadataCache, MetadataCacheEntry, PluginState
 
 from domain.steam_categories import build_steam_categories
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import Clock, DebugLogger, MetadataCachePersister
+    from services.protocols import Clock, DebugLogger, MetadataCachePersister, MetadataCacheStore
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class MetadataServiceConfig:
     logger: logging.Logger
     clock: Clock
     metadata_cache_persister: MetadataCachePersister
+    metadata_store: MetadataCacheStore
     log_debug: DebugLogger
 
 
@@ -52,6 +54,7 @@ class MetadataService:
         self._logger = config.logger
         self._clock = config.clock
         self._metadata_cache_persister = config.metadata_cache_persister
+        self._metadata_store = config.metadata_store
         self._log_debug = config.log_debug
 
         self._metadata_dirty_count = 0
@@ -114,7 +117,9 @@ class MetadataService:
             if not rom.get("metadatum"):
                 continue
             rom_id_str = str(rom["id"])
-            self._metadata_cache[rom_id_str] = self.extract_metadata(rom)
+            self._metadata_store.apply_stamp(
+                MetadataStampPatch(rom_id_str=rom_id_str, entry=self.extract_metadata(rom))
+            )
             self.mark_metadata_dirty()
         self.flush_metadata_if_dirty()
 

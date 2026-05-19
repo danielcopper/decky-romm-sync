@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         MetadataExtractor,
         RommLibraryApi,
         SettingsPersister,
+        ShortcutRegistryStore,
         Sleeper,
         StatePersister,
         SteamConfigStore,
@@ -71,6 +72,7 @@ class LibraryServiceConfig:
     sleeper: Sleeper
     state_persister: StatePersister
     settings_persister: SettingsPersister
+    registry_store: ShortcutRegistryStore
     log_debug: DebugLogger
     metadata_service: MetadataExtractor
     artwork: ArtworkManager
@@ -150,6 +152,7 @@ class LibraryService:
                 emit=config.emit,
                 clock=config.clock,
                 state_persister=config.state_persister,
+                registry_store=config.registry_store,
                 sync_state_box=self._box,
                 emit_progress=self._emit_progress_proxy,
                 artwork=config.artwork,

@@ -20,9 +20,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.registry_patches import RegistrySyncApplyPatch
 from models.state import PluginState
 
-from domain.shortcut_data import build_registry_entry
 from domain.sync_diff import should_include_in_platform_collection
 from domain.sync_state import SyncState
 from services.library._state import LibrarySyncStateBox
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         ArtworkManager,
         Clock,
         EventEmitter,
+        ShortcutRegistryStore,
         StatePersister,
         SteamConfigStore,
     )
@@ -65,6 +66,7 @@ class SyncReporterConfig:
     emit: EventEmitter
     clock: Clock
     state_persister: StatePersister
+    registry_store: ShortcutRegistryStore
     sync_state_box: LibrarySyncStateBox
     emit_progress: EmitProgressFn
     artwork: ArtworkManager
@@ -82,6 +84,7 @@ class SyncReporter:
         self._emit = config.emit
         self._clock = config.clock
         self._state_persister = config.state_persister
+        self._registry_store = config.registry_store
         self._sync_state = config.sync_state_box
         self._emit_progress = config.emit_progress
         self._artwork = config.artwork
@@ -91,10 +94,6 @@ class SyncReporter:
     def _finalize_cover_path(self, grid, cover_path, app_id, rom_id_str):
         """Delegate to ArtworkService for the final ``{app_id}p.png`` cover-path."""
         return self._artwork.finalize_cover_path(grid, cover_path, app_id, rom_id_str)
-
-    def _build_registry_entry(self, pending, app_id, cover_path):
-        """Build a registry entry dict from pending sync data."""
-        return build_registry_entry(pending, app_id, cover_path)
 
     def _build_collection_app_ids(
         self,
@@ -218,7 +217,20 @@ class SyncReporter:
         for rom_id_str, app_id in rom_id_to_app_id.items():
             pending = box.pending_sync.get(int(rom_id_str), {})
             cover_path = self._finalize_cover_path(grid, pending.get("cover_path", ""), app_id, rom_id_str)
-            self._state["shortcut_registry"][rom_id_str] = self._build_registry_entry(pending, app_id, cover_path)
+            self._registry_store.apply_sync(
+                RegistrySyncApplyPatch(
+                    rom_id_str=rom_id_str,
+                    app_id=app_id,
+                    name=pending.get("name", ""),
+                    fs_name=pending.get("fs_name", ""),
+                    platform_name=pending.get("platform_name", ""),
+                    platform_slug=pending.get("platform_slug", ""),
+                    cover_path=cover_path,
+                    igdb_id=pending.get("igdb_id"),
+                    sgdb_id=pending.get("sgdb_id"),
+                    ra_id=pending.get("ra_id"),
+                )
+            )
 
         steam_input_mode = self._settings.get("steam_input_mode", "default")
         if steam_input_mode != "default" and rom_id_to_app_id:

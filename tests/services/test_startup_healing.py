@@ -11,6 +11,7 @@ from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from models.state import InstalledRomEntry, PluginState, ShortcutRegistryEntry, make_default_plugin_state
 
+from adapters.registry_store import RegistryStoreAdapter
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 
 _RETRODECK_HOME = "/run/media/deck/Emulation/retrodeck"
@@ -54,6 +55,7 @@ def _make_service(
             state=state,
             logger=logger,
             state_persister=state_persister,
+            registry_store=RegistryStoreAdapter(state=state, logger=logger),
             retrodeck_paths=FakeRetroDeckPaths(home=retrodeck_home),
             path_probe=probe,
         ),

@@ -15,6 +15,7 @@ from models.state import make_default_plugin_state
 
 from adapters.download_file import DownloadFileAdapter
 from adapters.download_queue import DownloadQueueAdapter
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.save_state import SaveSyncState
@@ -54,6 +55,7 @@ def plugin():
             sleeper=FakeSleeper(),
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
+            registry_store=RegistryStoreAdapter(state=p._state, logger=decky.logger),
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),

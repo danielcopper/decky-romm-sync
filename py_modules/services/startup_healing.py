@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.registry_patches import RegistryDeletePatch
 from models.state import PluginState
 
 from domain.installed_roms import is_pending_migration_path
@@ -20,7 +21,7 @@ from domain.installed_roms import is_pending_migration_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import PathExistsReader, RetroDeckPaths, StatePersister
+    from services.protocols import PathExistsReader, RetroDeckPaths, ShortcutRegistryStore, StatePersister
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class StartupHealingServiceConfig:
     state: PluginState
     logger: logging.Logger
     state_persister: StatePersister
+    registry_store: ShortcutRegistryStore
     retrodeck_paths: RetroDeckPaths
     path_probe: PathExistsReader
 
@@ -47,6 +49,7 @@ class StartupHealingService:
         self._state = config.state
         self._logger = config.logger
         self._state_persister = config.state_persister
+        self._registry_store = config.registry_store
         self._retrodeck_paths = config.retrodeck_paths
         self._path_probe = config.path_probe
 
@@ -100,6 +103,6 @@ class StartupHealingService:
                 self._logger.info(f"Pruned stale registry entry: rom_id={rom_id} (invalid app_id={app_id})")
                 pruned.append(rom_id)
         for rom_id in pruned:
-            del self._state["shortcut_registry"][rom_id]
+            self._registry_store.delete(RegistryDeletePatch(rom_id_str=rom_id))
         if pruned:
             self._state_persister.save_state()

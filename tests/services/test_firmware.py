@@ -14,6 +14,7 @@ from models.bios import BiosFileEntry
 from models.state import PluginState, make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -81,6 +82,7 @@ def plugin():
             sleeper=FakeSleeper(),
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
+            registry_store=RegistryStoreAdapter(state=p._state, logger=decky.logger),
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),

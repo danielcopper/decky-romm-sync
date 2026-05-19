@@ -256,6 +256,13 @@ describe("RomMPlaySection", () => {
       message: "Connected",
     });
     vi.mocked(backend.debugLog).mockResolvedValue(undefined);
+    // refreshCoverArtwork defaults to success so the artwork-refresh action
+    // doesn't spew "refreshCoverArtwork failed" debugLogs into unrelated tests.
+    vi.mocked(backend.refreshCoverArtwork).mockResolvedValue({
+      success: true,
+      message: "Cover refreshed",
+      cover_path: "/grid/p.png",
+    });
   });
 
   afterEach(() => {
@@ -1090,6 +1097,123 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({ body: "ROM info not loaded yet" }),
       );
+      // No backend call when romId is null
+      expect(vi.mocked(backend.refreshCoverArtwork)).not.toHaveBeenCalled();
+    });
+
+    it("calls refreshCoverArtwork BEFORE SGDB and dispatches 'cover_refreshed' on success", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 77,
+      });
+      vi.mocked(backend.refreshCoverArtwork).mockResolvedValue({
+        success: true,
+        message: "Cover refreshed",
+        cover_path: "/grid/999p.png",
+      });
+      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
+        base64: null,
+        no_api_key: false,
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      const items = await openRomMMenuAndGetItems(testAppId);
+      vi.mocked(backend.refreshCoverArtwork).mockClear();
+      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
+
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        await act(async () => {
+          await items[0]!.props.onClick?.();
+        });
+
+        // refreshCoverArtwork called once with the rom_id
+        expect(vi.mocked(backend.refreshCoverArtwork)).toHaveBeenCalledWith(77);
+
+        // Order: refreshCoverArtwork before getSgdbArtworkBase64
+        const refreshOrder = vi.mocked(backend.refreshCoverArtwork).mock.invocationCallOrder[0]!;
+        const sgdbOrder = vi.mocked(backend.getSgdbArtworkBase64).mock.invocationCallOrder[0]!;
+        expect(refreshOrder).toBeLessThan(sgdbOrder);
+
+        // cover_refreshed event dispatched with the rom_id
+        const ev = listener.mock.calls
+          .map((c) => c[0] as CustomEvent)
+          .find((e) => e.detail?.type === "cover_refreshed");
+        expect(ev?.detail).toEqual({ type: "cover_refreshed", rom_id: 77 });
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
+    });
+
+    it("on refreshCoverArtwork {success: false}, logs and STILL runs the SGDB step", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 77,
+      });
+      vi.mocked(backend.refreshCoverArtwork).mockResolvedValue({
+        success: false,
+        reason: "not_synced",
+        message: "ROM is not synced to Steam",
+      });
+      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
+        base64: null,
+        no_api_key: false,
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      const items = await openRomMMenuAndGetItems(testAppId);
+      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
+      vi.mocked(backend.debugLog).mockClear();
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        await act(async () => {
+          await items[0]!.props.onClick?.();
+        });
+        // SGDB step still runs (graceful fall-through)
+        expect(vi.mocked(backend.getSgdbArtworkBase64)).toHaveBeenCalledTimes(4);
+        // debugLog surfaced the failure reason + message
+        expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+          expect.stringContaining("not_synced"),
+        );
+        // No cover_refreshed event on failure
+        const ev = listener.mock.calls
+          .map((c) => c[0] as CustomEvent)
+          .find((e) => e.detail?.type === "cover_refreshed");
+        expect(ev).toBeUndefined();
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
+    });
+
+    it("on refreshCoverArtwork rejection, debugLogs the rejection and continues to SGDB", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 77,
+      });
+      vi.mocked(backend.refreshCoverArtwork).mockRejectedValue(new Error("network down"));
+      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
+        base64: null,
+        no_api_key: false,
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      const items = await openRomMMenuAndGetItems(testAppId);
+      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
+      vi.mocked(backend.debugLog).mockClear();
+      await act(async () => {
+        await items[0]!.props.onClick?.();
+      });
+      // Non-vacuous catch assertion: debugLog observed the rejection.
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+        expect.stringContaining("refreshCoverArtwork rejected"),
+      );
+      // SGDB step still runs
+      expect(vi.mocked(backend.getSgdbArtworkBase64)).toHaveBeenCalledTimes(4);
     });
 
     it("toasts 'Failed to refresh artwork' when SteamClient.SetCustomArtworkForApp throws", async () => {

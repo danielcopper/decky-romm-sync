@@ -7,11 +7,26 @@ adapters. Each Protocol carries a domain-specific method name
 (``save_state`` / ``save_settings`` / ``save_metadata`` / ``save``)
 rather than a generic ``__call__`` so the type checker rejects
 mis-wires between the three plugin-level persisters.
+
+Field-owning stores (``ShortcutRegistryStore``, ``MetadataCacheStore``)
+live here too: they expose typed-patch mutation seams over the live
+state and metadata-cache dicts. Stores mutate but do not flush — the
+caller drives the matching ``*Persister.save_*`` after a batch.
 """
 
 from __future__ import annotations
 
 from typing import Protocol
+
+from models.metadata_patches import MetadataStampPatch
+from models.registry_patches import (
+    RegistryCoverPathPatch,
+    RegistryDeletePatch,
+    RegistryIdsPatch,
+    RegistrySgdbIdPatch,
+    RegistrySyncApplyPatch,
+)
+from models.state import ShortcutRegistryEntry
 
 
 class StatePersister(Protocol):
@@ -82,3 +97,33 @@ class PluginMetadataReader(Protocol):
         abort on a metadata read.
         """
         ...
+
+
+class ShortcutRegistryStore(Protocol):
+    """Owned mutations for ``shortcut_registry[rom_id_str]``.
+
+    Every mutation goes through a typed patch — writers may only touch
+    fields the patch type owns. The store does not persist; callers
+    drive ``StatePersister.save_state()`` after a batch of writes.
+    """
+
+    def apply_sync(self, patch: RegistrySyncApplyPatch) -> None: ...
+
+    def apply_cover_path(self, patch: RegistryCoverPathPatch) -> None: ...
+
+    def apply_sgdb_id(self, patch: RegistrySgdbIdPatch) -> None: ...
+
+    def apply_ids(self, patch: RegistryIdsPatch) -> None: ...
+
+    def delete(self, patch: RegistryDeletePatch) -> ShortcutRegistryEntry | None: ...
+
+
+class MetadataCacheStore(Protocol):
+    """Owned mutations for ``metadata_cache[rom_id_str]``.
+
+    Mirrors :class:`ShortcutRegistryStore`: typed patches in, in-memory
+    mutations out, no flush. The caller drives the matching
+    ``MetadataCachePersister.save_metadata()`` after a batch.
+    """
+
+    def apply_stamp(self, patch: MetadataStampPatch) -> None: ...

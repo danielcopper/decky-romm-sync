@@ -8,6 +8,7 @@ import decky
 import pytest
 from models.state import make_default_plugin_state
 
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 
@@ -38,6 +39,7 @@ def svc(state, steam_config, artwork_remover_mock):
             logger=decky.logger,
             emit=decky.emit,
             state_persister=MagicMock(),
+            registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
             artwork_remover=artwork_remover_mock,
         ),
     )
@@ -239,6 +241,8 @@ class TestRemovalCleansUpArtwork:
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 get_pending_sync=dict,
+                registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
+                state_persister=MagicMock(),
             ),
         )
 
@@ -251,6 +255,7 @@ class TestRemovalCleansUpArtwork:
                 logger=decky.logger,
                 emit=decky.emit,
                 state_persister=MagicMock(),
+                registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
                 artwork_remover=artwork_svc,
             ),
         )
@@ -281,6 +286,8 @@ class TestRemovalCleansUpArtwork:
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 get_pending_sync=dict,
+                registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
+                state_persister=MagicMock(),
             ),
         )
 
@@ -293,6 +300,7 @@ class TestRemovalCleansUpArtwork:
                 logger=decky.logger,
                 emit=decky.emit,
                 state_persister=MagicMock(),
+                registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
                 artwork_remover=artwork_svc,
             ),
         )

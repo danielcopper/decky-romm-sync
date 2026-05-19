@@ -73,9 +73,11 @@ from services.protocols.paths import (
 from services.protocols.persistence import (
     FirmwareCachePersister,
     MetadataCachePersister,
+    MetadataCacheStore,
     PluginMetadataReader,
     SaveSyncStatePersister,
     SettingsPersister,
+    ShortcutRegistryStore,
     StatePersister,
 )
 from services.protocols.transport import (
@@ -118,6 +120,7 @@ __all__ = [
     "LaunchGateRomLookup",
     "LaunchGateSaveStatusReader",
     "MetadataCachePersister",
+    "MetadataCacheStore",
     "MetadataExtractor",
     "MigrationFileStore",
     "MigrationPendingFn",
@@ -151,6 +154,7 @@ __all__ = [
     "SessionPostExitSync",
     "SettingsPersister",
     "SgdbArtworkCache",
+    "ShortcutRegistryStore",
     "Sleeper",
     "StatePersister",
     "SteamConfigStore",

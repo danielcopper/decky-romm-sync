@@ -36,6 +36,7 @@ import {
   getBiosStatus,
   getSgdbArtworkBase64,
   getRomMetadata,
+  refreshCoverArtwork,
   removeRom,
   downloadAllFirmware,
   syncRomSaves,
@@ -401,9 +402,29 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       toaster.toast({ title: "RomM Sync", body: "ROM info not loaded yet" });
       return;
     }
+    const romId = info.romId;
     setActionPending("artwork");
     try {
-      const applied = await applyArtwork(info.romId, appId);
+      // Step 1: re-download the RomM cover, rename to {app_id}p.png, and
+      // patch cover_path on the registry row so the game info panel can
+      // render the refreshed image.
+      const coverResult = await refreshCoverArtwork(romId).catch(
+        (e): { success: boolean; reason?: string; message: string; cover_path?: string } => {
+          debugLog(`refreshCoverArtwork rejected: ${e}`);
+          return { success: false, reason: "exception", message: String(e) };
+        },
+      );
+      if (!coverResult.success) {
+        debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
+      } else {
+        // Notify the game info panel so it can re-render the cover image.
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
+          detail: { type: "cover_refreshed", rom_id: romId },
+        }));
+      }
+
+      // Step 2: refresh SGDB artwork (hero, logo, grid, icon).
+      const applied = await applyArtwork(romId, appId);
       if (applied === -1) {
         toaster.toast({ title: "RomM Sync", body: "Set a SteamGridDB API key in settings first" });
       } else if (applied > 0) {

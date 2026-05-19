@@ -391,6 +391,24 @@ class TestArtworkCallableDelegation:
         plugin._artwork_service.get_artwork_base64.assert_awaited_once_with(42)
         assert result == {"base64": None}
 
+    @pytest.mark.asyncio
+    async def test_refresh_cover_artwork_delegates(self, plugin):
+        plugin._artwork_service.refresh_cover = AsyncMock(
+            return_value={"success": True, "message": "Cover refreshed", "cover_path": "/grid/999p.png"},
+        )
+        result = await plugin.refresh_cover_artwork(42)
+        plugin._artwork_service.refresh_cover.assert_awaited_once_with(42)
+        assert result["success"] is True
+        assert result["cover_path"] == "/grid/999p.png"
+
+    @pytest.mark.asyncio
+    async def test_refresh_cover_artwork_coerces_string_rom_id(self, plugin):
+        plugin._artwork_service.refresh_cover = AsyncMock(return_value={"success": True, "message": "ok"})
+        # Decky callables receive args as JSON — defensive int() coercion guards
+        # against the frontend accidentally sending a string.
+        await plugin.refresh_cover_artwork("42")
+        plugin._artwork_service.refresh_cover.assert_awaited_once_with(42)
+
 
 # ── Launch / session lifecycle callables ───────────────────────────────
 

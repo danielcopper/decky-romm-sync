@@ -32,6 +32,8 @@ from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import ShortcutRegistryEntry, make_default_plugin_state
 
+from adapters.metadata_cache_store import MetadataCacheStoreAdapter
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
@@ -186,6 +188,7 @@ class TestWireServices:
         http_adapter = MagicMock(spec=RommHttpAdapter)
         steam_config = SteamConfigAdapter(user_home=str(tmp_path), logger=logger)
         state = make_default_plugin_state()
+        metadata_cache: dict = {}
         romm_api = MagicMock(spec=RommApiAdapter)
         return {
             "http_adapter": http_adapter,
@@ -204,7 +207,7 @@ class TestWireServices:
             "path_probe": FakePathExistsReader(),
             "state": state,
             "settings": settings,
-            "metadata_cache": {},
+            "metadata_cache": metadata_cache,
             "save_sync_state": {"saves": {}, "playtime": {}, "settings": {}},
             "loop": asyncio.new_event_loop(),
             "logger": logger,
@@ -230,6 +233,8 @@ class TestWireServices:
             "firmware_cache_persister": FakeFirmwareCachePersister(),
             "core_info_provider": FakeCoreInfoProvider(),
             "save_sync_state_persister": MagicMock(load=MagicMock(return_value=None), save=MagicMock()),
+            "registry_store": RegistryStoreAdapter(state=state, logger=logger),
+            "metadata_store": MetadataCacheStoreAdapter(metadata_cache=metadata_cache),
             "log_debug": MagicMock(),
             "plugin_metadata": FakePluginMetadataReader(version="0.14.0"),
         }
@@ -281,6 +286,8 @@ class TestWireServices:
                 metadata_cache_persister=deps["metadata_cache_persister"],
                 firmware_cache_persister=deps["firmware_cache_persister"],
                 save_sync_state_persister=deps["save_sync_state_persister"],
+                registry_store=deps["registry_store"],
+                metadata_store=deps["metadata_store"],
                 log_debug=deps["log_debug"],
                 plugin_metadata=deps["plugin_metadata"],
             ),

@@ -37,6 +37,8 @@ class Plugin:
     _state_persister: Any
     _settings_persister: Any
     _metadata_cache_persister: Any
+    _registry_store: Any
+    _metadata_store: Any
     _http_adapter: Any
     _romm_api: Any
     _steam_config: Any
@@ -289,6 +291,10 @@ class Plugin:
 
     async def get_artwork_base64(self, rom_id):
         return await self._artwork_service.get_artwork_base64(rom_id)
+
+    @migration_blocked
+    async def refresh_cover_artwork(self, rom_id):
+        return await self._artwork_service.refresh_cover(int(rom_id))
 
     @migration_blocked
     async def clear_sync_cache(self):

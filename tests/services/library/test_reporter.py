@@ -183,52 +183,60 @@ class TestFinalizeCoverPath:
         assert result == staging_path
 
 
-class TestBuildRegistryEntry:
-    """Tests for _build_registry_entry() — lines 714-727."""
+class TestCommitUnitResults:
+    """Tests for _commit_unit_results_io — registry write via store with field preservation."""
 
-    def test_builds_full_entry(self, plugin):
-        pending = {
-            "name": "Game A",
-            "fs_name": "gamea.z64",
+    def test_commit_preserves_sgdb_id_when_pending_lacks_it(self, plugin):
+        """Field-clobber regression (#745): pending without sgdb_id must not wipe an existing sgdb_id."""
+        plugin._state["shortcut_registry"]["42"] = {
+            "app_id": 100001,
+            "name": "Old",
+            "fs_name": "old.z64",
             "platform_name": "N64",
             "platform_slug": "n64",
-            "igdb_id": 100,
-            "sgdb_id": 200,
-            "ra_id": 300,
+            "cover_path": "/covers/old.png",
+            "sgdb_id": 999,
         }
-        result = plugin._sync_service._reporter._build_registry_entry(pending, 100001, "/grid/100001p.png")
-        assert result["app_id"] == 100001
-        assert result["name"] == "Game A"
-        assert result["fs_name"] == "gamea.z64"
-        assert result["platform_name"] == "N64"
-        assert result["platform_slug"] == "n64"
-        assert result["cover_path"] == "/grid/100001p.png"
-        assert result["igdb_id"] == 100
-        assert result["sgdb_id"] == 200
-        assert result["ra_id"] == 300
-
-    def test_omits_none_meta_keys(self, plugin):
-        pending = {
-            "name": "Game B",
-            "fs_name": "",
-            "platform_name": "SNES",
-            "platform_slug": "snes",
-            "igdb_id": None,
-            "sgdb_id": None,
-            "ra_id": None,
+        plugin._sync_service._box.pending_sync[42] = {
+            "name": "Game",
+            "fs_name": "game.z64",
+            "platform_name": "Game Boy",
+            "platform_slug": "gb",
+            "cover_path": "",
         }
-        result = plugin._sync_service._reporter._build_registry_entry(pending, 100002, "")
-        assert "igdb_id" not in result
-        assert "sgdb_id" not in result
-        assert "ra_id" not in result
 
-    def test_missing_keys_default_to_empty(self, plugin):
-        pending = {}
-        result = plugin._sync_service._reporter._build_registry_entry(pending, 100003, "")
-        assert result["name"] == ""
-        assert result["fs_name"] == ""
-        assert result["platform_name"] == ""
-        assert result["platform_slug"] == ""
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001})
+
+        entry = plugin._state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 999
+        assert entry["name"] == "Game"
+        assert entry["app_id"] == 100001
+
+    def test_commit_preserves_igdb_and_ra_ids_when_pending_lacks_them(self, plugin):
+        """The preservation guarantee extends to igdb_id and ra_id."""
+        plugin._state["shortcut_registry"]["42"] = {
+            "app_id": 100001,
+            "name": "Old",
+            "fs_name": "old.z64",
+            "platform_name": "N64",
+            "platform_slug": "n64",
+            "cover_path": "/covers/old.png",
+            "igdb_id": 555,
+            "ra_id": 777,
+        }
+        plugin._sync_service._box.pending_sync[42] = {
+            "name": "Game",
+            "fs_name": "game.z64",
+            "platform_name": "Game Boy",
+            "platform_slug": "gb",
+            "cover_path": "",
+        }
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001})
+
+        entry = plugin._state["shortcut_registry"]["42"]
+        assert entry["igdb_id"] == 555
+        assert entry["ra_id"] == 777
 
 
 class TestClearSyncCache:

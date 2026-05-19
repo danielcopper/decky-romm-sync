@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.registry_patches import RegistryIdsPatch, RegistrySgdbIdPatch
 from models.state import PluginState
 
 from domain.sgdb_artwork import (
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
         RommRomReader,
         SettingsPersister,
         SgdbArtworkCache,
+        ShortcutRegistryStore,
         StatePersister,
         SteamConfigStore,
         SteamGridDbApi,
@@ -62,6 +64,7 @@ class SteamGridServiceConfig:
     logger: logging.Logger
     state_persister: StatePersister
     settings_persister: SettingsPersister
+    registry_store: ShortcutRegistryStore
     get_pending_sync: PendingSyncReader
     log_debug: DebugLogger
 
@@ -80,6 +83,7 @@ class SteamGridService:
         self._logger = config.logger
         self._state_persister = config.state_persister
         self._settings_persister = config.settings_persister
+        self._registry_store = config.registry_store
         self._get_pending_sync = config.get_pending_sync
         self._log_debug = config.log_debug
 
@@ -150,8 +154,8 @@ class SteamGridService:
         # Fallback: look up SGDB via IGDB ID
         if not sgdb_id and igdb_id:
             sgdb_id = await self._loop.run_in_executor(None, self._get_sgdb_game_id, igdb_id)
-            if sgdb_id and rom_id_str in self._state["shortcut_registry"]:
-                self._state["shortcut_registry"][rom_id_str]["sgdb_id"] = sgdb_id
+            if sgdb_id:
+                self._registry_store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str=rom_id_str, sgdb_id=sgdb_id))
                 self._state_persister.save_state()
 
         return sgdb_id
@@ -166,11 +170,10 @@ class SteamGridService:
                 sgdb_id = rom_data.get("sgdb_id")
                 igdb_id = igdb_id or rom_data.get("igdb_id")
             self._log_debug(f"SGDB artwork: fetched sgdb_id={sgdb_id}, igdb_id={igdb_id} from RomM for rom_id={rom_id}")
-            if rom_id_str in self._state["shortcut_registry"]:
-                if sgdb_id:
-                    self._state["shortcut_registry"][rom_id_str]["sgdb_id"] = sgdb_id
-                if igdb_id:
-                    self._state["shortcut_registry"][rom_id_str]["igdb_id"] = igdb_id
+            if sgdb_id or igdb_id:
+                self._registry_store.apply_ids(
+                    RegistryIdsPatch(rom_id_str=rom_id_str, sgdb_id=sgdb_id or None, igdb_id=igdb_id or None)
+                )
                 self._state_persister.save_state()
         except Exception as e:
             self._logger.warning(f"SGDB artwork: failed to fetch IDs from RomM for rom_id={rom_id}: {e}")

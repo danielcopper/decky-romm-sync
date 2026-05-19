@@ -16,7 +16,8 @@ export type RommDataChangedDetail =
   | { type: "save_sync_settings"; save_sync_enabled: boolean }
   | { type: "metadata"; rom_id: number }
   | { type: "bios"; platform_slug: string }
-  | { type: "core_changed"; platform_slug: string };
+  | { type: "core_changed"; platform_slug: string }
+  | { type: "cover_refreshed"; rom_id: number };
 
 export interface RommRomUninstalledDetail {
   rom_id: number;

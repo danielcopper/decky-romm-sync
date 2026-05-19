@@ -18,11 +18,13 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
+from adapters.metadata_cache_store import MetadataCacheStoreAdapter
 from adapters.persistence import (
     MetadataCachePersisterAdapter,
     PersistenceAdapter,
     StatePersisterAdapter,
 )
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -50,6 +52,8 @@ def plugin(tmp_path):
     p._state_persister = StatePersisterAdapter(p._persistence, p._state)
     p._settings_persister = FakeSettingsPersister()
     p._metadata_cache_persister = MetadataCachePersisterAdapter(p._persistence, p._metadata_cache)
+    p._registry_store = RegistryStoreAdapter(state=p._state, logger=decky.logger)
+    p._metadata_store = MetadataCacheStoreAdapter(metadata_cache=p._metadata_cache)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
@@ -61,6 +65,7 @@ def plugin(tmp_path):
             logger=decky.logger,
             clock=FakeClock(),
             metadata_cache_persister=p._metadata_cache_persister,
+            metadata_store=p._metadata_store,
             log_debug=p._log_debug,
         ),
     )
@@ -75,6 +80,8 @@ def plugin(tmp_path):
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             get_pending_sync=dict,
+            registry_store=p._registry_store,
+            state_persister=MagicMock(),
         ),
     )
     p._artwork_service = artwork_service
@@ -95,6 +102,7 @@ def plugin(tmp_path):
             sleeper=FakeSleeper(),
             state_persister=p._state_persister,
             settings_persister=p._settings_persister,
+            registry_store=p._registry_store,
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,
@@ -110,6 +118,7 @@ def plugin(tmp_path):
             logger=decky.logger,
             emit=decky.emit,
             state_persister=p._state_persister,
+            registry_store=p._registry_store,
             artwork_remover=artwork_service,
         ),
     )

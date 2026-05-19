@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.registry_patches import RegistryDeletePatch
 from models.state import PluginState
 
 if TYPE_CHECKING:
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
         ArtworkRemover,
         EventEmitter,
         RommPlatformReader,
+        ShortcutRegistryStore,
         StatePersister,
         SteamConfigStore,
     )
@@ -36,6 +38,7 @@ class ShortcutRemovalServiceConfig:
     logger: logging.Logger
     emit: EventEmitter
     state_persister: StatePersister
+    registry_store: ShortcutRegistryStore
     artwork_remover: ArtworkRemover
 
 
@@ -50,6 +53,7 @@ class ShortcutRemovalService:
         self._logger = config.logger
         self._emit = config.emit
         self._state_persister = config.state_persister
+        self._registry_store = config.registry_store
         self._artwork_remover = config.artwork_remover
 
     # ── Registry helpers ───────────────────────────────────────────────────
@@ -128,7 +132,7 @@ class ShortcutRemovalService:
 
         grid = self._steam_config.grid_dir()
         for rom_id in removed_rom_ids:
-            entry = self._state["shortcut_registry"].pop(str(rom_id), None)
+            entry = self._registry_store.delete(RegistryDeletePatch(rom_id_str=str(rom_id)))
             if entry and grid:
                 self._artwork_remover.remove_artwork_files(grid, rom_id, entry)
 

@@ -7,6 +7,7 @@ from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.save_state import SaveSyncState
 
@@ -63,6 +64,7 @@ def plugin(clock):
             sleeper=FakeSleeper(),
             state_persister=MagicMock(),
             settings_persister=MagicMock(),
+            registry_store=RegistryStoreAdapter(state=p._state, logger=decky.logger),
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),

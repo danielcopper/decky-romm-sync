@@ -8,15 +8,24 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from models.registry_patches import RegistryCoverPathPatch
 from models.state import PluginState, ShortcutRegistryEntry
 
 from domain.artwork_paths import final_filename, staging_filename
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
 
-    from services.protocols import CoverArtFileStore, PendingSyncReader, RommRomReader, SteamConfigStore
+    from services.protocols import (
+        CoverArtFileStore,
+        PendingSyncReader,
+        RommRomReader,
+        ShortcutRegistryStore,
+        StatePersister,
+        SteamConfigStore,
+    )
 
 
 @dataclass(frozen=True)
@@ -35,6 +44,8 @@ class ArtworkServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     get_pending_sync: PendingSyncReader
+    registry_store: ShortcutRegistryStore
+    state_persister: StatePersister
 
 
 class ArtworkService:
@@ -48,6 +59,8 @@ class ArtworkService:
         self._loop = config.loop
         self._logger = config.logger
         self._get_pending_sync = config.get_pending_sync
+        self._registry_store = config.registry_store
+        self._state_persister = config.state_persister
 
     # ── Existing cover path check ──────────────────────────────────────────
 
@@ -193,6 +206,13 @@ class ArtworkService:
             if self._cover_art_file_store.exists(staging):
                 cover_path = staging
 
+        # The canonical {app_id}p.png may be on disk even when the registry
+        # row has no cover_path — recover it via the registry's app_id.
+        if not cover_path:
+            fallback = self.existing_cover_path(rom_id, grid)
+            if fallback:
+                cover_path = fallback
+
         if cover_path and self._cover_art_file_store.exists(cover_path):
             try:
                 data = await self._loop.run_in_executor(None, self._cover_art_file_store.read_bytes, cover_path)
@@ -201,6 +221,84 @@ class ArtworkService:
                 self._logger.warning(f"Failed to read artwork for rom {rom_id}: {e}")
 
         return {"base64": None}
+
+    # ── Cover refresh (single-ROM repair) ──────────────────────────────────
+
+    async def refresh_cover(self, rom_id: int) -> dict:
+        """Re-download a ROM's RomM cover and update its registry row.
+
+        Looks up the ROM's current registry entry to get its ``app_id``,
+        fetches the fresh cover URL from RomM, downloads to staging,
+        renames to ``{app_id}p.png``, and applies a
+        :class:`RegistryCoverPathPatch` so the registry's ``cover_path``
+        catches up. Returns the canonical ``{success, reason, message}``
+        failure shape on every failure branch — see
+        ``lib/list_result.py``.
+        """
+        reg = self._state["shortcut_registry"].get(str(rom_id))
+        if not reg or not reg.get("app_id"):
+            return {
+                "success": False,
+                "reason": "not_synced",
+                "message": "ROM is not synced to Steam",
+            }
+        app_id = reg["app_id"]
+
+        grid = self._steam_config.grid_dir()
+        if not grid:
+            return {
+                "success": False,
+                "reason": "no_grid_dir",
+                "message": "Steam grid directory not found",
+            }
+
+        try:
+            rom = await self._loop.run_in_executor(None, self._romm_api.get_rom, rom_id)
+        except Exception as e:
+            self._logger.warning(f"refresh_cover: failed to fetch rom {rom_id}: {e}")
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Could not fetch ROM from server",
+            }
+        if not rom:
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Could not fetch ROM from server",
+            }
+
+        cover_url = rom.get("path_cover_large") or rom.get("path_cover_small")
+        if not cover_url:
+            return {
+                "success": False,
+                "reason": "no_cover",
+                "message": "ROM has no cover artwork",
+            }
+
+        staging = os.path.join(grid, staging_filename(rom_id))
+        try:
+            await self._loop.run_in_executor(None, self._romm_api.download_cover, cover_url, staging)
+        except Exception as e:
+            self._logger.warning(f"refresh_cover: failed to download cover for rom {rom_id}: {e}")
+            return {
+                "success": False,
+                "reason": "download_failed",
+                "message": str(e),
+            }
+
+        final = self.finalize_cover_path(grid, staging, app_id, str(rom_id))
+
+        self._registry_store.apply_cover_path(
+            RegistryCoverPathPatch(rom_id_str=str(rom_id), cover_path=final),
+        )
+        await self._loop.run_in_executor(None, self._state_persister.save_state)
+
+        return {
+            "success": True,
+            "message": "Cover refreshed",
+            "cover_path": final,
+        }
 
     # ── Staging file housekeeping ──────────────────────────────────────────
 

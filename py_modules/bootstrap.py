@@ -25,6 +25,7 @@ from adapters.download_queue import DownloadQueueAdapter
 from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
+from adapters.metadata_cache_store import MetadataCacheStoreAdapter
 from adapters.migration_file import MigrationFileAdapter
 from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import (
@@ -36,6 +37,7 @@ from adapters.persistence import (
     StatePersisterAdapter,
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
+from adapters.registry_store import RegistryStoreAdapter
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
@@ -77,6 +79,7 @@ from services.protocols import (
     GamelistXmlEditor,
     HostnameReader,
     MetadataCachePersister,
+    MetadataCacheStore,
     MigrationFileStore,
     PathExistsReader,
     PluginMetadataReader,
@@ -88,6 +91,7 @@ from services.protocols import (
     SaveSyncStatePersister,
     SettingsPersister,
     SgdbArtworkCache,
+    ShortcutRegistryStore,
     Sleeper,
     StatePersister,
     SteamConfigStore,
@@ -172,6 +176,8 @@ class CallbackBundle:
     metadata_cache_persister: MetadataCachePersister
     firmware_cache_persister: FirmwareCachePersister
     save_sync_state_persister: SaveSyncStatePersister
+    registry_store: ShortcutRegistryStore
+    metadata_store: MetadataCacheStore
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
 
@@ -308,6 +314,8 @@ def bootstrap(
     state_persister = StatePersisterAdapter(persistence, state)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
     metadata_cache_persister = MetadataCachePersisterAdapter(persistence, metadata_cache)
+    registry_store = RegistryStoreAdapter(state=state, logger=logger)
+    metadata_store = MetadataCacheStoreAdapter(metadata_cache=metadata_cache)
     plugin_metadata = PluginMetadataAdapter()
     # Single source of truth for outgoing User-Agent — read package.json
     # version once at boot and thread the string to every HTTP-talking
@@ -366,6 +374,8 @@ def bootstrap(
         metadata_cache_persister=metadata_cache_persister,
         firmware_cache_persister=firmware_cache_persister,
         save_sync_state_persister=save_sync_state_persister,
+        registry_store=registry_store,
+        metadata_store=metadata_store,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
     )
@@ -474,6 +484,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
             metadata_cache_persister=cfg.callbacks.metadata_cache_persister,
+            metadata_store=cfg.callbacks.metadata_store,
             log_debug=cfg.callbacks.log_debug,
         ),
     )
@@ -487,6 +498,8 @@ def wire_services(cfg: WiringConfig) -> dict:
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             get_pending_sync=pending_sync_binding.get,
+            registry_store=cfg.callbacks.registry_store,
+            state_persister=cfg.callbacks.state_persister,
         ),
     )
 
@@ -499,6 +512,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             logger=cfg.runtime.logger,
             emit=cfg.runtime.emit,
             state_persister=cfg.callbacks.state_persister,
+            registry_store=cfg.callbacks.registry_store,
             artwork_remover=artwork_service,
         ),
     )
@@ -519,6 +533,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             sleeper=cfg.runtime.sleeper,
             state_persister=cfg.callbacks.state_persister,
             settings_persister=cfg.callbacks.settings_persister,
+            registry_store=cfg.callbacks.registry_store,
             log_debug=cfg.callbacks.log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,
@@ -591,6 +606,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             logger=cfg.runtime.logger,
             state_persister=cfg.callbacks.state_persister,
             settings_persister=cfg.callbacks.settings_persister,
+            registry_store=cfg.callbacks.registry_store,
             get_pending_sync=pending_sync_binding.get,
             log_debug=cfg.callbacks.log_debug,
         ),
@@ -655,6 +671,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             state=cfg.stores.state,
             logger=cfg.runtime.logger,
             state_persister=cfg.callbacks.state_persister,
+            registry_store=cfg.callbacks.registry_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             path_probe=cfg.adapters.path_probe,
         ),
