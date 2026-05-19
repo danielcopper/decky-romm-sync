@@ -782,15 +782,24 @@ class TestDoSyncPerUnit:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "N64", "fs_name": "n.z64", "platform_name": "N64", "platform_slug": "n64"},
-            "20": {"name": "GBA", "fs_name": "g.gba", "platform_name": "GBA", "platform_slug": "gba"},
-        }
-        fake_romm_api.platforms = [
-            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 1},
-            {"id": 2, "name": "GBA", "slug": "gba", "rom_count": 1},
-        ]
+        # Live-fetch platforms (no last_sync, empty registry) so both
+        # units reach the apply branch and emit ``sync_apply_unit``.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}],
+        )
+        _seed_platform(
+            fake_romm_api,
+            platform_id=2,
+            name="GBA",
+            slug="gba",
+            roms=[{"id": 20, "name": "B"}],
+        )
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -812,7 +821,16 @@ class TestDoSyncPerUnit:
         assert unit_events[1]["unit_index"] == 1
 
     @pytest.mark.asyncio
-    async def test_skips_artwork_when_incremental_skipped(self, plugin, fake_romm_api):
+    async def test_skipped_unit_short_circuits_apply(self, plugin, fake_romm_api):
+        """``skipped=True`` from the fetcher short-circuits the whole apply+commit branch.
+
+        For a unit whose registry already matches the server-side ROM
+        count and has no updates since ``last_sync``, none of these run:
+        artwork download, ``_wait_for_unit_complete``, the
+        ``sync_apply_unit`` emit, or the reporter's ``commit_unit_results``.
+        The unit's reconstructed ROMs still join ``synced_rom_ids`` so
+        the final stale-cleanup pass doesn't mistakenly remove them.
+        """
         import decky
 
         decky.emit.reset_mock()
@@ -829,12 +847,27 @@ class TestDoSyncPerUnit:
 
         download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._download_artwork = download_artwork
-        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        wait_mock = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_mock
+        commit_mock = AsyncMock()
+        plugin._sync_service._reporter.commit_unit_results = commit_mock  # type: ignore[method-assign]
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
-        # skipped=True from fetcher → no artwork download
+
+        # Nothing on the apply branch ran.
         download_artwork.assert_not_called()
+        wait_mock.assert_not_called()
+        apply_events = [c for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_apply_unit"]
+        assert apply_events == [], f"sync_apply_unit must not be emitted for a skipped unit, got: {apply_events}"
+        commit_mock.assert_not_called()
+
+        # Stale-cleanup still emits with an empty remove list — the
+        # skipped unit's reconstructed ROMs joined synced_rom_ids so
+        # rom_id 10 is not classified as stale.
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        assert len(stale_events) == 1
+        assert stale_events[0] == {"remove_rom_ids": []}
 
     @pytest.mark.asyncio
     async def test_downloads_artwork_when_not_skipped(self, plugin, fake_romm_api):
@@ -866,22 +899,37 @@ class TestDoSyncPerUnit:
 
     @pytest.mark.asyncio
     async def test_cancel_between_units_stops_processing(self, plugin, fake_romm_api):
+        """Cancel flipped during the first unit's ack stops the queue mid-flight.
+
+        Both platforms take the live-fetch path (no ``last_sync``) so
+        each fully traverses ``_sync_one_unit`` rather than short-
+        circuiting. The cancel observed between units must produce
+        exactly one ``sync_apply_unit`` and a ``cancelled=True``
+        ``sync_complete``.
+        """
         import decky
 
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
-        # Two incremental-skip platforms in the queue.
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
-            "20": {"name": "B", "fs_name": "b.gba", "platform_name": "GBA", "platform_slug": "gba"},
-        }
-        fake_romm_api.platforms = [
-            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 1},
-            {"id": 2, "name": "GBA", "slug": "gba", "rom_count": 1},
-        ]
+        # Two live-fetch platforms (no last_sync, empty registry).
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}],
+        )
+        _seed_platform(
+            fake_romm_api,
+            platform_id=2,
+            name="GBA",
+            slug="gba",
+            roms=[{"id": 20, "name": "B"}],
+        )
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -898,7 +946,7 @@ class TestDoSyncPerUnit:
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
         unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
-        assert len(unit_events) == 1  # second unit was skipped
+        assert len(unit_events) == 1  # cancel observed between units
         complete_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert len(complete_events) == 1
         assert complete_events[0].get("cancelled") is True
@@ -1314,7 +1362,6 @@ class TestSyncOneUnitCollectionAndCancel:
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
-            all_rom_id_to_app_id={},
         )
         assert applied == 0
 
@@ -1351,7 +1398,6 @@ class TestSyncOneUnitCollectionAndCancel:
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
-            all_rom_id_to_app_id={},
         )
         assert applied == 0
 
@@ -1361,11 +1407,17 @@ class TestSyncOneUnitCollectionAndCancel:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
-        # Incremental-skip path: registry matches platform rom_count + zero updates.
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "1": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
-        }
+        # Live-fetch path so the unit reaches the apply branch where
+        # ``_wait_for_unit_complete`` is called.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}],
+        )
+        plugin._state["last_sync"] = None
+        plugin._state["shortcut_registry"] = {}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
@@ -1384,7 +1436,6 @@ class TestSyncOneUnitCollectionAndCancel:
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
-            all_rom_id_to_app_id={},
         )
         assert applied == 0
         # pending_sync was cleared, unit event reference dropped, state flipped.
@@ -1448,7 +1499,6 @@ class TestPerUnitMetadataStamping:
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
-            all_rom_id_to_app_id={},
         )
 
         assert call_order == ["record_unit_metadata", "commit_unit_results"]
@@ -1457,9 +1507,9 @@ class TestPerUnitMetadataStamping:
     async def test_skipped_unit_does_not_stamp_metadata(self, plugin, fake_romm_api):
         """Incremental-skip platforms must NOT call ``record_unit_metadata``.
 
-        Skipped units carry registry-reconstructed thin ROMs without a
-        ``metadatum`` field. Passing them through the stamp path would
-        erase populated cache entries with empty ones — the #738 bug.
+        The skipped short-circuit returns from ``_sync_one_unit`` before
+        the metadata stamp runs, so populated cache entries from prior
+        real fetches are preserved (#738).
         """
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
@@ -1489,7 +1539,6 @@ class TestPerUnitMetadataStamping:
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
-            all_rom_id_to_app_id={},
         )
 
         record_mock.assert_not_called()
@@ -1536,7 +1585,6 @@ class TestPerUnitMetadataStamping:
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
-            all_rom_id_to_app_id={},
         )
 
         assert {r["id"] for r in recorded_roms} == {1, 3, 5}

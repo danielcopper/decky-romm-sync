@@ -339,12 +339,10 @@ class SyncOrchestrator:
         box = self._sync_state
         # Cross-unit accumulators — built up unit-by-unit, consumed by the
         # final phase. ``synced_rom_ids`` is shared with collection units
-        # for dedup. ``all_rom_id_to_app_id`` aggregates every unit's
-        # frontend-reported mapping for stale detection. ``collection_
-        # memberships`` and ``platform_rom_ids`` feed the reporter's
-        # ``_build_collection_app_ids`` once every unit has been applied.
+        # for dedup. ``collection_memberships`` and ``platform_rom_ids``
+        # feed the reporter's ``_build_collection_app_ids`` once every
+        # unit has been applied.
         synced_rom_ids: set[int] = set()
-        all_rom_id_to_app_id: dict[str, int] = {}
         collection_memberships: dict[str, list[int]] = {}
         platform_rom_ids: set[int] = set()
         total_games_applied = 0
@@ -393,7 +391,6 @@ class SyncOrchestrator:
                     synced_rom_ids=synced_rom_ids,
                     collection_memberships=collection_memberships,
                     platform_rom_ids=platform_rom_ids,
-                    all_rom_id_to_app_id=all_rom_id_to_app_id,
                 )
                 total_games_applied += applied
 
@@ -435,7 +432,6 @@ class SyncOrchestrator:
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
         platform_rom_ids: set[int],
-        all_rom_id_to_app_id: dict[str, int],
     ) -> int:
         """Process one work unit start-to-finish; return shortcuts applied.
 
@@ -446,6 +442,12 @@ class SyncOrchestrator:
         any crash between the two leaves harmless orphan metadata
         rather than orphan registry entries pointing at unstamped
         metadata (#738).
+
+        When the fetcher reports ``skipped=True`` (registry already
+        matches the server-side platform state), the entire apply +
+        commit branch is short-circuited: no frontend roundtrip, no
+        registry write. The unit's ROMs still count toward the
+        ``total_games_applied`` total returned to the user.
         """
         box = self._sync_state
         await self._emit_progress(
@@ -474,12 +476,22 @@ class SyncOrchestrator:
         if box.sync_state == SyncState.CANCELLING:
             return 0
 
+        # Per-unit incremental skip: registry already matches the
+        # server-side state for this platform, so neither apply nor
+        # commit have any work. Skip the frontend roundtrip and the
+        # no-op two-phase commit. Force Full Sync clears ``last_sync``
+        # upstream, so ``skipped`` is always False on forced runs.
+        if skipped:
+            self._logger.info(f"Per-unit apply skipped: {unit.name} ({len(unit_roms)} ROMs unchanged)")
+            return len(unit_roms)
+
         # Build shortcut data for this unit.
         shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir)
 
-        # Download artwork for this unit (skipped if the incremental
-        # path already populated cover_path from the registry).
-        if not skipped and unit_roms:
+        # Download artwork for this unit. Empty unit_roms is a defensive
+        # guard — an empty platform that survived planning still has no
+        # artwork to fetch.
+        if unit_roms:
             cover_paths = await self._download_artwork(
                 unit_roms, progress_step=unit_index + 1, progress_total_steps=total_units
             )
@@ -519,28 +531,18 @@ class SyncOrchestrator:
             box.sync_state = SyncState.CANCELLING
             return 0
 
-        # Per-unit two-phase commit:
-        #
-        # 1) Stamp metadata cache for the acked ROMs first. Skipped
-        #    (incremental-skip) units carry thin registry-reconstructed
-        #    ROMs without a ``metadatum`` field; ``record_unit_metadata``
-        #    guards on that and is a no-op for them — so we never erase
-        #    the populated entries from a prior real fetch (#738).
-        # 2) Then commit the registry + persist state via the reporter.
-        #
-        # The ordering matters across crashes: metadata-first means an
-        # interrupted apply leaves only orphan metadata (harmless,
-        # next sync re-stamps). Registry-first would leave registry
-        # entries pointing at an unstamped (or freshly wiped) cache.
-        if not skipped:
-            acked_roms = [r for r in unit_roms if str(r["id"]) in applied]
-            await self._loop.run_in_executor(None, self._metadata_service.record_unit_metadata, acked_roms)
+        # Per-unit two-phase commit: stamp metadata cache for the acked
+        # ROMs first, then commit the registry + persist state via the
+        # reporter. The ordering matters across crashes: metadata-first
+        # means an interrupted apply leaves only orphan metadata
+        # (harmless, next sync re-stamps). Registry-first would leave
+        # registry entries pointing at an unstamped (or freshly wiped)
+        # cache (#738).
+        acked_roms = [r for r in unit_roms if str(r["id"]) in applied]
+        await self._loop.run_in_executor(None, self._metadata_service.record_unit_metadata, acked_roms)
 
         await self._reporter.get().commit_unit_results(applied)
 
-        # Mirror the rom_id_to_app_id into the cross-run accumulator
-        # for stale + Steam-collection mapping.
-        all_rom_id_to_app_id.update(applied)
         box.pending_sync = {}
         box.unit_complete_event = None
         return len(applied)

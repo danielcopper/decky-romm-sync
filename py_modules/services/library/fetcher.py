@@ -470,9 +470,11 @@ class LibraryFetcher:
         used to reconstruct the ROM list (avoids re-paginating).
 
         Returns ``(unit_roms, skipped)`` where ``skipped`` is True when
-        the incremental check succeeded — callers can use this to skip
-        the artwork-download step entirely if the registry already
-        carries the cover_path.
+        the incremental check succeeded. Callers use ``skipped=True`` as
+        the signal to short-circuit the entire per-unit apply + commit
+        branch — no ``sync_apply_unit`` emit, no frontend roundtrip, no
+        registry commit. The reconstructed ``unit_roms`` still flow back
+        so the caller can keep its synced-rom accounting accurate.
         """
         if unit.type != "platform":
             raise ValueError(f"fetch_platform_unit called with non-platform unit type={unit.type}")
