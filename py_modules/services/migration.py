@@ -30,8 +30,17 @@ if TYPE_CHECKING:
         MigrationFileStore,
         RetroArchSaveSortingProvider,
         RetroDeckPaths,
+        SettingsPersister,
         StatePersister,
     )
+
+
+# Settings schema version that introduced the fetch/apply split (#738).
+# Pre-v2 plugin runs may have left the metadata cache corrupted by a
+# delta-sync that overwrote populated entries with empty ones. Clearing
+# ``last_sync`` on the v1→v2 hop forces the next sync to do a full
+# fetch, which re-stamps the cache from real ROMs.
+_SETTINGS_VERSION_FETCH_APPLY_SPLIT = 2
 
 
 @dataclass(frozen=True)
@@ -39,16 +48,18 @@ class MigrationServiceConfig:
     """Frozen wiring bundle handed to ``MigrationService.__init__``.
 
     Holds the Protocol-typed migration-file adapter, the live state
-    dict, runtime infrastructure, persistence callback, event emitter,
-    and the provider callables MigrationService needs at construction
-    time.
+    and settings dicts, runtime infrastructure, persistence callbacks,
+    event emitter, and the provider callables MigrationService needs
+    at construction time.
     """
 
     migration_file_store: MigrationFileStore
     state: PluginState
+    settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     state_persister: StatePersister
+    settings_persister: SettingsPersister
     emit: EventEmitter
     get_bios_files_index: Callable[[], dict]
     retrodeck_paths: RetroDeckPaths
@@ -63,9 +74,11 @@ class MigrationService:
     def __init__(self, *, config: MigrationServiceConfig) -> None:
         self._migration_file_store = config.migration_file_store
         self._state = config.state
+        self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
         self._state_persister = config.state_persister
+        self._settings_persister = config.settings_persister
         self._emit = config.emit
         self._get_bios_files_index = config.get_bios_files_index
         self._retrodeck_paths = config.retrodeck_paths
@@ -101,6 +114,31 @@ class MigrationService:
             task.cancel()
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
+
+    # ---------------------------------------------------------------------------
+    # Settings-schema migrations (#738)
+    # ---------------------------------------------------------------------------
+
+    def apply_settings_schema_migrations(self) -> None:
+        """Apply one-shot settings-schema migrations on plugin start.
+
+        Plugin runs older than v2 may have left the metadata cache
+        corrupted by a delta sync that overwrote populated entries with
+        empty ones (#738). The migration clears ``last_sync`` so the
+        next sync does a full re-fetch, which re-stamps every cache
+        entry from real ROMs. The settings file's ``version`` field is
+        stamped on the next ``save_settings`` write (handled by the
+        persistence adapter), but we persist immediately here so the
+        bump lands even if the user makes no settings changes.
+        """
+        version = self._settings.get("version", 0)
+        if version < _SETTINGS_VERSION_FETCH_APPLY_SPLIT:
+            self._state["last_sync"] = None
+            self._state_persister.save_state()
+            self._settings_persister.save_settings()
+            self._logger.info(
+                "Settings schema migration v1→v2: cleared last_sync to force full resync (fixes #738 cache corruption)"
+            )
 
     def detect_retrodeck_path_change(self) -> None:
         """Check if RetroDECK home path changed since last run."""

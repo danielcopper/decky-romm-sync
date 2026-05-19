@@ -55,9 +55,11 @@ def _make_service(
         config=MigrationServiceConfig(
             migration_file_store=migration_file_store if migration_file_store is not None else MigrationFileAdapter(),
             state=state,
+            settings={},
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             state_persister=save_state_mock,
+            settings_persister=MagicMock(),
             emit=MagicMock(),
             get_bios_files_index=lambda: {},
             retrodeck_paths=FakeRetroDeckPaths(

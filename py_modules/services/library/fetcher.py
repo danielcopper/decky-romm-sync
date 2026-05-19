@@ -1,13 +1,13 @@
 """Library fetch sub-service.
 
-Owns every roundtrip to the RomM library: listing platforms,
-listing collections, the incremental/full ROM pagination loop, and
-the per-ROM metadata-cache stamping that follows a successful fetch.
-Settings reads/writes about which platforms/collections are enabled
-live here too, since they shape the fetch query. Anything that
-transforms fetched ROMs into Steam-shortcut shape belongs on the
-façade or downstream sub-services; this file stops at "we now have
-the ROM list and metadata is cached".
+Owns every read-only roundtrip to the RomM library: listing platforms,
+listing collections, the incremental/full ROM pagination loop, and the
+per-unit work-queue construction. Settings reads/writes about which
+platforms/collections are enabled live here too, since they shape the
+fetch query. Anything that transforms fetched ROMs into Steam-shortcut
+shape belongs on the façade or downstream sub-services; this file
+stops at "we now have the ROM list". The metadata-cache is stamped
+elsewhere (per applied unit) so a fetch never mutates the cache.
 """
 
 from __future__ import annotations
@@ -18,11 +18,10 @@ from typing import TYPE_CHECKING
 
 from models.state import MetadataCache, PluginState
 
-from domain.shortcut_data import build_shortcuts_data
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 from lib.errors import classify_error
-from services.library._state import LibrarySyncStateBox, PrefetchedUnit
+from services.library._state import LibrarySyncStateBox
 
 if TYPE_CHECKING:
     import logging
@@ -30,7 +29,6 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         DebugLogger,
-        MetadataExtractor,
         RommLibraryApi,
         SettingsPersister,
     )
@@ -52,10 +50,9 @@ class LibraryFetcherConfig:
     metadata-cache dicts, runtime infrastructure (loop, logger),
     plugin-dir reference (used for shortcut-data path construction),
     settings persistence callback, debug-logger seam, the shared
-    ``LibrarySyncStateBox`` (read for the cancel signal), an
+    ``LibrarySyncStateBox`` (read for the cancel signal), and an
     ``_emit_progress`` callback the fetcher uses to surface long
-    paginated fetches to the frontend, and the ``MetadataExtractor``
-    peer service the fetcher stamps the metadata cache through.
+    paginated fetches to the frontend.
     """
 
     romm_api: RommLibraryApi
@@ -69,7 +66,6 @@ class LibraryFetcherConfig:
     log_debug: DebugLogger
     sync_state_box: LibrarySyncStateBox
     emit_progress: EmitProgressFn
-    metadata_service: MetadataExtractor
 
 
 class LibraryFetcher:
@@ -87,7 +83,6 @@ class LibraryFetcher:
         self._log_debug = config.log_debug
         self._sync_state = config.sync_state_box
         self._emit_progress = config.emit_progress
-        self._metadata_service = config.metadata_service
 
     # ── Platform metadata callables ──────────────────────────────
 
@@ -575,84 +570,3 @@ class LibraryFetcher:
             offset += limit
 
         return new_roms, all_collection_rom_ids
-
-    async def prefetch_all_units(
-        self,
-    ) -> tuple[list[PrefetchedUnit], list[dict], list[dict], dict[str, list[int]], set[int]]:
-        """Build the work queue and fetch every unit's ROMs upfront.
-
-        Used by the unified preview path so ``sync_apply_delta`` can
-        dispatch the per-unit pipeline against cached unit data without
-        re-fetching from RomM on the apply step. Returns the aggregated
-        ROM list, shortcut data, full platform list (kept for downstream
-        callers that count platforms), per-collection memberships, and
-        the set of rom_ids seen via platform units (used for the
-        platform-collection diff gate in the summary). Caches metadata
-        at the end through the injected ``MetadataExtractor`` so a
-        mid-flight crash leaves the ROM metadata stamped on disk.
-        """
-        await self._emit_progress("platforms", message="Fetching platforms...")
-        work_queue = await self.build_work_queue()
-        self._check_cancelling()
-
-        prefetched: list[PrefetchedUnit] = []
-        all_roms: list[dict] = []
-        platform_rom_ids: set[int] = set()
-        collection_memberships: dict[str, list[int]] = {}
-        synced_rom_ids: set[int] = set()
-
-        total_units = len(work_queue)
-        for unit_index, unit in enumerate(work_queue, 1):
-            self._check_cancelling()
-            await self._emit_progress(
-                "roms",
-                current=len(all_roms),
-                message=f"Fetching {unit.name}... ({unit_index}/{total_units})",
-            )
-
-            if unit.type == "platform":
-                unit_roms, skipped = await self.fetch_platform_unit(unit)
-                for rom in unit_roms:
-                    platform_rom_ids.add(rom["id"])
-                    synced_rom_ids.add(rom["id"])
-                all_roms.extend(unit_roms)
-                prefetched.append(PrefetchedUnit(unit=unit, roms=unit_roms, skipped=skipped))
-            else:
-                unit_roms, all_collection_rom_ids = await self.fetch_collection_unit(unit, synced_rom_ids)
-                if all_collection_rom_ids:
-                    collection_memberships[unit.name] = all_collection_rom_ids
-                all_roms.extend(unit_roms)
-                prefetched.append(
-                    PrefetchedUnit(
-                        unit=unit,
-                        roms=unit_roms,
-                        skipped=False,
-                        all_collection_rom_ids=all_collection_rom_ids,
-                    )
-                )
-
-        shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir)
-        self._check_cancelling()
-
-        for rom in all_roms:
-            rom_id_str = str(rom["id"])
-            self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
-            self._metadata_service.mark_metadata_dirty()
-        self._metadata_service.flush_metadata_if_dirty()
-        self._log_debug(f"Metadata cached for {len(all_roms)} ROMs (prefetch)")
-
-        return prefetched, all_roms, shortcuts_data, collection_memberships, platform_rom_ids
-
-    def cache_metadata_for_unit(self, unit_roms: list[dict]) -> None:
-        """Stamp the metadata cache for one unit's ROMs and flush.
-
-        Called by the per-unit pipeline after each unit so a mid-sync
-        crash leaves cached metadata for every unit that completed.
-        """
-        if not unit_roms:
-            return
-        for rom in unit_roms:
-            rom_id_str = str(rom["id"])
-            self._metadata_cache[rom_id_str] = self._metadata_service.extract_metadata(rom)
-            self._metadata_service.mark_metadata_dirty()
-        self._metadata_service.flush_metadata_if_dirty()

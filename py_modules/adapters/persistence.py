@@ -17,7 +17,7 @@ from models.state import MetadataCache, PluginState
 _STATE_VERSION = 1
 _METADATA_CACHE_VERSION = 1
 _FIRMWARE_CACHE_VERSION = 1
-_SETTINGS_VERSION = 1
+_SETTINGS_VERSION = 2
 _LOCK_EXT = ".lock"
 
 DEFAULT_SETTINGS: dict = {

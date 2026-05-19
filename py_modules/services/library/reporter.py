@@ -1,11 +1,13 @@
 """Sync result reporter and registry-query sub-service.
 
-Owns the post-apply path: the per-unit ``report_unit_results`` callback
-that finalises artwork file names and appends per-ROM registry entries,
-and the terminal ``finalize_per_unit_run`` step that builds the
-cross-unit collection mappings, persists last-sync metadata, and emits
-the ``sync_complete`` event. Also owns the registry-derived query
-methods (``get_registry_platforms``, ``get_sync_stats``,
+Owns the post-apply path: the frontend-callable ``report_unit_results``
+ack (event signal only) and the orchestrator-driven
+``commit_unit_results`` that finalises artwork file names, appends
+per-ROM registry entries, and persists state. The terminal
+``finalize_per_unit_run`` step builds the cross-unit collection
+mappings, persists last-sync metadata, and emits the ``sync_complete``
+event. Also owns the registry-derived query methods
+(``get_registry_platforms``, ``get_sync_stats``,
 ``get_rom_by_steam_app_id``) and the ``clear_sync_cache`` reset.
 Anything that mutates the registry as a side-effect of a finished
 sync run belongs here; anything that decides "what should this sync
@@ -208,7 +210,7 @@ class SyncReporter:
 
     # ── Report unit results (per-unit pipeline) ──────────────────
 
-    def _report_unit_results_io(self, rom_id_to_app_id):
+    def _commit_unit_results_io(self, rom_id_to_app_id):
         """Sync helper: finalise artwork + registry for one unit, persist state."""
         grid = self._steam_config.grid_dir()
         box = self._sync_state
@@ -232,22 +234,30 @@ class SyncReporter:
         self._state_persister.save_state()
 
     async def report_unit_results(self, rom_id_to_app_id):
-        """Called by the frontend after applying one unit's shortcuts via SteamClient.
+        """Frontend-Callable: ack that this unit's shortcuts have been applied.
 
-        Finalises that unit's artwork files (rename staging -> {app_id}p.png),
-        appends the per-ROM registry entries, persists state, and
-        signals the orchestrator's per-unit wait event so dispatch
-        moves on to the next unit.
+        Records the rom_id→app_id mapping into the state box and signals
+        the orchestrator's per-unit wait event. The orchestrator drives
+        the actual per-unit commit (metadata-cache stamp + registry
+        update + state persist) after this returns, so the write order
+        is metadata-first then state.
         """
-        await self._loop.run_in_executor(None, self._report_unit_results_io, rom_id_to_app_id)
-
         box = self._sync_state
         box.last_unit_results = dict(rom_id_to_app_id)
         if box.unit_complete_event is not None:
             box.unit_complete_event.set()
 
-        self._logger.info(f"Unit results reported: {len(rom_id_to_app_id)} shortcuts")
+        self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
         return {"success": True, "count": len(rom_id_to_app_id)}
+
+    async def commit_unit_results(self, rom_id_to_app_id):
+        """Per-unit commit: cover-path finalize, registry update, state save.
+
+        Called by the orchestrator after metadata-cache stamping for the
+        unit completes. This is the second half of the per-unit write
+        transaction (metadata first, state second — crash-safe order).
+        """
+        await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id)
 
     # ── Registry queries ─────────────────────────────────────────
 

@@ -111,7 +111,6 @@ class LibraryService:
                 log_debug=config.log_debug,
                 sync_state_box=self._box,
                 emit_progress=self._emit_progress_proxy,
-                metadata_service=config.metadata_service,
             )
         )
 

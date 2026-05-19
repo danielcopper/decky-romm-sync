@@ -19,8 +19,9 @@ class PreviewDelta:
     clock at preview time so apply can reject snapshots older than the TTL.
     ``platforms_count`` and ``total_roms`` are persisted into ``sync_stats``
     on apply so ``get_sync_stats`` and the stale-removal pass see the
-    apply's intended counts. The per-unit pipeline gets ROM data from
-    :class:`PrefetchedUnit` on the state box, not from this snapshot.
+    apply's intended counts. The apply phase fetches ROM data live per
+    unit; this snapshot carries only the pre-flight counts, never ROM
+    payloads.
     """
 
     preview_id: str

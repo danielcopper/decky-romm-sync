@@ -551,6 +551,141 @@ class TestFlushMetadataIfDirty:
         plugin._metadata_service._metadata_cache_persister.save_metadata.assert_not_called()
 
 
+class TestRecordUnitMetadata:
+    """Tests for record_unit_metadata() — the per-applied-unit cache stamp (#738)."""
+
+    def test_stamps_metadata_for_roms_with_metadatum(self, plugin, tmp_path):
+        """Each ROM with a ``metadatum`` field lands in the metadata cache."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        roms = [
+            {"id": 1, "summary": "Game 1", "metadatum": {"genres": ["RPG"]}},
+            {"id": 2, "summary": "Game 2", "metadatum": {"genres": ["Action"]}},
+        ]
+
+        plugin._metadata_service.record_unit_metadata(roms)
+
+        assert "1" in plugin._metadata_cache
+        assert plugin._metadata_cache["1"]["summary"] == "Game 1"
+        assert plugin._metadata_cache["1"]["genres"] == ("RPG",)
+        assert "2" in plugin._metadata_cache
+        assert plugin._metadata_cache["2"]["summary"] == "Game 2"
+
+    def test_skips_roms_without_metadatum(self, plugin, tmp_path):
+        """Thin ROMs (no ``metadatum`` field) MUST NOT erase populated entries.
+
+        This is the load-bearing guard against #738 cache corruption:
+        if a registry-reconstructed thin ROM ever reaches this method
+        (it shouldn't — the orchestrator gates them out via the skip
+        flag), the populated cache entry must survive.
+        """
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        # Pre-existing populated entry.
+        plugin._metadata_cache["1"] = {
+            "summary": "Populated existing entry",
+            "genres": ("RPG",),
+            "companies": (),
+            "first_release_date": None,
+            "average_rating": None,
+            "game_modes": (),
+            "player_count": "",
+            "cached_at": 100.0,
+            "steam_categories": (),
+        }
+
+        # Thin ROM (no metadatum) — exactly what the registry-reconstruction
+        # path produces.
+        thin_roms = [{"id": 1, "name": "Game 1"}]
+
+        plugin._metadata_service.record_unit_metadata(thin_roms)
+
+        # Cache entry untouched.
+        assert plugin._metadata_cache["1"]["summary"] == "Populated existing entry"
+        assert plugin._metadata_cache["1"]["genres"] == ("RPG",)
+
+    def test_skips_roms_with_falsy_metadatum(self, plugin, tmp_path):
+        """ROMs with ``metadatum: None`` or ``metadatum: {}`` are skipped."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        plugin._metadata_cache["1"] = {
+            "summary": "Existing",
+            "genres": ("RPG",),
+            "companies": (),
+            "first_release_date": None,
+            "average_rating": None,
+            "game_modes": (),
+            "player_count": "",
+            "cached_at": 100.0,
+            "steam_categories": (),
+        }
+
+        plugin._metadata_service.record_unit_metadata([{"id": 1, "metadatum": None}])
+        assert plugin._metadata_cache["1"]["summary"] == "Existing"
+
+        plugin._metadata_service.record_unit_metadata([{"id": 1, "metadatum": {}}])
+        assert plugin._metadata_cache["1"]["summary"] == "Existing"
+
+    def test_empty_list_is_noop(self, plugin, tmp_path):
+        """Empty ROM list doesn't blow up."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        plugin._metadata_service.record_unit_metadata([])
+        # No assertion — just verify no exception raised.
+
+    def test_flushes_dirty_cache(self, plugin):
+        """After processing all ROMs, dirty cache is flushed (persister save_metadata called)."""
+        roms = [{"id": 1, "metadatum": {"genres": ["RPG"]}}]
+        # FakeMetadataCachePersister counts save_metadata calls.
+        save_count_before = plugin._metadata_cache_persister.save_count
+
+        plugin._metadata_service.record_unit_metadata(roms)
+
+        # Dirty counter reset after final flush.
+        assert plugin._metadata_service._metadata_dirty_count == 0
+        # Persister was invoked at least once for the final flush.
+        assert plugin._metadata_cache_persister.save_count > save_count_before
+
+    def test_mixed_thin_and_full_roms(self, plugin, tmp_path):
+        """Mixed batch: full ROMs stamped, thin ROMs skipped."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        # Pre-existing populated entry for rom 2 (the thin one).
+        plugin._metadata_cache["2"] = {
+            "summary": "Populated existing",
+            "genres": ("RPG",),
+            "companies": (),
+            "first_release_date": None,
+            "average_rating": None,
+            "game_modes": (),
+            "player_count": "",
+            "cached_at": 100.0,
+            "steam_categories": (),
+        }
+
+        mixed = [
+            {"id": 1, "summary": "New game", "metadatum": {"genres": ["Action"]}},
+            {"id": 2, "name": "Thin"},  # no metadatum → skip
+            {"id": 3, "summary": "Another", "metadatum": {"genres": ["Puzzle"]}},
+        ]
+
+        plugin._metadata_service.record_unit_metadata(mixed)
+
+        # rom 1 stamped fresh
+        assert plugin._metadata_cache["1"]["summary"] == "New game"
+        # rom 2 untouched (populated existing entry survived)
+        assert plugin._metadata_cache["2"]["summary"] == "Populated existing"
+        # rom 3 stamped fresh
+        assert plugin._metadata_cache["3"]["summary"] == "Another"
+
+
 class TestGetAppIdRomIdMap:
     """Tests for get_app_id_rom_id_map() — covers lines 121-126."""
 

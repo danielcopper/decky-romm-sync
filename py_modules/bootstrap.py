@@ -414,9 +414,11 @@ def wire_services(cfg: WiringConfig) -> dict:
         config=MigrationServiceConfig(
             migration_file_store=cfg.adapters.migration_file_store,
             state=cfg.stores.state,
+            settings=cfg.stores.settings,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             state_persister=cfg.callbacks.state_persister,
+            settings_persister=cfg.callbacks.settings_persister,
             emit=cfg.runtime.emit,
             get_bios_files_index=bios_files_index_binding.get,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,

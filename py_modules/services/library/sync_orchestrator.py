@@ -1,15 +1,18 @@
 """Preview / apply / per-unit sync lifecycle and the heartbeat clock.
 
 Owns every async path the user triggers from the QAM that mutates
-in-flight sync state: starting and cancelling syncs, prefetching
-units for a preview, and dispatching the per-unit sync pipeline on
-apply. The heartbeat clock — refreshed on every progress emission
-and inspected by per-unit waits — lives here too. Progress emission
-also lives here — sub-services that need to surface progress receive
-the orchestrator's ``_emit_progress`` callback through their config.
+in-flight sync state: starting and cancelling syncs, computing a
+preview (read-only), and dispatching the per-unit sync pipeline on
+apply. The heartbeat clock — refreshed on every progress emission and
+inspected by per-unit waits — lives here too. Progress emission also
+lives here — sub-services that need to surface progress receive the
+orchestrator's ``_emit_progress`` callback through their config.
 Anything that fetches ROMs belongs in :class:`LibraryFetcher`;
 anything that finalises shortcuts after the apply completes belongs
-in :class:`SyncReporter`.
+in :class:`SyncReporter`. The metadata-cache is only stamped per
+applied unit (by :class:`MetadataExtractor.record_unit_metadata`), so
+preview never mutates the cache and an interrupted apply leaves only
+already-applied units stamped.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 from lib.errors import classify_error
 from lib.late_binding import LateBinding
-from services.library._state import LibrarySyncStateBox, PrefetchedUnit
+from services.library._state import LibrarySyncStateBox
 
 if TYPE_CHECKING:
     import logging
@@ -74,13 +77,12 @@ class SyncOrchestratorConfig:
     plugin-dir reference for shortcut data construction, the shared
     :class:`LibrarySyncStateBox`, and three peer references the
     orchestrator drives at runtime: the :class:`LibraryFetcher` it
-    delegates prefetching and per-unit fetches to, an
-    :class:`ArtworkManager` for the apply-phase artwork download, and
-    a :class:`MetadataExtractor` it asks to flush its dirty metadata
-    cache during the sync ``finally``. The ``reporter`` field
-    is a :class:`LateBinding` because :class:`LibraryService` constructs
-    the orchestrator before the reporter exists; the façade plugs the
-    reader in via ``set()`` once the reporter is built.
+    delegates per-unit fetches to, an :class:`ArtworkManager` for the
+    apply-phase artwork download, and a :class:`MetadataExtractor` it
+    asks to stamp the metadata cache per applied unit. The ``reporter``
+    field is a :class:`LateBinding` because :class:`LibraryService`
+    constructs the orchestrator before the reporter exists; the façade
+    plugs the reader in via ``set()`` once the reporter is built.
     """
 
     state: PluginState
@@ -129,10 +131,6 @@ class SyncOrchestrator:
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
-        # Skip Preview ON path: any cache left from a prior preview is
-        # stale by definition — start_sync refetches from scratch via
-        # _do_sync_per_unit's no-prefetched branch.
-        box.pending_prefetched_units = None
         self._loop.create_task(self._do_sync_per_unit())
         return {"success": True, "message": "Sync started"}
 
@@ -157,25 +155,52 @@ class SyncOrchestrator:
     # ── Preview / Apply ──────────────────────────────────────────
 
     async def sync_preview(self):
+        """Read-only preview: paginate every unit, classify, return the summary.
+
+        Does NOT mutate the metadata cache — the metadata stamp happens
+        per applied unit, after the frontend acknowledges shortcuts for
+        that unit. Stamping during preview would erase populated entries
+        with the registry-reconstructed thin ROMs from the per-unit
+        incremental-skip path (#738).
+        """
         box = self._sync_state
         if box.sync_state != SyncState.IDLE:
             return {"success": False, "message": "Sync already in progress"}
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
-        # New preview always invalidates a prior cache — the user may
-        # have changed enabled platforms/collections or the RomM library
-        # may have shifted underneath them.
-        box.pending_prefetched_units = None
         try:
-            (
-                prefetched,
-                all_roms,
-                shortcuts_data,
-                collection_memberships,
-                platform_rom_ids,
-            ) = await self._fetcher.prefetch_all_units()
-            platform_names = {u.unit.name for u in prefetched if u.unit.type == "platform"}
+            await self._emit_progress("platforms", message="Fetching platforms...")
+            work_queue = await self._fetcher.build_work_queue()
+
+            all_roms: list[dict] = []
+            platform_rom_ids: set[int] = set()
+            collection_memberships: dict[str, list[int]] = {}
+            synced_rom_ids: set[int] = set()
+
+            total_units = len(work_queue)
+            for unit_index, unit in enumerate(work_queue, 1):
+                if box.sync_state == SyncState.CANCELLING:
+                    raise asyncio.CancelledError(_SYNC_CANCELLED)
+                await self._emit_progress(
+                    "roms",
+                    current=len(all_roms),
+                    message=f"Fetching {unit.name}... ({unit_index}/{total_units})",
+                )
+                if unit.type == "platform":
+                    unit_roms, _skipped = await self._fetcher.fetch_platform_unit(unit)
+                    for rom in unit_roms:
+                        platform_rom_ids.add(rom["id"])
+                        synced_rom_ids.add(rom["id"])
+                    all_roms.extend(unit_roms)
+                else:
+                    unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
+                    if all_collection_rom_ids:
+                        collection_memberships[unit.name] = all_collection_rom_ids
+                    all_roms.extend(unit_roms)
+
+            shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir)
+            platform_names = {u.name for u in work_queue if u.type == "platform"}
             new, changed, unchanged_ids, stale, disabled_count = classify_roms(
                 shortcuts_data,
                 self._state["shortcut_registry"],
@@ -183,14 +208,13 @@ class SyncOrchestrator:
             )
 
             preview_id = self._uuid_gen.uuid4()
-            platforms_count = sum(1 for u in prefetched if u.unit.type == "platform")
+            platforms_count = sum(1 for u in work_queue if u.type == "platform")
             box.pending_delta = PreviewDelta(
                 preview_id=preview_id,
                 created_at=self._clock.time(),
                 platforms_count=platforms_count,
                 total_roms=len(all_roms),
             )
-            box.pending_prefetched_units = prefetched
 
             await self._emit_progress("done", message="Preview ready", running=False)
 
@@ -218,14 +242,14 @@ class SyncOrchestrator:
                 "preview_id": preview_id,
             }
         except asyncio.CancelledError:
-            box.pending_prefetched_units = None
+            box.pending_delta = None
             await self._finish_sync(_SYNC_CANCELLED)
             raise
         except Exception as e:
             import traceback
 
             self._logger.error(f"Sync preview failed: {e}\n{traceback.format_exc()}")
-            box.pending_prefetched_units = None
+            box.pending_delta = None
             _code, _msg = classify_error(e)
             await self._emit_progress("error", message=_msg, running=False)
             return {"success": False, "message": _msg, "error_code": _code}
@@ -239,19 +263,13 @@ class SyncOrchestrator:
         age = self._clock.time() - box.pending_delta.created_at
         if age > _PREVIEW_MAX_AGE_SECONDS:
             box.pending_delta = None
-            box.pending_prefetched_units = None
             return {
                 "success": False,
                 "message": "Preview is older than 30 minutes, please re-run sync",
                 "error_code": "stale_preview",
             }
         delta = box.pending_delta
-        prefetched = box.pending_prefetched_units
         box.pending_delta = None
-        # Take the cache out of the box before dispatch so a concurrent
-        # cancel/error path can't double-consume it; the per-unit driver
-        # owns the list for the lifetime of this apply.
-        box.pending_prefetched_units = None
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
@@ -265,19 +283,12 @@ class SyncOrchestrator:
         }
         self._state_persister.save_state()
 
-        if prefetched is None:
-            # Cache was lost (server restart, race, etc.) — log a warning
-            # and let _do_sync_per_unit refetch from scratch so the user
-            # still gets a successful sync rather than a hard failure.
-            self._logger.warning("sync_apply_delta: prefetch cache empty, falling back to fresh fetch")
-
-        self._loop.create_task(self._do_sync_per_unit(prefetched=prefetched))
+        self._loop.create_task(self._do_sync_per_unit())
 
         return {"success": True, "message": "Applying changes"}
 
     def sync_cancel_preview(self):
         self._sync_state.pending_delta = None
-        self._sync_state.pending_prefetched_units = None
         return {"success": True}
 
     # ── Progress & safety ────────────────────────────────────────
@@ -313,21 +324,17 @@ class SyncOrchestrator:
 
     # ── Per-unit pipeline ────────────────────────────────────────
 
-    async def _do_sync_per_unit(self, prefetched: list[PrefetchedUnit] | None = None):
+    async def _do_sync_per_unit(self):
         """Per-unit sync pipeline (Phase 0 + per-unit dispatch + finalize).
 
-        Replaces the monolithic all-platforms-then-all-shortcuts flow:
-        builds a work queue, processes each platform/collection unit
-        to completion (fetch -> shortcuts -> artwork -> apply ->
-        registry update) before moving on, then emits stale-removal +
-        Steam-collection mappings + ``sync_complete`` at the end. Each
-        completed unit is a crash-safe checkpoint in the on-disk
-        registry.
-
-        When ``prefetched`` is supplied, the work queue is taken from
-        the cached units and each unit's ROMs come from the cache —
-        used by the Skip Preview OFF path so apply does not refetch the
-        library after preview has already paginated it.
+        Builds a work queue, processes each platform/collection unit to
+        completion (fetch -> shortcuts -> artwork -> apply -> per-unit
+        metadata stamp + registry update) before moving on, then emits
+        stale-removal + Steam-collection mappings + ``sync_complete``
+        at the end. Each completed unit is a crash-safe checkpoint:
+        metadata cache is written first, state second, both atomically
+        — an orphaned metadata stamp after a crash is harmless; the
+        reverse order would re-introduce the #738 cache wipe.
         """
         box = self._sync_state
         # Cross-unit accumulators — built up unit-by-unit, consumed by the
@@ -344,23 +351,17 @@ class SyncOrchestrator:
         cancelled = False
 
         try:
-            work_queue: list[WorkUnit]
-            prefetched_by_unit: dict[WorkUnit, PrefetchedUnit] = {}
-            if prefetched is not None:
-                work_queue = [pu.unit for pu in prefetched]
-                prefetched_by_unit = {pu.unit: pu for pu in prefetched}
-            else:
-                try:
-                    work_queue = await self._fetcher.build_work_queue()
-                except asyncio.CancelledError:
-                    await self._finish_sync(_SYNC_CANCELLED)
-                    raise
-                except Exception as e:
-                    self._logger.error(f"Failed to build work queue: {e}")
-                    _code, _msg = classify_error(e)
-                    await self._emit_progress("error", message=_msg, running=False)
-                    box.sync_state = SyncState.IDLE
-                    return
+            try:
+                work_queue = await self._fetcher.build_work_queue()
+            except asyncio.CancelledError:
+                await self._finish_sync(_SYNC_CANCELLED)
+                raise
+            except Exception as e:
+                self._logger.error(f"Failed to build work queue: {e}")
+                _code, _msg = classify_error(e)
+                await self._emit_progress("error", message=_msg, running=False)
+                box.sync_state = SyncState.IDLE
+                return
 
             total_units = len(work_queue)
             total_roms_planned = sum(u.rom_count for u in work_queue)
@@ -393,7 +394,6 @@ class SyncOrchestrator:
                     collection_memberships=collection_memberships,
                     platform_rom_ids=platform_rom_ids,
                     all_rom_id_to_app_id=all_rom_id_to_app_id,
-                    prefetched=prefetched_by_unit.get(unit),
                 )
                 total_games_applied += applied
 
@@ -436,15 +436,16 @@ class SyncOrchestrator:
         collection_memberships: dict[str, list[int]],
         platform_rom_ids: set[int],
         all_rom_id_to_app_id: dict[str, int],
-        prefetched: PrefetchedUnit | None = None,
     ) -> int:
         """Process one work unit start-to-finish; return shortcuts applied.
 
-        When ``prefetched`` is supplied (Skip Preview OFF path), this
-        unit's ROMs come from the cached preview result and no extra
-        RomM round trip happens. When ``prefetched`` is ``None`` (Skip
-        Preview ON or cache-fallback path), the unit's ROMs are fetched
-        on demand via the per-unit fetcher.
+        The ROMs for the unit come from a live per-unit fetch. After the
+        frontend acks the unit's shortcuts (via ``report_unit_results``),
+        the metadata cache is stamped for the acked ROMs *before* the
+        reporter commits the registry update — that ordering guarantees
+        any crash between the two leaves harmless orphan metadata
+        rather than orphan registry entries pointing at unstamped
+        metadata (#738).
         """
         box = self._sync_state
         await self._emit_progress(
@@ -454,21 +455,18 @@ class SyncOrchestrator:
             message=f"{unit.name} ({unit_index + 1}/{total_units})",
         )
 
-        # Fetch (or replay) this unit's ROMs. Platform units may
-        # incremental-skip; collection units always paginate (collection
-        # membership is the source of truth, no per-collection
-        # "last_sync" gate today).
+        # Fetch this unit's ROMs. Platform units may incremental-skip;
+        # collection units always paginate (collection membership is
+        # the source of truth, no per-collection "last_sync" gate today).
         if unit.type == "platform":
             unit_roms, skipped = await self._sync_platform_unit(
                 unit,
-                prefetched=prefetched,
                 synced_rom_ids=synced_rom_ids,
                 platform_rom_ids=platform_rom_ids,
             )
         else:
             unit_roms, skipped = await self._sync_collection_unit(
                 unit,
-                prefetched=prefetched,
                 synced_rom_ids=synced_rom_ids,
                 collection_memberships=collection_memberships,
             )
@@ -476,13 +474,8 @@ class SyncOrchestrator:
         if box.sync_state == SyncState.CANCELLING:
             return 0
 
-        # Build shortcut data + cache metadata for this unit only.
-        # When ``prefetched`` is set the preview path already stamped
-        # the metadata cache for every ROM in the run; skip the
-        # redundant re-stamp.
+        # Build shortcut data for this unit.
         shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir)
-        if prefetched is None:
-            self._fetcher.cache_metadata_for_unit(unit_roms)
 
         # Download artwork for this unit (skipped if the incremental
         # path already populated cover_path from the registry).
@@ -496,8 +489,8 @@ class SyncOrchestrator:
         if box.sync_state == SyncState.CANCELLING:
             return 0
 
-        # Stage pending_sync for this unit so report_unit_results can
-        # finalise cover paths + build registry entries against it.
+        # Stage pending_sync for this unit so the reporter's commit step
+        # can finalise cover paths + build registry entries against it.
         box.pending_sync = {sd["rom_id"]: sd for sd in shortcuts_data}
 
         # Emit per-unit apply event + wait for the frontend callback.
@@ -526,9 +519,27 @@ class SyncOrchestrator:
             box.sync_state = SyncState.CANCELLING
             return 0
 
-        # Reporter has already updated the registry + persisted state via
-        # report_unit_results — mirror the rom_id_to_app_id into the
-        # cross-run accumulator for stale + Steam-collection mapping.
+        # Per-unit two-phase commit:
+        #
+        # 1) Stamp metadata cache for the acked ROMs first. Skipped
+        #    (incremental-skip) units carry thin registry-reconstructed
+        #    ROMs without a ``metadatum`` field; ``record_unit_metadata``
+        #    guards on that and is a no-op for them — so we never erase
+        #    the populated entries from a prior real fetch (#738).
+        # 2) Then commit the registry + persist state via the reporter.
+        #
+        # The ordering matters across crashes: metadata-first means an
+        # interrupted apply leaves only orphan metadata (harmless,
+        # next sync re-stamps). Registry-first would leave registry
+        # entries pointing at an unstamped (or freshly wiped) cache.
+        if not skipped:
+            acked_roms = [r for r in unit_roms if str(r["id"]) in applied]
+            await self._loop.run_in_executor(None, self._metadata_service.record_unit_metadata, acked_roms)
+
+        await self._reporter.get().commit_unit_results(applied)
+
+        # Mirror the rom_id_to_app_id into the cross-run accumulator
+        # for stale + Steam-collection mapping.
         all_rom_id_to_app_id.update(applied)
         box.pending_sync = {}
         box.unit_complete_event = None
@@ -538,21 +549,17 @@ class SyncOrchestrator:
         self,
         unit: WorkUnit,
         *,
-        prefetched: PrefetchedUnit | None,
         synced_rom_ids: set[int],
         platform_rom_ids: set[int],
     ) -> tuple[list[dict], bool]:
         """Resolve ROMs for a platform unit and update cross-unit accumulators.
 
         Returns ``(unit_roms, skipped)`` for the caller's downstream
-        shortcut + artwork + apply phases. ROMs come from the prefetched
-        cache when present, otherwise from a live per-unit fetch.
+        shortcut + artwork + apply phases. ROMs come from a live per-unit
+        fetch (no preview cache); the fetcher's incremental-skip path
+        handles the "unchanged platform" optimisation internally.
         """
-        if prefetched is not None:
-            unit_roms = prefetched.roms
-            skipped = prefetched.skipped
-        else:
-            unit_roms, skipped = await self._fetcher.fetch_platform_unit(unit)
+        unit_roms, skipped = await self._fetcher.fetch_platform_unit(unit)
         platform_rom_ids.update(r["id"] for r in unit_roms)
         synced_rom_ids.update(r["id"] for r in unit_roms)
         return unit_roms, skipped
@@ -561,7 +568,6 @@ class SyncOrchestrator:
         self,
         unit: WorkUnit,
         *,
-        prefetched: PrefetchedUnit | None,
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
     ) -> tuple[list[dict], bool]:
@@ -569,17 +575,11 @@ class SyncOrchestrator:
 
         Returns ``(unit_roms, skipped)`` — ``skipped`` is always
         ``False`` because collection units have no incremental-skip
-        gate today. ROMs come from the prefetched cache when present,
-        otherwise from a live per-unit fetch that already dedups against
-        ``synced_rom_ids``.
+        gate today. ROMs come from a live per-unit fetch that already
+        dedups against ``synced_rom_ids``.
         """
         skipped = False
-        if prefetched is not None:
-            unit_roms = prefetched.roms
-            all_collection_rom_ids = prefetched.all_collection_rom_ids or []
-            synced_rom_ids.update(r["id"] for r in unit_roms)
-        else:
-            unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
+        unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
         if all_collection_rom_ids:
             collection_memberships[unit.name] = all_collection_rom_ids
         return unit_roms, skipped

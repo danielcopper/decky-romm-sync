@@ -111,9 +111,11 @@ def plugin(tmp_path, fake_romm_api):
         config=MigrationServiceConfig(
             migration_file_store=MigrationFileAdapter(),
             state=p._state,
+            settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             state_persister=p._state_persister,
+            settings_persister=p._settings_persister,
             emit=RecordingEmitter(),
             get_bios_files_index=lambda: p._firmware_service.bios_files_index,
             retrodeck_paths=FakeRetroDeckPaths(),
@@ -906,9 +908,11 @@ class TestMigrationFailureInjection:
                 "installed_roms": {},
                 "downloaded_bios": {},
             },
+            "settings": {},
             "loop": asyncio.get_event_loop(),
             "logger": decky.logger,
             "state_persister": FakeStatePersister(),
+            "settings_persister": FakeSettingsPersister(),
             "emit": RecordingEmitter(),
             "get_bios_files_index": lambda: {},
             "retrodeck_paths": FakeRetroDeckPaths(),
@@ -1190,3 +1194,73 @@ class TestBackgroundTaskTracking:
         await plugin._migration_service.shutdown()
 
         assert plugin._migration_service._background_tasks == set()
+
+
+class TestApplySettingsSchemaMigrations:
+    """Tests for apply_settings_schema_migrations() — settings-schema bumps (#738)."""
+
+    def test_v0_clears_last_sync(self, plugin):
+        """Pre-versioning settings (version=0) trigger the v1→v2 migration: clear last_sync."""
+        plugin.settings["version"] = 0
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+
+        plugin._migration_service.apply_settings_schema_migrations()
+
+        assert plugin._state["last_sync"] is None
+
+    def test_v1_clears_last_sync(self, plugin):
+        """Version 1 settings (pre-fetch-apply-split) trigger the migration."""
+        plugin.settings["version"] = 1
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+
+        plugin._migration_service.apply_settings_schema_migrations()
+
+        assert plugin._state["last_sync"] is None
+
+    def test_v2_is_noop(self, plugin):
+        """Version 2 settings (post-fetch-apply-split) are already migrated — preserve last_sync."""
+        plugin.settings["version"] = 2
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+
+        plugin._migration_service.apply_settings_schema_migrations()
+
+        assert plugin._state["last_sync"] == "2025-01-01T00:00:00Z"
+
+    def test_persists_state_after_migration(self, plugin):
+        """The state-persister is invoked so the cleared last_sync lands on disk."""
+        plugin.settings["version"] = 1
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+
+        save_count_before = plugin._state_persister.save_count
+        plugin._migration_service.apply_settings_schema_migrations()
+        assert plugin._state_persister.save_count > save_count_before
+
+    def test_persists_settings_after_migration(self, plugin):
+        """The settings-persister is invoked so the version-bump stamp lands on disk."""
+        plugin.settings["version"] = 1
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+
+        save_count_before = plugin._settings_persister.save_count
+        plugin._migration_service.apply_settings_schema_migrations()
+        assert plugin._settings_persister.save_count > save_count_before
+
+    def test_v2_does_not_persist(self, plugin):
+        """When already at v2, no persistence calls are made (avoid spurious disk writes)."""
+        plugin.settings["version"] = 2
+
+        state_save_before = plugin._state_persister.save_count
+        settings_save_before = plugin._settings_persister.save_count
+
+        plugin._migration_service.apply_settings_schema_migrations()
+
+        assert plugin._state_persister.save_count == state_save_before
+        assert plugin._settings_persister.save_count == settings_save_before
+
+    def test_missing_version_treated_as_zero(self, plugin):
+        """Settings without a ``version`` field are treated as v0 (oldest possible)."""
+        plugin.settings.pop("version", None)
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+
+        plugin._migration_service.apply_settings_schema_migrations()
+
+        assert plugin._state["last_sync"] is None

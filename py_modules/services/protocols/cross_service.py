@@ -48,6 +48,8 @@ class MetadataExtractor(Protocol):
 
     def flush_metadata_if_dirty(self) -> None: ...
 
+    def record_unit_metadata(self, roms: list[dict]) -> None: ...
+
 
 class ArtworkManager(Protocol):
     """Artwork operations consumed by LibraryService."""

@@ -99,6 +99,25 @@ class MetadataService:
             self._metadata_cache_persister.save_metadata()
             self._metadata_dirty_count = 0
 
+    def record_unit_metadata(self, roms: list[dict]) -> None:
+        """Stamp metadata cache for the ROMs of one applied unit.
+
+        Called after the frontend has confirmed shortcut application for
+        a unit, and only for ROMs that carry fresh metadata. Defensively
+        skips ROMs without a ``metadatum`` field — registry-reconstructed
+        thin ROMs from the per-unit incremental-skip path must never
+        reach the extract path (the orchestrator gates them out via the
+        skip-marker), but this guard prevents accidental cache erasure
+        should that contract be broken in the future.
+        """
+        for rom in roms:
+            if not rom.get("metadatum"):
+                continue
+            rom_id_str = str(rom["id"])
+            self._metadata_cache[rom_id_str] = self.extract_metadata(rom)
+            self.mark_metadata_dirty()
+        self.flush_metadata_if_dirty()
+
     def get_rom_metadata(self, rom_id):
         """Return cached metadata for a ROM.
 

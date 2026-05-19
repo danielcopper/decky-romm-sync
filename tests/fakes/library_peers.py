@@ -21,9 +21,10 @@ class FakeMetadataExtractor:
     """In-memory ``MetadataExtractor`` for tests.
 
     Returns the dict configured at construction (``canned_extract``) from
-    every ``extract_metadata`` call. Counts ``mark_metadata_dirty`` and
-    ``flush_metadata_if_dirty`` invocations so tests that wire the peer
-    can assert it was reached without standing up the real service.
+    every ``extract_metadata`` call. Counts ``mark_metadata_dirty``,
+    ``flush_metadata_if_dirty``, and ``record_unit_metadata`` invocations
+    so tests that wire the peer can assert it was reached without
+    standing up the real service.
     """
 
     def __init__(self, canned_extract: dict | None = None) -> None:
@@ -31,6 +32,7 @@ class FakeMetadataExtractor:
         self.extract_calls: list[dict] = []
         self.mark_dirty_count: int = 0
         self.flush_count: int = 0
+        self.record_unit_calls: list[list[dict]] = []
 
     def extract_metadata(self, rom: dict) -> MetadataCacheEntry:
         self.extract_calls.append(rom)
@@ -41,6 +43,9 @@ class FakeMetadataExtractor:
 
     def flush_metadata_if_dirty(self) -> None:
         self.flush_count += 1
+
+    def record_unit_metadata(self, roms: list[dict]) -> None:
+        self.record_unit_calls.append(list(roms))
 
 
 class FakeArtworkManager:

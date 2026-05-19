@@ -458,9 +458,11 @@ class TestPostExitSync:
             config=MigrationServiceConfig(
                 migration_file_store=MigrationFileAdapter(),
                 state=plugin._state,
+                settings={},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
                 state_persister=MagicMock(),
+                settings_persister=MagicMock(),
                 emit=MagicMock(),
                 get_bios_files_index=lambda: {},
                 retrodeck_paths=FakeRetroDeckPaths(),
