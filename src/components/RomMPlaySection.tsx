@@ -414,13 +414,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           return { success: false, reason: "exception", message: String(e) };
         },
       );
-      if (!coverResult.success) {
-        debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
-      } else {
+      if (coverResult.success) {
         // Notify the game info panel so it can re-render the cover image.
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
           detail: { type: "cover_refreshed", rom_id: romId },
         }));
+      } else {
+        debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
       }
 
       // Step 2: refresh SGDB artwork (hero, logo, grid, icon).
