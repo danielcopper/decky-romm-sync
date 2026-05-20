@@ -740,8 +740,8 @@ class TestOwnUploadIds:
         assert rom_state.own_upload_ids.count(1000) == 1
 
     @pytest.mark.asyncio
-    async def test_put_upload_does_not_touch_own_list(self, tmp_path):
-        """Updating an existing tracked save (PUT path) does not modify own_upload_ids."""
+    async def test_put_upload_appends_own_upload_id(self, tmp_path):
+        """A PUT upload (existing save id) records that id in own_upload_ids."""
         svc, fake = make_service(tmp_path)
         _install_rom(svc, tmp_path)
         save_file = _create_save(tmp_path)
@@ -761,8 +761,34 @@ class TestOwnUploadIds:
         svc._sync_engine._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=server_save)
 
         rom_state = svc._save_sync_state.saves["42"]
-        # own_upload_ids must not have changed (100 not added, 99 still there)
-        assert rom_state.own_upload_ids == [99]
+        # This device pushed new content to id 100 → 100 is now ours; 99 untouched.
+        assert rom_state.own_upload_ids == [99, 100]
+
+    @pytest.mark.asyncio
+    async def test_put_upload_idempotent_in_own_list(self, tmp_path):
+        """Two PUT uploads to the same save id record it only once (dedup)."""
+        svc, fake = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        save_file = _create_save(tmp_path)
+
+        fake.saves[100] = _server_save(save_id=100, rom_id=42)
+        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+            {
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "old"}},
+                "system": "gba",
+                "active_slot": "default",
+                "own_upload_ids": [],
+            }
+        )
+
+        server_save = fake.saves[100]
+        svc._sync_engine._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=server_save)
+        svc._sync_engine._do_upload_save(42, str(save_file), "pokemon.srm", "42", "gba", server_save=server_save)
+
+        rom_state = svc._save_sync_state.saves["42"]
+        assert rom_state.own_upload_ids is not None
+        assert rom_state.own_upload_ids.count(100) == 1
+        assert rom_state.own_upload_ids == [100]
 
     @pytest.mark.asyncio
     async def test_get_save_status_legacy_rom_state_returns_none(self, tmp_path):
@@ -789,8 +815,8 @@ class TestOwnUploadIds:
         assert files_by_id[26]["uploaded_by_us"] is None
 
     @pytest.mark.asyncio
-    async def test_rollback_to_foreign_version_preserves_own_upload_ids(self, tmp_path):
-        """Rolling back to a foreign save (not in own_upload_ids) does not modify own_upload_ids."""
+    async def test_rollback_to_foreign_version_records_target_id(self, tmp_path):
+        """Rolling back PUTs the target's content back, so this device now owns that id."""
         svc, fake = make_service(tmp_path)
         _install_rom(svc, tmp_path)
 
@@ -812,15 +838,16 @@ class TestOwnUploadIds:
             }
         )
         fake.saves[26] = _server_save(save_id=26, rom_id=42, slot="default")
-        # Foreign older version to roll back to
+        # Older version to roll back to
         fake.saves[27] = _server_save(save_id=27, rom_id=42, slot="default", updated_at="2026-01-01T00:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", 27)
 
         assert result["status"] == "ok"
-        # own_upload_ids must be unchanged — 27 was not POSTed by us
+        # The switch re-uploads (PUTs) id=27's content to bump updated_at, so this
+        # device is now the uploader of the bytes at id 27 → 27 joins the own list.
         rom_state = svc._save_sync_state.saves["42"]
-        assert rom_state.own_upload_ids == [26]
+        assert rom_state.own_upload_ids == [26, 27]
 
 
 class TestPromoteLocalSlotPersistsState:

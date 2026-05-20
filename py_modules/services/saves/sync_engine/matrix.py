@@ -264,7 +264,6 @@ class MatrixExecutor:
         device_id = self._state_svc.get_server_device_id()
         slot = self._resolve_upload_slot(rom_id_str, device_id)
 
-        is_post = save_id is None
         result = self._retry.with_retry(
             lambda: self._romm_api.upload_save(
                 int(rom_id), file_path, emulator, save_id, device_id=device_id, slot=slot
@@ -275,8 +274,7 @@ class MatrixExecutor:
             rom_id_str, filename, result, file_path, system, emulator_tag=emulator, core_so=core_so
         )
 
-        if is_post:
-            self._record_own_upload(rom_id_str, result.get("id"))
+        self._record_own_upload(rom_id_str, result.get("id"))
 
         if slot:
             self._promote_local_slot_to_server(rom_id_str, slot)
@@ -292,11 +290,16 @@ class MatrixExecutor:
         return result
 
     def _record_own_upload(self, rom_id_str: str, new_id: int | None) -> None:
-        """Track a save_id we POSTed ourselves for uploader attribution.
+        """Track a save_id whose current content this device uploaded.
 
-        POST = brand-new save; PUT updates an existing tracked save without
-        changing ownership. Assumes POST is not upsert-by-filename on the
-        server — if RomM ever changes that, revisit this tracker.
+        Records the id for any upload this device performs — POST (new save)
+        or PUT (new content pushed to an existing id) alike. The attribution
+        question it answers is "did this device upload the bytes currently at
+        this save id?", so both paths qualify.
+
+        Attribution is id-granular, not content-hash-granular: if another
+        device later PUTs over the same id, this device still lists it. That
+        stale-attribution window is accepted as a known limitation.
 
         Pure in-memory mutation. The caller (:meth:`do_upload_save`) owns the
         single persistence point so every upload outcome lands on disk exactly
