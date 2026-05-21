@@ -12,7 +12,7 @@ When you open a RomM game in the Steam Library, you'll see the RomM Sync panel b
 - **Save sync status** — last sync time, conflict count, and playtime (see [Save Sync](save-sync.md))
 - **Action buttons** — Download, Uninstall, Cancel, or Refresh Metadata depending on state
 
-[Screenshot: Game detail page showing the RomM Sync panel for an installed game]
+![Game detail page showing the RomM Sync panel for an installed game](../assets/screenshot-game-detail.jpg)
 
 ## Downloading ROMs
 
@@ -23,7 +23,7 @@ Games appear as shortcuts in your library even before the ROM file is downloaded
 3. A progress bar shows download status with bytes transferred
 4. When complete, the status changes to "Installed" and the game is ready to play
 
-[Screenshot: Game detail page during a download with progress bar]
+<!-- Screenshot: Game detail page during a download with progress bar -->
 
 You can also tap **Cancel** to abort a download in progress. Partial files are cleaned up automatically.
 
@@ -54,6 +54,10 @@ Tap **Refresh Metadata** in the game detail panel to:
 
 This is useful if artwork was missing on first sync (SteamGridDB may have added new images since) or if metadata has changed on your RomM server.
 
+The full set of per-game actions — refresh artwork, refresh metadata, sync save files, download BIOS, and uninstall — is available from the RomM Actions menu in the game detail panel.
+
+![RomM Actions context menu with Refresh Artwork, Sync Save Files, Download BIOS, and Uninstall entries](../assets/screenshot-actions.jpg)
+
 ## Download Queue
 
 The **Downloads** page (accessible from the main QAM panel) shows all active and completed downloads:
@@ -62,7 +66,7 @@ The **Downloads** page (accessible from the main QAM panel) shows all active and
 - Completed, failed, and cancelled downloads with status details
 - **Clear Completed** button to clean up the list
 
-[Screenshot: Download Queue page with an active download and completed entries]
+<!-- Screenshot: Download Queue page with an active download and completed entries -->
 
 ## Launching Games
 

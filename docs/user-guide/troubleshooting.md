@@ -130,7 +130,7 @@ Deletes local `.srm` save files for a specific platform. Shows each platform tha
 
 Deletes downloaded BIOS files for a specific platform. Shows each platform that has BIOS files present locally. You can re-download them later from the BIOS Manager.
 
-[Screenshot: Danger Zone page showing removal options and whitelist]
+<!-- Screenshot: Danger Zone page showing removal options and whitelist -->
 
 ---
 

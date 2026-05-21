@@ -18,9 +18,9 @@ Syncing fetches your RomM game library and creates Non-Steam shortcuts in Steam 
 3. A progress bar shows the sync status
 4. When complete, a summary appears (e.g. "Added 42 games from 5 platforms")
 
-[Screenshot: Main page with Sync Library button]
+![RomM Sync QAM panel with connection status and the Sync Library button](../assets/screenshot-qam.jpg)
 
-[Screenshot: Sync in progress with progress bar]
+<!-- Screenshot: Sync in progress with progress bar -->
 
 You can tap **Cancel Sync** to stop mid-sync. Games already added will remain.
 
@@ -34,7 +34,7 @@ Not every platform in your RomM library needs to be synced to Steam. Use the **P
 4. Use **Enable All** / **Disable All** for bulk changes
 5. Only enabled platforms are included in the next sync
 
-[Screenshot: Platforms page with toggle switches and ROM counts]
+<!-- Screenshot: Platforms page with toggle switches and ROM counts -->
 
 ## Collections
 

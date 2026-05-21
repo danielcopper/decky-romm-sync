@@ -6,7 +6,7 @@ All settings are accessible from the plugin's QAM panel. Open the Quick Access M
 
 The Connection Settings page manages your RomM server connection.
 
-[Screenshot: Connection Settings page]
+<!-- Screenshot: Connection Settings page -->
 
 - **RomM URL** — the full URL of your RomM server, including port if needed (e.g. `http://192.168.1.100:8080`)
 - **Username** — your RomM account username
@@ -27,7 +27,7 @@ To set this up:
 3. In Connection Settings, paste it into the **API Key** field under "SteamGridDB"
 4. Tap **Verify Key** to confirm it works
 
-[Screenshot: SteamGridDB API Key section with Edit and Verify buttons]
+<!-- Screenshot: SteamGridDB API Key section with Edit and Verify buttons -->
 
 Without an API key, games will still have cover art from RomM but the hero banner, logo overlay, and wide grid image will be missing.
 
@@ -43,7 +43,7 @@ Controls how Steam handles controller input for ROM shortcuts. Found under the *
 
 After changing the mode, tap **Apply to All Shortcuts** to update all existing ROM shortcuts.
 
-[Screenshot: Steam Input Mode dropdown with the three options]
+<!-- Screenshot: Steam Input Mode dropdown with the three options -->
 
 ## Log Level
 
@@ -62,7 +62,7 @@ Leave this at **Warn** unless you're investigating an issue. Switch to **Debug**
 
 If the plugin detects that RetroArch is using the `x` input driver (which causes controller issues in menus on Wayland systems), a warning appears on the main page with a **Change to sdl2** button. This modifies your RetroArch config to use `sdl2` instead, which fixes controller navigation in RetroArch menus.
 
-[Screenshot: RetroArch input_driver warning with fix button]
+<!-- Screenshot: RetroArch input_driver warning with fix button -->
 
 ---
 

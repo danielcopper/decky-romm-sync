@@ -21,9 +21,9 @@ When you open a game that belongs to a platform with BIOS files on your RomM ser
 
 Tap the BIOS status indicator to see a detailed list of individual files and which ones are present or missing.
 
-[Screenshot: Game detail page showing orange BIOS status with "3/5 downloaded"]
+<!-- Screenshot: Game detail page showing orange BIOS status with "3/5 downloaded" -->
 
-[Screenshot: BIOS file list overlay showing individual files with checkmarks and "Missing" labels]
+![BIOS file list overlay showing individual required files with checkmarks and "Missing" labels](../assets/screenshot-bios.jpg)
 
 ## BIOS Manager
 
@@ -35,7 +35,7 @@ The dedicated BIOS management page shows all platforms that have firmware files 
 4. Tap **Show Files** to see the individual file list for a platform
 5. Tap **Download All** to download all missing BIOS files for a platform
 
-[Screenshot: BIOS Manager page showing platforms with download counts and Download All buttons]
+<!-- Screenshot: BIOS Manager page showing platforms with download counts and Download All buttons -->
 
 BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use subdirectories — for example, Dreamcast BIOS goes into `bios/dc/` and PS2 BIOS goes into `bios/pcsx2/bios/`. The plugin handles the correct placement automatically.
 

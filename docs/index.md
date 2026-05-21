@@ -9,6 +9,8 @@ A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](h
 - Manage BIOS files for systems that require them
 - Sync save files between devices through your RomM server
 
+![A RomM game's detail page in Steam showing the injected RomM Sync panel](assets/screenshot-game-detail.jpg)
+
 ## User Guide
 
 1. **[Getting Started](user-guide/getting-started.md)** — Prerequisites, installation, and first-time setup

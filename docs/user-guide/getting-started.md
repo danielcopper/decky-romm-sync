@@ -61,7 +61,7 @@ After installation, you need to connect the plugin to your RomM server:
 4. Enter your username and password
 5. Tap **Save Settings**, then **Test Connection** to verify
 
-[Screenshot: Connection Settings page with URL, username, and password fields]
+<!-- Screenshot: Connection Settings page with URL, username, and password fields -->
 
 Once connected, you're ready to sync your library. See [Configuration](configuration.md) for additional settings, or jump straight to [Syncing Your Library](syncing-your-library.md).
 

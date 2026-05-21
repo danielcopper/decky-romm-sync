@@ -38,7 +38,7 @@ Standalone emulator saves (PCSX2, DuckStation, Dolphin, PPSSPP, melonDS, etc.) a
 
 Open **Save Sync** from the main QAM page to configure sync behavior.
 
-[Screenshot: Save Sync settings page showing auto-sync toggles]
+<!-- Screenshot: Save Sync settings page showing auto-sync toggles -->
 
 ### Auto Sync
 
@@ -63,7 +63,7 @@ Tap **Sync All Saves Now** to sync saves for all installed ROMs at once. This is
 
 When both your local save and the server save have changed since the last sync, a modal appears with both versions.
 
-[Screenshot: Sync conflict modal with local and server save details and three buttons]
+<!-- Screenshot: Sync conflict modal with local and server save details and three buttons -->
 
 Each side shows:
 
