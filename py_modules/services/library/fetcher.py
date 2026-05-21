@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from models.state import MetadataCache, PluginState
 
+from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 from lib.errors import classify_error
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     )
 
     # Orchestrator-supplied progress emitter. Matches the kw-only signature
-    # of ``SyncOrchestrator._emit_progress``: phase positional, every other
+    # of ``SyncOrchestrator._emit_progress``: stage positional, every other
     # field keyword. Sub-services consume this through the Config seam.
     EmitProgressFn = Callable[..., Awaitable[None]]
 
@@ -278,9 +279,11 @@ class LibraryFetcher:
                 self._logger.info(f"Skipping {platform_name}: {registry_count} ROMs unchanged")
                 all_roms.extend(self._reconstruct_platform_from_registry(registry, platform_name, platform_slug))
                 await self._emit_progress(
-                    "roms",
+                    SyncStage.FETCHING,
                     current=len(all_roms),
                     message=f"{platform_name} unchanged ({pi}/{total_platforms})",
+                    step=pi,
+                    total_steps=total_platforms,
                 )
                 return True
 
@@ -297,9 +300,11 @@ class LibraryFetcher:
         offset = 0
         limit = 50
         await self._emit_progress(
-            "roms",
+            SyncStage.FETCHING,
             current=len(all_roms),
             message=f"Fetching {platform_name}... {len(all_roms)} found ({pi}/{total_platforms})",
+            step=pi,
+            total_steps=total_platforms,
         )
 
         while True:
@@ -328,9 +333,11 @@ class LibraryFetcher:
 
             all_roms.extend(rom_list)
             await self._emit_progress(
-                "roms",
+                SyncStage.FETCHING,
                 current=len(all_roms),
                 message=f"Fetching {platform_name}... {len(all_roms)} found ({pi}/{total_platforms})",
+                step=pi,
+                total_steps=total_platforms,
             )
             if len(rom_list) < limit:
                 break

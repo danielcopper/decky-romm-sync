@@ -332,6 +332,13 @@ class TestLibrarySyncCallableDelegation:
         assert result == {"applied": True}
 
     @pytest.mark.asyncio
+    async def test_get_sync_status_delegates(self, plugin):
+        plugin._sync_service.get_sync_status.return_value = {"running": True, "stage": "applying"}
+        result = await plugin.get_sync_status()
+        plugin._sync_service.get_sync_status.assert_called_once_with()
+        assert result == {"running": True, "stage": "applying"}
+
+    @pytest.mark.asyncio
     async def test_report_unit_results_delegates(self, plugin):
         plugin._sync_service.report_unit_results = AsyncMock(return_value={"ok": True})
         result = await plugin.report_unit_results({"1": 100})

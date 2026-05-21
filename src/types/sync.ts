@@ -20,13 +20,26 @@ export interface CollectionSyncSetting {
   category: "favorites" | "user" | "franchise";
 }
 
+export type SyncStage =
+  | "discovering"
+  | "fetching"
+  | "applying"
+  | "finalizing"
+  | "done"
+  | "cancelled"
+  | "error";
+
 export interface SyncProgress {
   running: boolean;
-  phase?: string;
+  stage?: SyncStage | "";
+  /** Fine: items processed within the current unit. */
   current?: number;
+  /** Fine: total items in the current unit. */
   total?: number;
   message?: string;
+  /** Coarse: current unit index (1-based) driving the determinate main bar. */
   step?: number;
+  /** Coarse: total units. ``0`` means indeterminate. */
   totalSteps?: number;
 }
 

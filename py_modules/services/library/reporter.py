@@ -24,6 +24,7 @@ from models.registry_patches import RegistrySyncApplyPatch
 from models.state import PluginState
 
 from domain.sync_diff import should_include_in_platform_collection
+from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
 from services.library._state import LibrarySyncStateBox
 
@@ -188,7 +189,7 @@ class SyncReporter:
         total = len(self._state["shortcut_registry"])
         if cancelled:
             await self._emit_progress(
-                "done",
+                SyncStage.CANCELLED,
                 current=total_games,
                 total=total,
                 message=f"Sync cancelled: {total_games} of {total} games processed",
@@ -196,7 +197,7 @@ class SyncReporter:
             )
         else:
             await self._emit_progress(
-                "done",
+                SyncStage.DONE,
                 current=total,
                 total=total,
                 message=f"Sync complete: {total} games from {len(platform_app_ids)} platforms",

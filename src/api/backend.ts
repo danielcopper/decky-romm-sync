@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { PluginSettings, SyncStats, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse, LaunchVerdict, SlotDeleteInfo, DeleteSlotResult, MigrationStatus, MigrationResult, SaveSortMigrationStatus, RollbackStatus, ListFileVersionsResult, ListDevicesResponse } from "../types";
+import type { PluginSettings, SyncStats, SyncProgress, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse, LaunchVerdict, SlotDeleteInfo, DeleteSlotResult, MigrationStatus, MigrationResult, SaveSortMigrationStatus, RollbackStatus, ListFileVersionsResult, ListDevicesResponse } from "../types";
 
 export interface BackendResult {
   success: boolean;
@@ -55,6 +55,7 @@ export const syncHeartbeat = callable<[], { success: boolean }>("sync_heartbeat"
 export const syncPreview = callable<[], SyncPreview>("sync_preview");
 export const syncApplyDelta = callable<[string], BackendResult>("sync_apply_delta");
 export const syncCancelPreview = callable<[], BackendResult>("sync_cancel_preview");
+export const getSyncStatus = callable<[], SyncProgress>("get_sync_status");
 export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");
 export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
 export const startDownload = callable<[number], BackendResult>("start_download");

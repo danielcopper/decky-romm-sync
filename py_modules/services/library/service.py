@@ -160,14 +160,14 @@ class LibraryService:
         )
         reporter_binding.set(lambda: self._reporter)
 
-    async def _emit_progress_proxy(self, phase, **kwargs):
+    async def _emit_progress_proxy(self, stage, **kwargs):
         """Late-bound proxy to the orchestrator's _emit_progress.
 
         Threaded into the fetcher's config at ctor time before
         ``self._orchestrator`` exists — calls resolve at invocation
         time, by which point both sub-services are wired.
         """
-        await self._orchestrator._emit_progress(phase, **kwargs)
+        await self._orchestrator._emit_progress(stage, **kwargs)
 
     # ── Public properties ────────────────────────────────────────
 
@@ -351,6 +351,9 @@ class LibraryService:
 
     def sync_cancel_preview(self):
         return self._orchestrator.sync_cancel_preview()
+
+    def get_sync_status(self):
+        return self._orchestrator.get_sync_status()
 
     # Reporting
     async def report_unit_results(self, rom_id_to_app_id):

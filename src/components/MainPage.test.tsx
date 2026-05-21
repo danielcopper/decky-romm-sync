@@ -274,7 +274,7 @@ describe("MainPage", () => {
     setDownloads([]);
     setSyncProgress({
       running: false,
-      phase: "",
+      stage: "",
       current: 0,
       total: 0,
       message: "",
@@ -357,6 +357,13 @@ describe("MainPage", () => {
     });
     vi.mocked(backend.syncCancelPreview).mockResolvedValue({
       success: true,
+      message: "",
+    });
+    vi.mocked(backend.getSyncStatus).mockResolvedValue({
+      running: false,
+      stage: "",
+      current: 0,
+      total: 0,
       message: "",
     });
     vi.mocked(backend.cancelSync).mockResolvedValue({
@@ -512,10 +519,12 @@ describe("MainPage", () => {
       expect(container.textContent).not.toContain("RetroArch: input_driver");
     });
 
-    it("recovers in-flight sync state from getSyncProgress() on mount", async () => {
-      setSyncProgress({
+    it("recovers in-flight sync state from getSyncStatus() on mount", async () => {
+      // Backend is authoritative: the mount query returns a live run, so the
+      // in-flight UI is shown even though the event-fed store was idle.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
-        phase: "fetching",
+        stage: "fetching",
         message: "Fetching library...",
         step: 1,
         totalSteps: 5,
@@ -523,11 +532,24 @@ describe("MainPage", () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       // In-flight: Cancel Sync button is rendered (replaces the Sync Library
-      // button) and the ProgressBarWithInfo shows the recovered message.
+      // button) and the determinate bar shows the recovered stage label.
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
       expect(buttonByExactText(container, "Sync Library")).toBeNull();
       expect(container.querySelector('[data-testid="progress-op"]')?.textContent)
         .toContain("Fetching library");
+    });
+
+    it("logs the failure when getSyncStatus rejects on mount", async () => {
+      vi.mocked(backend.getSyncStatus).mockRejectedValue(new Error("offline"));
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to query sync status"),
+      );
+      // Falls back to the idle UI — the Sync Library button stays available.
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      logSpy.mockRestore();
     });
   });
 
@@ -839,37 +861,75 @@ describe("MainPage", () => {
     });
   });
 
-  describe("formatProgressText (via in-flight sync ProgressBarWithInfo)", () => {
-    it("renders 'Syncing...' fallback when message is empty (no step info)", async () => {
-      setSyncProgress({
+  describe("two-level in-flight progress UI", () => {
+    it("main bar shows the coarse step/totalSteps and stage label", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
-        step: 1,
-        totalSteps: 2,
-        message: "",
+        stage: "applying",
+        step: 2,
+        totalSteps: 5,
+        current: 3,
+        total: 10,
+        message: "N64: 3/10",
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       const op = container.querySelector('[data-testid="progress-op"]');
-      expect(op?.textContent).toContain("[1/2]");
-      expect(op?.textContent).toContain("Syncing...");
+      expect(op?.textContent).toContain("Applying shortcuts");
+      // sTimeRemaining carries the coarse "step/totalSteps" counter.
+      expect(container.querySelector('[data-testid="progress-remaining"]')?.textContent)
+        .toContain("2/5");
+      // Determinate: 2/5 * 100 = 40.
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("40");
+      expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
     });
 
-    it("truncates long messages with an ellipsis", async () => {
-      // 40-char budget — produce a 60-char message and assert truncation.
-      const longMsg = "x".repeat(60);
-      setSyncProgress({
+    it("main bar goes indeterminate when totalSteps is 0", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
+        stage: "fetching",
+        step: 0,
+        totalSteps: 0,
+        message: "Fetching platforms...",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("true");
+    });
+
+    it("detail line renders the fine current/total message with a step prefix", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 1,
+        totalSteps: 2,
+        current: 4,
+        total: 8,
+        message: "N64: 4/8",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // The detail line is the field-label; it carries the step-prefixed message.
+      expect(container.textContent).toContain("[1/2]");
+      expect(container.textContent).toContain("N64: 4/8");
+    });
+
+    it("truncates long detail messages with an ellipsis", async () => {
+      const longMsg = "x".repeat(60);
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
         step: 2,
         totalSteps: 5,
+        total: 60,
         message: longMsg,
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      const op = container.querySelector('[data-testid="progress-op"]');
-      expect(op?.textContent).toContain("…");
-      // Step prefix counts towards the 40-char budget; total rendered length
-      // should be ~40.
-      expect((op?.textContent ?? "").length).toBeLessThanOrEqual(41);
+      const labels = fieldLabels(container);
+      const detail = labels.find((l) => l.includes("…"));
+      expect(detail).toBeDefined();
+      expect((detail ?? "").length).toBeLessThanOrEqual(41);
     });
   });
 
@@ -1133,9 +1193,10 @@ describe("MainPage", () => {
   // ===========================================================================
   describe("handleCancel", () => {
     it("clicking the in-flight 'Cancel Sync' button calls requestSyncCancel + cancelSync", async () => {
-      // Pre-arm an in-flight sync via the recovery branch on mount.
-      setSyncProgress({
+      // Pre-arm an in-flight sync via the backend-authoritative mount query.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
+        stage: "applying",
         message: "Working",
       });
       vi.mocked(backend.cancelSync).mockResolvedValue({
@@ -1156,11 +1217,12 @@ describe("MainPage", () => {
     });
 
     it("cancelSync success: surfaces result.message in the status field (un-gated)", async () => {
-      // #733 fix: handleCancel now stops polling + flips syncing/loading off
-      // before setting status, so the `status && !syncing && !preview` gate
-      // un-masks the cancel-specific message.
-      setSyncProgress({
+      // #733 fix: handleCancel flips syncing/loading off before setting status,
+      // so the `status && !syncing && !preview` gate un-masks the cancel
+      // message.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
+        stage: "applying",
         message: "Working",
       });
       vi.mocked(backend.cancelSync).mockResolvedValue({
@@ -1179,25 +1241,19 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
     });
 
-    it("cancelSync success: stops polling and status auto-clears after 8s (mirrors startPolling's finish branch)", async () => {
+    it("cancelSync success: status auto-clears after 8s", async () => {
       vi.useFakeTimers({
         toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"],
       });
       try {
-        setSyncProgress({
+        vi.mocked(backend.getSyncStatus).mockResolvedValue({
           running: true,
+          stage: "applying",
           message: "Working",
         });
-        // Realistic backend behavior: cancelSync flips the progress store to
-        // running:false with a different message. This drives the poll tick's
-        // !progress.running branch — if handleCancel forgets to stopPolling(),
-        // the next tick clobbers our "cancelled-msg" with "poll-clobbered-msg".
-        vi.mocked(backend.cancelSync).mockImplementation(async () => {
-          setSyncProgress({
-            running: false,
-            message: "poll-clobbered-msg",
-          });
-          return { success: true, message: "cancelled-msg" };
+        vi.mocked(backend.cancelSync).mockResolvedValue({
+          success: true,
+          message: "cancelled-msg",
         });
         const { container } = render(<MainPage onNavigate={vi.fn()} />);
         await act(async () => {
@@ -1210,15 +1266,11 @@ describe("MainPage", () => {
           await Promise.resolve();
         });
         expect(fieldLabels(container)).toContain("cancelled-msg");
-        // Advance the 8s auto-clear timer. Without stopPolling() the 250ms
-        // poll tick would fire and clobber the status with "poll-clobbered-msg"
-        // (and arm its own 8s timer), so the auto-clear assertion below would
-        // fail in two ways: the message survives, and it's the wrong one.
+        // showTransientStatus arms an 8s auto-clear timer.
         await act(async () => {
           await vi.advanceTimersByTimeAsync(8000);
         });
         expect(fieldLabels(container)).not.toContain("cancelled-msg");
-        expect(fieldLabels(container)).not.toContain("poll-clobbered-msg");
       } finally {
         vi.useRealTimers();
       }
@@ -1227,8 +1279,9 @@ describe("MainPage", () => {
     it("cancelSync rejection: surfaces 'Failed to cancel sync' in the status field", async () => {
       // #733 fix: catch branch now uses the same cleanup-and-status helper, so
       // the failure message is visible to the user.
-      setSyncProgress({
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
+        stage: "applying",
         message: "Working",
       });
       vi.mocked(backend.cancelSync).mockRejectedValue(new Error("net"));
@@ -1611,63 +1664,113 @@ describe("MainPage", () => {
       clearIntervalSpy.mockRestore();
     });
 
-    it("pollRef (250ms sync progress) is cleared on unmount when sync is in-flight", async () => {
-      // Pre-arm in-flight sync so startPolling runs at mount.
-      setSyncProgress({ running: true, message: "Working" });
-      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-      const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-
-      const { unmount } = render(<MainPage onNavigate={vi.fn()} />);
+    it("onSyncProgressChange subscription is removed on unmount", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        message: "Working",
+      });
+      const { container, unmount } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-
-      const pollIds = setIntervalSpy.mock.results
-        .filter((_, i) => setIntervalSpy.mock.calls[i][1] === 250)
-        .map((r) => r.value as ReturnType<typeof setInterval>);
-      const expectedId = pollIds[pollIds.length - 1];
-      expect(expectedId).toBeDefined();
-
-      const callsBeforeUnmount = clearIntervalSpy.mock.calls.length;
+      // In-flight UI is up — the subscription is live.
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
       unmount();
-      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
-      expect(clearIntervalSpy).toHaveBeenCalledWith(expectedId);
+      // After unmount, a store update must not throw (listener was removed)
+      // and must not resurrect the unmounted tree.
+      act(() => {
+        setSyncProgress({ running: false, stage: "done", message: "Sync complete" });
+      });
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+    });
+  });
 
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
+  // ===========================================================================
+  // N2. Backend-authoritative progress — store subscription drives the UI
+  // ===========================================================================
+  describe("store-driven sync UI (#751)", () => {
+    it("terminal stage tears down the in-flight UI and surfaces the final message", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 1,
+        totalSteps: 2,
+        message: "Working",
+      });
+      const statsAfter: SyncStats = {
+        ...defaultStats(),
+        roms: 7,
+        last_sync: new Date().toISOString(),
+      };
+      vi.mocked(backend.getSyncStats).mockResolvedValue(statsAfter);
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // In-flight initially.
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+
+      // A terminal sync_progress lands via the module store.
+      await act(async () => {
+        setSyncProgress({ running: false, stage: "done", message: "Sync complete: 7 games" });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Torn down: Sync Library button back, final message surfaced, stats refreshed.
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
+      expect(fieldLabels(container)).toContain("Sync complete: 7 games");
+      expect(vi.mocked(backend.getSyncStats)).toHaveBeenCalledTimes(2);
     });
 
-    it("pollRef tick stops polling when sync becomes not-running, surfaces final message + refreshes stats", async () => {
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
-      try {
-        // Pre-arm in-flight sync.
-        setSyncProgress({ running: true, message: "Working" });
-        vi.mocked(backend.getSyncStats).mockResolvedValueOnce(defaultStats());
-        const { container } = render(<MainPage onNavigate={vi.fn()} />);
-        // First flush — mount useEffect.
-        await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    it("a bare running:false (no terminal stage) does NOT tear down the in-flight UI", async () => {
+      // Reproduces the #751 teardown race: a non-terminal running:false must
+      // not collapse the syncing UI (it would right after startSync, before
+      // events land).
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        message: "Working",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
 
-        // Flip the store to NOT running, then advance one 250ms tick — the
-        // poll handler should stop the interval, set status to the final
-        // message, and refresh stats.
-        setSyncProgress({ running: false, message: "Sync finished" });
-        const statsAfter: SyncStats = {
-          ...defaultStats(),
-          roms: 1,
-          last_sync: new Date().toISOString(),
-        };
-        vi.mocked(backend.getSyncStats).mockResolvedValue(statsAfter);
+      await act(async () => {
+        setSyncProgress({ running: false, stage: "", message: "" });
+        await Promise.resolve();
+      });
 
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(260);
-        });
+      // Still in-flight — only a terminal stage tears down.
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+    });
 
-        // The status field shows the final message.
-        expect(fieldLabels(container)).toContain("Sync finished");
-        // The Sync Library button is back (in-flight ended).
-        expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
-        expect(vi.mocked(backend.getSyncStats)).toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
+    it("Sync Library button is disabled optimistically on click before the first event", async () => {
+      // skipPreview path: startSync resolves but no progress event has landed.
+      // The button must be gone (replaced by Cancel Sync) immediately.
+      let resolveStart: (v: { success: boolean; message: string }) => void = () => {};
+      vi.mocked(backend.startSync).mockImplementation(
+        () => new Promise((res) => { resolveStart = res; }),
+      );
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const toggle = container.querySelector('[data-testid="toggle-input"]') as HTMLInputElement | null;
+      fireEvent.click(toggle!);
+      await flushAsync();
+
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+      });
+      // Optimistic: in-flight UI shown before startSync even resolves.
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+
+      await act(async () => {
+        resolveStart({ success: true, message: "" });
+        await Promise.resolve();
+      });
+      // Still in-flight after the resolve — store subscription owns teardown.
+      expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
     });
   });
 

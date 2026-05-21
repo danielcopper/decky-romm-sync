@@ -12,6 +12,7 @@ from models.registry_patches import RegistryCoverPathPatch
 from models.state import PluginState, ShortcutRegistryEntry
 
 from domain.artwork_paths import final_filename, staging_filename
+from domain.sync_stage import SyncStage
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
@@ -110,7 +111,7 @@ class ArtworkService:
                 return cover_paths
 
             await emit_progress(
-                "applying",
+                SyncStage.APPLYING,
                 current=i + 1,
                 total=total,
                 message=f"Downloading artwork {i + 1}/{total}",

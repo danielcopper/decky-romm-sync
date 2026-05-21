@@ -691,6 +691,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_registry_platforms",
     "report_removal_results",
     "get_artwork_base64",
+    "get_sync_status",
     "get_sync_stats",
     "get_rom_by_steam_app_id",
     "get_download_queue",

@@ -146,7 +146,7 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
 
       updateSyncProgress({
         running: true,
-        phase: "applying",
+        stage: "applying",
         current: 0,
         total,
         message: `${data.unit_name}: 0/${total}`,

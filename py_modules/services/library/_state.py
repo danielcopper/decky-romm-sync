@@ -23,10 +23,12 @@ if TYPE_CHECKING:
 def _default_progress() -> dict:
     return {
         "running": False,
-        "phase": "",
+        "stage": "",
         "current": 0,
         "total": 0,
         "message": "",
+        "step": 0,
+        "totalSteps": 0,
     }
 
 

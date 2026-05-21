@@ -24,10 +24,11 @@ import {
   syncCancelPreview,
   clearSyncCache,
   refreshMigrationState,
+  getSyncStatus,
   logError,
 } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
-import { getSyncProgress } from "../utils/syncProgress";
+import { getSyncProgress, setSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
@@ -36,7 +37,7 @@ import { requestSyncCancel } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
-import type { SyncProgress, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
+import type { SyncProgress, SyncStage, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
 import type { MigrationStatus } from "../types";
 
 type Page = "settings" | "library" | "data" | "downloads";
@@ -73,6 +74,26 @@ const ConnectionIndicator: FC<{ connected: boolean | null }> = ({ connected }) =
     </>
   );
 };
+
+const TERMINAL_STAGES: ReadonlySet<SyncStage> = new Set<SyncStage>(["done", "cancelled", "error"]);
+
+function isTerminalStage(stage: SyncProgress["stage"]): boolean {
+  return !!stage && TERMINAL_STAGES.has(stage as SyncStage);
+}
+
+const STAGE_LABELS: Record<SyncStage, string> = {
+  discovering: "Discovering platforms",
+  fetching: "Fetching library",
+  applying: "Applying shortcuts",
+  finalizing: "Finalizing",
+  done: "Done",
+  cancelled: "Cancelled",
+  error: "Error",
+};
+
+function stageLabel(stage: SyncProgress["stage"]): string {
+  return stage ? STAGE_LABELS[stage as SyncStage] ?? "Syncing" : "Syncing";
+}
 
 function formatProgressText(progress: SyncProgress | null): string {
   if (!progress) return "Syncing...";
@@ -126,7 +147,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [connected, setConnected] = useState<boolean | null>(null);
   const versionError = useVersionError();
   const [syncing, setSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  const [syncProgress, setSyncProgressState] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
@@ -135,34 +156,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
   const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downloadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const stopPolling = () => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  };
-
-  const startPolling = (progressOnly = false) => {
-    stopPolling();
-    pollRef.current = setInterval(() => {
-      // Read directly from module-level store — no async callable, no WebSocket
-      const progress = getSyncProgress();
-      setSyncProgress(progress);
-
-      if (!progressOnly && !progress.running) {
-        stopPolling();
-        setSyncing(false);
-        setLoading(false);
-        if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-        setStatus(progress.message || "Sync finished");
-        statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
-        getSyncStats().then(setStats);
-      }
-    }, 250);
+  const showTransientStatus = (msg: string) => {
+    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+    setStatus(msg);
+    statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
   };
 
   useEffect(() => {
@@ -183,15 +183,34 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       }
     });
 
-    // Check if a sync is already in progress (handles QAM close/reopen)
-    const progress = getSyncProgress();
-    if (progress.running) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- recovery of in-flight sync state on QAM re-mount; legitimate mount-time setState
-      setSyncing(true);
-      setLoading(true);
-      setSyncProgress(progress);
-      startPolling();
-    }
+    // Backend is authoritative for in-flight sync state. Seed the module
+    // store from get_sync_status() so a QAM close/reopen recovers the live
+    // run rather than guessing from the event-fed store alone.
+    getSyncStatus()
+      .then((progress) => {
+        setSyncProgress(progress);
+        if (progress.running) {
+          setSyncing(true);
+          setLoading(true);
+          setSyncProgressState(progress);
+        }
+      })
+      .catch((e) => logError(`Failed to query sync status: ${e}`));
+
+    // Subscribe to the module store — every backend sync_progress event and
+    // every frontend updateSyncProgress notifies, driving a re-render. The
+    // in-progress UI is torn down ONLY on a terminal stage, never on a bare
+    // running:false (which can transiently race a fresh run's first event).
+    const unsubProgress = onSyncProgressChange(() => {
+      const progress = getSyncProgress();
+      setSyncProgressState(progress);
+      if (isTerminalStage(progress.stage)) {
+        setSyncing(false);
+        setLoading(false);
+        showTransientStatus(progress.message || "Sync finished");
+        getSyncStats().then(setStats);
+      }
+    });
 
     // Poll download state for inline display
     downloadPollRef.current = setInterval(() => {
@@ -201,7 +220,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     const unsubMigration = onMigrationChange(() => setMigration(getMigrationState()));
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
     return () => {
-      stopPolling();
+      unsubProgress();
       unsubMigration();
       unsubSaveSort();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
@@ -209,13 +228,26 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     };
   }, []);
 
+  // A start/apply call never reached a running backend sync (rejected up
+  // front or threw). Reset both the local UI and the MODULE store so the
+  // store mirrors reality — the optimistic running:true must not linger.
+  const abortOptimisticSync = (msg: string) => {
+    setStatus(msg);
+    setSyncing(false);
+    setLoading(false);
+    setSyncProgress({ running: false, stage: "" });
+  };
+
   const handleSync = async () => {
+    // Optimistically disable the button and show the in-progress UI before
+    // the backend's first sync_progress event lands — writing running:true
+    // into the MODULE store (the single source of truth the subscription
+    // reads), not a shadowing local state.
     setLoading(true);
     setSyncing(true);
     setStatus("");
     setPreview(null);
-    setSyncProgress({ running: true, phase: "fetching", message: "Fetching library..." });
-    startPolling(true);
+    setSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
     try {
       // Skip Preview takes the per-unit pipeline (start_sync) — incremental
       // shortcut delivery, per-unit crash safety, no upfront full library
@@ -223,32 +255,22 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // review changes before they apply.
       if (skipPreview) {
         const startResult = await startSync();
-        if (startResult.success) {
-          startPolling();
-        } else {
-          stopPolling();
-          setStatus(startResult.message);
-          setSyncing(false);
-          setLoading(false);
+        if (!startResult.success) {
+          abortOptimisticSync(startResult.message);
         }
+        // On success the store subscription drives the UI from here.
         return;
       }
       const result = await syncPreview();
-      stopPolling();
       if (result.success) {
         setPreview(result);
         setSyncing(false);
         setLoading(false);
       } else {
-        setStatus(result.message || "Preview failed");
-        setSyncing(false);
-        setLoading(false);
+        abortOptimisticSync(result.message || "Preview failed");
       }
     } catch {
-      stopPolling();
-      setStatus("Failed to start sync");
-      setSyncing(false);
-      setLoading(false);
+      abortOptimisticSync("Failed to start sync");
     }
   };
 
@@ -258,20 +280,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setPreview(null);
     setLoading(true);
     setSyncing(true);
-    setSyncProgress({ running: true, phase: "applying", message: "Applying changes..." });
+    setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
     try {
       const result = await syncApplyDelta(previewId);
-      if (result.success) {
-        startPolling();
-      } else {
-        setStatus(result.message);
-        setSyncing(false);
-        setLoading(false);
+      if (!result.success) {
+        abortOptimisticSync(result.message);
       }
+      // On success the store subscription drives the UI from here.
     } catch {
-      setStatus("Failed to apply sync");
-      setSyncing(false);
-      setLoading(false);
+      abortOptimisticSync("Failed to apply sync");
     }
   };
 
@@ -286,12 +303,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   const finishCancelWithStatus = (msg: string) => {
-    stopPolling();
     setSyncing(false);
     setLoading(false);
-    setStatus(msg);
-    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-    statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
+    showTransientStatus(msg);
   };
 
   const handleCancel = async () => {
@@ -310,10 +324,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     }
   };
 
-  // Steam's ProgressBarWithInfo nProgress uses percentage (0-100), not fraction (0-1)
-  const progressFraction = syncProgress?.total
-    ? ((syncProgress.current ?? 0) / syncProgress.total) * 100
+  // Two-level progress. The main determinate bar tracks COARSE unit
+  // progress (step / totalSteps); 0/0 means the run hasn't reached a unit
+  // yet, so the bar goes indeterminate. Steam's ProgressBarWithInfo
+  // nProgress uses percentage (0-100), not fraction (0-1).
+  const coarseFraction = syncProgress?.totalSteps
+    ? ((syncProgress.step ?? 0) / syncProgress.totalSteps) * 100
     : undefined;
+  const hasFineDetail = !!(syncProgress?.total && syncProgress.message);
 
   const activeDownloads = downloads.filter(d => d.status === "queued" || d.status === "downloading");
   const completedDownloads = downloads.filter(d => d.status === "completed" || d.status === "failed" || d.status === "cancelled");
@@ -375,21 +393,25 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   } else if (syncing) {
     syncBody = (
       <>
-        {syncProgress?.step && syncProgress?.totalSteps ? (
-          <PanelSectionRow>
-            <ProgressBarWithInfo
-              indeterminate={progressFraction === undefined}
-              nProgress={progressFraction}
-              sOperationText={formatProgressText(syncProgress)}
-            />
-          </PanelSectionRow>
-        ) : (
+        <PanelSectionRow>
+          <ProgressBarWithInfo
+            indeterminate={coarseFraction === undefined}
+            nProgress={coarseFraction}
+            sOperationText={stageLabel(syncProgress?.stage)}
+            sTimeRemaining={
+              syncProgress?.totalSteps
+                ? `${syncProgress.step ?? 0}/${syncProgress.totalSteps}`
+                : undefined
+            }
+          />
+        </PanelSectionRow>
+        {hasFineDetail && (
           <PanelSectionRow>
             <Field
               label={
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <Spinner width={16} height={16} />
-                  {syncProgress?.message || "Fetching..."}
+                  <Spinner width={14} height={14} />
+                  <span style={{ fontSize: "12px" }}>{formatProgressText(syncProgress)}</span>
                 </div>
               }
             />
