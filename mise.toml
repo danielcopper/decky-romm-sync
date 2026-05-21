@@ -11,8 +11,8 @@ description = "Install JS and Python dependencies"
 run = ["pnpm install", "pip install -r requirements-dev.txt", "git config core.hooksPath .githooks"]
 
 [tasks.build]
-description = "Build frontend"
-run = "pnpm build"
+description = "Build frontend (dev: with source maps)"
+run = "pnpm build:dev"
 depends = ["setup"]
 
 [tasks.test]

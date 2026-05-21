@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "rollup -c",
+    "build:dev": "rollup -c rollup.dev.config.js",
     "size": "size-limit",
     "lint": "eslint .",
     "test": "vitest run",

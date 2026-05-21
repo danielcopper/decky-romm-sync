@@ -61,11 +61,6 @@ jobs:
           chmod +x /tmp/decky-cli/decky
           echo "/tmp/decky-cli" >> $GITHUB_PATH
 
-      - name: Build frontend (no source maps in release zip)
-        run: |
-          pnpm build
-          rm -f dist/*.map
-
       - name: Package plugin
         run: |
           sudo $(which decky) plugin build -o /tmp/output -s directory $GITHUB_WORKSPACE
