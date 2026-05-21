@@ -34,6 +34,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.6.0",
     "happy-dom": "^20.0.0",
+    "markdownlint-cli2": "^0.22.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-icons": "^5.6.0",

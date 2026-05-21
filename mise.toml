@@ -27,8 +27,13 @@ run = "pnpm test"
 description = "Run frontend tests with coverage report"
 run = "pnpm test:coverage"
 
+[tasks."lint:md"]
+description = "Lint Markdown with markdownlint-cli2 (CI parity)"
+run = "pnpm exec markdownlint-cli2 \"**/*.md\" \"!node_modules\" \"!.worktrees\" \"!CHANGELOG.md\" \"!site\""
+
 [tasks.lint]
-description = "Check Cosmic Python architecture rules (layer imports + forbidden service calls)"
+description = "Check Cosmic Python architecture rules (layer imports + forbidden service calls) and Markdown"
+depends = ["lint:md"]
 run = [
     "PYTHONPATH=py_modules lint-imports",
     "bash scripts/check_cosmic_call_bans.sh",
