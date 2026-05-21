@@ -17,9 +17,21 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      # Mint a GitHub App installation token so release-please's PR/branch
+      # pushes are authored by the App, not GITHUB_TOKEN. Pushes made with
+      # GITHUB_TOKEN do not trigger workflows (anti-recursion), which left
+      # the release PR's required status checks stuck "Expected" and
+      # unmergeable. An App token makes those checks run automatically.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@v4
         id: release
         with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
