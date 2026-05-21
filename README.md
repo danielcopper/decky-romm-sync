@@ -1,6 +1,7 @@
 ![decky-romm-sync](assets/banner.png)
 
 [![CI](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml)
+[![Documentation](https://img.shields.io/badge/docs-online-526CFE?logo=materialformkdocs&logoColor=white)](https://danielcopper.github.io/decky-romm-sync/)
 [![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
 [![Coverage](https://img.shields.io/sonar/coverage/danielcopper_decky-romm-sync?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
 [![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
@@ -10,83 +11,84 @@
 
 # decky-romm-sync
 
-A [Decky Loader](https://decky.xyz/) plugin that syncs your [RomM](https://github.com/rommapp/romm) game library to
-Steam as non-steam shortcuts. Games appear directly in your Steam library and launch through [RetroDECK](https://retrodeck.net/).
+A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) library
+into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
+[RetroDECK](https://retrodeck.net/), and keep their saves in sync across devices through your RomM server.
+
+### 📖 [Read the full documentation →](https://danielcopper.github.io/decky-romm-sync/)
+
+Installation, setup, save sync, BIOS management, troubleshooting, and the architecture reference all live on the
+documentation site. This README is just the quick tour.
 
 ## Features
 
-- **Library sync** — Fetches platforms and ROMs from your RomM server, creates Steam shortcuts with artwork
-- **Per-platform control** — Enable/disable which platforms to sync
-- **ROM downloads** — Download ROMs on demand with progress tracking and queue management
-- **BIOS management** — Download firmware/BIOS files from RomM for systems that need them (PSX, Dreamcast, PS2, etc.)
-- **Game detail page** — Shows install status, BIOS status, download/uninstall actions directly on each game's Steam page
+- **Library sync** — Pulls platforms and ROMs from your RomM server and creates Steam shortcuts, complete with cover
+  art, hero banners, and logos (with optional [SteamGridDB](https://www.steamgriddb.com/) artwork)
+- **Save sync** — Keeps save files in sync across devices through your RomM server, with newest-wins conflict
+  resolution and a manual override when you need it
+- **ROM downloads** — Download ROMs on demand with progress tracking and a managed download queue
+- **BIOS management** — Download firmware/BIOS files from RomM for systems that need them (PSX, Dreamcast, PS2, …)
+- **Game detail page** — Install status, BIOS status, and download/uninstall actions right on each game's Steam page
+- **Per-platform control** — Choose exactly which platforms get synced
 - **Controller friendly** — Full gamepad navigation throughout the plugin UI
 - **Steam Input config** — Per-shortcut Steam Input mode (Default / Force On / Force Off)
+- **RetroDECK path migration** — Move your RetroDECK installation between storage locations without re-syncing
 - **RetroArch diagnostics** — Detects misconfigured input drivers that break menu navigation
+
+## Screenshots
+
+| QAM panel | Game detail page |
+| :---: | :---: |
+| ![RomM Sync QAM panel](assets/screenshot-qam.jpg) | ![Game detail page with metadata](assets/screenshot-game-detail.jpg) |
+| **BIOS management** | **Per-game actions** |
+| ![BIOS status showing a required file to download](assets/screenshot-bios.jpg) | ![RomM actions menu: sync saves, download BIOS, refresh artwork](assets/screenshot-actions.jpg) |
 
 ## Requirements
 
-- [Decky Loader](https://decky.xyz/) installed on your Steam Deck or Linux HTPC
-- A running [RomM](https://github.com/rommapp/romm) server with ROM files
-- [RetroDECK](https://retrodeck.net/) (for launching games)
+- [Decky Loader](https://decky.xyz/) on your Steam Deck or Linux HTPC
+- A running [RomM](https://github.com/rommapp/romm) server, **version 4.8.1 or newer** (the plugin stays inert against
+  older servers)
+- [RetroDECK](https://retrodeck.net/) for launching games
 
 ## Installation
 
-Both methods below require **Developer Mode** in Decky Loader:
+### From the Decky Store
 
-1. Open the Quick Access Menu (QAM) and select **Decky**
-2. Click the **gear icon** (top right) to open Decky settings
-3. Toggle on **Developer Mode** — a **Developer** tab will appear
+> ⚠️ **Not available yet.** The plugin will be submitted to the [Decky Store](https://plugins.deckbrew.xyz/) with the
+> **v1.0** release. Until then, use the manual install below.
 
-### Install from ZIP
+Once published, install it straight from Decky's built-in store — open the Quick Access Menu → **Decky** → store icon,
+search for **RomM Sync**, and install. No Developer Mode required.
+
+### From ZIP or URL
+
+This is the current method while v1.0 is in progress. It requires **Developer Mode** in Decky Loader (Decky settings →
+gear icon → toggle **Developer Mode**).
 
 1. Download the latest `decky-romm-sync.zip` from the [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
-   to your Steam Deck
-2. In Decky settings, go to the **Developer** tab
-3. Select **Install Plugin from ZIP**
-4. Choose the downloaded file and confirm
+2. In Decky settings → **Developer** tab → **Install Plugin from ZIP** (or **from URL** with the
+   [latest release link](https://github.com/danielcopper/decky-romm-sync/releases/latest/download/decky-romm-sync.zip))
 
-### Install from URL
+> Full step-by-step instructions, including first-time setup, are in
+> [Getting Started](https://danielcopper.github.io/decky-romm-sync/user-guide/getting-started/).
 
-1. In Decky settings, go to the **Developer** tab
-2. Select **Install Plugin from URL**
-3. Paste the direct link to the latest release zip (e.g. `https://github.com/danielcopper/decky-romm-sync/releases/latest/download/decky-romm-sync.zip`)
-4. Confirm installation
+## Quick start
 
-### From source
+1. Open the Quick Access Menu and select **RomM Sync**
+2. In **Settings**, enter your RomM server URL and credentials, then hit **Test Connection**
+3. In **Platforms**, enable the platforms you want to sync
+4. Hit **Sync Library** — your ROMs appear as non-steam shortcuts
 
-Requires [mise](https://mise.jdx.dev/) (or Node LTS + pnpm manually).
+See the [User Guide](https://danielcopper.github.io/decky-romm-sync/user-guide/syncing-your-library/) for syncing
+details, [save sync](https://danielcopper.github.io/decky-romm-sync/user-guide/save-sync/), and
+[BIOS management](https://danielcopper.github.io/decky-romm-sync/user-guide/bios-management/).
 
-```bash
-git clone https://github.com/danielcopper/decky-romm-sync.git
-cd decky-romm-sync
-mise install          # installs Node, pnpm, Python
-pnpm install
-pnpm build
-```
+## Contributing
 
-Deploy to your device:
+Build from source, run the tests, and read the architecture reference on the documentation site:
 
-```bash
-# Symlink for development (rebuilds take effect immediately after Decky restart)
-sudo ln -sf "$(pwd)" ~/homebrew/plugins/decky-romm-sync
-sudo systemctl restart plugin_loader
-```
-
-## Setup
-
-1. Open the Quick Access Menu (QAM) and select **RomM Sync**
-2. Go to **Settings** and enter your RomM server URL and credentials
-3. Hit **Test Connection** to verify
-4. Go to **Platforms** and enable the platforms you want to sync
-5. Go back and hit **Sync Library**
-6. Your ROMs will appear as non-steam shortcuts in your Steam library
-
-## Running tests
-
-```bash
-python -m pytest tests/ -q
-```
+- [Development setup](https://danielcopper.github.io/decky-romm-sync/contributing/development/)
+- [Backend architecture](https://danielcopper.github.io/decky-romm-sync/architecture/backend-architecture/)
 
 ## Acknowledgments
 
