@@ -51,6 +51,14 @@ rsync -a --delete py_modules/ "$DEST/py_modules/"
 cp -f main.py plugin.json package.json "$DEST/"
 """
 
+[tasks.docs]
+description = "Serve the documentation site locally with live reload"
+run = "mkdocs serve"
+
+[tasks."docs:build"]
+description = "Build the documentation site (strict mode fails on broken links)"
+run = "mkdocs build --strict"
+
 [tasks.dev]
 description = "Build, deploy, and restart plugin loader"
 raw = true

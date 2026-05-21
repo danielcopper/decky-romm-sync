@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# MkDocs build output
+site/
+
 # Environment
 .env
 .env.*

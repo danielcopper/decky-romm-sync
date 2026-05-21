@@ -1,0 +1,64 @@
+site_name: decky-romm-sync
+site_description: Decky Loader plugin to sync your RomM library to Steam as non-steam shortcuts
+site_url: https://danielcopper.github.io/decky-romm-sync/
+
+repo_url: https://github.com/danielcopper/decky-romm-sync
+repo_name: danielcopper/decky-romm-sync
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.action.edit
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.details
+
+nav:
+  - Home: index.md
+  - User Guide:
+      - Getting Started: user-guide/getting-started.md
+      - Configuration: user-guide/configuration.md
+      - Syncing Your Library: user-guide/syncing-your-library.md
+      - Managing Games: user-guide/managing-games.md
+      - BIOS Management: user-guide/bios-management.md
+      - Save Sync: user-guide/save-sync.md
+      - Save File Extensions: user-guide/save-file-extensions.md
+      - RetroDECK Path Migration: user-guide/retrodeck-path-migration.md
+      - Troubleshooting: user-guide/troubleshooting.md
+  - Architecture:
+      - Backend Architecture: architecture/backend-architecture.md
+      - Save File Sync Architecture: architecture/save-file-sync-architecture.md
+      - Config Source Parsers: architecture/config-source-parsers.md
+      - Steam Non-Steam Shortcuts: architecture/steam-non-steam-shortcuts.md
+      - Steam Remote Play & Cross-Device: architecture/steam-remote-play.md
+  - Contributing:
+      - Development: contributing/development.md
