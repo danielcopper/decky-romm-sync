@@ -29,7 +29,7 @@ import {
   logError,
 } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
-import { getSyncProgress, setSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
+import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
@@ -38,8 +38,7 @@ import { requestSyncCancel } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
-import type { SyncProgress, SyncStage, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem } from "../types";
-import type { MigrationStatus } from "../types";
+import type { SyncProgress, SyncStage, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem, MigrationStatus } from "../types";
 
 type Page = "settings" | "library" | "data" | "downloads";
 
@@ -79,7 +78,7 @@ const ConnectionIndicator: FC<{ connected: boolean | null }> = ({ connected }) =
 const TERMINAL_STAGES: ReadonlySet<SyncStage> = new Set<SyncStage>(["done", "cancelled", "error"]);
 
 function isTerminalStage(stage: SyncProgress["stage"]): boolean {
-  return !!stage && TERMINAL_STAGES.has(stage as SyncStage);
+  return !!stage && TERMINAL_STAGES.has(stage);
 }
 
 const STAGE_LABELS: Record<SyncStage, string> = {
@@ -93,7 +92,7 @@ const STAGE_LABELS: Record<SyncStage, string> = {
 };
 
 function stageLabel(stage: SyncProgress["stage"]): string {
-  return stage ? STAGE_LABELS[stage as SyncStage] ?? "Syncing" : "Syncing";
+  return stage ? STAGE_LABELS[stage] : "Syncing";
 }
 
 function formatProgressText(progress: SyncProgress | null): string {
@@ -148,7 +147,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [connected, setConnected] = useState<boolean | null>(null);
   const versionError = useVersionError();
   const [syncing, setSyncing] = useState(false);
-  const [syncProgress, setSyncProgressState] = useState<SyncProgress | null>(null);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
@@ -189,11 +188,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // run rather than guessing from the event-fed store alone.
     getSyncStatus()
       .then((progress) => {
-        setSyncProgress(progress);
+        setStoredSyncProgress(progress);
         if (progress.running) {
           setSyncing(true);
           setLoading(true);
-          setSyncProgressState(progress);
+          setSyncProgress(progress);
         }
       })
       .catch((e) => logError(`Failed to query sync status: ${e}`));
@@ -204,7 +203,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // running:false (which can transiently race a fresh run's first event).
     const unsubProgress = onSyncProgressChange(() => {
       const progress = getSyncProgress();
-      setSyncProgressState(progress);
+      setSyncProgress(progress);
       if (isTerminalStage(progress.stage)) {
         setSyncing(false);
         setLoading(false);
@@ -236,7 +235,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setStatus(msg);
     setSyncing(false);
     setLoading(false);
-    setSyncProgress({ running: false, stage: "" });
+    setStoredSyncProgress({ running: false, stage: "" });
   };
 
   const handleSync = async () => {
@@ -248,7 +247,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setSyncing(true);
     setStatus("");
     setPreview(null);
-    setSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
+    setStoredSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
     try {
       // Skip Preview takes the per-unit pipeline (start_sync) — incremental
       // shortcut delivery, per-unit crash safety, no upfront full library
@@ -281,7 +280,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setPreview(null);
     setLoading(true);
     setSyncing(true);
-    setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
+    setStoredSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
     try {
       const result = await syncApplyDelta(previewId);
       if (!result.success) {
