@@ -35,6 +35,7 @@ The 500ms delay is critical. Without it, the `Set*` calls may silently fail beca
 **Do NOT pass quoted exe paths to `AddShortcut` or `SetShortcutExe`.** The API handles quoting internally. Passing `"\"path/to/exe\""` (pre-quoted) results in double-quoting, which causes launches to fail with "file not found."
 
 Pass the raw path:
+
 ```typescript
 SteamClient.Apps.SetShortcutExe(appId, "/home/deck/homebrew/plugins/decky-romm-sync/bin/romm-launcher");
 ```
@@ -64,7 +65,8 @@ Shortcut creation goes through the frontend `SteamClient.Apps.AddShortcut()` API
 ### shortcuts.vdf structure
 
 Steam stores non-Steam shortcuts in a binary VDF file at:
-```
+
+```text
 ~/.local/share/Steam/userdata/<user_id>/config/shortcuts.vdf
 ```
 

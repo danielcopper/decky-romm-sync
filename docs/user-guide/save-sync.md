@@ -54,6 +54,7 @@ The plugin uses a single, automatic resolution policy:
 - **A conflict modal appears only when both sides changed** since the last sync. You pick which version to keep.
 
 Tap **Sync All Saves Now** to sync saves for all installed ROMs at once. This is useful for:
+
 - Bulk backup before uninstalling ROMs
 - Catching up after a period of offline play
 - Verifying that all saves are in sync
@@ -65,10 +66,12 @@ When both your local save and the server save have changed since the last sync, 
 [Screenshot: Sync conflict modal with local and server save details and three buttons]
 
 Each side shows:
+
 - File size
 - Modified / uploaded timestamp
 
 Three actions:
+
 - **Keep Local** — uploads your local save to the server, overwriting the server version.
 - **Use Server** — downloads the server save and overwrites your local file.
 - **Cancel** — dismisses the modal without changing anything. The conflict will reappear on the next sync as long as both sides still differ. If another device pushes an update in the meantime, the situation may resolve automatically (your unchanged local file gets the new version) and the modal won't reappear.
@@ -80,6 +83,7 @@ The modal blocks the Play action until you choose. If a post-exit sync detects a
 When you switch the emulator core for a game (e.g., from mGBA to gpSP for GBA), the plugin detects the change and shows a warning before launching. This is because some cores use incompatible save formats — launching with a different core may overwrite your existing save with data the previous core can't read.
 
 The warning shows which core you're switching from and to. You can:
+
 - **Continue** — launch with the new core (your save may be overwritten)
 - **Cancel** — go back and switch the core back before launching
 
@@ -109,6 +113,7 @@ Most cores for the same system produce compatible `.srm` saves because the save 
 ## Offline Behavior
 
 If the RomM server is unreachable when a sync is attempted:
+
 - **Before launch**: the game starts normally with your local save (a toast notification informs you).
 - **After exit**: the upload is skipped. Your local save is untouched, and the next sync attempt produces the same outcome — typically pushing your changes once the server is reachable again.
 - No save data is ever lost due to a failed sync.

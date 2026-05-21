@@ -51,7 +51,8 @@ The plugin only shows BIOS files that belong to the platform you're looking at. 
 
 Different emulator cores can have different BIOS requirements for the same platform. The plugin detects which core RetroDECK is actually configured to use and filters the BIOS list accordingly, so you only see the files that matter for your setup.
 
-**Example: Game Boy Advance**
+### Example: Game Boy Advance
+
 - With **mGBA** (RetroDECK's default), `gba_bios.bin` is shown as *optional* — mGBA has a built-in high-level BIOS replacement
 - With **gpSP**, `gba_bios.bin` is shown as *required* — gpSP cannot run without it
 

@@ -11,7 +11,7 @@ The initial implementation covers **RetroArch per-game `.srm` saves only**. This
 Requires RomM >= 4.8.1. The plugin rejects servers below 4.8.1 with `error_code: "version_error"`.
 
 | Endpoint | Method | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `/api/saves?rom_id={id}` | GET | Returns array. Each item now includes `slot`, `file_name_no_tags`, `file_extension`, `content_hash`, and `device_syncs` array. |
 | `/api/saves/{id}` | GET | Single save metadata with v4.7 fields |
 | `/api/saves?rom_id={id}&emulator={emulator}&slot={slot}` | POST | Creates a new save entry. Slot-aware: `slot=default` causes RomM to append a timestamp to the filename (e.g. `Game.srm` becomes `Game [2026-03-24_15-18-50].srm`). Same filename + same slot = upsert. Different slot = new entry. |
@@ -23,11 +23,13 @@ Requires RomM >= 4.8.1. The plugin rejects servers below 4.8.1 with `error_code:
 | `/api/saves/delete` | POST | Bulk delete saves by ID. Body: `{"saves": [id1, id2, ...]}`. Returns result dict. |
 
 **New parameters on POST:**
+
 - `slot` — slot name (e.g. `"default"`). If omitted, save has `slot=null` (legacy behavior).
 - `autocleanup_limit` — max save versions retained per slot (default: 10).
 - `device_id` — server-registered device UUID. Used to populate `device_syncs` per save.
 
 **New fields on save metadata:**
+
 - `slot` — the slot this save belongs to (string or null)
 - `file_name_no_tags` — base filename without timestamp tags (e.g. `Game` from `Game [2026-03-24_15-18-50].srm`)
 - `file_extension` — file extension (e.g. `srm`)
@@ -86,6 +88,7 @@ Save games in RomM are tied to the authenticated user account. Users must use th
 The `emulator` parameter on RomM save uploads determines the server-side folder path: `saves/{system}/{rom_id}/{emulator}/`
 
 **Format:** `retroarch-{core}` where core is the libretro core name without `_libretro` suffix, lowercased.
+
 - Examples: `retroarch-mgba`, `retroarch-snes9x`, `retroarch-swanstation`
 - Fallback: `retroarch` if core resolution fails (e.g., ES-DE config parse error)
 
@@ -119,7 +122,7 @@ Two discriminators drive the branch:
 ### Outcomes
 
 | Variant | Service behaviour |
-|---|---|
+| --- | --- |
 | `Skip(reason)` | No I/O. Optional `adopt_baseline=True` flag: dispatcher writes `last_sync_hash := local_hash` (state mutation only, no network). |
 | `Upload(target_save_id=None)` | POST a new save to the slot. Server assigns an ID; we record it in state. |
 | `Upload(target_save_id=int)` | PUT to the existing save id (re-upload). Used when our offline edits need to land on the existing server save. |
@@ -150,7 +153,7 @@ Dimensions:
 - **Local mtime vs server `updated_at`** — only consulted in the `never touched` branch where the algorithm has no other ordering signal.
 
 | # | local file | server in slot | our entry | local vs baseline | mtime vs server | decision | reason |
-|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | no | none | n/a | n/a | n/a | `Skip(nothing_to_sync)` | nothing local, nothing server |
 | 2 | yes | none | n/a | n/a | n/a | `Upload(POST)` | first push for this save (or recovery after server-side wipe) |
 | 3 | no | ≥1 | never touched | n/a | n/a | `Download(picked)` | no relation, pull newest |
@@ -186,7 +189,7 @@ Before save sync can operate for a game, the user must choose which slot to trac
 ### Scenarios on first use
 
 | Scenario | Local | Server | Behavior |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | A | No saves | Has saves | Wizard: choose which server slot to track |
 | B | Has saves | No saves | Auto-configure with default slot (no prompt) |
 | C | Has saves | Has saves (other slots) | Wizard: upload to default or track server slot |
@@ -206,11 +209,12 @@ Save files are located using a predictable path pattern based on the system slug
 
 The save base directory is read at runtime from RetroDECK's configuration file:
 
-```
+```text
 ~/.var/app/net.retrodeck.retrodeck/config/retrodeck/retrodeck.json -> paths.saves_path
 ```
 
 This path varies depending on where RetroDECK was installed:
+
 - **Internal SSD**: `/home/deck/retrodeck/saves/`
 - **SD card**: `/run/media/deck/Emulation/retrodeck/saves/`
 
@@ -220,11 +224,12 @@ The backend reads `retrodeck.json` as the primary source, with RetroArch's `retr
 
 All RetroArch cores save in a consistent location:
 
-```
+```text
 <saves_path>/{system}/{rom_name}.srm
 ```
 
 Where:
+
 - `<saves_path>` is the base path from `retrodeck.json` → `paths.saves_path`
 - `{system}` is the RetroDECK ROM directory name (e.g. `gba`, `snes`, `n64`, `psx`) — this matches the ROM folder under `roms/`
 - `{rom_name}` is the ROM filename without extension
@@ -248,7 +253,7 @@ When this setting is **enabled** (RetroDECK default is `false`), RetroArch write
 **Why this is easy to confuse**: the RetroArch UI labels are deliberately similar. "Write Saves to **Content Directory**" controls the **destination** (next to the ROM vs the saves directory), while "Sort Saves **Into Folders by Content Directory**" controls the **layout within** the saves directory. They sound nearly identical but mean very different things.
 
 | RetroArch UI label | cfg key | What it controls |
-|---|---|---|
+| --- | --- | --- |
 | Write Saves to Content Directory | `savefiles_in_content_dir` | **Destination** — next to ROM (true) vs `savefile_directory` (false). Plugin does **not** handle `true`. |
 | Sort Saves Into Folders by Content Directory | `sort_savefiles_by_content_enable` | **Layout inside `savefile_directory`** — group by ROM parent folder name. Plugin handles both values. |
 | Sort Saves Into Folders by Core Name | `sort_savefiles_enable` | **Layout inside `savefile_directory`** — further group by RetroArch core name. Plugin handles both values. |
@@ -273,7 +278,7 @@ The plugin must detect this layout change and offer a one-click migration to con
 All five trigger points call the `refresh_migration_state` callable and share the same idempotent backend methods. Running on every trigger is cheap: `detect_retrodeck_path_change()` and `detect_save_sort_change()` both have early-return guards that exit immediately when no config change has occurred since the last call.
 
 | When | Where (code location) | Why |
-|---|---|---|
+| --- | --- | --- |
 | Plugin load | `main.py` Phase 6 in `_main()` | Catches changes that occurred between plugin sessions |
 | QAM open | `MainPage.tsx` mount `useEffect` | User navigating via QAM sees current state when Settings is one tap away |
 | Game-detail open | `RomMGameInfoPanel.tsx` `useEffect([appId])` | Per-game navigation refreshes state when the user browses without launching |
@@ -307,7 +312,7 @@ Implemented in `_resolve_save_sort_conflict` in `py_modules/services/migration.p
 **Resolution rule**: the file with the newer `mtime` wins.
 
 | Case | Condition | Action |
-|---|---|---|
+| --- | --- | --- |
 | Destination newer (typical) | In-game save wrote to the new layout during the session | Remove the orphan at the old path via `os.remove`, keep the destination, count as migrated |
 | Source newer (rare) | Source `mtime` exceeds destination; possible if the user reverted settings without playing | Atomically overwrite the destination via `os.replace`, count as migrated |
 | Tie (equal mtime) | `mtime` values identical at filesystem granularity | Bias toward destination (no-op keep) |
@@ -413,7 +418,7 @@ The realistic race the lock prevents: user clicks Keep Local → executor runs P
 
 Every download path — pre-launch / post-exit / manual sync, conflict-resolve "Use Server", rollback / version switch, slot switch — writes content to a path of the form:
 
-```
+```text
 <saves_dir>/<rom_basename>.<server_save.file_extension>
 ```
 
@@ -445,7 +450,7 @@ To make the switch authoritative cross-device, the chosen older save's `updated_
 Before the destructive switch starts, `rollback_to_version` runs a full `compute_sync_action` pre-flight on the currently-tracked save (via `_sync_rom_saves`):
 
 | Pre-flight outcome | What happens |
-|---|---|
+| --- | --- |
 | `Skip(synced)` / `Skip(adopt_baseline=True)` | No I/O. Switch proceeds. |
 | `Upload(POST/PUT)` | Local changes are silently pushed to the server first. Switch proceeds. |
 | `Download(server)` | The newer server save is silently adopted. Switch then proceeds (the user's chosen target is still in the slot). |
@@ -556,6 +561,7 @@ If the RomM server is unreachable when a sync runs:
 Playtime is tracked per-ROM in `save_sync_state.json` under `playtime.<rom_id>` (a separate top-level section from `saves`).
 
 Session tracking:
+
 1. `recordSessionStart(romId)`: backend notes the start timestamp in `playtime.<rom_id>.last_session_start`
 2. During play, device suspend/resume events pause the timer (via `RegisterForOnSuspendRequest` / `RegisterForOnResumeFromSuspend`)
 3. `recordSessionEnd(romId)`: backend calculates elapsed time (clamped to 0–24h), increments `total_seconds` and `session_count`, records `last_session_duration_sec`, then syncs to RomM via user notes
@@ -680,6 +686,7 @@ Game start and stop events are detected using Steam's frontend APIs, not by poll
 The primary mechanism. `SteamClient.GameSessions.RegisterForAppLifetimeNotifications` fires a callback whenever any app (including non-Steam shortcuts) starts or stops.
 
 The callback receives:
+
 - `bRunning: boolean` — whether the app just started (`true`) or stopped (`false`)
 - `unAppID: number` — the app ID
 
@@ -690,6 +697,7 @@ After a game starts, there is a brief window where the app ID may not be fully r
 ### App ID to ROM ID mapping
 
 The session manager maintains a cached `appId -> romId` map loaded from the backend shortcut registry. This map is refreshed:
+
 - On session manager initialization (plugin load)
 - Before each game start event (in case a sync added new shortcuts)
 
@@ -698,6 +706,7 @@ If the launched app ID is not in the map, it is not a RomM shortcut and the sess
 ### Suspend/resume handling
 
 To exclude sleep time from playtime tracking:
+
 - `SteamClient.System.RegisterForOnSuspendRequest` — records the suspend timestamp
 - `SteamClient.System.RegisterForOnResumeFromSuspend` — calculates paused duration and subtracts it from the session
 
@@ -716,6 +725,7 @@ This bug is in the `get_rom_notes()` handler in RomM's `backend/endpoints/rom.py
 `GET /api/roms/{id}` (the ROM detail endpoint) returns the full `DetailedRomSchema` which includes an `all_user_notes` array of `UserNoteSchema` objects. This completely bypasses the broken notes list endpoint.
 
 Each note in `all_user_notes` contains:
+
 - `id` — note ID (needed for PUT updates and DELETE)
 - `title` — note title
 - `content` — note body (we store JSON here)
@@ -759,6 +769,7 @@ Phase 5 only covers RetroArch `.srm` saves. Standalone emulators store saves und
 | xbox | Xemu | `xbox/xemu/` | Xbox HDD image saves |
 
 Key challenges:
+
 - PCSX2 and DuckStation use shared memory cards (multiple games on one file) requiring system-level sync
 - Dolphin, PPSSPP, Azahar, Cemu, and Ryubing organize saves by title ID, requiring title ID mapping databases
 - Each emulator needs a dedicated save handler

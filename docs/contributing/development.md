@@ -45,6 +45,7 @@ Tests mirror the source layout (`tests/services/`, `tests/adapters/`, `tests/dom
 Frontend component tests run with `mise run test:frontend` (`pnpm test`); see the CLAUDE.md "Frontend component tests" section for the `@decky/api` event harness.
 
 Every backend feature or callable where testing makes sense should have unit tests covering:
+
 - **Happy path** — normal successful operation
 - **Bad path** — invalid input, missing data, API errors, network failures
 - **Edge cases** — empty strings, None values, boundary conditions
@@ -76,6 +77,7 @@ mise run lint                        # same via mise
 ```
 
 The `.importlinter` config enforces the layer boundary contracts:
+
 - Services must not import concrete adapter implementations (Protocols are allowed)
 - Adapters must not import services
 - Utilities (`lib/`) must not import services, adapters, or domain
@@ -98,7 +100,7 @@ See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Project Structure
 
-```
+```text
 main.py                              # Plugin entry — Decky lifecycle + callable surface
 py_modules/
   bootstrap.py                       # Composition root — bootstrap() builds adapters, wire_services() builds services

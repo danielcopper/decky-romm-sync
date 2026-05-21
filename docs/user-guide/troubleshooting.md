@@ -77,6 +77,7 @@ Also make sure each person using RomM has their own account — shared accounts 
 **Explanation**: This is Steam's Remote Play discovery protocol, not a plugin bug. Steam automatically advertises all non-Steam shortcuts to other Steam clients on the same network. These "phantom" shortcuts are ephemeral — they only exist while both devices are online.
 
 The plugin cannot prevent this. Your options are:
+
 - Disable Remote Play entirely in Steam Settings > Remote Play
 - Ignore them — they show a "Stream" button instead of "Play" so they're distinguishable
 
@@ -113,6 +114,7 @@ Deletes all downloaded ROM files from disk. Shortcuts remain in your library so 
 Removes ALL non-Steam shortcuts visible to Steam — including games not managed by this plugin. Use with extreme caution.
 
 A **whitelist** system lets you protect specific shortcuts from removal:
+
 1. Tap **Configure Whitelist**
 2. Toggle on any games you want to protect (RetroDECK is auto-protected by default)
 3. Use the search box to find specific games in long lists

@@ -21,7 +21,7 @@ Checked against RetroDECK's installed cores (March 2026). Only cores relevant to
 These cores all produce `.srm` (and optionally `.rtc`). No additional extensions needed.
 
 | Platform | Cores | Notes |
-|---|---|---|
+| --- | --- | --- |
 | **GB/GBC** | gambatte, sameboy, gearboy, tgbdual, fixgb, DoubleCherryGB | `.rtc` used by Pokemon Crystal/Gold/Silver etc. |
 | **GBA** | mgba, vbam, vba_next, skyemu | All GBA save types (EEPROM, SRAM, Flash) packed into single `.srm` |
 | **NES** | fceumm, nestopia, mesen | Battery-backed saves |
@@ -92,7 +92,7 @@ These cores all produce `.srm` (and optionally `.rtc`). No additional extensions
 
 Uses a **flat global allowlist** of 11 extensions with no per-platform mapping:
 
-```
+```text
 .srm, .sav, .dsv, .mcr, .mcd, .brm, .eep, .sra, .fla, .mpk, .nv
 ```
 
@@ -103,7 +103,7 @@ This is intentionally broad -- Grout targets multiple CFWs (muOS, NextUI, MinUI)
 Uses a **per-emulator** mapping:
 
 | Emulator | Extensions |
-|---|---|
+| --- | --- |
 | RetroArch | `.srm`, `.sav` |
 | Mupen64Plus FZ (standalone) | `.sra`, `.eep`, `.fla`, `.mpk` |
 | DraStic (standalone DS) | `.dsv`, `.sav` |
@@ -118,7 +118,7 @@ Again, standalone emulator formats that don't apply to RetroDECK's RetroArch-bas
 For decky-romm-sync (RetroDECK-only):
 
 | Extension | Include? | Reason |
-|---|---|---|
+| --- | --- | --- |
 | `.srm` | **Yes** (already supported) | Standard RetroArch SRAM |
 | `.rtc` | **Yes** (already supported) | Standard RetroArch RTC |
 | `.dsv` | **Yes** (add as DS override) | DeSmuME native format |

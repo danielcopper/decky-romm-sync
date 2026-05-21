@@ -28,17 +28,17 @@ Before installing the plugin, you need:
 
    The URL for the latest release follows this pattern:
 
-   ```
+   ```text
    https://github.com/danielcopper/decky-romm-sync/releases/download/decky-romm-sync-v{VERSION}/decky-romm-sync.zip
    ```
 
    For example, for v0.9.3:
 
-   ```
+   ```text
    https://github.com/danielcopper/decky-romm-sync/releases/download/decky-romm-sync-v0.9.3/decky-romm-sync.zip
    ```
 
-4. Decky downloads and installs the plugin automatically — no restart needed
+6. Decky downloads and installs the plugin automatically — no restart needed
 
 **Tip:** You can also open the [releases page](https://github.com/danielcopper/decky-romm-sync/releases) in Steam's built-in browser (Gaming Mode → long-press the Steam button → Web Browser), long-press the zip download link, and copy the URL from there.
 

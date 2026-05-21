@@ -42,7 +42,7 @@ The concrete case that motivated this principle, and the bug in [#208](https://g
 These two values **are not redundant representations of the same thing**. They answer different questions at different layers:
 
 | Core | ES-DE label | RetroArch `corename` |
-|---|---|---|
+| --- | --- | --- |
 | Snes9x | `Snes9x - Current` | `Snes9x` |
 | mGBA | `mGBA` | `mGBA` |
 | Beetle PSX HW | `Beetle PSX HW` | `Beetle PSX HW` |
@@ -56,7 +56,7 @@ Reconciling by whitelist — a table of "ES-DE label → RetroArch corename" map
 ## Question-to-source mapping
 
 | Question | Authoritative source | Why |
-|---|---|---|
+| --- | --- | --- |
 | Which core is active for system X / ROM Y? | ES-DE (`es_systems.xml` + `gamelist.xml`) | ES-DE **decides** this — defaults, per-system overrides, per-game overrides. |
 | What's the ES-DE display label for a core? | ES-DE | Label is an ES-DE/RetroDECK UI concern, chosen at the ES-DE config level. |
 | What subdirectory does RetroArch use for this core's saves (sort-by-core)? | RetroArch `.info` `corename` field | RetroArch creates the directory using `corename`; `.info` is the only place that canonical name lives. |
@@ -72,7 +72,7 @@ If a new question appears, the first step is to figure out which source authorit
 
 New parsers follow a strict domain-plus-adapter split, matching the broader service/adapter architecture documented in [Backend Architecture](backend-architecture.md): a pure parse function in `domain/`, all I/O in an `adapters/` class, and a callback Protocol that services depend on. The `.info` parser below (`domain/retroarch_core_info.py` + `adapters/retroarch_core_info.py`) is the reference shape.
 
-```
+```text
 ┌──────────────────────────────────────┐
 │ services/                            │
 │   <SomeService> depends on callback  │
@@ -174,7 +174,7 @@ The service receives callbacks, not an adapter. It has no knowledge of which fil
 ## Current parsers
 
 | Source | Format | Parser location | Layer status | What it answers |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `retrodeck.json` | JSON | `adapters/retrodeck_paths.py` — `RetroDeckPathsAdapter` | ✅ adapter (correct layering) | Where RetroDECK puts saves, ROMs, BIOS, and its home directory. |
 | `retroarch.cfg` | INI-ish `key = "value"` | `adapters/retroarch_config.py` — `RetroArchConfigAdapter` | ✅ adapter (correct layering) | Save-sorting flags (`sort_savefiles_by_content_enable`, `sort_savefiles_enable`); room to grow as more cfg fields are needed. |
 | `es_systems.xml` | XML | `adapters/es_de_config.py` — `CoreResolver` | ✅ adapter (correct layering) | Which core is ES-DE's default for a system; list of available cores with labels. |
@@ -218,7 +218,7 @@ When reviewing a PR that touches save-path resolution, core resolution, firmware
 ### Historical examples
 
 | Issue | Parser state | Consumer state | Resolution |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | [#208](https://github.com/danielcopper/decky-romm-sync/issues/208) | `.info` parser did not exist; ES-DE label was the only core name source | `MigrationService` used the ES-DE label as the RetroArch save subdir name | Add `RetroArchCoreInfoAdapter`, resolve corename from `.info`, wire into migration |
 | [#232](https://github.com/danielcopper/decky-romm-sync/issues/232) | `.info` parser correct (from #208) | `SaveService._get_rom_save_info` still called `resolve_save_dir` with `core_name=None`, so `sort_by_core` was a silent no-op for every save flow | Thread `get_core_name` into `SaveService`, extract `_resolve_retroarch_corename` helper mirroring `MigrationService`, warn+fallback when unresolvable |
 
@@ -229,7 +229,7 @@ Both issues are parser-side fine in the sense that the parser itself returned th
 The RetroArch `.info` parser, introduced by #208, ships with only the `corename` field hooked up — the minimum needed to fix the save-sort migration bug. But `.info` files contain much more, and the parser returns the full dict internally. The following unlocks are natural follow-ups; each should land in its own issue and its own PR so we can pace them against real need rather than speculatively building ahead.
 
 | Capability | `.info` field(s) | Replaces today's | Value |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Per-core supported extensions | `supported_extensions` | Hardcoded lists in `defaults/config.json` | Self-updating via Flatpak releases; fewer drift bugs when cores add formats. |
 | Per-core firmware requirements | `firmware_count`, `firmware<N>_desc`, `firmware<N>_path`, `firmware<N>_opt` | Manual BIOS registry in `FirmwareService` | Authoritative list per active core; highlights what's truly needed vs optional. |
 | Core switching validation | `supported_extensions` | (no check today) | Prevent assigning a core to a system whose ROM extensions it can't load. |
@@ -275,6 +275,7 @@ Non-obvious design choices worth preserving:
 ---
 
 **Related pages:**
+
 - [Backend Architecture](backend-architecture.md) — service/adapter architecture, dependency diagram, boundary enforcement
 - [Save File Sync Architecture](save-file-sync-architecture.md) — save sync details, conflict detection, sort-by-core migration flow
 - [RetroDECK Path Migration](../user-guide/retrodeck-path-migration.md) — user-facing guide for moving a RetroDECK install between storage locations

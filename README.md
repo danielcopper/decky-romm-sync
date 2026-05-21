@@ -15,7 +15,7 @@ A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](h
 into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
 [RetroDECK](https://retrodeck.net/), and keep their saves in sync across devices through your RomM server.
 
-### 📖 [Read the full documentation →](https://danielcopper.github.io/decky-romm-sync/)
+## 📖 [Read the full documentation →](https://danielcopper.github.io/decky-romm-sync/)
 
 Installation, setup, save sync, BIOS management, troubleshooting, and the architecture reference all live on the
 documentation site. This README is just the quick tour.

@@ -6,7 +6,7 @@ A Decky Loader plugin that syncs a self-hosted RomM library into Steam as Non-St
 
 ## Documentation
 
-The docs live in `docs/` and are the canonical source for architecture, file structure, and feature documentation. They are built with **Material for MkDocs** and published to GitHub Pages (https://danielcopper.github.io/decky-romm-sync/) by `.github/workflows/docs.yml` on every push to `main`. Because the docs sit in this repo, doc updates are reviewed in the same PR as the code change — when a change affects architecture, data flows, or feature behavior, update the relevant page under `docs/` in that same PR. Preview locally with `mise run docs`.
+The docs live in `docs/` and are the canonical source for architecture, file structure, and feature documentation. They are built with **Material for MkDocs** and published to GitHub Pages (<https://danielcopper.github.io/decky-romm-sync/>) by `.github/workflows/docs.yml` on every push to `main`. Because the docs sit in this repo, doc updates are reviewed in the same PR as the code change — when a change affects architecture, data flows, or feature behavior, update the relevant page under `docs/` in that same PR. Preview locally with `mise run docs`.
 
 Layout mirrors the three nav tabs: `docs/user-guide/` (end users), `docs/architecture/` (how it works), `docs/contributing/` (dev setup). The old GitHub Wiki is retired — it only redirects to the published site.
 
