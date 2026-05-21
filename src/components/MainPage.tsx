@@ -391,19 +391,33 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       </>
     );
   } else if (syncing) {
+    const stepText = syncProgress?.totalSteps
+      ? `${syncProgress.step ?? 0}/${syncProgress.totalSteps}`
+      : "";
     syncBody = (
       <>
         <PanelSectionRow>
-          <ProgressBarWithInfo
-            indeterminate={coarseFraction === undefined}
-            nProgress={coarseFraction}
-            sOperationText={stageLabel(syncProgress?.stage)}
-            sTimeRemaining={
-              syncProgress?.totalSteps
-                ? `${syncProgress.step ?? 0}/${syncProgress.totalSteps}`
-                : undefined
-            }
-          />
+          {/* Own the caption in a full-width row instead of ProgressBarWithInfo's
+              sOperationText/sTimeRemaining — Steam's built-in label row overflows
+              the narrow QAM panel and clips on the right (#751). The bar itself
+              renders text-less so its widget shrinks to the panel width. */}
+          <div style={{ width: "100%" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: "12px",
+                marginBottom: "4px",
+              }}
+            >
+              <span data-testid="sync-stage">{stageLabel(syncProgress?.stage)}</span>
+              {stepText && <span data-testid="sync-step">{stepText}</span>}
+            </div>
+            <ProgressBarWithInfo
+              indeterminate={coarseFraction === undefined}
+              nProgress={coarseFraction}
+            />
+          </div>
         </PanelSectionRow>
         {hasFineDetail && (
           <PanelSectionRow>

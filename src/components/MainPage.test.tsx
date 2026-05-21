@@ -535,7 +535,7 @@ describe("MainPage", () => {
       // button) and the determinate bar shows the recovered stage label.
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
       expect(buttonByExactText(container, "Sync Library")).toBeNull();
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent)
+      expect(container.querySelector('[data-testid="sync-stage"]')?.textContent)
         .toContain("Fetching library");
     });
 
@@ -874,10 +874,10 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      const op = container.querySelector('[data-testid="progress-op"]');
+      const op = container.querySelector('[data-testid="sync-stage"]');
       expect(op?.textContent).toContain("Applying shortcuts");
-      // sTimeRemaining carries the coarse "step/totalSteps" counter.
-      expect(container.querySelector('[data-testid="progress-remaining"]')?.textContent)
+      // The caption's step span carries the coarse "step/totalSteps" counter.
+      expect(container.querySelector('[data-testid="sync-step"]')?.textContent)
         .toContain("2/5");
       // Determinate: 2/5 * 100 = 40.
       expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("40");
