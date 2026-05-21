@@ -37,74 +37,10 @@ describe("SgdbGamePickerModal", () => {
     vi.mocked(backend.debugLog).mockResolvedValue(undefined);
   });
 
-  // ----- conflict entry point -----
-
-  describe("conflict tiles", () => {
-    function renderConflict(overrides: Record<string, unknown> = {}) {
-      const onApplied = vi.fn();
-      const closeModal = vi.fn();
-      const ui = render(
-        createElement(SgdbGamePickerModalContent, {
-          romId: 77,
-          appId: 5000,
-          romName: "Sonic",
-          stateTile: { id: 11, thumb_url: "https://x/state.png" },
-          rommTile: { id: 22, thumb_url: "https://x/romm.png" },
-          onApplied,
-          closeModal,
-          ...overrides,
-        }),
-      );
-      return { ...ui, onApplied, closeModal };
-    }
-
-    it("renders both tiles with 'Current' and 'From RomM' labels", () => {
-      const { container } = renderConflict();
-      expect(container.textContent).toContain("Current");
-      expect(container.textContent).toContain("From RomM");
-      // Both thumbnails render as <img>.
-      const imgs = container.querySelectorAll("img");
-      const srcs = Array.from(imgs).map((i) => i.getAttribute("src"));
-      expect(srcs).toContain("https://x/state.png");
-      expect(srcs).toContain("https://x/romm.png");
-    });
-
-    it("selecting the RomM tile applies with source 'romm', triggers applyArtwork, onApplied + close", async () => {
-      const { container, onApplied, closeModal } = renderConflict();
-      await act(async () => {
-        fireEvent.click(buttonContaining(container, "From RomM"));
-      });
-      await flushAsync();
-      expect(vi.mocked(backend.applySgdbGameId)).toHaveBeenCalledWith(77, 22, "romm");
-      expect(vi.mocked(artwork.applyArtwork)).toHaveBeenCalledWith(77, 5000);
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Artwork refreshed (4/4 images applied)" }),
-      );
-      expect(onApplied).toHaveBeenCalledWith(4);
-      expect(closeModal).toHaveBeenCalledTimes(1);
-    });
-
-    it("selecting the Current tile applies with source 'keep' (preserves provenance)", async () => {
-      const { container } = renderConflict();
-      await act(async () => {
-        fireEvent.click(buttonContaining(container, "Current"));
-      });
-      await flushAsync();
-      expect(vi.mocked(backend.applySgdbGameId)).toHaveBeenCalledWith(77, 11, "keep");
-    });
-
-    it("renders a placeholder when a tile thumb_url is null", () => {
-      const { container } = renderConflict({
-        stateTile: { id: 11, thumb_url: null },
-      });
-      expect(container.textContent).toContain("No preview");
-    });
-  });
-
   // ----- needs_pick / candidate entry point -----
 
   describe("candidates", () => {
-    it("renders initial candidates and selecting one applies with source 'manual'", async () => {
+    it("renders initial candidates and selecting one applies (2-arg)", async () => {
       const onApplied = vi.fn();
       const closeModal = vi.fn();
       const { container } = render(
@@ -125,10 +61,24 @@ describe("SgdbGamePickerModal", () => {
         fireEvent.click(buttonContaining(container, "Super Mario"));
       });
       await flushAsync();
-      expect(vi.mocked(backend.applySgdbGameId)).toHaveBeenCalledWith(88, 1, "manual");
+      expect(vi.mocked(backend.applySgdbGameId)).toHaveBeenCalledWith(88, 1);
       expect(vi.mocked(artwork.applyArtwork)).toHaveBeenCalledWith(88, 6000);
       expect(onApplied).toHaveBeenCalledWith(4);
       expect(closeModal).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders a placeholder when a candidate thumb_url is null", () => {
+      const { container } = render(
+        createElement(SgdbGamePickerModalContent, {
+          romId: 88,
+          appId: 6000,
+          romName: "Mario",
+          candidates: [{ id: 1, name: "Super Mario", release_year: null, thumb_url: null }],
+          onApplied: vi.fn(),
+          closeModal: vi.fn(),
+        }),
+      );
+      expect(container.textContent).toContain("No preview");
     });
   });
 
@@ -170,7 +120,7 @@ describe("SgdbGamePickerModal", () => {
       expect(container.textContent).toContain("Link's Awakening");
     });
 
-    it("selecting a search result applies with source 'manual'", async () => {
+    it("selecting a search result applies (2-arg)", async () => {
       vi.mocked(backend.searchSgdbGames).mockResolvedValue({
         success: true,
         games: [{ id: 7, name: "Link's Awakening", release_year: 1993, thumb_url: null }],
@@ -184,7 +134,7 @@ describe("SgdbGamePickerModal", () => {
         fireEvent.click(buttonContaining(container, "Link's Awakening"));
       });
       await flushAsync();
-      expect(vi.mocked(backend.applySgdbGameId)).toHaveBeenCalledWith(99, 7, "manual");
+      expect(vi.mocked(backend.applySgdbGameId)).toHaveBeenCalledWith(99, 7);
     });
 
     it("empty search results surface a 'No matches found.' message", async () => {

@@ -164,91 +164,35 @@ class TestApplySgdbId:
         assert entry["igdb_id"] == 666
         assert entry["cover_path"] == "/covers/old.png"
 
-    def test_source_recorded_when_provided(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry()
 
-        store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str="42", sgdb_id=888, source="manual"))
+class TestApplySyncSgdbId:
+    """Sync-write merge for ``sgdb_id`` — RomM is the source of truth.
 
-        entry = state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 888
-        assert entry["sgdb_id_source"] == "manual"
-
-    def test_source_none_leaves_existing_provenance(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id_source="manual")
-
-        store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str="42", sgdb_id=888))
-
-        entry = state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 888
-        assert entry["sgdb_id_source"] == "manual"
-
-
-class TestApplySyncSgdbIdStickiness:
-    """Sync-write merge for ``sgdb_id`` honours manual provenance.
-
-    A manually-picked id must survive a full sync that proposes a
-    different RomM id; a non-manual (or absent) provenance yields to the
-    sync patch and is re-tagged ``"romm"``.
+    A fresh RomM id on the patch overwrites the stored one; when the
+    patch carries no id, the existing id is preserved.
     """
 
-    def test_manual_id_survives_conflicting_sync(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="manual")
-
-        store.apply_sync(_base_sync_patch(sgdb_id=999))
-
-        entry = state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 555  # manual pick wins
-        assert entry["sgdb_id_source"] == "manual"
-
-    def test_non_manual_id_overwritten_and_tagged_romm(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="igdb")
-
-        store.apply_sync(_base_sync_patch(sgdb_id=999))
-
-        entry = state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 999  # patch wins
-        assert entry["sgdb_id_source"] == "romm"
-
-    def test_no_existing_source_overwritten_and_tagged_romm(self, store, state):
+    def test_patch_id_overwrites_existing(self, store, state):
         state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555)
 
         store.apply_sync(_base_sync_patch(sgdb_id=999))
 
         entry = state["shortcut_registry"]["42"]
         assert entry["sgdb_id"] == 999
-        assert entry["sgdb_id_source"] == "romm"
 
-    def test_fresh_sync_with_sgdb_id_tagged_romm(self, store, state):
-        store.apply_sync(_base_sync_patch(sgdb_id=999))
-
-        entry = state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 999
-        assert entry["sgdb_id_source"] == "romm"
-
-    def test_manual_id_preserved_when_patch_carries_no_id(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="manual")
+    def test_existing_id_preserved_when_patch_carries_no_id(self, store, state):
+        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555)
 
         store.apply_sync(_base_sync_patch())  # sgdb_id defaults to None
 
         entry = state["shortcut_registry"]["42"]
         assert entry["sgdb_id"] == 555
-        assert entry["sgdb_id_source"] == "manual"
-
-    def test_non_manual_id_preserved_when_patch_carries_no_id(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="igdb")
-
-        store.apply_sync(_base_sync_patch())
-
-        entry = state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 555
-        assert entry["sgdb_id_source"] == "igdb"
 
     def test_no_sgdb_id_anywhere_leaves_field_absent(self, store, state):
         store.apply_sync(_base_sync_patch())
 
         entry = state["shortcut_registry"]["42"]
         assert "sgdb_id" not in entry
-        assert "sgdb_id_source" not in entry
 
 
 class TestDelete:

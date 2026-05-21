@@ -54,7 +54,7 @@ Tap **Refresh Metadata** in the game detail panel to:
 
 This is useful if artwork was missing on first sync (SteamGridDB may have added new images since) or if metadata has changed on your RomM server.
 
-When you tap **Refresh Artwork**, the plugin resolves which SteamGridDB game to use from your RomM server's data. If it can resolve a single confident match, artwork is applied straight away. If it can't find a match, or if your RomM server now points at a different SteamGridDB game than the one currently applied, a picker opens so you choose: keep what you have, switch to your server's suggestion, or search SteamGridDB by name and pick from the results (with thumbnails). A manual pick sticks — a later full library sync won't overwrite it.
+When you tap **Refresh Artwork**, the plugin asks your RomM server which SteamGridDB game the ROM maps to and applies the hero banner, logo, wide grid, and icon for that game. **RomM is the source of truth**: whenever your server has a SteamGridDB id for a game, that id wins — on both sync and refresh. If RomM has no id, the plugin tries to derive one from the game's IGDB id. Only when neither resolves a SteamGridDB game does a picker open, where you search SteamGridDB by name and choose from the results (with thumbnails). A name pick is applied immediately but is **not permanent** — once your RomM server has a SteamGridDB id for that game, that id takes over. To pin a specific match for good, set the SteamGridDB id on the game in RomM.
 
 The full set of per-game actions — refresh artwork, refresh metadata, sync save files, download BIOS, and uninstall — is available from the RomM Actions menu in the game detail panel.
 

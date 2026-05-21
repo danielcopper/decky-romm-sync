@@ -387,8 +387,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
       }
 
-      // Step 2: resolve which SGDB game id to use. The backend may pick one
-      // automatically, surface a conflict, or hand back manual candidates.
+      // Step 2: resolve which SGDB game id to use. The backend either picks
+      // one automatically (RomM/IGDB) or hands back manual candidates.
       const resolution = await getSgdbResolution(romId).catch(
         (e): null => {
           debugLog(`getSgdbResolution rejected: ${e}`);
@@ -415,18 +415,6 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           }
           break;
         }
-        case "conflict":
-          showModal(
-            createElement(SgdbGamePickerModalContent, {
-              romId,
-              appId,
-              romName: info.romName,
-              stateTile: resolution.state,
-              rommTile: resolution.romm,
-              onApplied: () => {},
-            }),
-          );
-          break;
         case "needs_pick":
           showModal(
             createElement(SgdbGamePickerModalContent, {

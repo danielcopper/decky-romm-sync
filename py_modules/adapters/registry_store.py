@@ -41,13 +41,10 @@ class RegistryStoreAdapter:
     def apply_sync(self, patch: RegistrySyncApplyPatch) -> None:
         """Write the sync-apply row, preserving optional IDs not in *patch*.
 
-        For ``igdb_id`` and ``ra_id``: a non-``None`` value on the patch
-        wins; otherwise the existing value (if any) is preserved;
-        otherwise the field is omitted.
-
-        ``sgdb_id`` carries provenance and merges differently — see
-        :meth:`_merge_sync_sgdb_id`. A manually-picked id is sticky and
-        survives a sync that would otherwise overwrite it.
+        For each of ``igdb_id``, ``sgdb_id`` and ``ra_id``: a non-``None``
+        value on the patch wins; otherwise the existing value (if any) is
+        preserved; otherwise the field is omitted. RomM is the source of
+        truth — a fresh ``sgdb_id`` from a sync overwrites the stored one.
         """
         registry = self._state["shortcut_registry"]
         existing = registry.get(patch.rom_id_str)
@@ -62,7 +59,7 @@ class RegistryStoreAdapter:
         }
 
         self._merge_optional_id(new_entry, existing, patch.igdb_id, "igdb_id")
-        self._merge_sync_sgdb_id(new_entry, existing, patch.sgdb_id)
+        self._merge_optional_id(new_entry, existing, patch.sgdb_id, "sgdb_id")
         self._merge_optional_id(new_entry, existing, patch.ra_id, "ra_id")
 
         registry[patch.rom_id_str] = new_entry
@@ -79,12 +76,7 @@ class RegistryStoreAdapter:
         entry["cover_path"] = patch.cover_path
 
     def apply_sgdb_id(self, patch: RegistrySgdbIdPatch) -> None:
-        """Set ``sgdb_id`` (and optional provenance) on an existing row.
-
-        No-op when the row is absent. A non-``None`` ``source`` records
-        how the id was chosen (``"manual"`` / ``"romm"`` / ``"igdb"``);
-        ``None`` leaves any existing provenance untouched.
-        """
+        """Set ``sgdb_id`` on an existing row; no-op when the row is absent."""
         entry = self._state["shortcut_registry"].get(patch.rom_id_str)
         if entry is None:
             self._logger.warning(
@@ -93,8 +85,6 @@ class RegistryStoreAdapter:
             )
             return
         entry["sgdb_id"] = patch.sgdb_id
-        if patch.source is not None:
-            entry["sgdb_id_source"] = patch.source
 
     def delete(self, patch: RegistryDeletePatch) -> ShortcutRegistryEntry | None:
         """Pop and return the row, or ``None`` when nothing was stored."""
@@ -111,36 +101,3 @@ class RegistryStoreAdapter:
             cast("dict", new_entry)[key] = patch_value
         elif existing is not None and key in existing:
             cast("dict", new_entry)[key] = cast("dict", existing)[key]
-
-    @staticmethod
-    def _merge_sync_sgdb_id(
-        new_entry: ShortcutRegistryEntry,
-        existing: ShortcutRegistryEntry | None,
-        patch_value: int | None,
-    ) -> None:
-        """Merge ``sgdb_id`` for a sync write, honouring manual stickiness.
-
-        A manually-picked id (``existing["sgdb_id_source"] == "manual"``)
-        is authoritative: it survives the sync untouched, carrying its
-        provenance forward, regardless of what the sync patch proposes.
-
-        Otherwise the sync patch value wins when present and is tagged
-        with source ``"romm"`` (sync ids come from RomM's authoritative
-        ``sgdb_id`` field). When the patch carries no id, the existing id
-        and its provenance (if any) are preserved.
-        """
-        existing_id = existing.get("sgdb_id") if existing else None
-        existing_source = existing.get("sgdb_id_source") if existing else None
-
-        if existing_id is not None and existing_source == "manual":
-            new_entry["sgdb_id"] = existing_id
-            new_entry["sgdb_id_source"] = "manual"
-            return
-
-        if patch_value is not None:
-            new_entry["sgdb_id"] = patch_value
-            new_entry["sgdb_id_source"] = "romm"
-        elif existing_id is not None:
-            new_entry["sgdb_id"] = existing_id
-            if existing_source is not None:
-                new_entry["sgdb_id_source"] = existing_source

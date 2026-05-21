@@ -200,14 +200,14 @@ class TestClassifyResolution:
     def test_state_only_uses_state(self):
         assert classify_resolution(9999, None) == "use_state"
 
-    def test_state_and_equal_romm_uses_state(self):
-        assert classify_resolution(9999, 9999) == "use_state"
-
     def test_romm_only_uses_romm(self):
         assert classify_resolution(None, 7777) == "use_romm"
 
-    def test_different_ids_conflict(self):
-        assert classify_resolution(9999, 7777) == "conflict"
+    def test_romm_wins_over_equal_state(self):
+        assert classify_resolution(9999, 9999) == "use_romm"
+
+    def test_romm_wins_over_differing_state(self):
+        assert classify_resolution(9999, 7777) == "use_romm"
 
     def test_both_none_unresolved(self):
         assert classify_resolution(None, None) == "unresolved"

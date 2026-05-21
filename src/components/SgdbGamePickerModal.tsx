@@ -1,16 +1,14 @@
 /**
  * SgdbGamePickerModal — the manual resolution surface for the SGDB artwork
- * cascade. Opened by RomMPlaySection's "Refresh Artwork" action whenever the
- * backend can't pick a SteamGridDB game id on its own:
+ * cascade. Opened by RomMPlaySection's "Refresh Artwork" action only when the
+ * backend can resolve no SteamGridDB game id at all (RomM has no sgdb_id and
+ * the IGDB cross-ref yields nothing).
  *
- * - conflict — the stored id and RomM's id disagree; both are shown as
- *   "Current" / "From RomM" tiles for the user to choose between.
- * - needs_pick — nothing resolved; a name-search picker is offered.
- *
- * Whatever the entry point, a search field (prefilled with the ROM name) lets
- * the user search SGDB and pick any result. Selecting a tile persists the id
- * via applySgdbGameId, re-runs the artwork apply for the appId, then reports
- * the applied count back and closes.
+ * A search field (prefilled with the ROM name) lets the user search SGDB and
+ * pick any result. Selecting a result persists the id via applySgdbGameId,
+ * re-runs the artwork apply for the appId, then reports the applied count back
+ * and closes. The pick is not protected — a later sync with a RomM sgdb_id
+ * overwrites it.
  */
 
 import { FC, useState } from "react";
@@ -28,11 +26,7 @@ export interface SgdbGamePickerModalProps {
   romId: number;
   appId: number;
   romName: string;
-  /** Conflict entry point: the stored ("Current") tile. */
-  stateTile?: { id: number; thumb_url: string | null };
-  /** Conflict entry point: the RomM tile. */
-  rommTile?: { id: number; thumb_url: string | null };
-  /** needs_pick entry point: initial candidate list. */
+  /** Initial candidate list from the resolution cascade. */
   candidates?: SgdbCandidate[];
   /** Reports how many images applyArtwork applied (or -1 for no API key). */
   onApplied: (appliedCount: number) => void;
@@ -40,7 +34,7 @@ export interface SgdbGamePickerModalProps {
   closeModal?: () => void;
 }
 
-/** Selectable tile showing a thumbnail (or placeholder) plus optional label. */
+/** Selectable tile showing a thumbnail (or placeholder) plus optional subtitle. */
 const Tile: FC<{
   thumbUrl: string | null;
   title: string;
@@ -98,8 +92,6 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
   romId,
   appId,
   romName,
-  stateTile,
-  rommTile,
   candidates,
   onApplied,
   closeModal,
@@ -109,8 +101,6 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
   const [searching, setSearching] = useState(false);
   const [applying, setApplying] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-
-  const hasConflict = stateTile != null && rommTile != null;
 
   const runSearch = async () => {
     if (searching) return;
@@ -137,11 +127,11 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     }
   };
 
-  const applySelection = async (selectedId: number, source: string) => {
+  const applySelection = async (selectedId: number) => {
     if (applying) return;
     setApplying(true);
     try {
-      const result = await applySgdbGameId(romId, selectedId, source).catch(
+      const result = await applySgdbGameId(romId, selectedId).catch(
         (e): { success: boolean } => {
           debugLog(`SgdbGamePickerModal: applySgdbGameId rejected: ${e}`);
           return { success: false };
@@ -179,31 +169,6 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
           {romName}
         </div>
 
-        {hasConflict ? (
-          <div style={{ marginBottom: "16px" }}>
-            <div style={{ fontSize: "13px", color: "#fff", marginBottom: "8px" }}>
-              Two different matches were found. Pick the artwork you want:
-            </div>
-            <Focusable
-              style={{ display: "flex", gap: "12px", justifyContent: "center" }}
-              flow-children="right"
-            >
-              <Tile
-                thumbUrl={stateTile!.thumb_url}
-                title="Current"
-                onSelect={() => applySelection(stateTile!.id, "keep")}
-                disabled={applying}
-              />
-              <Tile
-                thumbUrl={rommTile!.thumb_url}
-                title="From RomM"
-                onSelect={() => applySelection(rommTile!.id, "romm")}
-                disabled={applying}
-              />
-            </Focusable>
-          </div>
-        ) : null}
-
         <div style={{ display: "flex", gap: "8px", alignItems: "flex-end", marginBottom: "12px" }}>
           <div style={{ flex: 1 }}>
             <TextField
@@ -240,7 +205,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
                 thumbUrl={game.thumb_url}
                 title={game.name}
                 subtitle={game.release_year != null ? String(game.release_year) : undefined}
-                onSelect={() => applySelection(game.id, "manual")}
+                onSelect={() => applySelection(game.id)}
                 disabled={applying}
               />
             ))}

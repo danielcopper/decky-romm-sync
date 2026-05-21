@@ -89,17 +89,10 @@ export interface SgdbCandidate {
   thumb_url: string | null;
 }
 
-/** One side of a state-vs-RomM SGDB id conflict (id + preview thumbnail). */
-export interface SgdbConflictTile {
-  id: number;
-  thumb_url: string | null;
-}
-
 /** Discriminated outcome of the SGDB artwork resolution cascade. */
 export type SgdbResolution =
   | { decision: "no_api_key" }
   | { decision: "resolved"; sgdb_id: number }
-  | { decision: "conflict"; state: SgdbConflictTile; romm: SgdbConflictTile }
   | { decision: "needs_pick"; candidates: SgdbCandidate[] };
 
 /** Result of a manual SGDB name search. */
@@ -110,7 +103,7 @@ export interface SgdbSearchResult {
 
 export const getSgdbResolution = callable<[number], SgdbResolution>("get_sgdb_resolution");
 export const searchSgdbGames = callable<[string], SgdbSearchResult>("search_sgdb_games");
-export const applySgdbGameId = callable<[number, number, string], { success: boolean }>("apply_sgdb_game_id");
+export const applySgdbGameId = callable<[number, number], { success: boolean }>("apply_sgdb_game_id");
 export const reportUnitResults = callable<[Record<string, number>], { success: boolean; count: number }>("report_unit_results");
 export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>("report_removal_results");
 export const uninstallAllRoms = callable<[], { success: boolean; removed_count: number; errors: { rom_id: string; error: string }[] }>("uninstall_all_roms");

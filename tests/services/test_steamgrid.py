@@ -374,8 +374,9 @@ class TestGetSgdbArtworkBase64:
 class TestGetSgdbResolution:
     """The picker-driven resolution cascade in ``get_sgdb_resolution``.
 
-    Exercises every ``classify_resolution`` branch plus the unresolved
-    fall-through to IGDB cross-ref and the name-search picker.
+    Exercises every ``classify_resolution`` branch (RomM is the source of
+    truth) plus the unresolved fall-through to IGDB cross-ref and the
+    name-search picker.
     """
 
     @pytest.mark.asyncio
@@ -385,20 +386,20 @@ class TestGetSgdbResolution:
         assert result == {"decision": "no_api_key"}
 
     @pytest.mark.asyncio
-    async def test_use_state(self, plugin, fake_romm_api):
+    async def test_use_state_when_romm_silent(self, plugin, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
         plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 9999}
-        # RomM agrees (or is silent) → state wins, nothing persisted.
-        fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 9999}
+        # RomM has no sgdb_id → state wins, nothing persisted.
+        fake_romm_api.roms[42] = {"id": 42}
 
         result = await plugin.get_sgdb_resolution(42)
 
         assert result == {"decision": "resolved", "sgdb_id": 9999}
 
     @pytest.mark.asyncio
-    async def test_use_romm_persists(self, plugin, fake_romm_api):
+    async def test_use_romm_persists_when_state_empty(self, plugin, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         persister = FakeStatePersister()
@@ -411,34 +412,43 @@ class TestGetSgdbResolution:
         result = await plugin.get_sgdb_resolution(42)
 
         assert result == {"decision": "resolved", "sgdb_id": 7777}
-        # Persisted with romm provenance.
         entry = plugin._state["shortcut_registry"]["42"]
         assert entry["sgdb_id"] == 7777
-        assert entry["sgdb_id_source"] == "romm"
         assert persister.save_count == 1
 
     @pytest.mark.asyncio
-    async def test_conflict_returns_thumbs(self, plugin, fake_romm_api, fake_steamgrid_db_api):
+    async def test_romm_wins_over_differing_state_and_persists(self, plugin, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
+        persister = FakeStatePersister()
+        plugin._sgdb_service._state_persister = persister
 
+        # State holds an old id; RomM disagrees → RomM overwrites it.
         plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 9999}
         fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 7777}
 
-        fake_steamgrid_db_api.seed_raw_response(
-            "/grids/game/9999", {"success": True, "data": [{"thumb": "state-thumb.png"}]}
-        )
-        fake_steamgrid_db_api.seed_raw_response(
-            "/grids/game/7777", {"success": True, "data": [{"thumb": "romm-thumb.png"}]}
-        )
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result == {"decision": "resolved", "sgdb_id": 7777}
+        entry = plugin._state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 7777
+        assert persister.save_count == 1
+
+    @pytest.mark.asyncio
+    async def test_romm_matches_state_no_persist(self, plugin, fake_romm_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        persister = FakeStatePersister()
+        plugin._sgdb_service._state_persister = persister
+
+        # RomM agrees with state → resolved, no redundant persist.
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 7777}
+        fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 7777}
 
         result = await plugin.get_sgdb_resolution(42)
 
-        assert result == {
-            "decision": "conflict",
-            "state": {"id": 9999, "thumb_url": "state-thumb.png"},
-            "romm": {"id": 7777, "thumb_url": "romm-thumb.png"},
-        }
+        assert result == {"decision": "resolved", "sgdb_id": 7777}
+        assert persister.save_count == 0
 
     @pytest.mark.asyncio
     async def test_unresolved_igdb_resolves_and_persists(self, plugin, fake_romm_api, fake_steamgrid_db_api):
@@ -457,7 +467,6 @@ class TestGetSgdbResolution:
         assert result == {"decision": "resolved", "sgdb_id": 5555}
         entry = plugin._state["shortcut_registry"]["42"]
         assert entry["sgdb_id"] == 5555
-        assert entry["sgdb_id_source"] == "igdb"
         assert persister.save_count == 1
 
     @pytest.mark.asyncio
@@ -560,7 +569,7 @@ class TestSearchSgdbGames:
 
 class TestApplySgdbGameId:
     @pytest.mark.asyncio
-    async def test_persists_with_source_and_clears_cache(self, plugin, sgdb_artwork_cache):
+    async def test_persists_and_clears_cache(self, plugin, sgdb_artwork_cache):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         persister = FakeStatePersister()
@@ -576,45 +585,19 @@ class TestApplySgdbGameId:
         assert result == {"success": True}
         entry = plugin._state["shortcut_registry"]["42"]
         assert entry["sgdb_id"] == 8888
-        assert entry["sgdb_id_source"] == "manual"
         assert persister.save_count == 1
         # All cached artwork cleared so the next fetch re-downloads.
         for asset_type in ("hero", "logo", "grid", "icon"):
             assert _cached_path(sgdb_artwork_cache, 42, asset_type) not in sgdb_artwork_cache.files
 
     @pytest.mark.asyncio
-    async def test_explicit_source(self, plugin):
+    async def test_overwrites_existing_id(self, plugin):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 1111}
 
-        await plugin.apply_sgdb_game_id(42, 8888, source="romm")
+        await plugin.apply_sgdb_game_id(42, 8888)
 
-        assert plugin._state["shortcut_registry"]["42"]["sgdb_id_source"] == "romm"
-
-    @pytest.mark.asyncio
-    async def test_keep_source_preserves_existing_provenance(self, plugin, sgdb_artwork_cache):
-        plugin._sgdb_service._loop = asyncio.get_event_loop()
-        persister = FakeStatePersister()
-        plugin._sgdb_service._state_persister = persister
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 1,
-            "sgdb_id": 1111,
-            "sgdb_id_source": "romm",
-        }
-        for asset_type in ("hero", "logo", "grid", "icon"):
-            sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, asset_type)] = b"old"
-
-        await plugin.apply_sgdb_game_id(42, 8888, source="keep")
-
-        entry = plugin._state["shortcut_registry"]["42"]
-        # sgdb_id updated, but the existing "romm" provenance is left untouched
-        # — re-confirming an auto-picked id must not promote it to "manual".
-        assert entry["sgdb_id"] == 8888
-        assert entry["sgdb_id_source"] == "romm"
-        # Cache still cleared and state still flushed.
-        assert persister.save_count == 1
-        for asset_type in ("hero", "logo", "grid", "icon"):
-            assert _cached_path(sgdb_artwork_cache, 42, asset_type) not in sgdb_artwork_cache.files
+        assert plugin._state["shortcut_registry"]["42"]["sgdb_id"] == 8888
 
     @pytest.mark.asyncio
     async def test_coerces_string_args(self, plugin):

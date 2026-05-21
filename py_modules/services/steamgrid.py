@@ -176,11 +176,9 @@ class SteamGridService:
             self._logger.warning(f"SGDB artwork: failed to fetch IDs from RomM for rom_id={rom_id}: {e}")
         return sgdb_id, igdb_id, rom_data
 
-    def _persist_sgdb_id(self, rom_id_str, sgdb_id, source):
-        """Write a resolved ``sgdb_id`` with provenance and flush state."""
-        self._registry_store.apply_sgdb_id(
-            RegistrySgdbIdPatch(rom_id_str=rom_id_str, sgdb_id=int(sgdb_id), source=source)
-        )
+    def _persist_sgdb_id(self, rom_id_str, sgdb_id):
+        """Write a resolved ``sgdb_id`` and flush state."""
+        self._registry_store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str=rom_id_str, sgdb_id=int(sgdb_id)))
         self._state_persister.save_state()
 
     def _first_grid_thumb(self, sgdb_id):
@@ -203,13 +201,12 @@ class SteamGridService:
         """Resolve which SGDB game id to use for *rom_id*, picker-driven.
 
         The single explicit user action that may re-read RomM and run the
-        IGDB cross-ref / name-search cascade. Returns one of:
+        IGDB cross-ref / name-search cascade. RomM's ``sgdb_id`` always
+        wins when present. Returns one of:
 
         - ``{"decision": "no_api_key"}`` — no key configured.
         - ``{"decision": "resolved", "sgdb_id": int}`` — a winning id was
           found (and persisted when it came from RomM or IGDB).
-        - ``{"decision": "conflict", "state": {...}, "romm": {...}}`` —
-          the stored id and RomM's id disagree; the frontend prompts.
         - ``{"decision": "needs_pick", "candidates": [...]}`` — nothing
           resolved automatically; offer a manual name-search picker.
         """
@@ -222,33 +219,23 @@ class SteamGridService:
         romm_id, igdb_id, rom_data = await self._fetch_ids_from_romm(rom_id, None)
 
         decision = classify_resolution(state_id, romm_id)
+        if decision == "use_romm" and romm_id is not None:
+            if romm_id != state_id:
+                self._persist_sgdb_id(rom_id_str, romm_id)
+            return {"decision": "resolved", "sgdb_id": int(romm_id)}
         if decision == "use_state" and state_id is not None:
             return {"decision": "resolved", "sgdb_id": int(state_id)}
-        if decision == "use_romm" and romm_id is not None:
-            self._persist_sgdb_id(rom_id_str, romm_id, "romm")
-            return {"decision": "resolved", "sgdb_id": int(romm_id)}
-        if decision == "conflict" and state_id is not None and romm_id is not None:
-            state_thumb, romm_thumb = await self._loop.run_in_executor(None, self._conflict_thumbs, state_id, romm_id)
-            return {
-                "decision": "conflict",
-                "state": {"id": int(state_id), "thumb_url": state_thumb},
-                "romm": {"id": int(romm_id), "thumb_url": romm_thumb},
-            }
 
         # Unresolved: try IGDB cross-ref, then fall back to a name search.
         if igdb_id:
             resolved = await self._loop.run_in_executor(None, self._get_sgdb_game_id, igdb_id)
             if resolved:
-                self._persist_sgdb_id(rom_id_str, resolved, "igdb")
+                self._persist_sgdb_id(rom_id_str, resolved)
                 return {"decision": "resolved", "sgdb_id": int(resolved)}
 
         name = (rom_data or {}).get("name") or ""
         search = await self.search_sgdb_games(name)
         return {"decision": "needs_pick", "candidates": search.get("games", [])}
-
-    def _conflict_thumbs(self, state_id, romm_id):
-        """Fetch preview thumbnails for both sides of a conflict (sync)."""
-        return self._first_grid_thumb(state_id), self._first_grid_thumb(romm_id)
 
     async def search_sgdb_games(self, term):
         """Search SGDB by name and enrich the top candidates with thumbnails.
@@ -282,21 +269,15 @@ class SteamGridService:
             )
         return {"success": True, "games": games}
 
-    async def apply_sgdb_game_id(self, rom_id, sgdb_id, source="manual"):
+    async def apply_sgdb_game_id(self, rom_id, sgdb_id):
         """Persist a chosen SGDB game id and clear cached artwork for *rom_id*.
 
         Stores ``sgdb_id`` on the registry row, then evicts the four
         cached artwork PNGs so the next fetch re-downloads from the
         newly-chosen game. Succeeds even when no registry row exists —
         the artwork still binds to the appId on the frontend; the missing
-        row is logged.
-
-        *source* records how the id was chosen and becomes the row's
-        ``sgdb_id_source`` provenance — except for the sentinel
-        ``"keep"``, which means "the user re-confirmed the existing id":
-        the stored provenance is left untouched so a re-confirmed
-        auto-picked id (``"romm"`` / ``"igdb"``) is not silently promoted
-        to a sync-immune ``"manual"`` pin.
+        row is logged. The id is stored as-is and carries no protection:
+        a later sync that brings a fresh RomM ``sgdb_id`` overwrites it.
         """
         rom_id = int(rom_id)
         sgdb_id = int(sgdb_id)
@@ -306,10 +287,7 @@ class SteamGridService:
             self._logger.info(
                 f"apply_sgdb_game_id: no registry row for rom_id={rom_id}; applying artwork by appId only"
             )
-        patch_source = None if source == "keep" else source
-        self._registry_store.apply_sgdb_id(
-            RegistrySgdbIdPatch(rom_id_str=rom_id_str, sgdb_id=sgdb_id, source=patch_source)
-        )
+        self._registry_store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str=rom_id_str, sgdb_id=sgdb_id))
 
         await self._loop.run_in_executor(None, self._clear_cached_artwork, rom_id)
         self._state_persister.save_state()

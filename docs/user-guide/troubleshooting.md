@@ -66,7 +66,7 @@ Also make sure each person using RomM has their own account — shared accounts 
 
 **Explanation**: Automatic matching links your ROM to a SteamGridDB game via its IGDB id, and that cross-reference is sometimes missing — especially for obscure ports and regional releases — even when SteamGridDB *does* have artwork under a differently-linked entry.
 
-**Fix**: Tap **Refresh Artwork** in the RomM Actions menu. When automatic matching fails, a picker opens where you can search SteamGridDB by name and choose the right game from the results. Your pick is remembered and survives future syncs. If a game genuinely has no artwork uploaded to SteamGridDB, those slots fall back to Steam's defaults — you can contribute artwork there to help the community.
+**Fix**: The durable fix is on your RomM server — set the correct SteamGridDB id on the game (or enable the SteamGridDB metadata source and rescan). RomM is the source of truth for artwork matching, so the plugin picks up the corrected id on the next sync or **Refresh Artwork**. When RomM *and* the IGDB cross-reference both come up empty, **Refresh Artwork** opens a picker where you can search SteamGridDB by name and apply a match on the spot — but that pick is temporary and is replaced once RomM provides an id for the game. If a game genuinely has no artwork uploaded to SteamGridDB, those slots fall back to Steam's defaults — you can contribute artwork there to help the community.
 
 ### Artwork not appearing after sync
 

@@ -583,32 +583,6 @@ describe("RomMPlaySection", () => {
       );
     });
 
-    it("decision=conflict → opens SgdbGamePickerModal with both conflict tiles", async () => {
-      const items = await setupForArtworkAction();
-      vi.mocked(backend.getSgdbResolution).mockResolvedValue({
-        decision: "conflict",
-        state: { id: 11, thumb_url: "https://x/state.png" },
-        romm: { id: 22, thumb_url: "https://x/romm.png" },
-      });
-      vi.mocked(showModal).mockClear();
-      await act(async () => {
-        await items[0]!.props.onClick?.();
-      });
-      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
-      const props = lastShowModalProps<{
-        romId?: number;
-        appId?: number;
-        romName?: string;
-        stateTile?: { id: number };
-        rommTile?: { id: number };
-      }>();
-      expect(props?.romId).toBe(77);
-      expect(props?.appId).toBe(testAppId);
-      expect(props?.romName).toBe("Test ROM");
-      expect(props?.stateTile?.id).toBe(11);
-      expect(props?.rommTile?.id).toBe(22);
-    });
-
     it("decision=needs_pick → opens SgdbGamePickerModal with candidates", async () => {
       const items = await setupForArtworkAction();
       vi.mocked(backend.getSgdbResolution).mockResolvedValue({

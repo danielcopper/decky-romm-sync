@@ -13,18 +13,9 @@ from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import quote
 
-# Provenance of a row's ``sgdb_id``: how it came to be stored.
-#
-# - ``"manual"`` — the user picked it explicitly via the manual picker.
-#   Sticky: a full sync must never overwrite it.
-# - ``"romm"`` — taken from RomM's authoritative ``sgdb_id`` field.
-# - ``"igdb"`` — derived from RomM's ``igdb_id`` via SGDB's IGDB cross-ref.
-SgdbIdSource = Literal["manual", "romm", "igdb"]
-SGDB_ID_SOURCES: frozenset[str] = frozenset({"manual", "romm", "igdb"})
-
 # Discriminant returned by ``classify_resolution`` describing which
-# sgdb_id (if any) should win and whether the two sources disagree.
-ResolutionDecision = Literal["use_state", "use_romm", "conflict", "unresolved"]
+# sgdb_id (if any) should win. RomM is the source of truth.
+ResolutionDecision = Literal["use_state", "use_romm", "unresolved"]
 
 # Plugin-internal singular asset-type names mapped to the SGDB endpoint segment.
 # The asset-type strings on the right are what the SGDB HTTP API exposes
@@ -146,19 +137,18 @@ def first_grid_url(payload: dict | None) -> str | None:
 
 
 def classify_resolution(state_id: int | None, romm_id: int | None) -> ResolutionDecision:
-    """Decide which sgdb_id source wins given the state and RomM values.
+    """Decide which sgdb_id wins given the state and RomM values.
 
-    - state set, RomM agrees or is absent → ``"use_state"``
-    - state absent, RomM set → ``"use_romm"``
-    - both set and different → ``"conflict"``
+    RomM is the source of truth:
+
+    - RomM set → ``"use_romm"`` (regardless of the stored state id)
+    - RomM absent, state set → ``"use_state"``
     - both absent → ``"unresolved"``
     """
-    if state_id is not None and (romm_id == state_id or romm_id is None):
-        return "use_state"
-    if state_id is None and romm_id is not None:
+    if romm_id is not None:
         return "use_romm"
-    if state_id is not None and romm_id is not None and state_id != romm_id:
-        return "conflict"
+    if state_id is not None:
+        return "use_state"
     return "unresolved"
 
 

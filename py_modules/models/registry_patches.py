@@ -49,17 +49,14 @@ class RegistryCoverPathPatch:
 
 @dataclass(frozen=True)
 class RegistrySgdbIdPatch:
-    """Write of ``sgdb_id`` (with optional provenance) only.
+    """Write of ``sgdb_id`` only.
 
     Owner: SteamGridDB resolution and the manual picker. The store
-    no-ops on a missing row. ``source`` records how the id was chosen
-    (``"manual"`` / ``"romm"`` / ``"igdb"``); ``None`` leaves the
-    existing provenance untouched.
+    no-ops on a missing row.
     """
 
     rom_id_str: str
     sgdb_id: int
-    source: str | None = None
 
 
 @dataclass(frozen=True)

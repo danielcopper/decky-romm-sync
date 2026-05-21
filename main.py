@@ -442,8 +442,8 @@ class Plugin:
     async def search_sgdb_games(self, term):
         return await self._sgdb_service.search_sgdb_games(term)
 
-    async def apply_sgdb_game_id(self, rom_id, sgdb_id, source="manual"):
-        return await self._sgdb_service.apply_sgdb_game_id(rom_id, sgdb_id, source)
+    async def apply_sgdb_game_id(self, rom_id, sgdb_id):
+        return await self._sgdb_service.apply_sgdb_game_id(rom_id, sgdb_id)
 
     # ── Metadata delegation to MetadataService ────────────────
 
