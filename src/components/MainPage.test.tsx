@@ -199,6 +199,13 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "progress-progress" }, String(p.nProgress)),
         ce("span", { "data-testid": "progress-indeterminate" }, String(p.indeterminate)),
       ),
+    ProgressBar: (p: AnyProps & { nProgress?: number; indeterminate?: boolean }) =>
+      ce(
+        "div",
+        { "data-testid": "progress" },
+        ce("span", { "data-testid": "progress-progress" }, String(p.nProgress)),
+        ce("span", { "data-testid": "progress-indeterminate" }, String(p.indeterminate)),
+      ),
     showModal: vi.fn(),
   };
 });

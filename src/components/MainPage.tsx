@@ -4,6 +4,7 @@ import {
   PanelSectionRow,
   ButtonItem,
   Field,
+  ProgressBar,
   ProgressBarWithInfo,
   ToggleField,
   Spinner,
@@ -397,10 +398,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     syncBody = (
       <>
         <PanelSectionRow>
-          {/* Own the caption in a full-width row instead of ProgressBarWithInfo's
-              sOperationText/sTimeRemaining — Steam's built-in label row overflows
-              the narrow QAM panel and clips on the right (#751). The bar itself
-              renders text-less so its widget shrinks to the panel width. */}
+          {/* Own the caption in a full-width row and use the bare ProgressBar.
+              ProgressBarWithInfo is a Steam Field (label column | bar column);
+              with no label text the empty column shoves the bar into the right
+              half and clips it (#751). The bare ProgressBar is just the bar and
+              spans the full panel width. */}
           <div style={{ width: "100%" }}>
             <div
               style={{
@@ -413,7 +415,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               <span data-testid="sync-stage">{stageLabel(syncProgress?.stage)}</span>
               {stepText && <span data-testid="sync-step">{stepText}</span>}
             </div>
-            <ProgressBarWithInfo
+            <ProgressBar
               indeterminate={coarseFraction === undefined}
               nProgress={coarseFraction}
             />
