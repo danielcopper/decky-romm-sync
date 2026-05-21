@@ -6,7 +6,6 @@ import pytest
 from models.registry_patches import (
     RegistryCoverPathPatch,
     RegistryDeletePatch,
-    RegistryIdsPatch,
     RegistrySgdbIdPatch,
     RegistrySyncApplyPatch,
 )
@@ -96,23 +95,6 @@ class TestRegistrySgdbIdPatch:
 
     def test_frozen(self):
         patch = RegistrySgdbIdPatch(rom_id_str="42", sgdb_id=888)
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            patch.sgdb_id = 0  # type: ignore[misc]
-
-
-class TestRegistryIdsPatch:
-    def test_both_set(self):
-        patch = RegistryIdsPatch(rom_id_str="42", sgdb_id=888, igdb_id=999)
-        assert patch.sgdb_id == 888
-        assert patch.igdb_id == 999
-
-    def test_both_none(self):
-        patch = RegistryIdsPatch(rom_id_str="42", sgdb_id=None, igdb_id=None)
-        assert patch.sgdb_id is None
-        assert patch.igdb_id is None
-
-    def test_frozen(self):
-        patch = RegistryIdsPatch(rom_id_str="42", sgdb_id=888, igdb_id=999)
         with pytest.raises(dataclasses.FrozenInstanceError):
             patch.sgdb_id = 0  # type: ignore[misc]
 

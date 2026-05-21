@@ -64,7 +64,9 @@ Also make sure each person using RomM has their own account — shared accounts 
 
 **Symptom**: Some games have full artwork while others are missing hero/logo/wide grid even with an API key configured.
 
-**Explanation**: SteamGridDB relies on community submissions. If a game doesn't have artwork uploaded there, those slots will show Steam's defaults. You can contribute artwork to SteamGridDB to help the community.
+**Explanation**: Automatic matching links your ROM to a SteamGridDB game via its IGDB id, and that cross-reference is sometimes missing — especially for obscure ports and regional releases — even when SteamGridDB *does* have artwork under a differently-linked entry.
+
+**Fix**: Tap **Refresh Artwork** in the RomM Actions menu. When automatic matching fails, a picker opens where you can search SteamGridDB by name and choose the right game from the results. Your pick is remembered and survives future syncs. If a game genuinely has no artwork uploaded to SteamGridDB, those slots fall back to Steam's defaults — you can contribute artwork there to help the community.
 
 ### Artwork not appearing after sync
 

@@ -22,7 +22,6 @@ from models.metadata_patches import MetadataStampPatch
 from models.registry_patches import (
     RegistryCoverPathPatch,
     RegistryDeletePatch,
-    RegistryIdsPatch,
     RegistrySgdbIdPatch,
     RegistrySyncApplyPatch,
 )
@@ -112,8 +111,6 @@ class ShortcutRegistryStore(Protocol):
     def apply_cover_path(self, patch: RegistryCoverPathPatch) -> None: ...
 
     def apply_sgdb_id(self, patch: RegistrySgdbIdPatch) -> None: ...
-
-    def apply_ids(self, patch: RegistryIdsPatch) -> None: ...
 
     def delete(self, patch: RegistryDeletePatch) -> ShortcutRegistryEntry | None: ...
 

@@ -54,6 +54,8 @@ Tap **Refresh Metadata** in the game detail panel to:
 
 This is useful if artwork was missing on first sync (SteamGridDB may have added new images since) or if metadata has changed on your RomM server.
 
+When you tap **Refresh Artwork**, the plugin resolves which SteamGridDB game to use from your RomM server's data. If it can resolve a single confident match, artwork is applied straight away. If it can't find a match, or if your RomM server now points at a different SteamGridDB game than the one currently applied, a picker opens so you choose: keep what you have, switch to your server's suggestion, or search SteamGridDB by name and pick from the results (with thumbnails). A manual pick sticks — a later full library sync won't overwrite it.
+
 The full set of per-game actions — refresh artwork, refresh metadata, sync save files, download BIOS, and uninstall — is available from the RomM Actions menu in the game detail panel.
 
 ![RomM Actions context menu with Refresh Artwork, Sync Save Files, Download BIOS, and Uninstall entries](../assets/screenshot-actions.jpg)

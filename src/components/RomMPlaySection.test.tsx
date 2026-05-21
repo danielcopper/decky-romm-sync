@@ -492,128 +492,161 @@ describe("RomMPlaySection", () => {
   });
 
   // ------------------------------------------------------------------
-  // D. applyArtwork flow (via handleRefreshArtwork)
+  // D. handleRefreshArtwork — getSgdbResolution-driven SGDB step
   // ------------------------------------------------------------------
 
-  describe("applyArtwork flow (via handleRefreshArtwork action)", () => {
-    async function setupForArtworkAction() {
-      // Cache load completes with a rom_id and one already-applied flag
-      // (testAppId is unique per test so Set state doesn't bleed).
+  describe("handleRefreshArtwork SGDB resolution flow", () => {
+    async function setupForArtworkAction(romId = 77) {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
-        rom_id: 77,
+        rom_id: romId,
+        rom_name: "Test ROM",
       });
-      // Avoid triggering auto-apply by pre-marking the appId — actually we
-      // can't reach the module Set from outside. Instead, count baseline
-      // calls and check the delta after the action runs.
-      render(<RomMPlaySection appId={testAppId} />);
-      await flushAsync();
-    }
-
-    it("returns -1 when any SGDB call reports no_api_key — surfaces 'Set a SteamGridDB API key' toast", async () => {
-      // Auto-apply happens on mount with all results returning no_api_key=true.
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
-        found: true,
-        rom_id: 77,
-      });
-      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
-        base64: null,
-        no_api_key: true,
-      });
-      render(<RomMPlaySection appId={testAppId} />);
-      await flushAsync();
-
-      // Trigger refresh artwork via the RomM menu
-      const menuItems = await openRomMMenuAndGetItems(testAppId);
-      const refreshArtwork = menuItems[0]!; // first item
-      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
-      vi.mocked(toaster.toast).mockClear();
-      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
-        base64: null,
-        no_api_key: true,
-      });
-      await act(async () => {
-        await refreshArtwork.props.onClick?.();
-      });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "Set a SteamGridDB API key in settings first",
-        }),
-      );
-    });
-
-    it("returns positive N and toasts 'Artwork refreshed (N/4 images applied)' when SGDB returns base64s", async () => {
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
-        found: true,
-        rom_id: 77,
-      });
+      // Auto-apply on mount routes through getSgdbArtworkBase64; default it
+      // to all-null so the mount path is inert and the action drives the test.
       vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
         base64: null,
         no_api_key: false,
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
+      return openRomMMenuAndGetItems(testAppId);
+    }
 
-      const menuItems = await openRomMMenuAndGetItems(testAppId);
-      const refreshArtwork = menuItems[0]!;
+    it("decision=no_api_key → 'Set a SteamGridDB API key' toast, no applyArtwork", async () => {
+      const items = await setupForArtworkAction();
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "no_api_key" });
+      vi.mocked(showModal).mockClear();
+      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
       vi.mocked(toaster.toast).mockClear();
-      // All four return base64s.
+      await act(async () => {
+        await items[0]!.props.onClick?.();
+      });
+      expect(vi.mocked(backend.getSgdbResolution)).toHaveBeenCalledWith(77);
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Set a SteamGridDB API key in settings first" }),
+      );
+      // No artwork apply, no picker modal.
+      expect(vi.mocked(backend.getSgdbArtworkBase64)).not.toHaveBeenCalled();
+      expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+    });
+
+    it("decision=resolved → applyArtwork runs, toasts 'Artwork refreshed (N/4 images applied)'", async () => {
+      const items = await setupForArtworkAction();
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "resolved", sgdb_id: 42 });
+      vi.mocked(toaster.toast).mockClear();
       vi.mocked(backend.getSgdbArtworkBase64)
         .mockResolvedValueOnce({ base64: "AA==", no_api_key: false })
         .mockResolvedValueOnce({ base64: "BB==", no_api_key: false })
         .mockResolvedValueOnce({ base64: "CC==", no_api_key: false })
         .mockResolvedValueOnce({ base64: "DD==", no_api_key: false });
       vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });
-
       await act(async () => {
-        await refreshArtwork.props.onClick?.();
+        await items[0]!.props.onClick?.();
       });
-
-      // 3 SteamClient.SetCustomArtworkForApp calls (types 1, 2, 3) + 1 saveShortcutIcon (type 4).
-      expect(
-        vi.mocked(SteamClient.Apps.SetCustomArtworkForApp),
-      ).toHaveBeenCalledTimes(3);
-      expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(
-        testAppId,
-        "DD==",
-      );
+      expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(testAppId, "DD==");
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "Artwork refreshed (4/4 images applied)",
-        }),
+        expect.objectContaining({ body: "Artwork refreshed (4/4 images applied)" }),
       );
     });
 
-    it("returns 0 and toasts 'No artwork found' when SGDB returns all-null base64s", async () => {
-      await setupForArtworkAction();
-      const menuItems = await openRomMMenuAndGetItems(testAppId);
-      const refreshArtwork = menuItems[0]!;
+    it("decision=resolved with all-null artwork → toasts 'No artwork available for this game'", async () => {
+      const items = await setupForArtworkAction();
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "resolved", sgdb_id: 42 });
       vi.mocked(toaster.toast).mockClear();
       vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
         base64: null,
         no_api_key: false,
       });
       await act(async () => {
-        await refreshArtwork.props.onClick?.();
+        await items[0]!.props.onClick?.();
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "No artwork found" }),
+        expect.objectContaining({ body: "No artwork available for this game" }),
       );
     });
 
-    it("emits 'No artwork found' even if the outer await rejects (per-call .catch handles it)", async () => {
-      await setupForArtworkAction();
-      const menuItems = await openRomMMenuAndGetItems(testAppId);
-      const refreshArtwork = menuItems[0]!;
+    it("decision=resolved but applyArtwork sees no_api_key → key toast", async () => {
+      const items = await setupForArtworkAction();
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "resolved", sgdb_id: 42 });
       vi.mocked(toaster.toast).mockClear();
-      vi.mocked(backend.getSgdbArtworkBase64).mockRejectedValue(new Error("net"));
-      await act(async () => {
-        await refreshArtwork.props.onClick?.();
+      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
+        base64: null,
+        no_api_key: true,
       });
-      // Per-call .catch returns { base64: null, no_api_key: false } → applied=0.
+      await act(async () => {
+        await items[0]!.props.onClick?.();
+      });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "No artwork found" }),
+        expect.objectContaining({ body: "Set a SteamGridDB API key in settings first" }),
       );
+    });
+
+    it("decision=conflict → opens SgdbGamePickerModal with both conflict tiles", async () => {
+      const items = await setupForArtworkAction();
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({
+        decision: "conflict",
+        state: { id: 11, thumb_url: "https://x/state.png" },
+        romm: { id: 22, thumb_url: "https://x/romm.png" },
+      });
+      vi.mocked(showModal).mockClear();
+      await act(async () => {
+        await items[0]!.props.onClick?.();
+      });
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      const props = lastShowModalProps<{
+        romId?: number;
+        appId?: number;
+        romName?: string;
+        stateTile?: { id: number };
+        rommTile?: { id: number };
+      }>();
+      expect(props?.romId).toBe(77);
+      expect(props?.appId).toBe(testAppId);
+      expect(props?.romName).toBe("Test ROM");
+      expect(props?.stateTile?.id).toBe(11);
+      expect(props?.rommTile?.id).toBe(22);
+    });
+
+    it("decision=needs_pick → opens SgdbGamePickerModal with candidates", async () => {
+      const items = await setupForArtworkAction();
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({
+        decision: "needs_pick",
+        candidates: [{ id: 1, name: "Game A", release_year: 1999, thumb_url: null }],
+      });
+      vi.mocked(showModal).mockClear();
+      await act(async () => {
+        await items[0]!.props.onClick?.();
+      });
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      const props = lastShowModalProps<{
+        candidates?: Array<{ id: number; name: string }>;
+        romName?: string;
+      }>();
+      expect(props?.candidates).toHaveLength(1);
+      expect(props?.candidates?.[0]?.name).toBe("Game A");
+      expect(props?.romName).toBe("Test ROM");
+    });
+
+    it("getSgdbResolution rejection → 'Failed to refresh artwork' toast + debugLog (non-vacuous catch)", async () => {
+      const items = await setupForArtworkAction();
+      vi.mocked(backend.getSgdbResolution).mockRejectedValue(new Error("net"));
+      vi.mocked(showModal).mockClear();
+      vi.mocked(toaster.toast).mockClear();
+      vi.mocked(backend.debugLog).mockClear();
+      await act(async () => {
+        await items[0]!.props.onClick?.();
+      });
+      // Catch's observable effects: the failure toast + the debugLog message.
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Failed to refresh artwork" }),
+      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+        expect.stringContaining("getSgdbResolution rejected"),
+      );
+      // No modal opened on failure.
+      expect(vi.mocked(showModal)).not.toHaveBeenCalled();
     });
   });
 
@@ -1101,7 +1134,7 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(backend.refreshCoverArtwork)).not.toHaveBeenCalled();
     });
 
-    it("calls refreshCoverArtwork BEFORE SGDB and dispatches 'cover_refreshed' on success", async () => {
+    it("calls refreshCoverArtwork BEFORE getSgdbResolution and dispatches 'cover_refreshed' on success", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 77,
@@ -1115,12 +1148,13 @@ describe("RomMPlaySection", () => {
         base64: null,
         no_api_key: false,
       });
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "no_api_key" });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
       const items = await openRomMMenuAndGetItems(testAppId);
       vi.mocked(backend.refreshCoverArtwork).mockClear();
-      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
+      vi.mocked(backend.getSgdbResolution).mockClear();
 
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
@@ -1132,10 +1166,10 @@ describe("RomMPlaySection", () => {
         // refreshCoverArtwork called once with the rom_id
         expect(vi.mocked(backend.refreshCoverArtwork)).toHaveBeenCalledWith(77);
 
-        // Order: refreshCoverArtwork before getSgdbArtworkBase64
+        // Order: refreshCoverArtwork before getSgdbResolution
         const refreshOrder = vi.mocked(backend.refreshCoverArtwork).mock.invocationCallOrder[0]!;
-        const sgdbOrder = vi.mocked(backend.getSgdbArtworkBase64).mock.invocationCallOrder[0]!;
-        expect(refreshOrder).toBeLessThan(sgdbOrder);
+        const resolutionOrder = vi.mocked(backend.getSgdbResolution).mock.invocationCallOrder[0]!;
+        expect(refreshOrder).toBeLessThan(resolutionOrder);
 
         // cover_refreshed event dispatched with the rom_id
         const ev = listener.mock.calls
@@ -1147,7 +1181,7 @@ describe("RomMPlaySection", () => {
       }
     });
 
-    it("on refreshCoverArtwork {success: false}, logs and STILL runs the SGDB step", async () => {
+    it("on refreshCoverArtwork {success: false}, logs and STILL runs the SGDB resolution step", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 77,
@@ -1161,11 +1195,12 @@ describe("RomMPlaySection", () => {
         base64: null,
         no_api_key: false,
       });
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "resolved", sgdb_id: 42 });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
       const items = await openRomMMenuAndGetItems(testAppId);
-      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
+      vi.mocked(backend.getSgdbResolution).mockClear();
       vi.mocked(backend.debugLog).mockClear();
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
@@ -1173,8 +1208,8 @@ describe("RomMPlaySection", () => {
         await act(async () => {
           await items[0]!.props.onClick?.();
         });
-        // SGDB step still runs (graceful fall-through)
-        expect(vi.mocked(backend.getSgdbArtworkBase64)).toHaveBeenCalledTimes(4);
+        // SGDB resolution step still runs (graceful fall-through)
+        expect(vi.mocked(backend.getSgdbResolution)).toHaveBeenCalledWith(77);
         // debugLog surfaced the failure reason + message
         expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
           expect.stringContaining("not_synced"),
@@ -1189,7 +1224,7 @@ describe("RomMPlaySection", () => {
       }
     });
 
-    it("on refreshCoverArtwork rejection, debugLogs the rejection and continues to SGDB", async () => {
+    it("on refreshCoverArtwork rejection, debugLogs the rejection and continues to the SGDB resolution step", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 77,
@@ -1199,11 +1234,12 @@ describe("RomMPlaySection", () => {
         base64: null,
         no_api_key: false,
       });
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "resolved", sgdb_id: 42 });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
       const items = await openRomMMenuAndGetItems(testAppId);
-      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
+      vi.mocked(backend.getSgdbResolution).mockClear();
       vi.mocked(backend.debugLog).mockClear();
       await act(async () => {
         await items[0]!.props.onClick?.();
@@ -1212,28 +1248,28 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
         expect.stringContaining("refreshCoverArtwork rejected"),
       );
-      // SGDB step still runs
-      expect(vi.mocked(backend.getSgdbArtworkBase64)).toHaveBeenCalledTimes(4);
+      // SGDB resolution step still runs
+      expect(vi.mocked(backend.getSgdbResolution)).toHaveBeenCalledWith(77);
     });
 
-    it("toasts 'Failed to refresh artwork' when SteamClient.SetCustomArtworkForApp throws", async () => {
+    it("toasts 'Failed to refresh artwork' when applyArtwork's SetCustomArtworkForApp throws (resolved decision)", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 77,
       });
-      // First mount: auto-apply with all-null base64 (no SteamClient calls,
-      // applied=0, marked as applied). Then manual refresh re-runs and
-      // throws via SetCustomArtworkForApp.
+      // Mount auto-apply with all-null base64 (no SteamClient calls), then
+      // the manual refresh resolves and re-runs applyArtwork which throws.
       vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
         base64: null,
         no_api_key: false,
       });
+      vi.mocked(backend.getSgdbResolution).mockResolvedValue({ decision: "resolved", sgdb_id: 42 });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
       const items = await openRomMMenuAndGetItems(testAppId);
       vi.mocked(toaster.toast).mockClear();
-      // Now SteamClient throws.
+      // Now SGDB returns base64 and SteamClient throws on apply.
       vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
         base64: "AA==",
         no_api_key: false,

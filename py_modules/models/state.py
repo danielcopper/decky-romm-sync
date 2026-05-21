@@ -43,6 +43,7 @@ class ShortcutRegistryEntry(TypedDict):
     cover_path: str
     igdb_id: NotRequired[int]
     sgdb_id: NotRequired[int]
+    sgdb_id_source: NotRequired[str]
     ra_id: NotRequired[int]
 
 

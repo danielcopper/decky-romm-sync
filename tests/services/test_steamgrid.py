@@ -255,61 +255,12 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_no_igdb_id_fetched_from_romm(self, plugin, sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
-        import base64
-
+    async def test_state_only_no_romm_call_when_state_empty(self, plugin, fake_romm_api, fake_steamgrid_db_api):
+        """base64 path is state-only — a registry row without sgdb_id never hits RomM."""
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        # ROM in registry but without igdb_id
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-        }
-
-        # RomM API returns igdb_id
-        fake_romm_api.roms[42] = {"id": 42, "igdb_id": 1234}
-
-        # SGDB resolves IGDB to game ID, then serves hero artwork.
-        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=9999)
-        fake_steamgrid_db_api.seed_artwork(9999, "hero", "https://example.com/hero.png")
-        fake_steamgrid_db_api.seed_image_bytes("https://example.com/hero.png", b"hero artwork")
-
-        result = await plugin.get_sgdb_artwork_base64(42, 1)
-
-        assert result["base64"] is not None
-        assert result["no_api_key"] is False
-        assert base64.b64decode(result["base64"]) == b"hero artwork"
-        # igdb_id should be saved back to registry
-        assert plugin._state["shortcut_registry"]["42"]["igdb_id"] == 1234
-
-    @pytest.mark.asyncio
-    async def test_no_igdb_id_anywhere(self, plugin, fake_romm_api):
-        plugin.settings["steamgriddb_api_key"] = "some-key"
-        plugin._sgdb_service._loop = asyncio.get_event_loop()
-
-        # ROM in registry without igdb_id
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-        }
-
-        # RomM API also returns no igdb_id
-        fake_romm_api.roms[42] = {"id": 42, "igdb_id": None}
-
-        result = await plugin.get_sgdb_artwork_base64(42, 1)
-
-        assert result["base64"] is None
-        assert result["no_api_key"] is False
-
-    @pytest.mark.asyncio
-    async def test_sgdb_game_lookup_no_match(self, plugin, fake_steamgrid_db_api):
-        plugin.settings["steamgriddb_api_key"] = "some-key"
-        plugin._sgdb_service._loop = asyncio.get_event_loop()
-
-        # ROM with igdb_id in registry
+        # ROM in registry but without sgdb_id (only an igdb_id).
         plugin._state["shortcut_registry"]["42"] = {
             "app_id": 100001,
             "name": "Zelda",
@@ -317,8 +268,29 @@ class TestGetSgdbArtworkBase64:
             "igdb_id": 1234,
         }
 
-        # SGDB lookup returns no match for this IGDB id
-        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=None)
+        # RomM/IGDB would resolve if (incorrectly) consulted — they must not be.
+        fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 9999}
+        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=9999)
+
+        result = await plugin.get_sgdb_artwork_base64(42, 1)
+
+        assert result["base64"] is None
+        assert result["no_api_key"] is False
+        # No RomM read and no IGDB cross-ref happened on the passive path.
+        assert not any(name == "get_rom" for name, _a, _k in fake_romm_api.call_log)
+        assert not any(p.startswith("/games/igdb/") for p in fake_steamgrid_db_api.requested_paths)
+
+    @pytest.mark.asyncio
+    async def test_no_sgdb_id_in_state(self, plugin, fake_romm_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        # ROM in registry without sgdb_id.
+        plugin._state["shortcut_registry"]["42"] = {
+            "app_id": 100001,
+            "name": "Zelda",
+            "platform_name": "N64",
+        }
 
         result = await plugin.get_sgdb_artwork_base64(42, 1)
 
@@ -348,21 +320,20 @@ class TestGetSgdbArtworkBase64:
         assert result["no_api_key"] is False
 
     @pytest.mark.asyncio
-    async def test_igdb_id_from_pending_sync(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+    async def test_sgdb_id_from_pending_sync(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
         import base64
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        # Not in registry, but in pending sync
+        # Not in registry, but in pending sync with a resolved sgdb_id.
         plugin._sync_service._pending_sync[42] = {
             "name": "Zelda",
             "platform_name": "N64",
-            "igdb_id": 5678,
+            "sgdb_id": 9999,
         }
 
-        # SGDB resolves and serves logo artwork.
-        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=5678, sgdb_id=9999)
+        # SGDB serves logo artwork for the cached sgdb_id.
         fake_steamgrid_db_api.seed_artwork(9999, "logo", "https://example.com/logo.png")
         fake_steamgrid_db_api.seed_image_bytes("https://example.com/logo.png", b"logo data")
 
@@ -370,42 +341,6 @@ class TestGetSgdbArtworkBase64:
 
         assert result["base64"] is not None
         assert base64.b64decode(result["base64"]) == b"logo data"
-
-    @pytest.mark.asyncio
-    async def test_romm_api_fetch_fails_gracefully(self, plugin, fake_romm_api):
-        plugin.settings["steamgriddb_api_key"] = "some-key"
-        plugin._sgdb_service._loop = asyncio.get_event_loop()
-
-        # Not in registry or pending, RomM API fails
-        fake_romm_api.get_rom_side_effect = Exception("Connection refused")
-
-        result = await plugin.get_sgdb_artwork_base64(42, 1)
-
-        assert result["base64"] is None
-        assert result["no_api_key"] is False
-
-    @pytest.mark.asyncio
-    async def test_no_ids_returned_does_not_persist(self, plugin, fake_romm_api):
-        """RomM returns a row without sgdb_id/igdb_id → no patch, no save_state."""
-        plugin.settings["steamgriddb_api_key"] = "some-key"
-        plugin._sgdb_service._loop = asyncio.get_event_loop()
-
-        persister = FakeStatePersister()
-        plugin._sgdb_service._state_persister = persister
-
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-        }
-        fake_romm_api.roms[42] = {"id": 42, "igdb_id": None, "sgdb_id": None}
-
-        result = await plugin.get_sgdb_artwork_base64(42, 1)
-
-        assert result["base64"] is None
-        assert persister.save_count == 0
-        assert "sgdb_id" not in plugin._state["shortcut_registry"]["42"]
-        assert "igdb_id" not in plugin._state["shortcut_registry"]["42"]
 
     @pytest.mark.asyncio
     async def test_sgdb_id_cached_in_registry(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
@@ -434,6 +369,271 @@ class TestGetSgdbArtworkBase64:
         # The artwork request must use the cached sgdb_id (9999), not 7777.
         assert any("/grids/game/9999" in p for p in fake_steamgrid_db_api.requested_paths)
         assert result["base64"] is not None
+
+
+class TestGetSgdbResolution:
+    """The picker-driven resolution cascade in ``get_sgdb_resolution``.
+
+    Exercises every ``classify_resolution`` branch plus the unresolved
+    fall-through to IGDB cross-ref and the name-search picker.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_api_key(self, plugin):
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        result = await plugin.get_sgdb_resolution(42)
+        assert result == {"decision": "no_api_key"}
+
+    @pytest.mark.asyncio
+    async def test_use_state(self, plugin, fake_romm_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 9999}
+        # RomM agrees (or is silent) → state wins, nothing persisted.
+        fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 9999}
+
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result == {"decision": "resolved", "sgdb_id": 9999}
+
+    @pytest.mark.asyncio
+    async def test_use_romm_persists(self, plugin, fake_romm_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        persister = FakeStatePersister()
+        plugin._sgdb_service._state_persister = persister
+
+        # State has no sgdb_id; RomM supplies one.
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 7777}
+
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result == {"decision": "resolved", "sgdb_id": 7777}
+        # Persisted with romm provenance.
+        entry = plugin._state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 7777
+        assert entry["sgdb_id_source"] == "romm"
+        assert persister.save_count == 1
+
+    @pytest.mark.asyncio
+    async def test_conflict_returns_thumbs(self, plugin, fake_romm_api, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 9999}
+        fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 7777}
+
+        fake_steamgrid_db_api.seed_raw_response(
+            "/grids/game/9999", {"success": True, "data": [{"thumb": "state-thumb.png"}]}
+        )
+        fake_steamgrid_db_api.seed_raw_response(
+            "/grids/game/7777", {"success": True, "data": [{"thumb": "romm-thumb.png"}]}
+        )
+
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result == {
+            "decision": "conflict",
+            "state": {"id": 9999, "thumb_url": "state-thumb.png"},
+            "romm": {"id": 7777, "thumb_url": "romm-thumb.png"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_unresolved_igdb_resolves_and_persists(self, plugin, fake_romm_api, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        persister = FakeStatePersister()
+        plugin._sgdb_service._state_persister = persister
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        # No sgdb_id anywhere, but RomM has an igdb_id that cross-refs.
+        fake_romm_api.roms[42] = {"id": 42, "igdb_id": 1234, "name": "Zelda"}
+        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=5555)
+
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result == {"decision": "resolved", "sgdb_id": 5555}
+        entry = plugin._state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 5555
+        assert entry["sgdb_id_source"] == "igdb"
+        assert persister.save_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unresolved_needs_pick_with_candidates(self, plugin, fake_romm_api, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        # No sgdb_id, no igdb_id → name search.
+        fake_romm_api.roms[42] = {"id": 42, "name": "Zelda"}
+
+        fake_steamgrid_db_api.seed_raw_response(
+            "/search/autocomplete/Zelda",
+            {"success": True, "data": [{"id": 100, "name": "Zelda", "release_date": 1234567890}]},
+        )
+        fake_steamgrid_db_api.seed_raw_response(
+            "/grids/game/100", {"success": True, "data": [{"thumb": "z-thumb.png"}]}
+        )
+
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result["decision"] == "needs_pick"
+        assert result["candidates"] == [{"id": 100, "name": "Zelda", "release_year": 2009, "thumb_url": "z-thumb.png"}]
+
+    @pytest.mark.asyncio
+    async def test_unresolved_igdb_lookup_fails_falls_through_to_pick(
+        self, plugin, fake_romm_api, fake_steamgrid_db_api
+    ):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        fake_romm_api.roms[42] = {"id": 42, "igdb_id": 1234, "name": "Obscure Port"}
+        # IGDB cross-ref has no match.
+        fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=None)
+        # Name search yields nothing.
+        fake_steamgrid_db_api.seed_raw_response("/search/autocomplete/Obscure%20Port", {"success": True, "data": []})
+
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result == {"decision": "needs_pick", "candidates": []}
+
+
+class TestSearchSgdbGames:
+    @pytest.mark.asyncio
+    async def test_happy_path_enriches_thumbs(self, plugin, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        fake_steamgrid_db_api.seed_raw_response(
+            "/search/autocomplete/mario",
+            {
+                "success": True,
+                "data": [
+                    {"id": 1, "name": "Mario", "release_date": 1234567890},
+                    {"id": 2, "name": "Mario 2"},
+                ],
+            },
+        )
+        fake_steamgrid_db_api.seed_raw_response("/grids/game/1", {"success": True, "data": [{"thumb": "m1.png"}]})
+        # game 2 has no grid → thumb None.
+
+        result = await plugin.search_sgdb_games("mario")
+
+        assert result["success"] is True
+        assert result["games"] == [
+            {"id": 1, "name": "Mario", "release_year": 2009, "thumb_url": "m1.png"},
+            {"id": 2, "name": "Mario 2", "release_year": None, "thumb_url": None},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_api_key(self, plugin):
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        result = await plugin.search_sgdb_games("mario")
+        assert result == {"success": False, "games": []}
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_failure(self, plugin, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        fake_steamgrid_db_api.request_side_effect = ConnectionError("DNS failed")
+
+        result = await plugin.search_sgdb_games("mario")
+
+        assert result == {"success": False, "games": []}
+
+    @pytest.mark.asyncio
+    async def test_caps_at_six_candidates(self, plugin, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        data = [{"id": i, "name": f"Game {i}"} for i in range(1, 11)]
+        fake_steamgrid_db_api.seed_raw_response("/search/autocomplete/many", {"success": True, "data": data})
+
+        result = await plugin.search_sgdb_games("many")
+
+        assert result["success"] is True
+        assert len(result["games"]) == 6
+
+
+class TestApplySgdbGameId:
+    @pytest.mark.asyncio
+    async def test_persists_with_source_and_clears_cache(self, plugin, sgdb_artwork_cache):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        persister = FakeStatePersister()
+        plugin._sgdb_service._state_persister = persister
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        # Seed cached artwork for all four asset types.
+        for asset_type in ("hero", "logo", "grid", "icon"):
+            sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, asset_type)] = b"old"
+
+        result = await plugin.apply_sgdb_game_id(42, 8888)
+
+        assert result == {"success": True}
+        entry = plugin._state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 8888
+        assert entry["sgdb_id_source"] == "manual"
+        assert persister.save_count == 1
+        # All cached artwork cleared so the next fetch re-downloads.
+        for asset_type in ("hero", "logo", "grid", "icon"):
+            assert _cached_path(sgdb_artwork_cache, 42, asset_type) not in sgdb_artwork_cache.files
+
+    @pytest.mark.asyncio
+    async def test_explicit_source(self, plugin):
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+
+        await plugin.apply_sgdb_game_id(42, 8888, source="romm")
+
+        assert plugin._state["shortcut_registry"]["42"]["sgdb_id_source"] == "romm"
+
+    @pytest.mark.asyncio
+    async def test_keep_source_preserves_existing_provenance(self, plugin, sgdb_artwork_cache):
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        persister = FakeStatePersister()
+        plugin._sgdb_service._state_persister = persister
+        plugin._state["shortcut_registry"]["42"] = {
+            "app_id": 1,
+            "sgdb_id": 1111,
+            "sgdb_id_source": "romm",
+        }
+        for asset_type in ("hero", "logo", "grid", "icon"):
+            sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, asset_type)] = b"old"
+
+        await plugin.apply_sgdb_game_id(42, 8888, source="keep")
+
+        entry = plugin._state["shortcut_registry"]["42"]
+        # sgdb_id updated, but the existing "romm" provenance is left untouched
+        # — re-confirming an auto-picked id must not promote it to "manual".
+        assert entry["sgdb_id"] == 8888
+        assert entry["sgdb_id_source"] == "romm"
+        # Cache still cleared and state still flushed.
+        assert persister.save_count == 1
+        for asset_type in ("hero", "logo", "grid", "icon"):
+            assert _cached_path(sgdb_artwork_cache, 42, asset_type) not in sgdb_artwork_cache.files
+
+    @pytest.mark.asyncio
+    async def test_coerces_string_args(self, plugin):
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+
+        await plugin.apply_sgdb_game_id("42", "8888")
+
+        assert plugin._state["shortcut_registry"]["42"]["sgdb_id"] == 8888
+
+    @pytest.mark.asyncio
+    async def test_missing_row_still_succeeds(self, plugin):
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        # No registry row for rom_id 42.
+        result = await plugin.apply_sgdb_game_id(42, 8888)
+
+        assert result == {"success": True}
+        # Row absent → apply_sgdb_id no-ops, but the call still succeeds.
+        assert "42" not in plugin._state["shortcut_registry"]
 
 
 class TestIconSupport:

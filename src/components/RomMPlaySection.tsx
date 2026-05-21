@@ -25,6 +25,8 @@ import {
 } from "@decky/ui";
 import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
+import { SgdbGamePickerModalContent } from "./SgdbGamePickerModal";
+import { applyArtwork } from "../utils/artwork";
 import { hasAnySaveConflict } from "../utils/saveStatus";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
@@ -34,14 +36,13 @@ import {
   testConnection,
   getSaveStatus,
   getBiosStatus,
-  getSgdbArtworkBase64,
+  getSgdbResolution,
   getRomMetadata,
   refreshCoverArtwork,
   removeRom,
   downloadAllFirmware,
   syncRomSaves,
   deleteLocalSaves,
-  saveShortcutIcon,
   setGameCore,
   debugLog,
 } from "../api/backend";
@@ -62,43 +63,6 @@ import {
 
 /** Track which appIds have had auto-artwork applied this session */
 const artworkApplied = new Set<number>();
-
-/** Fetch SGDB artwork (hero, logo, wide grid, icon) and apply to Steam.
- *  Returns count of successfully applied images. */
-async function applyArtwork(romId: number, appId: number): Promise<number> {
-  const results = await Promise.all([
-    getSgdbArtworkBase64(romId, 1).catch(() => ({ base64: null, no_api_key: false })),
-    getSgdbArtworkBase64(romId, 2).catch(() => ({ base64: null, no_api_key: false })),
-    getSgdbArtworkBase64(romId, 3).catch(() => ({ base64: null, no_api_key: false })),
-    getSgdbArtworkBase64(romId, 4).catch(() => ({ base64: null, no_api_key: false })),
-  ]);
-
-  if (results.some((r) => r.no_api_key)) return -1;
-
-  let applied = 0;
-  // SGDB type 1 = hero → Steam assetType 1
-  if (results[0].base64) {
-    await SteamClient.Apps.SetCustomArtworkForApp(appId, results[0].base64, "png", 1);
-    applied++;
-  }
-  // SGDB type 2 = logo → Steam assetType 2
-  if (results[1].base64) {
-    await SteamClient.Apps.SetCustomArtworkForApp(appId, results[1].base64, "png", 2);
-    applied++;
-  }
-  // SGDB type 3 = wide grid → Steam assetType 3
-  if (results[2].base64) {
-    await SteamClient.Apps.SetCustomArtworkForApp(appId, results[2].base64, "png", 3);
-    applied++;
-  }
-  // Type 4 = icon (VDF-based)
-  if (results[3].base64) {
-    await saveShortcutIcon(appId, results[3].base64);
-    applied++;
-  }
-
-  return applied;
-}
 
 interface RomMPlaySectionProps {
   appId: number;
@@ -423,14 +387,57 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
       }
 
-      // Step 2: refresh SGDB artwork (hero, logo, grid, icon).
-      const applied = await applyArtwork(romId, appId);
-      if (applied === -1) {
-        toaster.toast({ title: "RomM Sync", body: "Set a SteamGridDB API key in settings first" });
-      } else if (applied > 0) {
-        toaster.toast({ title: "RomM Sync", body: `Artwork refreshed (${applied}/4 images applied)` });
-      } else {
-        toaster.toast({ title: "RomM Sync", body: "No artwork found" });
+      // Step 2: resolve which SGDB game id to use. The backend may pick one
+      // automatically, surface a conflict, or hand back manual candidates.
+      const resolution = await getSgdbResolution(romId).catch(
+        (e): null => {
+          debugLog(`getSgdbResolution rejected: ${e}`);
+          return null;
+        },
+      );
+      if (!resolution) {
+        toaster.toast({ title: "RomM Sync", body: "Failed to refresh artwork" });
+        return;
+      }
+
+      switch (resolution.decision) {
+        case "no_api_key":
+          toaster.toast({ title: "RomM Sync", body: "Set a SteamGridDB API key in settings first" });
+          break;
+        case "resolved": {
+          const applied = await applyArtwork(romId, appId);
+          if (applied === -1) {
+            toaster.toast({ title: "RomM Sync", body: "Set a SteamGridDB API key in settings first" });
+          } else if (applied > 0) {
+            toaster.toast({ title: "RomM Sync", body: `Artwork refreshed (${applied}/4 images applied)` });
+          } else {
+            toaster.toast({ title: "RomM Sync", body: "No artwork available for this game" });
+          }
+          break;
+        }
+        case "conflict":
+          showModal(
+            createElement(SgdbGamePickerModalContent, {
+              romId,
+              appId,
+              romName: info.romName,
+              stateTile: resolution.state,
+              rommTile: resolution.romm,
+              onApplied: () => {},
+            }),
+          );
+          break;
+        case "needs_pick":
+          showModal(
+            createElement(SgdbGamePickerModalContent, {
+              romId,
+              appId,
+              romName: info.romName,
+              candidates: resolution.candidates,
+              onApplied: () => {},
+            }),
+          );
+          break;
       }
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Failed to refresh artwork" });

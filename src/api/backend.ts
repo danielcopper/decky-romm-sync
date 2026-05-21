@@ -80,6 +80,37 @@ export const refreshCoverArtwork = callable<
   { success: boolean; reason?: string; message: string; cover_path?: string }
 >("refresh_cover_artwork");
 export const getSgdbArtworkBase64 = callable<[number, number], { base64: string | null; no_api_key?: boolean }>("get_sgdb_artwork_base64");
+
+/** A single SGDB game candidate for the manual picker. */
+export interface SgdbCandidate {
+  id: number;
+  name: string;
+  release_year: number | null;
+  thumb_url: string | null;
+}
+
+/** One side of a state-vs-RomM SGDB id conflict (id + preview thumbnail). */
+export interface SgdbConflictTile {
+  id: number;
+  thumb_url: string | null;
+}
+
+/** Discriminated outcome of the SGDB artwork resolution cascade. */
+export type SgdbResolution =
+  | { decision: "no_api_key" }
+  | { decision: "resolved"; sgdb_id: number }
+  | { decision: "conflict"; state: SgdbConflictTile; romm: SgdbConflictTile }
+  | { decision: "needs_pick"; candidates: SgdbCandidate[] };
+
+/** Result of a manual SGDB name search. */
+export interface SgdbSearchResult {
+  success: boolean;
+  games: SgdbCandidate[];
+}
+
+export const getSgdbResolution = callable<[number], SgdbResolution>("get_sgdb_resolution");
+export const searchSgdbGames = callable<[string], SgdbSearchResult>("search_sgdb_games");
+export const applySgdbGameId = callable<[number, number, string], { success: boolean }>("apply_sgdb_game_id");
 export const reportUnitResults = callable<[Record<string, number>], { success: boolean; count: number }>("report_unit_results");
 export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>("report_removal_results");
 export const uninstallAllRoms = callable<[], { success: boolean; removed_count: number; errors: { rom_id: string; error: string }[] }>("uninstall_all_roms");

@@ -731,6 +731,9 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "verify_sgdb_api_key",
     "save_sgdb_api_key",
     "save_shortcut_icon",
+    "get_sgdb_resolution",
+    "search_sgdb_games",
+    "apply_sgdb_game_id",
     # Metadata cache reads.
     "get_rom_metadata",
     "get_all_metadata_cache",

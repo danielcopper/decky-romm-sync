@@ -7,7 +7,6 @@ import pytest
 from models.registry_patches import (
     RegistryCoverPathPatch,
     RegistryDeletePatch,
-    RegistryIdsPatch,
     RegistrySgdbIdPatch,
     RegistrySyncApplyPatch,
 )
@@ -165,58 +164,91 @@ class TestApplySgdbId:
         assert entry["igdb_id"] == 666
         assert entry["cover_path"] == "/covers/old.png"
 
-
-class TestApplyIds:
-    def test_both_none_is_noop_existing_entry_unchanged(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, igdb_id=666)
-        before = dict(state["shortcut_registry"]["42"])
-
-        store.apply_ids(RegistryIdsPatch(rom_id_str="42", sgdb_id=None, igdb_id=None))
-
-        assert state["shortcut_registry"]["42"] == before
-
-    def test_both_none_on_missing_entry_is_noop(self, store, state, caplog):
-        with caplog.at_level(logging.WARNING):
-            store.apply_ids(RegistryIdsPatch(rom_id_str="42", sgdb_id=None, igdb_id=None))
-
-        assert "42" not in state["shortcut_registry"]
-        # No warning either — there's nothing to apply, so the missing-row
-        # branch isn't reached.
-        assert not any("apply_ids" in rec.message for rec in caplog.records)
-
-    def test_only_sgdb_id_leaves_igdb_id_untouched(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(igdb_id=666)
-
-        store.apply_ids(RegistryIdsPatch(rom_id_str="42", sgdb_id=888, igdb_id=None))
-
-        entry = state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 888
-        assert entry["igdb_id"] == 666
-
-    def test_only_igdb_id_leaves_sgdb_id_untouched(self, store, state):
-        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555)
-
-        store.apply_ids(RegistryIdsPatch(rom_id_str="42", sgdb_id=None, igdb_id=999))
-
-        entry = state["shortcut_registry"]["42"]
-        assert entry["igdb_id"] == 999
-        assert entry["sgdb_id"] == 555
-
-    def test_both_set_writes_both(self, store, state):
+    def test_source_recorded_when_provided(self, store, state):
         state["shortcut_registry"]["42"] = _make_existing_entry()
 
-        store.apply_ids(RegistryIdsPatch(rom_id_str="42", sgdb_id=888, igdb_id=999))
+        store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str="42", sgdb_id=888, source="manual"))
 
         entry = state["shortcut_registry"]["42"]
         assert entry["sgdb_id"] == 888
-        assert entry["igdb_id"] == 999
+        assert entry["sgdb_id_source"] == "manual"
 
-    def test_missing_entry_with_value_warns(self, store, state, caplog):
-        with caplog.at_level(logging.WARNING):
-            store.apply_ids(RegistryIdsPatch(rom_id_str="42", sgdb_id=888, igdb_id=None))
+    def test_source_none_leaves_existing_provenance(self, store, state):
+        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id_source="manual")
 
-        assert "42" not in state["shortcut_registry"]
-        assert any("apply_ids" in rec.message for rec in caplog.records)
+        store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str="42", sgdb_id=888))
+
+        entry = state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 888
+        assert entry["sgdb_id_source"] == "manual"
+
+
+class TestApplySyncSgdbIdStickiness:
+    """Sync-write merge for ``sgdb_id`` honours manual provenance.
+
+    A manually-picked id must survive a full sync that proposes a
+    different RomM id; a non-manual (or absent) provenance yields to the
+    sync patch and is re-tagged ``"romm"``.
+    """
+
+    def test_manual_id_survives_conflicting_sync(self, store, state):
+        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="manual")
+
+        store.apply_sync(_base_sync_patch(sgdb_id=999))
+
+        entry = state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 555  # manual pick wins
+        assert entry["sgdb_id_source"] == "manual"
+
+    def test_non_manual_id_overwritten_and_tagged_romm(self, store, state):
+        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="igdb")
+
+        store.apply_sync(_base_sync_patch(sgdb_id=999))
+
+        entry = state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 999  # patch wins
+        assert entry["sgdb_id_source"] == "romm"
+
+    def test_no_existing_source_overwritten_and_tagged_romm(self, store, state):
+        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555)
+
+        store.apply_sync(_base_sync_patch(sgdb_id=999))
+
+        entry = state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 999
+        assert entry["sgdb_id_source"] == "romm"
+
+    def test_fresh_sync_with_sgdb_id_tagged_romm(self, store, state):
+        store.apply_sync(_base_sync_patch(sgdb_id=999))
+
+        entry = state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 999
+        assert entry["sgdb_id_source"] == "romm"
+
+    def test_manual_id_preserved_when_patch_carries_no_id(self, store, state):
+        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="manual")
+
+        store.apply_sync(_base_sync_patch())  # sgdb_id defaults to None
+
+        entry = state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 555
+        assert entry["sgdb_id_source"] == "manual"
+
+    def test_non_manual_id_preserved_when_patch_carries_no_id(self, store, state):
+        state["shortcut_registry"]["42"] = _make_existing_entry(sgdb_id=555, sgdb_id_source="igdb")
+
+        store.apply_sync(_base_sync_patch())
+
+        entry = state["shortcut_registry"]["42"]
+        assert entry["sgdb_id"] == 555
+        assert entry["sgdb_id_source"] == "igdb"
+
+    def test_no_sgdb_id_anywhere_leaves_field_absent(self, store, state):
+        store.apply_sync(_base_sync_patch())
+
+        entry = state["shortcut_registry"]["42"]
+        assert "sgdb_id" not in entry
+        assert "sgdb_id_source" not in entry
 
 
 class TestDelete:

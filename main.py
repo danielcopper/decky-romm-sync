@@ -436,6 +436,15 @@ class Plugin:
     async def save_shortcut_icon(self, app_id, icon_base64):
         return await self._sgdb_service.save_shortcut_icon(app_id, icon_base64)
 
+    async def get_sgdb_resolution(self, rom_id):
+        return await self._sgdb_service.get_sgdb_resolution(rom_id)
+
+    async def search_sgdb_games(self, term):
+        return await self._sgdb_service.search_sgdb_games(term)
+
+    async def apply_sgdb_game_id(self, rom_id, sgdb_id, source="manual"):
+        return await self._sgdb_service.apply_sgdb_game_id(rom_id, sgdb_id, source)
+
     # ── Metadata delegation to MetadataService ────────────────
 
     async def get_rom_metadata(self, rom_id):
