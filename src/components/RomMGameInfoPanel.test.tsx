@@ -2032,6 +2032,20 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("No metadata available");
     });
 
+    it("renders the RomM game name on the info tab", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        rom_name: "Chrono Trigger",
+        metadata: { summary: "An RPG." } as never,
+        platform_name: "Super Nintendo",
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("Chrono Trigger");
+    });
+
     it("renders Platform row even when metadata is null but platformName is set", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,

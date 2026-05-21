@@ -10,6 +10,7 @@ All raw I/O is delegated to adapters (``SgdbArtworkCache``,
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from dataclasses import dataclass
@@ -31,7 +32,6 @@ from domain.sgdb_artwork import (
 from lib.errors import SgdbApiError, SteamGridDirMissingError
 
 if TYPE_CHECKING:
-    import asyncio
     import logging
 
     from services.protocols import (
@@ -257,17 +257,20 @@ class SteamGridService:
             self._logger.warning(f"SGDB name search failed for term={term!r}: {e}")
             return {"success": False, "games": []}
 
-        games = []
-        for candidate in candidates[:6]:
-            thumb = await self._loop.run_in_executor(None, self._first_grid_thumb, candidate["id"])
-            games.append(
-                {
-                    "id": candidate["id"],
-                    "name": candidate["name"],
-                    "release_year": candidate["release_year"],
-                    "thumb_url": thumb,
-                }
-            )
+        capped = candidates[:6]
+        thumb_futures = [
+            self._loop.run_in_executor(None, self._first_grid_thumb, candidate["id"]) for candidate in capped
+        ]
+        thumbs = await asyncio.gather(*thumb_futures)
+        games = [
+            {
+                "id": candidate["id"],
+                "name": candidate["name"],
+                "release_year": candidate["release_year"],
+                "thumb_url": thumb,
+            }
+            for candidate, thumb in zip(capped, thumbs, strict=True)
+        ]
         return {"success": True, "games": games}
 
     async def apply_sgdb_game_id(self, rom_id, sgdb_id):

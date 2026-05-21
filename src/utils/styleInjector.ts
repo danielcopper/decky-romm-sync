@@ -196,6 +196,13 @@ export function hideNativePlaySection(playSectionClass: string) {
   margin-bottom: 8px;
   line-height: 1.2;
 }
+.romm-panel-rom-name {
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  margin-bottom: 8px;
+}
 .romm-panel-summary {
   color: #acb2b8;
   font-size: 13px;

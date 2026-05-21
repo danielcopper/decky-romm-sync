@@ -165,32 +165,46 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px", color: "#fff" }}>
           Choose SteamGridDB Game
         </div>
-        <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)", marginBottom: "16px" }}>
+        <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)", marginBottom: "4px" }}>
           {romName}
         </div>
+        <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.5)", marginBottom: "16px" }}>
+          No SteamGridDB match was found automatically — search by name and pick the right game.
+        </div>
 
-        <div style={{ display: "flex", gap: "8px", alignItems: "flex-end", marginBottom: "12px" }}>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "12px" }}>
           <div style={{ flex: 1 }}>
             <TextField
-              label="Search SteamGridDB"
               value={term}
               onChange={(e: { target: { value: string } }) => setTerm(e.target.value)}
             />
           </div>
-          <DialogButton onClick={runSearch} disabled={searching} style={{ width: "120px" }}>
+          <DialogButton
+            onClick={runSearch}
+            disabled={searching}
+            style={{ width: "120px", height: "40px" }}
+          >
             Search
           </DialogButton>
         </div>
 
         {searching ? (
           <div style={{ display: "flex", justifyContent: "center", padding: "16px" }}>
-            <Spinner />
+            <div style={{ width: "32px", height: "32px" }}>
+              <Spinner />
+            </div>
           </div>
         ) : null}
 
         {searchError ? (
           <div style={{ fontSize: "12px", color: "#ff8800", marginBottom: "8px" }}>
             {searchError}
+          </div>
+        ) : null}
+
+        {results.length > 0 ? (
+          <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)", marginBottom: "8px" }}>
+            Showing the top 6 matches — refine your search if the right game isn&apos;t here.
           </div>
         ) : null}
 

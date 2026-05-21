@@ -67,6 +67,52 @@ describe("SgdbGamePickerModal", () => {
       expect(closeModal).toHaveBeenCalledTimes(1);
     });
 
+    it("shows the 'why shown' explanation under the rom name", () => {
+      const { container } = render(
+        createElement(SgdbGamePickerModalContent, {
+          romId: 88,
+          appId: 6000,
+          romName: "Mario",
+          candidates: [],
+          onApplied: vi.fn(),
+          closeModal: vi.fn(),
+        }),
+      );
+      expect(container.textContent).toContain(
+        "No SteamGridDB match was found automatically",
+      );
+    });
+
+    it("does not render the 'top 6' note when there are no results", () => {
+      const { container } = render(
+        createElement(SgdbGamePickerModalContent, {
+          romId: 88,
+          appId: 6000,
+          romName: "Mario",
+          candidates: [],
+          onApplied: vi.fn(),
+          closeModal: vi.fn(),
+        }),
+      );
+      expect(container.textContent).not.toContain("Showing the top 6 matches");
+    });
+
+    it("renders the 'top 6' note when results are present", () => {
+      const { container } = render(
+        createElement(SgdbGamePickerModalContent, {
+          romId: 88,
+          appId: 6000,
+          romName: "Mario",
+          candidates: [
+            { id: 1, name: "Super Mario", release_year: 1985, thumb_url: null },
+          ],
+          onApplied: vi.fn(),
+          closeModal: vi.fn(),
+        }),
+      );
+      expect(container.textContent).toContain("Showing the top 6 matches");
+    });
+
     it("renders a placeholder when a candidate thumb_url is null", () => {
       const { container } = render(
         createElement(SgdbGamePickerModalContent, {
