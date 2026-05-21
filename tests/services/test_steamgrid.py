@@ -567,56 +567,151 @@ class TestSearchSgdbGames:
         assert len(result["games"]) == 6
 
 
+def _seed_all_artwork(fake_steamgrid_db_api, sgdb_id: int) -> None:
+    """Seed the four asset URLs + bytes for *sgdb_id* on the fake transport."""
+    for asset_type in ("hero", "logo", "grid", "icon"):
+        url = f"https://example.com/{sgdb_id}_{asset_type}.png"
+        fake_steamgrid_db_api.seed_artwork(sgdb_id, asset_type, url)
+        fake_steamgrid_db_api.seed_image_bytes(url, f"{asset_type} bytes".encode())
+
+
 class TestApplySgdbGameId:
     @pytest.mark.asyncio
-    async def test_persists_and_clears_cache(self, plugin, sgdb_artwork_cache):
+    async def test_downloads_all_four_asset_types_for_picked_id(
+        self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api
+    ):
+        """A manual pick paints all four asset types into the rom's cache."""
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        _seed_all_artwork(fake_steamgrid_db_api, 8888)
+
+        result = await plugin.apply_sgdb_game_id(42, 8888)
+
+        assert result == {"success": True}
+        # All four cache files written for rom 42 with the picked game's bytes.
+        for asset_type in ("hero", "logo", "grid", "icon"):
+            path = _cached_path(sgdb_artwork_cache, 42, asset_type)
+            assert sgdb_artwork_cache.files[path] == f"{asset_type} bytes".encode()
+        # The four artwork requests targeted sgdb_id 8888.
+        for endpoint in ("heroes", "logos", "grids", "icons"):
+            assert any(f"/{endpoint}/game/8888" in p for p in fake_steamgrid_db_api.requested_paths)
+
+    @pytest.mark.asyncio
+    async def test_clears_existing_cache_before_redownload(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+        """A re-pick evicts the prior PNGs first, then paints the new game's art."""
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        # Stale art from a previous pick.
+        for asset_type in ("hero", "logo", "grid", "icon"):
+            sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, asset_type)] = b"old"
+        _seed_all_artwork(fake_steamgrid_db_api, 8888)
+
+        await plugin.apply_sgdb_game_id(42, 8888)
+
+        # Old bytes gone; new bytes painted in (cleared, not short-circuited).
+        for asset_type in ("hero", "logo", "grid", "icon"):
+            path = _cached_path(sgdb_artwork_cache, 42, asset_type)
+            assert sgdb_artwork_cache.files[path] == f"{asset_type} bytes".encode()
+
+    @pytest.mark.asyncio
+    async def test_persists_nothing(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+        """A manual pick never writes the registry or flushes state."""
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         persister = FakeStatePersister()
         plugin._sgdb_service._state_persister = persister
 
         plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
-        # Seed cached artwork for all four asset types.
-        for asset_type in ("hero", "logo", "grid", "icon"):
-            sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, asset_type)] = b"old"
-
-        result = await plugin.apply_sgdb_game_id(42, 8888)
-
-        assert result == {"success": True}
-        entry = plugin._state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 8888
-        assert persister.save_count == 1
-        # All cached artwork cleared so the next fetch re-downloads.
-        for asset_type in ("hero", "logo", "grid", "icon"):
-            assert _cached_path(sgdb_artwork_cache, 42, asset_type) not in sgdb_artwork_cache.files
-
-    @pytest.mark.asyncio
-    async def test_overwrites_existing_id(self, plugin):
-        plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 1111}
+        _seed_all_artwork(fake_steamgrid_db_api, 8888)
 
         await plugin.apply_sgdb_game_id(42, 8888)
 
-        assert plugin._state["shortcut_registry"]["42"]["sgdb_id"] == 8888
+        # No sgdb_id stored on the registry row.
+        assert "sgdb_id" not in plugin._state["shortcut_registry"]["42"]
+        # No state flush for the manual path.
+        assert persister.save_count == 0
 
     @pytest.mark.asyncio
-    async def test_coerces_string_args(self, plugin):
+    async def test_coerces_string_args(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        _seed_all_artwork(fake_steamgrid_db_api, 8888)
 
-        await plugin.apply_sgdb_game_id("42", "8888")
+        result = await plugin.apply_sgdb_game_id("42", "8888")
 
-        assert plugin._state["shortcut_registry"]["42"]["sgdb_id"] == 8888
+        assert result == {"success": True}
+        assert sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, "hero")] == b"hero bytes"
 
     @pytest.mark.asyncio
-    async def test_missing_row_still_succeeds(self, plugin):
+    async def test_missing_row_still_succeeds(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+        plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
+        _seed_all_artwork(fake_steamgrid_db_api, 8888)
+
         # No registry row for rom_id 42.
         result = await plugin.apply_sgdb_game_id(42, 8888)
 
         assert result == {"success": True}
-        # Row absent → apply_sgdb_id no-ops, but the call still succeeds.
+        # Row absent → still painted artwork, still nothing persisted.
         assert "42" not in plugin._state["shortcut_registry"]
+        assert sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, "hero")] == b"hero bytes"
+
+    @pytest.mark.asyncio
+    async def test_partial_download_failure_still_succeeds(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+        """One asset failing to download must not break the pick — the rest paint."""
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        # Seed only three of the four assets — "logo" stays unseeded so its
+        # download yields no data, simulating a single-asset failure.
+        for asset_type in ("hero", "grid", "icon"):
+            url = f"https://example.com/8888_{asset_type}.png"
+            fake_steamgrid_db_api.seed_artwork(8888, asset_type, url)
+            fake_steamgrid_db_api.seed_image_bytes(url, f"{asset_type} bytes".encode())
+
+        result = await plugin.apply_sgdb_game_id(42, 8888)
+
+        # The gather must not propagate the missing asset.
+        assert result == {"success": True}
+        # The three seeded assets painted; the unseeded "logo" left no file.
+        for asset_type in ("hero", "grid", "icon"):
+            path = _cached_path(sgdb_artwork_cache, 42, asset_type)
+            assert sgdb_artwork_cache.files[path] == f"{asset_type} bytes".encode()
+        assert _cached_path(sgdb_artwork_cache, 42, "logo") not in sgdb_artwork_cache.files
+
+    @pytest.mark.asyncio
+    async def test_pick_does_not_persist_so_next_resolution_reopens_picker(
+        self, plugin, sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api
+    ):
+        """Regression for #755: a manual pick leaves a later refresh on ``needs_pick``.
+
+        Because the pick persists no sgdb_id, a subsequent
+        ``get_sgdb_resolution`` for the same rom — RomM still silent, no
+        IGDB match — falls through to the name-search picker instead of
+        resolving the (no-longer-stored) manual id. Pre-fix the pick
+        stored the id and this returned ``resolved``, dead-ending the
+        re-pick.
+        """
+        plugin.settings["steamgriddb_api_key"] = "some-key"
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        _seed_all_artwork(fake_steamgrid_db_api, 8888)
+
+        await plugin.apply_sgdb_game_id(42, 8888)
+
+        # RomM still has no sgdb_id and no igdb_id; name search yields nothing.
+        fake_romm_api.roms[42] = {"id": 42, "name": "Obscure Port"}
+        fake_steamgrid_db_api.seed_raw_response("/search/autocomplete/Obscure%20Port", {"success": True, "data": []})
+
+        result = await plugin.get_sgdb_resolution(42)
+
+        assert result == {"decision": "needs_pick", "candidates": []}
 
 
 class TestIconSupport:

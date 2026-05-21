@@ -274,27 +274,31 @@ class SteamGridService:
         return {"success": True, "games": games}
 
     async def apply_sgdb_game_id(self, rom_id, sgdb_id):
-        """Persist a chosen SGDB game id and clear cached artwork for *rom_id*.
+        """Paint a manually-picked game's artwork into *rom_id*'s cache.
 
-        Stores ``sgdb_id`` on the registry row, then evicts the four
-        cached artwork PNGs so the next fetch re-downloads from the
-        newly-chosen game. Succeeds even when no registry row exists —
-        the artwork still binds to the appId on the frontend; the missing
-        row is logged. The id is stored as-is and carries no protection:
-        a later sync that brings a fresh RomM ``sgdb_id`` overwrites it.
+        A manual pick only paints pixels — it downloads the chosen
+        game's four asset types into the rom's artwork cache (which the
+        cache-first ``get_sgdb_artwork_base64`` then serves onto the
+        Steam shortcut) and persists **nothing**. Only authoritative ids
+        (RomM ``sgdb_id`` or an IGDB cross-ref) are remembered as the
+        resolved id; a manual pick is not. So a later "Refresh Artwork"
+        on an otherwise-unresolvable rom stays ``needs_pick`` and reopens
+        the picker, giving the user a free re-pick. The previously
+        applied art stays visible until replaced.
         """
         rom_id = int(rom_id)
         sgdb_id = int(sgdb_id)
-        rom_id_str = str(rom_id)
 
-        if rom_id_str not in self._state["shortcut_registry"]:
-            self._logger.info(
-                f"apply_sgdb_game_id: no registry row for rom_id={rom_id}; applying artwork by appId only"
-            )
-        self._registry_store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str=rom_id_str, sgdb_id=sgdb_id))
-
+        # Start clean: ``_download_sgdb_artwork`` early-returns an
+        # existing cache file, so a re-pick of a different game must
+        # evict the prior PNGs before downloading.
         await self._loop.run_in_executor(None, self._clear_cached_artwork, rom_id)
-        self._state_persister.save_state()
+
+        downloads = [
+            self._loop.run_in_executor(None, self._download_sgdb_artwork, sgdb_id, rom_id, asset_type)
+            for asset_type in ("hero", "logo", "grid", "icon")
+        ]
+        await asyncio.gather(*downloads)
         return {"success": True}
 
     def _clear_cached_artwork(self, rom_id):
