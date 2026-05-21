@@ -156,21 +156,22 @@ class SteamGridService:
             sgdb_id = pending.get("sgdb_id")
         return sgdb_id
 
-    async def _fetch_ids_from_romm(self, rom_id, igdb_id):
+    async def _fetch_ids_from_romm(self, rom_id):
         """Fetch ``(sgdb_id, igdb_id, rom_data)`` from RomM without persisting.
 
         Reads the ROM detail from RomM and surfaces its ``sgdb_id`` /
         ``igdb_id`` fields. Persistence is the caller's decision — this
-        method never writes the registry. Returns ``(None, igdb_id,
-        None)`` on a network failure (logged, never raised).
+        method never writes the registry. Returns ``(None, None, None)``
+        on a network failure (logged, never raised).
         """
         sgdb_id = None
+        igdb_id = None
         rom_data = None
         try:
             rom_data = await self._loop.run_in_executor(None, self._romm_api.get_rom, rom_id)
             if rom_data:
                 sgdb_id = rom_data.get("sgdb_id")
-                igdb_id = igdb_id or rom_data.get("igdb_id")
+                igdb_id = rom_data.get("igdb_id")
             self._log_debug(f"SGDB artwork: fetched sgdb_id={sgdb_id}, igdb_id={igdb_id} from RomM for rom_id={rom_id}")
         except Exception as e:
             self._logger.warning(f"SGDB artwork: failed to fetch IDs from RomM for rom_id={rom_id}: {e}")
@@ -216,7 +217,7 @@ class SteamGridService:
             return {"decision": "no_api_key"}
 
         state_id = self._resolve_sgdb_id_state_only(rom_id)
-        romm_id, igdb_id, rom_data = await self._fetch_ids_from_romm(rom_id, None)
+        romm_id, igdb_id, rom_data = await self._fetch_ids_from_romm(rom_id)
 
         decision = classify_resolution(state_id, romm_id)
         if decision == "use_romm" and romm_id is not None:
