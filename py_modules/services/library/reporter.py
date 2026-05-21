@@ -128,6 +128,7 @@ class SyncReporter:
         self,
         pending_collection_memberships: dict[str, list[int]],
         pending_platform_rom_ids: set[int] | None,
+        stale_rom_ids: list[int] | None = None,
     ) -> tuple[dict, dict[str, list]]:
         """Build collection app-id maps and persist last_sync metadata.
 
@@ -135,7 +136,18 @@ class SyncReporter:
         has already updated the registry, so we only need to build the
         cross-unit collection mappings and write the final
         ``last_sync`` / ``last_synced_*`` fields.
+
+        ``stale_rom_ids`` are the rom_ids the sync determined are no
+        longer present (disabled platform, removed from server). They are
+        pruned from the registry first so collections are built from — and
+        the persisted registry reflects — only the still-synced ROMs.
+        Registry keys are JSON strings; ``stale_rom_ids`` are ints, so we
+        pop by ``str(rid)``.
         """
+        registry = self._state["shortcut_registry"]
+        for rid in stale_rom_ids or []:
+            registry.pop(str(rid), None)
+
         platform_app_ids, romm_collection_app_ids = self._build_collection_app_ids(
             self._state["shortcut_registry"],
             pending_platform_rom_ids,
@@ -155,18 +167,23 @@ class SyncReporter:
         pending_platform_rom_ids: set[int] | None,
         total_games: int,
         cancelled: bool = False,
+        stale_rom_ids: list[int] | None = None,
     ):
         """Emit ``sync_collections`` + ``sync_complete`` after all units finish.
 
         Stale-removal is emitted separately by the orchestrator via
         ``sync_stale`` so the frontend can apply removals before
-        collections are recomputed.
+        collections are recomputed. ``stale_rom_ids`` (default ``None`` =
+        prune nothing) are pruned from the backend ``shortcut_registry``
+        before collections are built and state is persisted, keeping the
+        backend registry in sync with the frontend removals.
         """
         platform_app_ids, romm_collection_app_ids = await self._loop.run_in_executor(
             None,
             self._finalize_per_unit_run_io,
             pending_collection_memberships,
             pending_platform_rom_ids,
+            stale_rom_ids,
         )
 
         await self._emit(

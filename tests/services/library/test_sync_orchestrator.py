@@ -902,6 +902,51 @@ class TestDoSyncPerUnit:
         assert stale_events[0] == {"remove_rom_ids": []}
 
     @pytest.mark.asyncio
+    async def test_stale_entries_pruned_from_registry_after_finalize(self, plugin, fake_romm_api):
+        """End-to-end: a stale registry entry (disabled platform) is removed from the
+        backend registry during finalize, not just from the frontend via ``sync_stale``.
+
+        Regression for the inflated ``get_sync_stats`` count: the orchestrator emits
+        ``sync_stale`` so the frontend drops the shortcut, and the reporter now also
+        prunes the same rom_ids from ``shortcut_registry`` so ``len(registry)`` matches
+        the still-synced ROMs.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # rom_id 10 is the live N64 ROM (synced this run). rom_id 99 is a leftover
+        # from a now-disabled platform — present in the registry but in no enabled unit.
+        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
+        plugin._state["shortcut_registry"] = {
+            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64", "app_id": 1000},
+            "99": {"name": "Z", "fs_name": "z.gba", "platform_name": "GBA", "platform_slug": "gba", "app_id": 9900},
+        }
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = AsyncMock(return_value={})
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # Frontend was told to remove rom_id 99.
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        assert stale_events == [{"remove_rom_ids": [99]}]
+
+        # Backend registry was pruned to match — only the synced ROM remains.
+        assert set(plugin._state["shortcut_registry"].keys()) == {"10"}
+
+        # get_sync_stats reflects the pruned count, not the pre-sync inflated count.
+        stats = await plugin.get_sync_stats()
+        assert stats["roms"] == 1
+        assert stats["total_shortcuts"] == 1
+
+    @pytest.mark.asyncio
     async def test_downloads_artwork_when_not_skipped(self, plugin, fake_romm_api):
         import decky
 

@@ -335,3 +335,124 @@ class TestFinalizePerUnitRun:
         assert plugin._state["last_sync"] is not None
         assert plugin._state["last_synced_platforms"] == ["N64"]
         assert plugin._state["last_synced_collections"] == ["Faves"]
+
+    @pytest.mark.asyncio
+    async def test_prunes_stale_rom_ids_from_registry(self, plugin, tmp_path, monkeypatch):
+        """stale_rom_ids must be popped from the registry and the pruned registry persisted."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+
+        saved = []
+        monkeypatch.setattr(plugin._sync_service._reporter._state_persister, "save_state", lambda: saved.append(True))
+
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+            "2": {"app_id": 1002, "name": "B", "platform_name": "SNES", "platform_slug": "snes"},
+            "3": {"app_id": 1003, "name": "C", "platform_name": "GBA", "platform_slug": "gba"},
+        }
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids={1},
+            total_games=1,
+            stale_rom_ids=[2, 3],
+        )
+
+        assert set(plugin._state["shortcut_registry"].keys()) == {"1"}
+        assert saved == [True]
+
+    @pytest.mark.asyncio
+    async def test_stale_prune_excludes_pruned_from_collections(self, plugin, tmp_path):
+        """Collections are built from the pruned registry — stale ROMs do not appear."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+        plugin.settings["collection_create_platform_groups"] = True
+
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+            "2": {"app_id": 1002, "name": "B", "platform_name": "SNES", "platform_slug": "snes"},
+        }
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids={1, 2},
+            total_games=1,
+            stale_rom_ids=[2],
+        )
+
+        collections_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_collections"]
+        payload = collections_events[0][0][1]
+        assert set(payload["platform_app_ids"].keys()) == {"N64"}
+
+    @pytest.mark.asyncio
+    async def test_no_prune_when_stale_rom_ids_default(self, plugin, tmp_path):
+        """Default stale_rom_ids=None prunes nothing — backward-compat with non-pruning callers."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+            "2": {"app_id": 1002, "name": "B", "platform_name": "SNES", "platform_slug": "snes"},
+        }
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids={1, 2},
+            total_games=2,
+        )
+
+        assert set(plugin._state["shortcut_registry"].keys()) == {"1", "2"}
+
+    @pytest.mark.asyncio
+    async def test_cancelled_path_does_not_prune(self, plugin, tmp_path):
+        """Cancelled finalize passes stale_rom_ids=[] — registry stays intact."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+            "2": {"app_id": 1002, "name": "B", "platform_name": "SNES", "platform_slug": "snes"},
+        }
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids={1, 2},
+            total_games=2,
+            cancelled=True,
+            stale_rom_ids=[],
+        )
+
+        assert set(plugin._state["shortcut_registry"].keys()) == {"1", "2"}
+
+    @pytest.mark.asyncio
+    async def test_get_sync_stats_reflects_pruned_count(self, plugin, tmp_path):
+        """After a normal finalize prunes stale entries, get_sync_stats reports the pruned count."""
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        decky.emit.reset_mock()
+
+        plugin._state["shortcut_registry"] = {
+            "1": {"app_id": 1001, "name": "A", "platform_name": "N64", "platform_slug": "n64"},
+            "2": {"app_id": 1002, "name": "B", "platform_name": "SNES", "platform_slug": "snes"},
+            "3": {"app_id": 1003, "name": "C", "platform_name": "GBA", "platform_slug": "gba"},
+        }
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids={1},
+            total_games=1,
+            stale_rom_ids=[2, 3],
+        )
+
+        stats = await plugin.get_sync_stats()
+        assert stats["roms"] == 1
+        assert stats["total_shortcuts"] == 1

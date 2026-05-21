@@ -678,6 +678,7 @@ class SyncOrchestrator:
             pending_platform_rom_ids=platform_rom_ids,
             total_games=total_games_applied,
             cancelled=cancelled,
+            stale_rom_ids=stale_rom_ids,
         )
 
     # ── Artwork delegation ───────────────────────────────────────
