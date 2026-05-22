@@ -113,14 +113,14 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
           return { success: false, games: [] };
         },
       );
-      if (!res.success) {
-        setSearchError("Search failed. Check your connection and try again.");
-        setResults([]);
-      } else {
+      if (res.success) {
         setResults(res.games);
         if (res.games.length === 0) {
           setSearchError("No matches found.");
         }
+      } else {
+        setSearchError("Search failed. Check your connection and try again.");
+        setResults([]);
       }
     } finally {
       setSearching(false);
@@ -218,7 +218,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
                 key={game.id}
                 thumbUrl={game.thumb_url}
                 title={game.name}
-                subtitle={game.release_year != null ? String(game.release_year) : undefined}
+                subtitle={game.release_year == null ? undefined : String(game.release_year)}
                 onSelect={() => applySelection(game.id)}
                 disabled={applying}
               />
