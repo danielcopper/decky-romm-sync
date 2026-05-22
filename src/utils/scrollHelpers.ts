@@ -34,11 +34,15 @@ export function findOutermostScrollParent(el: HTMLElement): HTMLElement | null {
   return outermost;
 }
 
+/** Minimal focus-event shape both DOM `FocusEvent` and React's `FocusEvent`
+ *  satisfy — these helpers only ever read `currentTarget`. */
+type FocusLike = { currentTarget: EventTarget | null };
+
 /**
  * onFocus handler that scrolls the focused element to the center of the
  * scroll container. Use on DialogButton elements for gamepad navigation.
  */
-export function scrollFocusedToCenter(e: FocusEvent): void {
+export function scrollFocusedToCenter(e: FocusLike): void {
   const el = e.currentTarget as HTMLElement;
   setTimeout(() => {
     if (!el) return;
@@ -56,7 +60,7 @@ export function scrollFocusedToCenter(e: FocusEvent): void {
  * onFocus handler that scrolls to the top of the scroll container.
  * Use on the Play button so navigating back up reveals the banner/hero.
  */
-export function scrollToTop(e: FocusEvent): void {
+export function scrollToTop(e: FocusLike): void {
   const el = e.currentTarget as HTMLElement;
   setTimeout(() => {
     if (!el) return;

@@ -36,6 +36,7 @@ import {
   type SgdbCandidate,
 } from "../api/backend";
 import { applyArtwork } from "../utils/artwork";
+import { scrollToTop, scrollFocusedToCenter } from "../utils/scrollHelpers";
 
 export interface SgdbGamePickerModalProps {
   romId: number;
@@ -55,10 +56,12 @@ const Tile: FC<{
   title: string;
   subtitle?: string;
   onSelect: () => void;
+  onFocus?: (e: { currentTarget: EventTarget | null }) => void;
   disabled?: boolean;
-}> = ({ thumbUrl, title, subtitle, onSelect, disabled }) => (
+}> = ({ thumbUrl, title, subtitle, onSelect, onFocus, disabled }) => (
   <DialogButton
     onClick={onSelect}
+    onFocus={onFocus}
     disabled={disabled}
     style={{
       display: "flex",
@@ -198,7 +201,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         onButtonDown={onBodyButtonDown}
         onOKActionDescription="Select"
         actionDescriptionMap={{ [GamepadButton.TRIGGER_RIGHT]: "Search" }}
-        style={{ display: "flex", flexDirection: "column", gap: "12px", minWidth: "480px" }}
+        style={{ display: "flex", flexDirection: "column", gap: "12px", width: "560px" }}
       >
         <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)" }}>{romName}</div>
         <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.5)" }}>
@@ -215,10 +218,12 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
               label="Search SteamGridDB"
               value={term}
               onChange={(e: { target: { value: string } }) => setTerm(e.target.value)}
+              onFocus={scrollToTop}
             />
           </div>
           <DialogButton
             onClick={runSearch}
+            onFocus={scrollToTop}
             disabled={searching}
             style={{ width: "120px", height: "40px" }}
           >
@@ -256,6 +261,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
                 title={game.name}
                 subtitle={game.release_year == null ? undefined : String(game.release_year)}
                 onSelect={() => applySelection(game.id)}
+                onFocus={scrollFocusedToCenter}
                 disabled={applying}
               />
             ))}
