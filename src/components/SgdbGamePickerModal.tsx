@@ -69,7 +69,7 @@ const Tile: FC<{
       alignItems: "center",
       gap: "6px",
       padding: "8px",
-      width: "140px",
+      width: "100%",
       height: "auto",
       minWidth: "0",
     }}
@@ -201,7 +201,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         onButtonDown={onBodyButtonDown}
         onOKActionDescription="Select"
         actionDescriptionMap={{ [GamepadButton.TRIGGER_RIGHT]: "Search" }}
-        style={{ display: "flex", flexDirection: "column", gap: "12px", width: "560px" }}
+        style={{ display: "flex", flexDirection: "column", gap: "12px", width: "100%" }}
       >
         <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)" }}>{romName}</div>
         <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.5)" }}>
@@ -251,7 +251,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
 
         {results.length > 0 ? (
           <Focusable
-            style={{ display: "flex", flexWrap: "wrap", gap: "12px", justifyContent: "flex-start" }}
+            style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" }}
             flow-children="right"
           >
             {results.map((game) => (
