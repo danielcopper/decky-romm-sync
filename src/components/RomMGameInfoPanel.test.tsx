@@ -1259,7 +1259,8 @@ describe("RomMGameInfoPanel", () => {
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      expect(container.textContent).toContain("Game Info");
+      // The Game Info section renders its content (the platform row) by default.
+      expect(container.textContent).toContain("Super Nintendo");
     });
 
     it("ACHIEVEMENTS tab is hidden when raId is null", async () => {
