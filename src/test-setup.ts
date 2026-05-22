@@ -77,7 +77,41 @@ vi.mock("@decky/ui", () => {
         createElement("span", { "data-testid": "field-desc" }, p.description as never),
         p.children as never,
       ),
-    Focusable: passthrough("div"),
+    // Focusable forwards onButtonDown as a real DOM "decky-button-down"
+    // listener so tests can drive gamepad input via
+    // fireEvent(el, new CustomEvent("decky-button-down", { detail: { button } })).
+    // Other FooterLegend-only props (flow-children, actionDescriptionMap, …)
+    // are dropped — they have no DOM effect under happy-dom.
+    Focusable: ({
+      children,
+      style,
+      onButtonDown,
+    }: AnyProps & { style?: unknown; onButtonDown?: (evt: unknown) => void }) =>
+      createElement(
+        "div",
+        {
+          "data-testid": "focusable",
+          style,
+          ref: (el: HTMLDivElement | null) => {
+            if (!el) return;
+            const prev = (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown;
+            if (prev) el.removeEventListener("decky-button-down", prev);
+            if (!onButtonDown) return;
+            const listener = ((e: Event) => onButtonDown(e)) as EventListener;
+            (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown = listener;
+            el.addEventListener("decky-button-down", listener);
+          },
+        },
+        children as never,
+      ),
+    GamepadButton: {
+      OK: 1,
+      CANCEL: 2,
+      SECONDARY: 3,
+      TRIGGER_RIGHT: 8,
+      DIR_UP: 9,
+      DIR_DOWN: 10,
+    },
     PanelSection: passthrough("section"),
     PanelSectionRow: passthrough("div"),
     TextField: (p: AnyProps & { value?: string; onChange?: (e: unknown) => void }) =>

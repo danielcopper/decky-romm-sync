@@ -9,10 +9,25 @@
  * re-runs the artwork apply for the appId, then reports the applied count back
  * and closes. The pick is not protected — a later sync with a RomM sgdb_id
  * overwrites it.
+ *
+ * Wrapped in Steam's focus-managed ConfirmModal (same pattern as
+ * TextInputModal / NewSlotModal) so the on-screen keyboard and d-pad / left
+ * stick navigation behave correctly: focus flows field-row → results grid and
+ * back out. The modal's single OK button only dismisses — searching is an
+ * explicit in-body Search button (and R2 / TRIGGER_RIGHT shortcut), never the
+ * OK action, which would close the modal before the user can pick.
  */
 
 import { FC, useState } from "react";
-import { ModalRoot, DialogButton, Focusable, TextField, Spinner } from "@decky/ui";
+import {
+  ConfirmModal,
+  DialogButton,
+  Focusable,
+  GamepadButton,
+  TextField,
+  Spinner,
+  type GamepadEvent,
+} from "@decky/ui";
 import { toaster } from "@decky/api";
 import {
   searchSgdbGames,
@@ -159,22 +174,45 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     }
   };
 
+  // R2 (TRIGGER_RIGHT) on the focus-managed body triggers a search without
+  // leaving the field. The OSK is modal and captures input while open, so this
+  // only fires when focus is on the body/field with the keyboard closed —
+  // acceptable; the structural nav fix is the primary goal.
+  const onBodyButtonDown = (evt: GamepadEvent) => {
+    if (evt.detail.button === GamepadButton.TRIGGER_RIGHT) {
+      void runSearch();
+    }
+  };
+
   return (
-    <ModalRoot closeModal={closeModal}>
-      <div style={{ padding: "16px", minWidth: "480px" }}>
-        <div style={{ fontSize: "16px", fontWeight: "bold", marginBottom: "4px", color: "#fff" }}>
-          Choose SteamGridDB Game
-        </div>
-        <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)", marginBottom: "4px" }}>
-          {romName}
-        </div>
-        <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.5)", marginBottom: "16px" }}>
+    <ConfirmModal
+      closeModal={closeModal}
+      onOK={() => closeModal?.()}
+      onCancel={() => closeModal?.()}
+      strTitle="Choose SteamGridDB Game"
+      strOKButtonText="Close"
+      bAlertDialog={true}
+    >
+      <Focusable
+        flow-children="column"
+        onButtonDown={onBodyButtonDown}
+        onOKActionDescription="Select"
+        actionDescriptionMap={{ [GamepadButton.TRIGGER_RIGHT]: "Search" }}
+        style={{ display: "flex", flexDirection: "column", gap: "12px", minWidth: "480px" }}
+      >
+        <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.6)" }}>{romName}</div>
+        <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.5)" }}>
           No SteamGridDB match was found automatically — search by name and pick the right game.
         </div>
 
-        <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "12px" }}>
+        <Focusable
+          flow-children="row"
+          style={{ display: "flex", gap: "8px", alignItems: "center" }}
+        >
           <div style={{ flex: 1 }}>
             <TextField
+              focusOnMount={true}
+              label="Search SteamGridDB"
               value={term}
               onChange={(e: { target: { value: string } }) => setTerm(e.target.value)}
             />
@@ -186,7 +224,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
           >
             Search
           </DialogButton>
-        </div>
+        </Focusable>
 
         {searching ? (
           <div style={{ display: "flex", justifyContent: "center", padding: "16px" }}>
@@ -197,13 +235,11 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         ) : null}
 
         {searchError ? (
-          <div style={{ fontSize: "12px", color: "#ff8800", marginBottom: "8px" }}>
-            {searchError}
-          </div>
+          <div style={{ fontSize: "12px", color: "#ff8800" }}>{searchError}</div>
         ) : null}
 
         {results.length > 0 ? (
-          <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)", marginBottom: "8px" }}>
+          <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)" }}>
             Showing the top 6 matches — refine your search if the right game isn&apos;t here.
           </div>
         ) : null}
@@ -225,7 +261,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
             ))}
           </Focusable>
         ) : null}
-      </div>
-    </ModalRoot>
+      </Focusable>
+    </ConfirmModal>
   );
 };

@@ -207,6 +207,41 @@ describe("SgdbGamePickerModal", () => {
       );
     });
 
+    it("R2 (TRIGGER_RIGHT) on the body fires a search", async () => {
+      vi.mocked(backend.searchSgdbGames).mockResolvedValue({
+        success: true,
+        games: [{ id: 7, name: "Link's Awakening", release_year: 1993, thumb_url: null }],
+      });
+      const { container } = renderPicker();
+      // The outer body Focusable is the first one in the tree; it carries the
+      // onButtonDown handler (wired by the test mock to a "decky-button-down"
+      // DOM event). GamepadButton.TRIGGER_RIGHT === 8.
+      const body = container.querySelector('[data-testid="focusable"]') as HTMLElement;
+      await act(async () => {
+        fireEvent(
+          body,
+          new CustomEvent("decky-button-down", { detail: { button: 8 } }),
+        );
+      });
+      await flushAsync();
+      expect(vi.mocked(backend.searchSgdbGames)).toHaveBeenCalledWith("Zelda");
+      expect(container.textContent).toContain("Link's Awakening");
+    });
+
+    it("a non-R2 button on the body does NOT fire a search", async () => {
+      const { container } = renderPicker();
+      const body = container.querySelector('[data-testid="focusable"]') as HTMLElement;
+      await act(async () => {
+        // GamepadButton.DIR_DOWN === 10 — navigation, not search.
+        fireEvent(
+          body,
+          new CustomEvent("decky-button-down", { detail: { button: 10 } }),
+        );
+      });
+      await flushAsync();
+      expect(vi.mocked(backend.searchSgdbGames)).not.toHaveBeenCalled();
+    });
+
     it("unsuccessful (success:false) search surfaces an error message", async () => {
       vi.mocked(backend.searchSgdbGames).mockResolvedValue({ success: false, games: [] });
       const { container } = renderPicker();
