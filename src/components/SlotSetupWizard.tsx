@@ -153,6 +153,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
         <div className="romm-panel-section-title">Save Slot Setup</div>
         <div style={{ color: "#d4513f", fontSize: "12px", marginBottom: "8px" }}>{error}</div>
         <DialogButton
+          className="romm-wizard-btn"
           style={btnStyle}
           onClick={() => {
             setError(null);
@@ -240,6 +241,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             </div>
           </div>
           <DialogButton
+            className="romm-wizard-btn"
             style={btnStyle}
             onClick={() => handleConfirm(s.slot ?? defaultSlot)}
             onFocus={scrollFocusedToCenter}
@@ -269,6 +271,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       </div>,
       <div key="default-btn" style={{ marginBottom: "6px" }}>
         <DialogButton
+          className="romm-wizard-btn romm-wizard-btn-primary"
           style={btnPrimaryStyle}
           onClick={() => handleConfirm(defaultSlot)}
           onFocus={scrollFocusedToCenter}
@@ -282,6 +285,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
   rightChildren.push(
     <div key="custom-toggle">
       <DialogButton
+        className="romm-wizard-btn"
         style={btnStyle}
         onFocus={scrollFocusedToCenter}
         onClick={() => {

@@ -55,6 +55,22 @@ export function hideNativePlaySection(playSectionClass: string) {
   outline: 2px solid #1a9fff;
   outline-offset: 2px;
 }
+.romm-wizard-btn:hover,
+.romm-wizard-btn:focus,
+.romm-wizard-btn.gpfocus {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.7) !important;
+  outline: 2px solid #1a9fff !important;
+  outline-offset: 2px;
+}
+.romm-wizard-btn-primary:hover,
+.romm-wizard-btn-primary:focus,
+.romm-wizard-btn-primary.gpfocus {
+  background: rgba(26, 159, 255, 0.3) !important;
+  border-color: rgba(26, 159, 255, 0.9) !important;
+  outline: 2px solid #1a9fff !important;
+  outline-offset: 2px;
+}
 @keyframes romm-spin {
   to { transform: rotate(360deg); }
 }
