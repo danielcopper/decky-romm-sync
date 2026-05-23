@@ -11,24 +11,26 @@
  * Steam's gamepad engine when injected via routerHook.addPatch.
  */
 
-/** Find the nearest ancestor with overflowY scroll/auto */
+/** Find the nearest ancestor that is actually scrollable (overflow:scroll|auto
+ *  AND scrollHeight > clientHeight). */
 export function findScrollParent(el: HTMLElement): HTMLElement | null {
   let parent: HTMLElement | null = el.parentElement;
   while (parent) {
     const ov = globalThis.getComputedStyle(parent).overflowY;
-    if (ov === "scroll" || ov === "auto") return parent;
+    if ((ov === "scroll" || ov === "auto") && parent.scrollHeight > parent.clientHeight) return parent;
     parent = parent.parentElement;
   }
   return null;
 }
 
-/** Find the outermost ancestor with overflowY scroll/auto */
+/** Find the outermost ancestor that is actually scrollable (overflow:scroll|auto
+ *  AND scrollHeight > clientHeight). */
 export function findOutermostScrollParent(el: HTMLElement): HTMLElement | null {
   let parent: HTMLElement | null = el.parentElement;
   let outermost: HTMLElement | null = null;
   while (parent) {
     const ov = globalThis.getComputedStyle(parent).overflowY;
-    if (ov === "scroll" || ov === "auto") outermost = parent;
+    if ((ov === "scroll" || ov === "auto") && parent.scrollHeight > parent.clientHeight) outermost = parent;
     parent = parent.parentElement;
   }
   return outermost;
@@ -64,10 +66,9 @@ export function scrollToTop(e: FocusLike): void {
   const el = e.currentTarget as HTMLElement;
   setTimeout(() => {
     if (!el) return;
-    // Use outermost scroll parent to ensure the banner/hero is fully visible.
-    // Steam Deck has nested scrollable containers — the nearest one may not
-    // be the page-level viewport.
-    const scrollParent = findOutermostScrollParent(el) ?? findScrollParent(el);
+    // Use the outermost scroll parent so the banner/hero scrolls into view,
+    // not just the nearest inner container.
+    const scrollParent = findOutermostScrollParent(el);
     if (scrollParent) {
       scrollParent.scrollTo({ top: 0, behavior: "smooth" });
     }

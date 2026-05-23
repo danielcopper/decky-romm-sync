@@ -25,7 +25,7 @@ import { setMigrationStatus } from "./utils/migrationStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
-import { findOutermostScrollParent, findScrollParent } from "./utils/scrollHelpers";
+import { findOutermostScrollParent } from "./utils/scrollHelpers";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent, SaveStatus, SyncPlanData, SyncStaleData, SyncCollectionsData } from "./types";
 import { removeShortcut } from "./utils/steamShortcuts";
 
@@ -51,7 +51,7 @@ const QAMPanel: FC = () => {
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
-    const container = findOutermostScrollParent(el) ?? findScrollParent(el);
+    const container = findOutermostScrollParent(el);
     // rAF lets the new page mount/measure before we set scrollTop.
     const rafHandle = requestAnimationFrame(() => {
       if (container) container.scrollTop = 0;
