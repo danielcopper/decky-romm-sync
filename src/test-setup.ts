@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { resetDeckyEventBus } from "./test-utils/decky-api-mock";
 
 afterEach(() => {
@@ -102,7 +102,7 @@ vi.mock("@decky/ui", () => {
             el.addEventListener("decky-button-down", listener);
           },
         },
-        children as never,
+        children as ReactNode,
       ),
     GamepadButton: {
       OK: 1,
