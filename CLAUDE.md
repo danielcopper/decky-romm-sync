@@ -73,6 +73,13 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 
 **Domain**: `[CP]` Pure compute only. No I/O, no state mutation, no service or adapter imports. Functions take inputs, return outputs. Anything stateless and I/O-free that's currently in a service belongs here. (Canonical domain-model purity.)
 
+**Aggregates** (CP chapters 1–7 scope — locked in #788, applies as the SQLite migration #271 lands):
+
+- `[CP]` One Repository Protocol per aggregate root, not per table. Aggregate boundaries are domain-modeling decisions; table layout is downstream and may need multiple tables to back one aggregate.
+- `[CP]` Aggregate methods are the **only** mutation API for the aggregate's state. No external field assignment (`aggregate.field = value`) from services. Services call methods; methods enforce invariants and update internal state. Field access for reads is fine.
+- `[ours]` **Mutation methods are verb-named after the domain event they conceptually represent.** `adopt_baseline(filename, hash)` not `update_baseline(...)`. `mark_installed(path)` not `set_installed(...)`. `promote_slot(slot, source)` not `update_slot_source(...)`. Why: intent-revealing names encode what *happened*, not which fields changed; the method name becomes the implicit event name (`BaselineAdopted`, `Installed`, `SlotPromoted`) if/when chapter 8+ events get added in a follow-up epic. Free refactor seam, zero cost now.
+- `[ours]` Chapter 8+ (domain events + message bus) is explicitly **out of scope** for the current SQLite epic. Trigger for revisiting: handler diversity ≥3 kinds for the same aggregate state change, OR a non-Steam consumer (CLI/web/etc.) becomes concrete, OR a telemetry/analytics layer needs to subscribe.
+
 **Bootstrap (`bootstrap.py`)**: `[CP]` The composition root — the only place where concrete adapters meet services. (Canonical CP composition root.)
 
 - `[ours]` `WiringConfig` holds the wiring; protocols come in, services come out. Adapter instantiation never happens in `main.py` — if a service needs a Protocol-wrapped persister, the wrapper adapter is built in `bootstrap()` and passed through `CallbackBundle`. (Our concrete shape for the composition root.)
