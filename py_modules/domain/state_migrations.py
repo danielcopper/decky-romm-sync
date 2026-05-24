@@ -16,39 +16,57 @@ def migrate_settings(data: dict) -> dict:
     new_data = dict(data)
     version = new_data.get("version", 0)
     if version < 1:
-        # v0 → v1: rename deprecated boolean keys
-        if new_data.pop("disable_steam_input", None):
-            new_data["steam_input_mode"] = "force_off"
-        if new_data.pop("debug_logging", None):
-            new_data["log_level"] = "debug"
-        new_data["version"] = 1
+        new_data = _migrate_v0_to_v1(new_data)
     if version < 3:
-        # v<3 → v3: split flat ``enabled_collections`` dict into a nested
-        # dict keyed by collection kind (user/smart/franchise). Numeric
-        # string keys came from the user-collection endpoint; the rest
-        # (base64-shaped) came from the virtual/franchise endpoint. The
-        # smart bucket starts empty because smart collections did not
-        # exist before this version. Skip the split if the value is
-        # already nested (defensive — guards against re-migration of a
-        # half-stamped file). A partial-nested value (e.g. only the
-        # ``user`` bucket present) is normalized to the full three-bucket
-        # shape rather than re-split as if it were flat.
-        flat = new_data.get("enabled_collections")
-        if isinstance(flat, dict):
-            if _is_nested_collections(flat):
-                pass  # already correct shape
-            elif _is_partial_nested_collections(flat):
-                new_data["enabled_collections"] = _fill_missing_buckets(flat)
-            else:
-                nested: dict[str, dict[str, bool]] = {"user": {}, "smart": {}, "franchise": {}}
-                for key, value in flat.items():
-                    if isinstance(key, str) and key.lstrip("-").isdigit():
-                        nested["user"][key] = bool(value)
-                    else:
-                        nested["franchise"][str(key)] = bool(value)
-                new_data["enabled_collections"] = nested
-        new_data["version"] = 3
+        new_data = _migrate_v2_to_v3(new_data)
     return new_data
+
+
+def _migrate_v0_to_v1(data: dict) -> dict:
+    """v0 → v1: rename deprecated boolean keys."""
+    if data.pop("disable_steam_input", None):
+        data["steam_input_mode"] = "force_off"
+    if data.pop("debug_logging", None):
+        data["log_level"] = "debug"
+    data["version"] = 1
+    return data
+
+
+def _migrate_v2_to_v3(data: dict) -> dict:
+    """v<3 → v3: normalize ``enabled_collections`` to nested-by-kind shape.
+
+    Splits a flat dict into user/smart/franchise buckets. Numeric string
+    keys came from the user-collection endpoint; the rest (base64-shaped)
+    came from the virtual/franchise endpoint. The smart bucket starts
+    empty because smart collections did not exist before this version.
+    Already-nested values pass through; partial-nested values are
+    filled out rather than re-split.
+    """
+    flat = data.get("enabled_collections")
+    if isinstance(flat, dict):
+        data["enabled_collections"] = _normalize_enabled_collections(flat)
+    data["version"] = 3
+    return data
+
+
+def _normalize_enabled_collections(flat: dict) -> dict[str, dict[str, bool]]:
+    """Coerce *flat* to the full three-bucket shape."""
+    if _is_nested_collections(flat):
+        return flat
+    if _is_partial_nested_collections(flat):
+        return _fill_missing_buckets(flat)
+    return _split_flat_to_buckets(flat)
+
+
+def _split_flat_to_buckets(flat: dict) -> dict[str, dict[str, bool]]:
+    """Split a pre-v3 flat enabled_collections dict into user/franchise buckets."""
+    nested: dict[str, dict[str, bool]] = {"user": {}, "smart": {}, "franchise": {}}
+    for key, value in flat.items():
+        if isinstance(key, str) and key.lstrip("-").isdigit():
+            nested["user"][key] = bool(value)
+        else:
+            nested["franchise"][str(key)] = bool(value)
+    return nested
 
 
 _BUCKET_KEYS = ("user", "smart", "franchise")
