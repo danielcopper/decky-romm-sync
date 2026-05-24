@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.19.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.18.0...decky-romm-sync-v0.19.0) (2026-05-24)
+
+
+### Features
+
+* **artwork:** resolve SGDB game via cascade with manual picker ([#762](https://github.com/danielcopper/decky-romm-sync/issues/762)) ([fc53363](https://github.com/danielcopper/decky-romm-sync/commit/fc53363fea4e6ac6ec3e01044f9127eb69e5d476))
+* **library:** sync RomM smart collections ([#796](https://github.com/danielcopper/decky-romm-sync/issues/796)) ([c65b4ab](https://github.com/danielcopper/decky-romm-sync/commit/c65b4ab22ef309293077904822e866998c55087c))
+
+
+### Bug Fixes
+
+* **saves:** show focus outline on slot wizard buttons ([#768](https://github.com/danielcopper/decky-romm-sync/issues/768)) ([c3aedb6](https://github.com/danielcopper/decky-romm-sync/commit/c3aedb6930d04c98b8c2981929d151c5a8952fc1)), closes [#757](https://github.com/danielcopper/decky-romm-sync/issues/757)
+* **ui:** skip non-scrollable ancestors in scroll-parent lookup ([#770](https://github.com/danielcopper/decky-romm-sync/issues/770)) ([06b694b](https://github.com/danielcopper/decky-romm-sync/commit/06b694b41baea7b06a8ed07a8c98800cb56a657c)), closes [#767](https://github.com/danielcopper/decky-romm-sync/issues/767)
+
 ## [0.18.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.17.1...decky-romm-sync-v0.18.0) (2026-05-21)
 
 
