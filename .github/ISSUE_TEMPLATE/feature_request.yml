@@ -4,6 +4,11 @@ title: "feat: "
 labels: ["enhancement"]
 assignees: ["danielcopper"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Required fields are the minimum for triage. Optional fields make things significantly easier to act on — please fill what you can, but **don't skip the report just because you can't fill everything**.
+
   - type: textarea
     id: problem
     attributes:
@@ -16,9 +21,9 @@ body:
     id: solution
     attributes:
       label: Proposed solution
-      description: How should the plugin behave? Sketch the UX or the API surface.
+      description: How should the plugin behave? Sketch the UX or the API surface. If you have ideas, share them — if not, leave blank and we'll figure it out.
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: alternatives

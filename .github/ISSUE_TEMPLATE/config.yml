@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Wiki
-    url: https://github.com/danielcopper/decky-romm-sync/wiki
-    about: Architecture, file structure, and feature documentation
+  - name: Documentation
+    url: https://danielcopper.github.io/decky-romm-sync/
+    about: Architecture, file structure, user guide, and contributing docs
+  - name: Discussions
+    url: https://github.com/danielcopper/decky-romm-sync/discussions
+    about: Questions, ideas, and general conversation that aren't bug reports or specific feature requests

@@ -4,31 +4,16 @@ title: "bug: "
 labels: ["bug"]
 assignees: ["danielcopper"]
 body:
-  - type: textarea
-    id: repro
+  - type: markdown
     attributes:
-      label: Repro steps
-      description: Numbered steps that reproduce the bug from a known-good state.
-      placeholder: |
-        1. Open QAM > Decky > RomM Sync
-        2. Click "Sync Library"
-        3. ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected behavior
-      description: What you expected to happen.
-    validations:
-      required: true
+      value: |
+        Required fields are the minimum for triage. Optional fields make things significantly easier to act on — please fill what you can, but **don't skip the report just because you can't fill everything**.
 
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior
-      description: What actually happened. Include error messages verbatim.
+      label: What happened
+      description: What actually happened. Include error messages verbatim if any.
     validations:
       required: true
 
@@ -36,35 +21,55 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      description: Shown in the QAM panel header, or read from plugin.json.
-      placeholder: "0.5.4"
+      description: Shown in the QAM panel header. Required for triage.
+      placeholder: "0.18.0"
     validations:
       required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro steps
+      description: Numbered steps that reproduce the bug from a known-good state. Even a one-line description of what you were doing helps.
+      placeholder: |
+        1. Open QAM > Decky > RomM Sync
+        2. Click "Sync Library"
+        3. ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen. Skip if it's obvious from "What happened".
+    validations:
+      required: false
 
   - type: input
     id: retrodeck-version
     attributes:
       label: RetroDECK version
-      description: Shown in the RetroDECK Configurator, or read from the Flatpak metadata.
+      description: Shown in the RetroDECK Configurator. If you can't find it quickly, leave blank.
       placeholder: "0.9.0b"
     validations:
-      required: true
+      required: false
 
   - type: input
     id: decky-version
     attributes:
       label: Decky Loader version
-      description: Shown in the Decky settings panel.
+      description: Shown in the Decky settings panel. If you can't find it quickly, leave blank.
       placeholder: "3.0.5"
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: logs
     attributes:
       label: Log excerpt
       description: |
-        Optional. Plugin logs live at `~/homebrew/logs/decky-romm-sync/`. Set log level to "debug" in plugin settings for full output. Decky Loader logs are in `~/homebrew/services/PluginLoader/`.
+        Plugin logs live at `~/homebrew/logs/decky-romm-sync/`. Set log level to "debug" in plugin settings for full output. Decky Loader logs are in `~/homebrew/services/PluginLoader/`.
       render: text
     validations:
       required: false
