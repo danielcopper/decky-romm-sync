@@ -1,0 +1,95 @@
+name: docs-check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-required:
+    name: Docs updated in same PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine if docs are required
+        env:
+          PR_LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          # --- Opt-out: label ---
+          if echo "$PR_LABELS_JSON" | grep -q '"no-docs-change"'; then
+            echo "::notice::Skipping docs check — 'no-docs-change' label is set."
+            exit 0
+          fi
+
+          # --- Opt-out: PR body marker ---
+          if echo "${PR_BODY:-}" | grep -iqE 'docs:[[:space:]]*n/?a'; then
+            echo "::notice::Skipping docs check — PR description marks 'docs: N/A'."
+            exit 0
+          fi
+
+          # --- Changed files in this PR ---
+          mapfile -t changed < <(git diff --name-only "origin/${BASE_REF}...HEAD")
+
+          if [[ ${#changed[@]} -eq 0 ]]; then
+            echo "::notice::No files changed."
+            exit 0
+          fi
+
+          # --- Skip list: paths that don't require docs updates ---
+          # Inverse approach: everything triggers docs requirement UNLESS it matches this list.
+          # New file paths default to "needs docs" — additions to the skip list are explicit.
+          skip_re='^(tests|scripts|\.github|\.claude|\.worktrees)/'
+          skip_files_re='^(coverage\.json|mise\.toml|pyproject\.toml|pnpm-lock\.yaml|package-lock\.json|\.gitignore|\.editorconfig|\.gitattributes|LICENSE|CLAUDE\.md|MEMORY\.md|README\.md)$'
+
+          requires_docs=()
+          docs_touched=false
+
+          for file in "${changed[@]}"; do
+            if [[ "$file" =~ ^docs/ ]]; then
+              docs_touched=true
+              continue
+            fi
+            if [[ "$file" =~ $skip_re ]] || [[ "$file" =~ $skip_files_re ]]; then
+              continue
+            fi
+            requires_docs+=("$file")
+          done
+
+          if [[ ${#requires_docs[@]} -eq 0 ]]; then
+            echo "::notice::No doc-requiring paths changed. OK."
+            exit 0
+          fi
+
+          if [[ "$docs_touched" == "true" ]]; then
+            echo "::notice::Source changed AND docs/ updated. OK."
+            echo "Source files:"
+            printf '  - %s\n' "${requires_docs[@]}" | head -20
+            exit 0
+          fi
+
+          echo "::error::PR touches source code but no docs/ updates and no opt-out marker."
+          echo ""
+          echo "Source files changed that require docs updates:"
+          printf '  - %s\n' "${requires_docs[@]}" | head -20
+          if [[ ${#requires_docs[@]} -gt 20 ]]; then
+            echo "  ... and $(( ${#requires_docs[@]} - 20 )) more"
+          fi
+          echo ""
+          echo "Options:"
+          echo "  1. Update the relevant docs/ pages in this PR"
+          echo "  2. If genuinely doc-irrelevant: add the 'no-docs-change' label to this PR"
+          echo "  3. OR include 'docs: N/A' (with a one-line reason) in the PR description"
+          echo ""
+          echo "See CLAUDE.md > Documentation for the full rule."
+          exit 1

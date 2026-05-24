@@ -6,9 +6,11 @@ A Decky Loader plugin that syncs a self-hosted RomM library into Steam as Non-St
 
 ## Documentation
 
-The docs live in `docs/` and are the canonical source for architecture, file structure, and feature documentation. They are built with **Material for MkDocs** and published to GitHub Pages (<https://danielcopper.github.io/decky-romm-sync/>) by `.github/workflows/docs.yml` on every push to `main`. Because the docs sit in this repo, doc updates are reviewed in the same PR as the code change — when a change affects architecture, data flows, or feature behavior, update the relevant page under `docs/` in that same PR. Preview locally with `mise run docs`.
+**Docs are updated in the same PR as the code change. This is not optional.** When a change affects architecture, data flows, feature behavior, or user-facing UI, the relevant page under `docs/` must be updated in the same PR. Documentation-debt-as-a-separate-follow-up-issue is forbidden — those follow-ups never land. If you're not sure whether a change needs docs, the default is "yes, it does." Enforced in CI by `.github/workflows/docs-check.yml`.
 
-Layout mirrors the three nav tabs: `docs/user-guide/` (end users), `docs/architecture/` (how it works), `docs/contributing/` (dev setup). The old GitHub Wiki is retired — it only redirects to the published site.
+The docs live in `docs/` and are the canonical source for architecture, file structure, and feature documentation. Built with **Material for MkDocs** and published to GitHub Pages (<https://danielcopper.github.io/decky-romm-sync/>) by `.github/workflows/docs.yml` on every push to `main`. Layout mirrors the three nav tabs: `docs/user-guide/` (end users), `docs/architecture/` (how it works), `docs/contributing/` (dev setup). The old GitHub Wiki is retired — it only redirects to the published site. Preview locally with `mise run docs`.
+
+For genuinely doc-irrelevant PRs (pure refactor with no user-visible change, no architecture shift, no new flow; tooling/CI changes; dependency bumps), set the `no-docs-change` label on the PR OR include `docs: N/A` (with a one-line reason) in the PR description. The default posture is "docs needed"; opting out is an explicit acknowledgement, not a silent omission. The CI check enforces this.
 
 ## Key Technical Constraints
 
