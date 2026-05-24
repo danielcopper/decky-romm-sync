@@ -326,11 +326,11 @@ class LibraryService:
     async def get_collections(self):
         return await self._fetcher.get_collections()
 
-    def save_collection_sync(self, collection_id, enabled):
-        return self._fetcher.save_collection_sync(collection_id, enabled)
+    def save_collection_sync(self, collection_id, kind, enabled):
+        return self._fetcher.save_collection_sync(collection_id, kind, enabled)
 
-    async def set_all_collections_sync(self, enabled, category=None):
-        return await self._fetcher.set_all_collections_sync(enabled, category)
+    async def set_all_collections_sync(self, enabled, scope=None):
+        return await self._fetcher.set_all_collections_sync(enabled, scope)
 
     # Sync control
     def start_sync(self):

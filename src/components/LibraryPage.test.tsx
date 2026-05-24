@@ -107,7 +107,11 @@ vi.mock("@decky/ui", async () => {
     }) =>
       ce(
         "div",
-        { "data-testid": "toggle", "data-label": typeof p.label === "string" ? p.label : undefined },
+        {
+          "data-testid": "toggle",
+          "data-label": typeof p.label === "string" ? p.label : undefined,
+          "data-description": typeof p.description === "string" ? p.description : undefined,
+        },
         ce("input", {
           type: "checkbox",
           "data-testid": "toggle-input",
@@ -163,7 +167,8 @@ function makeCollection(
     name: "Favs",
     rom_count: 5,
     sync_enabled: false,
-    category: "favorites",
+    kind: "user",
+    is_favorite: true,
     ...overrides,
   };
 }
@@ -496,7 +501,7 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "f1", name: "MyFavs", category: "favorites" }),
+          makeCollection({ id: "u1", name: "MyColl", kind: "user", is_favorite: false }),
         ],
       });
       vi.mocked(backend.getSettings).mockResolvedValue({
@@ -510,10 +515,10 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(container.textContent).toContain("MyFavs");
-      // platformGroups true → 'Add to platform collections' toggle is checked.
+      expect(container.textContent).toContain("MyColl");
+      // platformGroups true → the renamed toggle is checked.
       const platformGroupsToggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Add to platform collections\"] input",
+        "[data-label=\"Show collection games in platform groups\"] input",
       );
       expect(platformGroupsToggle?.checked).toBe(true);
     });
@@ -535,7 +540,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const platformGroupsToggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Add to platform collections\"] input",
+        "[data-label=\"Show collection games in platform groups\"] input",
       );
       expect(platformGroupsToggle?.checked).toBe(false);
     });
@@ -587,10 +592,10 @@ describe("LibraryPage", () => {
   // F. Collections tab — handleCollectionToggle (optimistic + rollback)
   // ------------------------------------------------------------------
   describe("collections tab — handleCollectionToggle", () => {
-    it("optimistically toggles a collection and calls saveCollectionSync", async () => {
+    it("optimistically toggles a collection and calls saveCollectionSync with kind", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "abc", sync_enabled: false })],
+        collections: [makeCollection({ id: "abc", name: "MyColl", sync_enabled: false, kind: "user", is_favorite: false })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -599,9 +604,9 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Find the collection toggle by label
+      // Find the collection toggle by label (default sub-tab "my" → user collection visible).
       const collectionToggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Favs\"] input",
+        "[data-label=\"MyColl\"] input",
       )!;
       expect(collectionToggle.checked).toBe(false);
       await act(async () => {
@@ -610,18 +615,50 @@ describe("LibraryPage", () => {
       });
       expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith(
         "abc",
+        "user",
         true,
       );
       const after = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Favs\"] input",
+        "[data-label=\"MyColl\"] input",
       )!;
       expect(after.checked).toBe(true);
+    });
+
+    it("passes kind='smart' for smart collections", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [makeCollection({ id: "sc1", name: "Filter A", sync_enabled: false, kind: "smart", is_favorite: false })],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Switch to Smart sub-tab
+      await act(async () => {
+        fireEvent.click(getByText("Smart"));
+        await Promise.resolve();
+      });
+      const toggle = container.querySelector<HTMLInputElement>(
+        "[data-label=\"Filter A\"] input",
+      )!;
+      await act(async () => {
+        fireEvent.click(toggle);
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith(
+        "sc1",
+        "smart",
+        true,
+      );
     });
 
     it("reverts on saveCollectionSync rejection", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "abc", sync_enabled: false })],
+        collections: [makeCollection({ id: "abc", name: "MyColl", kind: "user", is_favorite: false, sync_enabled: false })],
       });
       vi.mocked(backend.saveCollectionSync).mockRejectedValue(new Error("nope"));
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -632,7 +669,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Favs\"] input",
+        "[data-label=\"MyColl\"] input",
       )!;
       await act(async () => {
         fireEvent.click(toggle);
@@ -641,7 +678,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const reverted = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Favs\"] input",
+        "[data-label=\"MyColl\"] input",
       )!;
       // CATCH-REJECTION assert: rolled back to original false
       expect(reverted.checked).toBe(false);
@@ -652,27 +689,53 @@ describe("LibraryPage", () => {
   // G. Collections tab — Enable/Disable All + platform-groups toggle
   // ------------------------------------------------------------------
   describe("collections tab — set-all + platform groups", () => {
-    it("calls setAllCollectionsSync(true, null) on Enable All", async () => {
+    it("calls setAllCollectionsSync(true, 'my') on Enable All in default My sub-tab", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "c1", sync_enabled: false })],
+        collections: [makeCollection({ id: "c1", kind: "user", is_favorite: false, sync_enabled: false })],
       });
-      const { getByText, getAllByText } = render(<LibraryPage onBack={vi.fn()} />);
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
         fireEvent.click(getByText("Collections"));
         await Promise.resolve();
         await Promise.resolve();
       });
-      const buttons = getAllByText("Enable All");
-      // There's only one Enable All visible on the Collections tab.
       await act(async () => {
-        fireEvent.click(buttons[0]!);
+        fireEvent.click(getByText("Enable All"));
         await Promise.resolve();
       });
       expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(
         true,
-        null,
+        "my",
+      );
+    });
+
+    it("calls setAllCollectionsSync(true, 'smart') when Smart sub-tab is active", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "s1", name: "S1", sync_enabled: false, kind: "smart", is_favorite: false }),
+        ],
+      });
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Smart"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Enable All"));
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(
+        true,
+        "smart",
       );
     });
 
@@ -680,14 +743,14 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "a", name: "A", sync_enabled: true }),
-          makeCollection({ id: "b", name: "B", sync_enabled: false }),
+          makeCollection({ id: "a", name: "A", kind: "user", is_favorite: false, sync_enabled: true }),
+          makeCollection({ id: "b", name: "B", kind: "user", is_favorite: false, sync_enabled: false }),
         ],
       });
       vi.mocked(backend.setAllCollectionsSync).mockRejectedValue(
         new Error("boom"),
       );
-      const { container, getByText, getAllByText } = render(
+      const { container, getByText } = render(
         <LibraryPage onBack={vi.fn()} />,
       );
       await flushAsync();
@@ -697,7 +760,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       await act(async () => {
-        fireEvent.click(getAllByText("Disable All")[0]!);
+        fireEvent.click(getByText("Disable All"));
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
@@ -709,7 +772,7 @@ describe("LibraryPage", () => {
       expect(b?.checked).toBe(false);
     });
 
-    it("toggling 'Add to platform collections' calls saveCollectionPlatformGroups", async () => {
+    it("toggling 'Show collection games in platform groups' calls saveCollectionPlatformGroups", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "c1" })],
@@ -722,7 +785,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Add to platform collections\"] input",
+        "[data-label=\"Show collection games in platform groups\"] input",
       )!;
       await act(async () => {
         fireEvent.click(toggle);
@@ -749,7 +812,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Add to platform collections\"] input",
+        "[data-label=\"Show collection games in platform groups\"] input",
       )!;
       await act(async () => {
         fireEvent.click(toggle);
@@ -759,23 +822,26 @@ describe("LibraryPage", () => {
       });
       // CATCH-REJECTION assert: rolled back to false
       const after = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Add to platform collections\"] input",
+        "[data-label=\"Show collection games in platform groups\"] input",
       )!;
       expect(after.checked).toBe(false);
     });
   });
 
   // ------------------------------------------------------------------
-  // H. Collections tab — renderCollectionSections (categories)
+  // H. Collections tab — sub-tabs (my / smart / franchise) + section headers
   // ------------------------------------------------------------------
-  describe("collections tab — category sections", () => {
-    it("renders distinct sections per category, skipping empty ones", async () => {
+  describe("collections tab — sub-tabs", () => {
+    it("renders 3 sub-tab buttons with plain labels (no inline counts)", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "f1", name: "Fav1", category: "favorites" }),
-          makeCollection({ id: "u1", name: "User1", category: "user" }),
-          // No "franchise" — that section should be omitted
+          makeCollection({ id: "f1", name: "F1", kind: "user", is_favorite: true }),
+          makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
+          makeCollection({ id: "u2", name: "U2", kind: "user", is_favorite: false }),
+          makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
+          makeCollection({ id: "fr1", name: "Fr1", kind: "franchise", is_favorite: false }),
+          makeCollection({ id: "fr2", name: "Fr2", kind: "franchise", is_favorite: false }),
         ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -785,15 +851,332 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const sections = container.querySelectorAll(
-        "[data-testid=\"panel-section\"]",
+      // Plain sub-tab labels — no inline counts.
+      expect(getByText("My")).not.toBeNull();
+      expect(getByText("Smart")).not.toBeNull();
+      expect(getByText("Franchise")).not.toBeNull();
+      // No "Favorites" sub-tab button (now a top-level toggle).
+      expect(container.textContent).not.toContain("Favorites (");
+    });
+
+    it("defaults to the My sub-tab and shows only non-favorite user collections", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "f1", name: "FavOne", kind: "user", is_favorite: true }),
+          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // UserOne renders in My; SmartOne does not. FavOne renders only via the
+      // top-level Sync RomM favorites toggle, not in the visible-list area.
+      expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
+      expect(container.querySelector("[data-label=\"SmartOne\"]")).toBeNull();
+    });
+
+    it("switching sub-tab filters the visible collection set", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "f1", name: "FavOne", kind: "user", is_favorite: true }),
+          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Default = My → UserOne visible, SmartOne hidden.
+      expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
+      expect(container.querySelector("[data-label=\"SmartOne\"]")).toBeNull();
+
+      // Switch to Smart.
+      await act(async () => {
+        fireEvent.click(getByText("Smart"));
+        await Promise.resolve();
+      });
+      expect(container.querySelector("[data-label=\"SmartOne\"]")).not.toBeNull();
+      expect(container.querySelector("[data-label=\"UserOne\"]")).toBeNull();
+    });
+
+    it("renders the section header with the visible-count for the active sub-tab", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
+          makeCollection({ id: "u2", name: "U2", kind: "user", is_favorite: false }),
+          makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
+          makeCollection({ id: "fr1", name: "Fr1", kind: "franchise", is_favorite: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Default My sub-tab → header reflects 2 visible.
+      expect(container.textContent).toContain("MY COLLECTIONS (2)");
+
+      await act(async () => {
+        fireEvent.click(getByText("Smart"));
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("SMART COLLECTIONS (1)");
+
+      await act(async () => {
+        fireEvent.click(getByText("Franchise"));
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("FRANCHISE (1)");
+    });
+
+    it("renders a 'No <sub-tab> collections' empty state when the bucket is empty", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          // Only smart collections — my/franchise buckets are empty.
+          makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Default My sub-tab → no my collections present.
+      expect(container.textContent).toContain("No my collections");
+    });
+
+    it("sub-tab resets to My each time the Collections tab is opened", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Switch to Smart sub-tab.
+      await act(async () => {
+        fireEvent.click(getByText("Smart"));
+        await Promise.resolve();
+      });
+      expect(container.querySelector("[data-label=\"SmartOne\"]")).not.toBeNull();
+
+      // Leave the Collections tab and come back; sub-tab should reset to My.
+      await act(async () => {
+        fireEvent.click(getByText("Platforms"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+      });
+      expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
+      expect(container.querySelector("[data-label=\"SmartOne\"]")).toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // H2. Collections tab — favorites top-level toggle
+  // ------------------------------------------------------------------
+  describe("collections tab — favorites toggle", () => {
+    it("renders the Sync RomM favorites toggle with the singular description for 1 game", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 1, sync_enabled: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const favToggle = container.querySelector<HTMLElement>(
+        "[data-label=\"Sync RomM favorites\"]",
       );
-      const titles = Array.from(sections).map((s) =>
-        s.getAttribute("data-title"),
+      expect(favToggle).not.toBeNull();
+      expect(favToggle?.getAttribute("data-description")).toBe(
+        "Includes 1 favorited game",
       );
-      expect(titles).toContain("Favorites");
-      expect(titles).toContain("My Collections");
-      expect(titles).not.toContain("Franchise");
+    });
+
+    it("renders the plural description for N>1 favorited games", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 7 }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const favToggle = container.querySelector<HTMLElement>(
+        "[data-label=\"Sync RomM favorites\"]",
+      );
+      expect(favToggle?.getAttribute("data-description")).toBe(
+        "Includes 7 favorited games",
+      );
+    });
+
+    it("renders the plural description for 0 favorited games", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 0 }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const favToggle = container.querySelector<HTMLElement>(
+        "[data-label=\"Sync RomM favorites\"]",
+      );
+      expect(favToggle?.getAttribute("data-description")).toBe(
+        "Includes 0 favorited games",
+      );
+    });
+
+    it("clicking the favorites toggle calls saveCollectionSync with the favorites id and kind=user", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "favid", name: "Faves", kind: "user", is_favorite: true, rom_count: 5, sync_enabled: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const toggle = container.querySelector<HTMLInputElement>(
+        "[data-label=\"Sync RomM favorites\"] input",
+      )!;
+      await act(async () => {
+        fireEvent.click(toggle);
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith(
+        "favid",
+        "user",
+        true,
+      );
+    });
+
+    it("reverts the favorites toggle on saveCollectionSync rejection", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "favid", name: "Faves", kind: "user", is_favorite: true, rom_count: 5, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.saveCollectionSync).mockRejectedValue(new Error("nope"));
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const toggle = container.querySelector<HTMLInputElement>(
+        "[data-label=\"Sync RomM favorites\"] input",
+      )!;
+      await act(async () => {
+        fireEvent.click(toggle);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const reverted = container.querySelector<HTMLInputElement>(
+        "[data-label=\"Sync RomM favorites\"] input",
+      )!;
+      // CATCH-REJECTION assert: rolled back to original false
+      expect(reverted.checked).toBe(false);
+    });
+
+    it("omits the favorites toggle when no favorites collection exists", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(
+        container.querySelector("[data-label=\"Sync RomM favorites\"]"),
+      ).toBeNull();
+    });
+
+    it("falls back to listing favorites in the My sub-tab when more than one exists (with console warning)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        vi.mocked(backend.getCollections).mockResolvedValue({
+          success: true,
+          collections: [
+            makeCollection({ id: "f1", name: "FavA", kind: "user", is_favorite: true }),
+            makeCollection({ id: "f2", name: "FavB", kind: "user", is_favorite: true }),
+            makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          ],
+        });
+        const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+        await flushAsync();
+        await act(async () => {
+          fireEvent.click(getByText("Collections"));
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        // Toggle hidden — single-toggle UI can't represent multiple favorites.
+        expect(
+          container.querySelector("[data-label=\"Sync RomM favorites\"]"),
+        ).toBeNull();
+        // Both favorites surface in My (alongside the regular user collection).
+        expect(container.querySelector("[data-label=\"FavA\"]")).not.toBeNull();
+        expect(container.querySelector("[data-label=\"FavB\"]")).not.toBeNull();
+        expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
 

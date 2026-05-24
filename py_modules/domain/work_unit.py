@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 UnitType = Literal["platform", "collection"]
+CollectionKind = Literal["user", "smart", "franchise"]
 
 
 @dataclass(frozen=True)
@@ -27,15 +28,19 @@ class WorkUnit:
     name: str
     slug: str
     rom_count: int
-    # Collection-only: discriminates user/franchise lookup at fetch time.
-    is_virtual: bool = False
+    # Collection-only: dispatches the correct list-roms endpoint at fetch time.
+    # ``None`` is only valid when ``type == "platform"``.
+    collection_kind: CollectionKind | None = None
 
     def to_event_payload(self) -> dict:
         """Serialise to the shape emitted in ``sync_plan`` / ``sync_apply_unit``."""
-        return {
+        payload: dict = {
             "type": self.type,
             "id": self.id,
             "name": self.name,
             "slug": self.slug,
             "rom_count": self.rom_count,
         }
+        if self.type == "collection":
+            payload["collection_kind"] = self.collection_kind
+        return payload

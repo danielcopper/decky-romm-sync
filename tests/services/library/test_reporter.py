@@ -22,11 +22,16 @@ class TestGetSyncStats:
         }
         plugin._state["last_sync"] = "2025-01-01T00:00:00"
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
-        plugin.settings["enabled_collections"] = {"3": True}
+        plugin.settings["enabled_collections"] = {
+            "user": {"3": True},
+            "smart": {"5": True},
+            "franchise": {"abc": False},  # disabled — not counted
+        }
 
         stats = await plugin.get_sync_stats()
         assert stats["platforms"] == 2
-        assert stats["collections"] == 1
+        # 3 enabled across two buckets (user["3"], smart["5"]); franchise["abc"] is False.
+        assert stats["collections"] == 2
         assert stats["roms"] == 3
         assert stats["total_shortcuts"] == 3
         assert stats["last_sync"] == "2025-01-01T00:00:00"

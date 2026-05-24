@@ -510,6 +510,62 @@ class TestListRomsByVirtualCollection:
         assert "offset=5" in url
 
 
+class TestListSmartCollections:
+    def test_returns_list(self):
+        api, client = _make_api()
+        client.request.return_value = [{"id": 1, "name": "Recent"}, {"id": 2, "name": "Played"}]
+        result = api.list_smart_collections()
+        client.request.assert_called_once_with("/api/collections/smart")
+        assert result == [{"id": 1, "name": "Recent"}, {"id": 2, "name": "Played"}]
+
+    def test_non_list_returns_empty(self):
+        api, client = _make_api()
+        client.request.return_value = {"error": "bad"}
+        assert api.list_smart_collections() == []
+
+    def test_empty_list(self):
+        api, client = _make_api()
+        client.request.return_value = []
+        assert api.list_smart_collections() == []
+
+    def test_propagates_http_error(self):
+        from lib.errors import RommServerError
+
+        api, client = _make_api()
+        client.request.side_effect = RommServerError(
+            "HTTP 500", status_code=500, url="/api/collections/smart", method="GET"
+        )
+        with pytest.raises(RommServerError):
+            api.list_smart_collections()
+
+
+class TestListRomsBySmartCollection:
+    def test_includes_smart_collection_id_and_pagination(self):
+        api, client = _make_api()
+        client.request.return_value = {"items": [], "total": 0}
+        api.list_roms_by_smart_collection(7, limit=25, offset=10)
+        client.request.assert_called_once_with("/api/roms?smart_collection_id=7&limit=25&offset=10")
+
+    def test_default_pagination(self):
+        api, client = _make_api()
+        client.request.return_value = {"items": [], "total": 0}
+        api.list_roms_by_smart_collection(1)
+        client.request.assert_called_once_with("/api/roms?smart_collection_id=1&limit=50&offset=0")
+
+    def test_propagates_http_error(self):
+        from lib.errors import RommServerError
+
+        api, client = _make_api()
+        client.request.side_effect = RommServerError(
+            "HTTP 503",
+            status_code=503,
+            url="/api/roms?smart_collection_id=1",
+            method="GET",
+        )
+        with pytest.raises(RommServerError):
+            api.list_roms_by_smart_collection(1)
+
+
 class TestListFirmware:
     def test_calls_firmware_endpoint(self):
         api, client = _make_api()

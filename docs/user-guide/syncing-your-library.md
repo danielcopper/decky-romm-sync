@@ -46,6 +46,17 @@ The plugin automatically creates Steam collections for each synced platform. Col
 
 Collections appear in Steam's library sidebar and can be used to browse games by platform.
 
+### Syncing RomM collections
+
+The **Collections** page splits collections into three sub-tabs plus a dedicated top-level toggle for RomM favorites:
+
+- **Sync RomM favorites** (top-level toggle) — the user collection RomM auto-manages as your favorites. Always exactly one per account, so it sits above the sub-tabs as a single switch.
+- **My** sub-tab — your other user-created collections
+- **Smart** sub-tab — filter-based collections that resolve membership at query time, so syncing always picks up the current matches
+- **Franchise** sub-tab — auto-generated franchise groupings (IGDB)
+
+Each sub-tab shows its visible count in the section header (e.g. `MY COLLECTIONS (4)`) and lets you toggle individual collections, or use the paired **Enable All** / **Disable All** buttons to bulk-toggle just that sub-tab. The global **Show collection games in platform groups** toggle controls whether games pulled in via a collection also get added to their platform's Steam group.
+
 ## Artwork
 
 Each synced game gets up to five types of artwork:

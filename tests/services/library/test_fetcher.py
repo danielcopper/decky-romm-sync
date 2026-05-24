@@ -319,15 +319,19 @@ class TestBuildWorkQueueErrorPaths:
 
     @pytest.mark.asyncio
     async def test_user_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
-        """Lines 375-377: user-collection fetch raises => warning logged, treated as empty."""
+        """User-collection fetch raises => warning logged, treated as empty."""
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"42": True}
+        plugin.settings["enabled_collections"] = {
+            "user": {"1": True},
+            "smart": {},
+            "franchise": {"42": True},
+        }
 
         fake_romm_api.list_collections_side_effect = RuntimeError("user collections boom")
         fake_romm_api.virtual_collections = {
             "franchise": [
-                {"id": "42", "name": "Faves", "slug": "faves", "rom_count": 3, "is_virtual": True},
+                {"id": "42", "name": "Faves", "slug": "faves", "rom_count": 3},
             ],
         }
 
@@ -338,10 +342,14 @@ class TestBuildWorkQueueErrorPaths:
 
     @pytest.mark.asyncio
     async def test_franchise_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
-        """Lines 382-384: franchise-collection fetch raises => warning logged, treated as empty."""
+        """Franchise-collection fetch raises => warning logged, treated as empty."""
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"7": True}
+        plugin.settings["enabled_collections"] = {
+            "user": {"7": True},
+            "smart": {},
+            "franchise": {"100": True},
+        }
 
         fake_romm_api.collections = [{"id": "7", "name": "Faves", "slug": "faves", "rom_count": 4}]
         fake_romm_api.list_virtual_collections_side_effect = RuntimeError("franchise collections boom")
@@ -352,28 +360,56 @@ class TestBuildWorkQueueErrorPaths:
         assert [u.name for u in units] == ["Faves"]
 
     @pytest.mark.asyncio
-    async def test_skips_disabled_user_and_franchise_collections(self, plugin, fake_romm_api):
-        """Lines 389 + 403: collections returned by the API but not in enabled_ids are filtered out."""
+    async def test_smart_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
+        """Smart-collection fetch raises => warning logged, treated as empty."""
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
-        # Only the "1" user collection and "100" franchise collection are enabled.
-        plugin.settings["enabled_collections"] = {"1": True, "100": True}
+        plugin.settings["enabled_collections"] = {
+            "user": {"7": True},
+            "smart": {"5": True},
+            "franchise": {},
+        }
+
+        fake_romm_api.collections = [{"id": "7", "name": "Faves", "slug": "faves", "rom_count": 4}]
+        fake_romm_api.list_smart_collections_side_effect = RuntimeError("smart collections boom")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.name for u in units] == ["Faves"]
+
+    @pytest.mark.asyncio
+    async def test_skips_disabled_collections_in_all_buckets(self, plugin, fake_romm_api):
+        """Collections returned by the API but not in enabled_ids are filtered out."""
+        _wire_fake(plugin, fake_romm_api)
+        plugin.settings["enabled_platforms"] = {}
+        # Only the "1" user / "5" smart / "100" franchise collections are enabled.
+        plugin.settings["enabled_collections"] = {
+            "user": {"1": True, "2": False},
+            "smart": {"5": True, "6": False},
+            "franchise": {"100": True, "200": False},
+        }
 
         fake_romm_api.collections = [
             {"id": "1", "name": "Enabled User", "slug": "eu", "rom_count": 1},
             {"id": "2", "name": "Disabled User", "slug": "du", "rom_count": 1},
         ]
+        fake_romm_api.smart_collections = [
+            {"id": "5", "name": "Enabled Smart", "slug": "es", "rom_count": 1},
+            {"id": "6", "name": "Disabled Smart", "slug": "ds", "rom_count": 1},
+        ]
         fake_romm_api.virtual_collections = {
             "franchise": [
-                {"id": "100", "name": "Enabled Franchise", "slug": "ef", "rom_count": 1, "is_virtual": True},
-                {"id": "200", "name": "Disabled Franchise", "slug": "df", "rom_count": 1, "is_virtual": True},
+                {"id": "100", "name": "Enabled Franchise", "slug": "ef", "rom_count": 1},
+                {"id": "200", "name": "Disabled Franchise", "slug": "df", "rom_count": 1},
             ],
         }
 
         units = await plugin._sync_service._fetcher.build_work_queue()
 
         # Only enabled collections survive the cid-not-in-enabled_ids skip.
-        assert [u.name for u in units] == ["Enabled User", "Enabled Franchise"]
+        assert [u.name for u in units] == ["Enabled User", "Enabled Smart", "Enabled Franchise"]
+        kinds = [u.collection_kind for u in units]
+        assert kinds == ["user", "smart", "franchise"]
 
 
 class TestTryUnitIncrementalSkip:
@@ -511,10 +547,48 @@ class TestFetchCollectionUnit:
             "collection_ids": [7],
         }
 
-        unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=51, is_virtual=False)
+        unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=51, collection_kind="user")
         synced: set[int] = set()
         new_roms, all_collection_rom_ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
 
         assert len(new_roms) == 51
         assert len(all_collection_rom_ids) == 51
         assert 999 in synced
+
+    @pytest.mark.asyncio
+    async def test_dispatches_smart_collection_to_smart_endpoint(self, plugin, fake_romm_api):
+        """collection_kind='smart' routes through list_roms_by_smart_collection."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.roms = {
+            1: {"id": 1, "platform_name": "N64", "smart_collection_ids": [9]},
+            2: {"id": 2, "platform_name": "SNES", "smart_collection_ids": [9]},
+        }
+
+        unit = WorkUnit(type="collection", id=9, name="Smart Filter", slug="", rom_count=2, collection_kind="smart")
+        synced: set[int] = set()
+        new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+
+        assert [r["id"] for r in new_roms] == [1, 2]
+        assert ids == [1, 2]
+        # Verify the smart endpoint was the one consulted, not the user/virtual ones.
+        method_calls = [c[0] for c in fake_romm_api.call_log]
+        assert "list_roms_by_smart_collection" in method_calls
+        assert "list_roms_by_collection" not in method_calls
+        assert "list_roms_by_virtual_collection" not in method_calls
+
+    @pytest.mark.asyncio
+    async def test_dispatches_franchise_collection_to_virtual_endpoint(self, plugin, fake_romm_api):
+        """collection_kind='franchise' routes through list_roms_by_virtual_collection."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.roms = {
+            1: {"id": 1, "platform_name": "N64", "virtual_collection_ids": ["100"]},
+        }
+
+        unit = WorkUnit(type="collection", id="100", name="Mario", slug="", rom_count=1, collection_kind="franchise")
+        synced: set[int] = set()
+        new_roms, _ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+
+        assert [r["id"] for r in new_roms] == [1]
+        method_calls = [c[0] for c in fake_romm_api.call_log]
+        assert "list_roms_by_virtual_collection" in method_calls
+        assert "list_roms_by_smart_collection" not in method_calls

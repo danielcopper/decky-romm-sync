@@ -38,7 +38,13 @@ from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalSer
 @pytest.fixture
 def plugin(tmp_path):
     p = Plugin()
-    p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
+    p.settings = {
+        "romm_url": "",
+        "romm_user": "",
+        "romm_pass": "",
+        "enabled_platforms": {},
+        "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
+    }
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
     p._metadata_cache = {}

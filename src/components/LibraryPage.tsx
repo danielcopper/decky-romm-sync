@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, FC } from "react";
+import { useState, useEffect, useMemo, useRef, FC } from "react";
 import {
   PanelSection,
   PanelSectionRow,
@@ -25,14 +25,51 @@ import {
   setSystemCore,
   debugLog,
 } from "../api/backend";
-import type { PlatformSyncSetting, CollectionSyncSetting, FirmwarePlatformExt } from "../types";
+import type { PlatformSyncSetting, CollectionSyncSetting, CollectionKind, CollectionScope, FirmwarePlatformExt } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 
-const CATEGORY_TITLES: Record<string, string> = {
-  favorites: "Favorites",
-  user: "My Collections",
+type CollectionSubTab = "my" | "smart" | "franchise";
+
+const SUB_TAB_ORDER: readonly CollectionSubTab[] = ["my", "smart", "franchise"];
+
+const SUB_TAB_LABELS: Record<CollectionSubTab, string> = {
+  my: "My",
+  smart: "Smart",
   franchise: "Franchise",
 };
+
+const SUB_TAB_HEADERS: Record<CollectionSubTab, string> = {
+  my: "MY COLLECTIONS",
+  smart: "SMART COLLECTIONS",
+  franchise: "FRANCHISE",
+};
+
+function filterCollectionsBySubTab(
+  collections: CollectionSyncSetting[],
+  subTab: CollectionSubTab,
+  // When the favorites toggle isn't shown (zero or >1 favorites), the "My"
+  // sub-tab includes favorites too so they remain reachable. Defaults to
+  // false because the optimistic-update callsite in handleSetAllCollections
+  // doesn't care — it only ever inspects the favorites-excluded "My" set,
+  // and the favorites toggle owns favorites mutations independently.
+  includeFavoritesInMy = false,
+): CollectionSyncSetting[] {
+  switch (subTab) {
+    case "my":
+      return collections.filter(
+        (c) => c.kind === "user" && (includeFavoritesInMy || !c.is_favorite),
+      );
+    case "smart":
+      return collections.filter((c) => c.kind === "smart");
+    case "franchise":
+      return collections.filter((c) => c.kind === "franchise");
+  }
+}
+
+function favoritesDescription(romCount: number): string {
+  if (romCount === 1) return "Includes 1 favorited game";
+  return `Includes ${romCount} favorited games`;
+}
 
 function getBiosSummary(requiredCount: number, requiredDone: number, allRequiredDone: boolean, optionalMissing: number, done: number, total: number, allDone: boolean) {
   if (requiredCount > 0 && allRequiredDone) {
@@ -59,30 +96,6 @@ function hashIndicator(hv: boolean | null): string {
   return " \u2014";
 }
 
-function renderCollectionSections(
-  collections: CollectionSyncSetting[],
-  onToggle: (id: string, enabled: boolean) => void,
-) {
-  return (["favorites", "user", "franchise"] as const).map((cat) => {
-    const items = collections.filter((c) => c.category === cat);
-    if (items.length === 0) return null;
-    return (
-      <PanelSection key={cat} title={CATEGORY_TITLES[cat]}>
-        {items.map((collection) => (
-          <PanelSectionRow key={collection.id}>
-            <ToggleField
-              label={collection.name}
-              description={`${collection.rom_count} ROMs`}
-              checked={collection.sync_enabled}
-              onChange={(value: boolean) => onToggle(collection.id, value)}
-            />
-          </PanelSectionRow>
-        ))}
-      </PanelSection>
-    );
-  });
-}
-
 interface LibraryPageProps {
   onBack: () => void;
 }
@@ -101,6 +114,24 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   const [collectionsError, setCollectionsError] = useState(false);
   const collectionsLoaded = useRef(false);
   const [platformGroups, setPlatformGroups] = useState(false);
+  const [activeSubTab, setActiveSubTab] = useState<CollectionSubTab>("my");
+
+  // The favorites collection (a user collection with is_favorite=true) is
+  // promoted to a top-level toggle. RomM's schema theoretically allows more
+  // than one — if that ever happens, drop the toggle and let the "My" sub-tab
+  // surface them all, since a single toggle can't represent the set.
+  const favoritesCollection = useMemo(() => {
+    const favs = collections.filter((c) => c.kind === "user" && c.is_favorite);
+    if (favs.length === 0) return null;
+    if (favs.length > 1) {
+      console.warn(
+        `decky-romm-sync: expected at most one favorites collection, got ${favs.length}. ` +
+          `Falling back to listing them in the My sub-tab.`,
+      );
+      return null;
+    }
+    return favs[0] ?? null;
+  }, [collections]);
 
   // --- BIOS tab state ---
   const [biosPlatforms, setBiosPlatforms] = useState<FirmwarePlatformExt[]>([]);
@@ -126,7 +157,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
       .finally(() => setSyncLoading(false));
   }, []);
 
-  // Load collections data lazily on first switch to collections tab
+  // Load collections data lazily on first switch to collections tab.
+  // Sub-tab is reset to "my" in the tab-click handler (not here);
+  // that's an event-driven concern, not state synchronisation.
   useEffect(() => {
     if (activeTab === "collections" && !collectionsLoaded.current) {
       collectionsLoaded.current = true;
@@ -144,6 +177,13 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
         .finally(() => setCollectionsLoading(false));
     }
   }, [activeTab]);
+
+  // Reset the collections sub-tab on every entry into the Collections tab
+  // so the user lands on a predictable view (no persistence).
+  const handleCollectionsTabClick = () => {
+    setActiveSubTab("my");
+    setActiveTab("collections");
+  };
 
   async function refreshBios() {
     setBiosLoading(true);
@@ -195,24 +235,27 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   };
 
   // --- Collections tab handlers ---
-  const handleCollectionToggle = async (id: string, enabled: boolean) => {
+  const handleCollectionToggle = async (id: string, kind: CollectionKind, enabled: boolean) => {
     setCollections((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, sync_enabled: enabled } : c))
+      prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: enabled } : c))
     );
     try {
-      await saveCollectionSync(id, enabled);
+      await saveCollectionSync(id, kind, enabled);
     } catch {
       setCollections((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, sync_enabled: !enabled } : c))
+        prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: !enabled } : c))
       );
     }
   };
 
-  const handleSetAllCollections = async (enabled: boolean) => {
+  const handleSetAllCollections = async (enabled: boolean, scope: CollectionScope) => {
     const previous = collections.map((c) => ({ ...c }));
-    setCollections((prev) => prev.map((c) => ({ ...c, sync_enabled: enabled })));
+    // Optimistically flip only the entries in the active sub-tab.
+    setCollections((prev) =>
+      prev.map((c) => (filterCollectionsBySubTab([c], scope).length > 0 ? { ...c, sync_enabled: enabled } : c))
+    );
     try {
-      await setAllCollectionsSync(enabled, null);
+      await setAllCollectionsSync(enabled, scope);
     } catch {
       setCollections(previous);
     }
@@ -326,23 +369,21 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
         </PanelSection>
       );
     }
+
+    // When the favorites toggle isn't rendered (zero or multi-favorites case),
+    // include any favorites in the "My" sub-tab so they stay reachable.
+    const includeFavoritesInMy = favoritesCollection === null;
+    const visible = filterCollectionsBySubTab(collections, activeSubTab, includeFavoritesInMy);
+    const activeLabel = SUB_TAB_LABELS[activeSubTab];
+    const sectionTitle = `${SUB_TAB_HEADERS[activeSubTab]} (${visible.length})`;
+
     return (
       <>
         <PanelSection>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => handleSetAllCollections(true)}>
-              Enable All
-            </ButtonItem>
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => handleSetAllCollections(false)}>
-              Disable All
-            </ButtonItem>
-          </PanelSectionRow>
-          <PanelSectionRow>
             <ToggleField
-              label="Add to platform collections"
-              description="Include collection games in platform collections"
+              label="Show collection games in platform groups"
+              description="When syncing a collection, also add its games to their platform-specific Steam group."
               checked={platformGroups}
               onChange={async (value: boolean) => {
                 setPlatformGroups(value);
@@ -350,9 +391,78 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               }}
             />
           </PanelSectionRow>
+          {favoritesCollection && (
+            <PanelSectionRow>
+              <ToggleField
+                label="Sync RomM favorites"
+                description={favoritesDescription(favoritesCollection.rom_count)}
+                checked={favoritesCollection.sync_enabled}
+                onChange={(value: boolean) =>
+                  handleCollectionToggle(favoritesCollection.id, favoritesCollection.kind, value)
+                }
+              />
+            </PanelSectionRow>
+          )}
         </PanelSection>
-        {/* Collection sections by category */}
-        {renderCollectionSections(collections, handleCollectionToggle)}
+        <Focusable
+          flow-children="horizontal"
+          style={{ display: "flex", gap: "4px", padding: "0 16px 12px" }}
+        >
+          {SUB_TAB_ORDER.map((sub) => (
+            <DialogButton
+              key={sub}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: "10px 0",
+                opacity: activeSubTab === sub ? 1 : 0.5,
+                borderBottom: activeSubTab === sub ? "2px solid #1a9fff" : "2px solid transparent",
+              }}
+              onClick={() => setActiveSubTab(sub)}
+            >
+              {SUB_TAB_LABELS[sub]}
+            </DialogButton>
+          ))}
+        </Focusable>
+        <PanelSection title={sectionTitle}>
+          <PanelSectionRow>
+            <Focusable
+              flow-children="horizontal"
+              style={{ display: "flex", gap: "8px" }}
+            >
+              <DialogButton
+                style={{ flex: 1, minWidth: 0 }}
+                onClick={() => handleSetAllCollections(true, activeSubTab)}
+              >
+                Enable All
+              </DialogButton>
+              <DialogButton
+                style={{ flex: 1, minWidth: 0 }}
+                onClick={() => handleSetAllCollections(false, activeSubTab)}
+              >
+                Disable All
+              </DialogButton>
+            </Focusable>
+          </PanelSectionRow>
+          {visible.length === 0 ? (
+            <PanelSectionRow>
+              <Field label={`No ${activeLabel.toLowerCase()} collections`} />
+            </PanelSectionRow>
+          ) : (
+            visible.map((collection) => (
+              <PanelSectionRow key={`${collection.kind}:${collection.id}`}>
+                <ToggleField
+                  label={collection.name}
+                  description={`${collection.rom_count} ROMs`}
+                  checked={collection.sync_enabled}
+                  onChange={(value: boolean) =>
+                    handleCollectionToggle(collection.id, collection.kind, value)
+                  }
+                />
+              </PanelSectionRow>
+            ))
+          )}
+        </PanelSection>
       </>
     );
   };
@@ -536,7 +646,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
         </DialogButton>
         <DialogButton
           style={{ flex: 1, minWidth: 0, padding: "10px 0", opacity: activeTab === "collections" ? 1 : 0.5, borderBottom: activeTab === "collections" ? "2px solid #1a9fff" : "2px solid transparent" }}
-          onClick={() => setActiveTab("collections")}
+          onClick={handleCollectionsTabClick}
         >
           Collections
         </DialogButton>

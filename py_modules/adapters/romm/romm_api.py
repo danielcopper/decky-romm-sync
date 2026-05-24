@@ -84,12 +84,19 @@ class RommApiAdapter:
         result = self._client.request(f"/api/collections/virtual?type={collection_type}")
         return result if isinstance(result, list) else []
 
+    def list_smart_collections(self) -> list[dict]:
+        result = self._client.request("/api/collections/smart")
+        return result if isinstance(result, list) else []
+
     def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict:
         return self._client.request(f"/api/roms?collection_id={collection_id}&limit={limit}&offset={offset}")
 
     def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict:
         encoded_id = urllib.parse.quote(str(virtual_id), safe="")
         return self._client.request(f"/api/roms?virtual_collection_id={encoded_id}&limit={limit}&offset={offset}")
+
+    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict:
+        return self._client.request(f"/api/roms?smart_collection_id={smart_id}&limit={limit}&offset={offset}")
 
     # ── Firmware / BIOS ───────────────────────────────────────────────
 

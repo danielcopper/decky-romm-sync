@@ -317,7 +317,12 @@ class SyncReporter:
         enabled_platforms = self._settings.get("enabled_platforms", {})
         enabled_platform_count = sum(1 for v in enabled_platforms.values() if v)
         enabled_collections = self._settings.get("enabled_collections", {})
-        enabled_collection_count = sum(1 for v in enabled_collections.values() if v)
+        if isinstance(enabled_collections, dict):
+            enabled_collection_count = sum(
+                1 for bucket in enabled_collections.values() if isinstance(bucket, dict) for v in bucket.values() if v
+            )
+        else:
+            enabled_collection_count = 0
         return {
             "last_sync": self._state.get("last_sync"),
             "platforms": enabled_platform_count,

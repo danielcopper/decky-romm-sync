@@ -149,6 +149,11 @@ class LibraryFetcher:
             _code, _msg = classify_error(e)
             return {"success": False, "message": _msg, "error_code": _code}
         try:
+            smart_collections = await self._loop.run_in_executor(None, self._romm_api.list_smart_collections)
+        except Exception as e:
+            self._logger.warning(f"Failed to fetch smart collections, continuing without them: {e}")
+            smart_collections = []
+        try:
             franchise_collections = await self._loop.run_in_executor(
                 None, self._romm_api.list_virtual_collections, "franchise"
             )
@@ -156,7 +161,7 @@ class LibraryFetcher:
             self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
             franchise_collections = []
 
-        enabled = self._settings.get("enabled_collections", {})
+        enabled = self._get_enabled_collections_buckets()
         result = []
         for c in user_collections:
             cid = str(c["id"])
@@ -165,8 +170,21 @@ class LibraryFetcher:
                     "id": cid,
                     "name": c.get("name", ""),
                     "rom_count": c.get("rom_count", len(c.get("rom_ids", []))),
-                    "sync_enabled": enabled.get(cid, False),
-                    "category": "favorites" if c.get("is_favorite") else "user",
+                    "sync_enabled": enabled["user"].get(cid, False),
+                    "kind": "user",
+                    "is_favorite": bool(c.get("is_favorite", False)),
+                }
+            )
+        for c in smart_collections:
+            cid = str(c["id"])
+            result.append(
+                {
+                    "id": cid,
+                    "name": c.get("name", ""),
+                    "rom_count": c.get("rom_count", len(c.get("rom_ids", []))),
+                    "sync_enabled": enabled["smart"].get(cid, False),
+                    "kind": "smart",
+                    "is_favorite": False,
                 }
             )
         for c in franchise_collections:
@@ -176,49 +194,103 @@ class LibraryFetcher:
                     "id": cid,
                     "name": c.get("name", ""),
                     "rom_count": c.get("rom_count", len(c.get("rom_ids", []))),
-                    "sync_enabled": enabled.get(cid, False),
-                    "category": "franchise",
+                    "sync_enabled": enabled["franchise"].get(cid, False),
+                    "kind": "franchise",
+                    "is_favorite": False,
                 }
             )
 
-        _category_order = {"favorites": 0, "user": 1, "franchise": 2}
-        result.sort(key=lambda x: (_category_order.get(x["category"], 99), x["name"].lower()))
+        _kind_order = {"user": 0, "smart": 1, "franchise": 2}
+        result.sort(key=lambda x: (_kind_order.get(x["kind"], 99), x["name"].lower()))
         return {"success": True, "collections": result}
 
-    def save_collection_sync(self, collection_id, enabled):
-        self._settings.setdefault("enabled_collections", {})[str(collection_id)] = bool(enabled)
+    def save_collection_sync(self, collection_id, kind, enabled):
+        if kind not in ("user", "smart", "franchise"):
+            return {"success": False, "reason": "invalid_kind", "message": f"Invalid collection kind: {kind}"}
+        buckets = self._get_enabled_collections_buckets()
+        buckets[kind][str(collection_id)] = bool(enabled)
+        self._settings["enabled_collections"] = buckets
         self._settings_persister.save_settings()
         return {"success": True}
 
-    async def set_all_collections_sync(self, enabled, category=None):
+    async def set_all_collections_sync(self, enabled, scope=None):
         enabled = bool(enabled)
-        try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
-        except Exception as e:
-            self._logger.error(f"Failed to fetch collections: {e}")
-            _code, _msg = classify_error(e)
-            return {"success": False, "message": _msg, "error_code": _code}
-        try:
-            franchise_collections = await self._loop.run_in_executor(
-                None, self._romm_api.list_virtual_collections, "franchise"
-            )
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
-            franchise_collections = []
+        if scope not in (None, "my", "smart", "franchise"):
+            return {"success": False, "reason": "invalid_scope", "message": f"Invalid scope: {scope}"}
 
-        all_collections = []
+        # Fetch only what we need based on scope.
+        need_user = scope in (None, "my")
+        need_smart = scope in (None, "smart")
+        need_franchise = scope in (None, "franchise")
+
+        user_collections: list[dict] = []
+        smart_collections: list[dict] = []
+        franchise_collections: list[dict] = []
+
+        if need_user:
+            try:
+                user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
+            except Exception as e:
+                self._logger.error(f"Failed to fetch collections: {e}")
+                _code, _msg = classify_error(e)
+                return {"success": False, "message": _msg, "error_code": _code}
+
+        if need_smart:
+            try:
+                smart_collections = await self._loop.run_in_executor(None, self._romm_api.list_smart_collections)
+            except Exception as e:
+                if scope == "smart":
+                    self._logger.error(f"Failed to fetch smart collections: {e}")
+                    _code, _msg = classify_error(e)
+                    return {"success": False, "message": _msg, "error_code": _code}
+                self._logger.warning(f"Failed to fetch smart collections, continuing without them: {e}")
+                smart_collections = []
+
+        if need_franchise:
+            try:
+                franchise_collections = await self._loop.run_in_executor(
+                    None, self._romm_api.list_virtual_collections, "franchise"
+                )
+            except Exception as e:
+                if scope == "franchise":
+                    self._logger.error(f"Failed to fetch franchise collections: {e}")
+                    _code, _msg = classify_error(e)
+                    return {"success": False, "message": _msg, "error_code": _code}
+                self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
+                franchise_collections = []
+
+        buckets = self._get_enabled_collections_buckets()
         for c in user_collections:
-            cat = "favorites" if c.get("is_favorite") else "user"
-            all_collections.append((str(c["id"]), cat))
+            is_fav = bool(c.get("is_favorite", False))
+            if scope == "my" and is_fav:
+                continue
+            buckets["user"][str(c["id"])] = enabled
+        for c in smart_collections:
+            buckets["smart"][str(c["id"])] = enabled
         for c in franchise_collections:
-            all_collections.append((str(c["id"]), "franchise"))
+            buckets["franchise"][str(c["id"])] = enabled
 
-        ec = self._settings.setdefault("enabled_collections", {})
-        for cid, cat in all_collections:
-            if category is None or cat == category:
-                ec[cid] = enabled
+        self._settings["enabled_collections"] = buckets
         self._settings_persister.save_settings()
         return {"success": True}
+
+    def _get_enabled_collections_buckets(self) -> dict[str, dict[str, bool]]:
+        """Return the ``enabled_collections`` setting in its nested-by-kind shape.
+
+        Defensively coerces missing buckets to empty dicts so callers can
+        always index by kind without re-checking presence. The migration
+        layer is the source of truth for the on-disk shape; this guard
+        protects against an in-memory ``settings`` dict that was seeded
+        without going through ``load_settings`` (e.g. in tests).
+        """
+        raw = self._settings.get("enabled_collections", {})
+        if not isinstance(raw, dict):
+            raw = {}
+        buckets: dict[str, dict[str, bool]] = {}
+        for kind in ("user", "smart", "franchise"):
+            bucket = raw.get(kind, {})
+            buckets[kind] = bucket if isinstance(bucket, dict) else {}
+        return buckets
 
     # ── ROM fetch pipeline ───────────────────────────────────────
 
@@ -354,9 +426,10 @@ class LibraryFetcher:
         """Phase 0 of the per-unit pipeline: enumerate enabled platforms + collections.
 
         Returns an ordered list of :class:`WorkUnit` entries (platforms
-        first, then user collections, then franchise collections) with
-        ROM counts pulled from the listing endpoints. No ROMs are
-        fetched here — the queue is a dispatch plan, not a payload.
+        first, then user collections, then smart collections, then
+        franchise collections) with ROM counts pulled from the listing
+        endpoints. No ROMs are fetched here — the queue is a dispatch
+        plan, not a payload.
         """
         units: list[WorkUnit] = []
 
@@ -372,27 +445,41 @@ class LibraryFetcher:
                 )
             )
 
-        enabled_collections = self._settings.get("enabled_collections", {})
-        enabled_ids = {k for k, v in enabled_collections.items() if v}
-        if not enabled_ids:
+        buckets = self._get_enabled_collections_buckets()
+        enabled_user_ids = {k for k, v in buckets["user"].items() if v}
+        enabled_smart_ids = {k for k, v in buckets["smart"].items() if v}
+        enabled_franchise_ids = {k for k, v in buckets["franchise"].items() if v}
+        if not (enabled_user_ids or enabled_smart_ids or enabled_franchise_ids):
             return units
 
-        try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch user collections for work queue: {e}")
-            user_collections = []
-        try:
-            franchise_collections = await self._loop.run_in_executor(
-                None, self._romm_api.list_virtual_collections, "franchise"
-            )
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch franchise collections for work queue: {e}")
-            franchise_collections = []
+        user_collections: list[dict] = []
+        smart_collections: list[dict] = []
+        franchise_collections: list[dict] = []
+
+        if enabled_user_ids:
+            try:
+                user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
+            except Exception as e:
+                self._logger.warning(f"Failed to fetch user collections for work queue: {e}")
+                user_collections = []
+        if enabled_smart_ids:
+            try:
+                smart_collections = await self._loop.run_in_executor(None, self._romm_api.list_smart_collections)
+            except Exception as e:
+                self._logger.warning(f"Failed to fetch smart collections for work queue: {e}")
+                smart_collections = []
+        if enabled_franchise_ids:
+            try:
+                franchise_collections = await self._loop.run_in_executor(
+                    None, self._romm_api.list_virtual_collections, "franchise"
+                )
+            except Exception as e:
+                self._logger.warning(f"Failed to fetch franchise collections for work queue: {e}")
+                franchise_collections = []
 
         for c in user_collections:
             cid = str(c.get("id", ""))
-            if cid not in enabled_ids:
+            if cid not in enabled_user_ids:
                 continue
             units.append(
                 WorkUnit(
@@ -401,12 +488,26 @@ class LibraryFetcher:
                     name=c.get("name", cid),
                     slug=c.get("slug", ""),
                     rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
-                    is_virtual=bool(c.get("is_virtual", False)),
+                    collection_kind="user",
+                )
+            )
+        for c in smart_collections:
+            cid = str(c.get("id", ""))
+            if cid not in enabled_smart_ids:
+                continue
+            units.append(
+                WorkUnit(
+                    type="collection",
+                    id=cid,
+                    name=c.get("name", cid),
+                    slug=c.get("slug", ""),
+                    rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
+                    collection_kind="smart",
                 )
             )
         for c in franchise_collections:
             cid = str(c.get("id", ""))
-            if cid not in enabled_ids:
+            if cid not in enabled_franchise_ids:
                 continue
             units.append(
                 WorkUnit(
@@ -415,7 +516,7 @@ class LibraryFetcher:
                     name=c.get("name", cid),
                     slug=c.get("slug", ""),
                     rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
-                    is_virtual=bool(c.get("is_virtual", True)),
+                    collection_kind="franchise",
                 )
             )
 
@@ -553,9 +654,13 @@ class LibraryFetcher:
         limit = 50
         while True:
             self._check_cancelling()
-            if unit.is_virtual:
+            if unit.collection_kind == "franchise":
                 page = await self._loop.run_in_executor(
                     None, self._romm_api.list_roms_by_virtual_collection, str(unit.id), limit, offset
+                )
+            elif unit.collection_kind == "smart":
+                page = await self._loop.run_in_executor(
+                    None, self._romm_api.list_roms_by_smart_collection, int(unit.id), limit, offset
                 )
             else:
                 page = await self._loop.run_in_executor(

@@ -17,7 +17,7 @@ from models.state import MetadataCache, PluginState
 _STATE_VERSION = 1
 _METADATA_CACHE_VERSION = 1
 _FIRMWARE_CACHE_VERSION = 1
-_SETTINGS_VERSION = 2
+_SETTINGS_VERSION = 3
 _LOCK_EXT = ".lock"
 
 DEFAULT_SETTINGS: dict = {
@@ -25,7 +25,7 @@ DEFAULT_SETTINGS: dict = {
     "romm_user": "",
     "romm_pass": "",
     "enabled_platforms": {},
-    "enabled_collections": {},
+    "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
     "collection_create_platform_groups": False,
     "steam_input_mode": "default",
     "steamgriddb_api_key": "",

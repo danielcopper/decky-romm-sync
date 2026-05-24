@@ -12,12 +12,17 @@ export interface PlatformSyncSetting {
   sync_enabled: boolean;
 }
 
+export type CollectionKind = "user" | "smart" | "franchise";
+
+export type CollectionScope = "my" | "smart" | "franchise";
+
 export interface CollectionSyncSetting {
   id: string;
   name: string;
   rom_count: number;
   sync_enabled: boolean;
-  category: "favorites" | "user" | "franchise";
+  kind: CollectionKind;
+  is_favorite: boolean;
 }
 
 export type SyncStage =
@@ -101,6 +106,8 @@ interface SyncPlanUnit {
   name: string;
   slug: string;
   rom_count: number;
+  /** Only present when ``type === "collection"``. Discriminates user/smart/franchise. */
+  collection_kind?: CollectionKind;
 }
 
 export interface SyncPlanData {

@@ -641,19 +641,25 @@ class TestBuildWorkQueue:
         _use_fake_romm(plugin, fake_romm_api)
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}]
         fake_romm_api.collections = [{"id": 7, "name": "Favorites", "rom_count": 3, "is_favorite": True}]
-        fake_romm_api.virtual_collections["franchise"] = [
-            {"id": 9, "name": "Metroid", "rom_count": 8, "is_virtual": True}
-        ]
+        fake_romm_api.smart_collections = [{"id": 5, "name": "Filter", "rom_count": 2}]
+        fake_romm_api.virtual_collections["franchise"] = [{"id": 9, "name": "Metroid", "rom_count": 8}]
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin.settings["enabled_collections"] = {"7": True, "9": True}
+        plugin.settings["enabled_collections"] = {
+            "user": {"7": True},
+            "smart": {"5": True},
+            "franchise": {"9": True},
+        }
 
         units = await plugin._sync_service._fetcher.build_work_queue()
         assert [(u.type, u.name) for u in units] == [
             ("platform", "N64"),
             ("collection", "Favorites"),
+            ("collection", "Filter"),
             ("collection", "Metroid"),
         ]
-        assert units[2].is_virtual is True
+        assert units[1].collection_kind == "user"
+        assert units[2].collection_kind == "smart"
+        assert units[3].collection_kind == "franchise"
 
 
 class TestFetchPlatformUnit:
@@ -729,7 +735,7 @@ class TestFetchCollectionUnit:
             2: {"id": 2, "platform_name": "SNES", "collection_ids": [7]},
             3: {"id": 3, "platform_name": "GBA", "collection_ids": [7]},
         }
-        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=3, is_virtual=False)
+        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=3, collection_kind="user")
         synced: set[int] = set()
         new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
         assert [r["id"] for r in new_roms] == [1, 2, 3]
@@ -743,7 +749,7 @@ class TestFetchCollectionUnit:
             1: {"id": 1, "platform_name": "N64", "virtual_collection_ids": ["9"]},
             2: {"id": 2, "platform_name": "SNES", "virtual_collection_ids": ["9"]},
         }
-        unit = WorkUnit(type="collection", id="9", name="Metroid", slug="", rom_count=2, is_virtual=True)
+        unit = WorkUnit(type="collection", id="9", name="Metroid", slug="", rom_count=2, collection_kind="franchise")
 
         # rom_id=1 was already fetched via a platform unit
         synced: set[int] = {1}
@@ -1480,7 +1486,7 @@ class TestSyncOneUnitCollectionAndCancel:
         fake_romm_api.roms[2]["name"] = "B"
         fake_romm_api.roms[2]["platform_name"] = "N64"
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"7": True}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event

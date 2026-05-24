@@ -10,8 +10,9 @@ satisfies any of them via duck typing.
 
 Seed in-memory state directly on the public attributes
 (``platforms`` / ``roms`` / ``firmware_files`` / ``collections`` /
-``virtual_collections`` / ``notes`` / ``saves`` / ``devices``); construct
-without arguments for tests that only care that the surface is callable.
+``virtual_collections`` / ``smart_collections`` / ``notes`` / ``saves`` /
+``devices``); construct without arguments for tests that only care that
+the surface is callable.
 
 Failure injection mirrors ``FakeSaveApi``:
 
@@ -48,6 +49,7 @@ class FakeRommApi:
         self.firmware_files: list[dict] = []
         self.collections: list[dict] = []
         self.virtual_collections: dict[str, list[dict]] = {}
+        self.smart_collections: list[dict] = []
         self.notes: dict[int, list[dict]] = {}
         self.saves: dict[int, dict] = {}
         self.devices: list[dict] = []
@@ -82,8 +84,10 @@ class FakeRommApi:
         self.list_roms_updated_after_side_effect: Exception | None = None
         self.list_collections_side_effect: Exception | None = None
         self.list_virtual_collections_side_effect: Exception | None = None
+        self.list_smart_collections_side_effect: Exception | None = None
         self.list_roms_by_collection_side_effect: Exception | None = None
         self.list_roms_by_virtual_collection_side_effect: Exception | None = None
+        self.list_roms_by_smart_collection_side_effect: Exception | None = None
         self.download_rom_content_side_effect: Exception | None = None
         self.download_cover_side_effect: Exception | None = None
         self.get_current_user_side_effect: Exception | None = None
@@ -238,6 +242,16 @@ class FakeRommApi:
         items = [r for r in self.roms.values() if virtual_id in (r.get("virtual_collection_ids") or [])]
         return self._paginate(items, limit, offset)
 
+    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict:
+        self._log(
+            "list_roms_by_smart_collection",
+            (smart_id,),
+            {"limit": limit, "offset": offset},
+        )
+        self._check_fail(self.list_roms_by_smart_collection_side_effect)
+        items = [r for r in self.roms.values() if smart_id in (r.get("smart_collection_ids") or [])]
+        return self._paginate(items, limit, offset)
+
     def list_collections(self) -> list[dict]:
         self._log("list_collections")
         self._check_fail(self.list_collections_side_effect)
@@ -247,6 +261,11 @@ class FakeRommApi:
         self._log("list_virtual_collections", (collection_type,))
         self._check_fail(self.list_virtual_collections_side_effect)
         return [dict(c) for c in self.virtual_collections.get(collection_type, [])]
+
+    def list_smart_collections(self) -> list[dict]:
+        self._log("list_smart_collections")
+        self._check_fail(self.list_smart_collections_side_effect)
+        return [dict(c) for c in self.smart_collections]
 
     def download_rom_content(
         self,

@@ -241,12 +241,12 @@ class Plugin:
         return await self._sync_service.get_collections()
 
     @migration_blocked
-    async def save_collection_sync(self, collection_id, enabled):
-        return self._sync_service.save_collection_sync(collection_id, enabled)
+    async def save_collection_sync(self, collection_id, kind, enabled):
+        return self._sync_service.save_collection_sync(collection_id, kind, enabled)
 
     @migration_blocked
-    async def set_all_collections_sync(self, enabled, category=None):
-        return await self._sync_service.set_all_collections_sync(enabled, category)
+    async def set_all_collections_sync(self, enabled, scope=None):
+        return await self._sync_service.set_all_collections_sync(enabled, scope)
 
     async def save_collection_platform_groups(self, enabled):
         return self._settings_service.save_collection_platform_groups(enabled)
