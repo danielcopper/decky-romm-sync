@@ -142,7 +142,6 @@ class Plugin:
 
         # ── 6. Background tasks ─────────────────────────────────────────────
         self._migration_service.detect_save_sort_change()
-        self._download_service.start()
         decky.logger.info("RomM Sync plugin loaded")
 
     async def _unload(self):  # Decky lifecycle — must be async

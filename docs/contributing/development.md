@@ -122,7 +122,7 @@ py_modules/
     romm/{http,romm_api}.py          # RomM HTTP transport + REST adapter
     steam_config.py / steamgriddb.py / sgdb_artwork_cache.py / cover_art_file_store.py
     persistence.py / registry_store.py / metadata_cache_store.py
-    download_file.py / download_queue.py / firmware_file.py / migration_file.py / rom_files.py / save_file.py
+    download_file.py / firmware_file.py / migration_file.py / rom_files.py / save_file.py
     retrodeck_paths.py / retroarch_config.py / retroarch_core_info.py / es_de_config.py
     system_clock.py / system_uuid_gen.py / asyncio_sleeper.py / hostname.py / path_probe.py / plugin_metadata.py / debug_logger.py
   domain/                            # Pure compute — no I/O, no service/adapter imports

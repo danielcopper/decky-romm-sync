@@ -137,29 +137,6 @@ class DownloadFileStore(Protocol):
         ...
 
 
-class DownloadQueueStore(Protocol):
-    """Filesystem seam for the launcher-script download request queue.
-
-    Owns the lock-and-poll round-trip DownloadService uses to consume
-    queued ROM-download requests written by the RetroDECK launcher
-    script. Path construction and request dispatch remain a service
-    concern; this Protocol exposes only the read-and-clear seam.
-
-    Implementations are synchronous — services that call from an async
-    context offload via ``loop.run_in_executor``.
-    """
-
-    def poll_and_clear(self, path: str) -> list[dict]:
-        """Atomically read all pending requests from *path* and clear the file.
-
-        Acquires an exclusive ``fcntl`` lock for the read-and-truncate
-        round-trip so concurrent writers cannot lose requests. Returns
-        the list of request dicts that were in the file. Idempotent on
-        missing or malformed files: returns ``[]``.
-        """
-        ...
-
-
 class FirmwareFileStore(Protocol):
     """Filesystem seam for firmware/BIOS file operations.
 

@@ -2,17 +2,14 @@
 
 Owns every step between a frontend download request and a ROM
 landing on disk: disk-space pre-flight, single-file and multi-file
-downloads, ZIP extraction, partial-download cleanup, and the
-launcher-script queue that surfaces frontend-initiated requests.
-Raw filesystem I/O flows through the ``DownloadFileStore`` and
-``DownloadQueueStore`` Protocols; HTTP traffic flows through
-``RommRomReader``.
+downloads, ZIP extraction, and partial-download cleanup.
+Raw filesystem I/O flows through the ``DownloadFileStore`` Protocol;
+HTTP traffic flows through ``RommRomReader``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -28,9 +25,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         Clock,
         DownloadFileStore,
-        DownloadQueueStore,
         EventEmitter,
-        MigrationPendingFn,
         RetroDeckPaths,
         RommRomReader,
         Sleeper,
@@ -48,24 +43,21 @@ class DownloadServiceConfig:
     """Frozen wiring bundle handed to ``DownloadService.__init__``.
 
     Holds the Protocol-typed adapters, the live state dict, runtime
-    infrastructure, time/sleep seams, path providers, and migration-
-    aware callbacks DownloadService needs at construction time.
+    infrastructure, time/sleep seams, and path providers DownloadService
+    needs at construction time.
     """
 
     romm_api: RommRomReader
     state: PluginState
     download_file_store: DownloadFileStore
-    download_queue: DownloadQueueStore
     resolve_system: SystemResolver
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
-    runtime_dir: str
     emit: EventEmitter
     clock: Clock
     sleeper: Sleeper
     state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths
-    is_retrodeck_migration_pending: MigrationPendingFn
 
 
 class DownloadService:
@@ -75,48 +67,27 @@ class DownloadService:
         self._romm_api = config.romm_api
         self._state = config.state
         self._download_file_store = config.download_file_store
-        self._download_queue_io = config.download_queue
         self._resolve_system = config.resolve_system
         self._loop = config.loop
         self._logger = config.logger
-        self._runtime_dir = config.runtime_dir
         self._emit = config.emit
         self._clock = config.clock
         self._sleeper = config.sleeper
         self._state_persister = config.state_persister
         self._retrodeck_paths = config.retrodeck_paths
-        self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
 
         # Owned state
         self._download_in_progress: set = set()
         self._download_queue: dict = {}
         self._download_tasks: dict = {}
-        self._poll_task: asyncio.Task[None] | None = None
-
-    def start(self) -> None:
-        """Spawn the background ``poll_download_requests`` task.
-
-        Owns the task handle so :meth:`shutdown` can cancel it on
-        unload. Idempotent: a second call while a poll task is already
-        running is a no-op.
-        """
-        if self._poll_task is not None and not self._poll_task.done():
-            return
-        self._poll_task = self._loop.create_task(self.poll_download_requests())
 
     async def shutdown(self) -> None:
-        """Cancel the background poll task and all active downloads.
+        """Cancel in-flight per-ROM download tasks on plugin unload.
 
-        Awaits the poll task so the loop fully exits before unload
-        returns; per-ROM download tasks are cancelled fire-and-forget
-        (their ``finally`` clauses run on the event loop after this
-        method returns, which is acceptable on plugin unload).
+        Per-ROM tasks are cancelled fire-and-forget; their ``finally``
+        clauses run on the event loop after this method returns, which
+        is acceptable on plugin unload.
         """
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._poll_task
-            self._poll_task = None
         for task in self._download_tasks.values():
             task.cancel()
         self._download_tasks.clear()
@@ -180,30 +151,6 @@ class DownloadService:
         cleaned = self._clean_rom_tmp_files() + self._clean_bios_tmp_files()
         if cleaned:
             self._logger.info(f"Cleaned {cleaned} leftover tmp file(s)")
-
-    async def poll_download_requests(self):
-        """Poll for download requests from the launcher script."""
-        requests_path = os.path.join(self._runtime_dir, "download_requests.json")
-        while True:
-            try:
-                await self._sleeper.sleep(2)
-                # Pause polling while a RetroDECK migration is pending — must
-                # short-circuit BEFORE poll_and_clear reads + clears the
-                # request file, otherwise queued requests would be silently
-                # dropped on the floor.
-                if self._is_retrodeck_migration_pending():
-                    continue
-                requests = await self._loop.run_in_executor(None, self._download_queue_io.poll_and_clear, requests_path)
-                if not requests:
-                    continue
-                for req in requests:
-                    rom_id = req.get("rom_id")
-                    if rom_id:
-                        await self.start_download(rom_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                self._logger.warning(f"Download request poll error: {e}")
 
     async def start_download(self, rom_id):
         rom_id = int(rom_id)

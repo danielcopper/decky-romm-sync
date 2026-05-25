@@ -816,7 +816,7 @@ class TestMainStartupOrdering:
 
     @pytest.mark.asyncio
     async def test_main_calls_detect_path_change_before_prune(self):
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         from bootstrap import (
             AdapterBundle,
@@ -853,7 +853,6 @@ class TestMainStartupOrdering:
 
         download_service = MagicMock()
         download_service.cleanup_leftover_tmp_files = MagicMock()
-        download_service.poll_download_requests = AsyncMock()
 
         firmware_service = MagicMock()
         firmware_service.load_bios_registry = MagicMock()
@@ -895,7 +894,6 @@ class TestMainStartupOrdering:
                 cover_art_file_store=MagicMock(),
                 sgdb_artwork_cache=MagicMock(),
                 download_file_store=MagicMock(),
-                download_queue=MagicMock(),
                 firmware_file_store=MagicMock(),
                 migration_file_store=MagicMock(),
                 rom_file_store=MagicMock(),

@@ -33,7 +33,7 @@ bootstrap.py (composition root: bootstrap() builds adapters, wire_services() bui
 │   SteamGridDbAdapter / SgdbArtworkCacheAdapter — SGDB   │
 │   PersistenceAdapter (+ persister adapters) — JSON I/O  │
 │   RegistryStoreAdapter / MetadataCacheStoreAdapter      │
-│   CoverArtFileStore / DownloadFile / DownloadQueue      │
+│   CoverArtFileStore / DownloadFile                      │
 │   FirmwareFile / MigrationFile / RomFile / SaveFile     │
 │   RetroDeckPaths / RetroArchConfig / RetroArchCoreInfo  │
 │   CoreResolver / GamelistXmlEditor (ES-DE)              │
@@ -145,7 +145,7 @@ RomM exposes three mutually exclusive file-layout flags on every ROM detail. The
 
 **Why nested-single is flattened locally**: a nested-single-file ROM has no sidecars by definition — RomM would mark it `has_multiple_files` if any companion files existed. The parent folder adds no value at the local layer, so the plugin drops it and stores the ROM directly in the platform folder, matching the simple-single-file layout. Multi-file ROMs keep their per-game subfolder because they contain multiple related files that belong together.
 
-Filesystem writes go through `DownloadFileAdapter`; the offline-aware download queue is `DownloadQueueAdapter` (fcntl-locked). ZIP extraction is ZIP-slip protected.
+Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
 
 ### Adapters (`py_modules/adapters/`)
 
@@ -162,7 +162,7 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 | `persistence.py` | `PersistenceAdapter` + per-domain persister adapters — settings/state/cache/save-sync JSON I/O |
 | `registry_store.py` | `RegistryStoreAdapter` — shortcut registry reads/writes |
 | `metadata_cache_store.py` | `MetadataCacheStoreAdapter` — metadata cache reads/writes |
-| `download_file.py` / `download_queue.py` | `DownloadFileAdapter` / `DownloadQueueAdapter` — download filesystem + fcntl-locked queue |
+| `download_file.py` | `DownloadFileAdapter` — download filesystem |
 | `firmware_file.py` / `migration_file.py` / `rom_files.py` / `save_file.py` | per-subtree filesystem adapters (BIOS, RetroDECK migration, ROM removal, local saves) |
 | `retrodeck_paths.py` | `RetroDeckPathsAdapter` — reads `retrodeck.json` for ROMs/saves/BIOS/home paths |
 | `retroarch_config.py` | `RetroArchConfigAdapter` — reads `retroarch.cfg` save-sort flags |
@@ -236,7 +236,7 @@ Services depend on Protocols, never on concrete adapter implementations. The Pro
 - **`persistence`** — `StatePersister`, `SettingsPersister`, `MetadataCachePersister`, `MetadataCacheStore`, `FirmwareCachePersister`, `SaveSyncStatePersister`, `ShortcutRegistryStore`, `PluginMetadataReader`.
 - **`paths`** — `RetroDeckPaths`, `SystemResolver`, `CoreInfoProvider`, `CoreResolverFn`, `CoreNameProviderFn`, `RetroArchConfigReader`, `RetroArchCoreInfoReader`, `RetroArchSaveSortingProvider`, `GamelistXmlEditor`.
 - **`infra`** — cross-cutting callable seams: `EventEmitter`, `DebugLogger`, `PathExistsReader`, `HostnameReader`, `PendingSyncReader`, `DownloadQueueCleanup`.
-- **`files`** — filesystem seams: `CoverArtFileStore`, `DownloadFileStore`, `DownloadQueueStore`, `FirmwareFileStore`, `MigrationFileStore`, `RomFileStore`, `SaveFileStore`, `SgdbArtworkCache`.
+- **`files`** — filesystem seams: `CoverArtFileStore`, `DownloadFileStore`, `FirmwareFileStore`, `MigrationFileStore`, `RomFileStore`, `SaveFileStore`, `SgdbArtworkCache`.
 - **`cross_service`** — narrowly-typed multi-method seams one service exposes to another so services stay independent: `BiosChecker`, `AchievementsReader`, `ArtworkManager`, `ArtworkRemover`, `MetadataExtractor`, `RetryStrategy`, `MigrationPendingFn`, `SaveSortChangeFn`, the `LaunchGate*` and `Session*` seams.
 
 Protocol names carry a suffix that signals shape (`…Reader`, `…Provider`/`…Fn`, `…Store`, `…Cache`, `…Persister`; bare names for pervasive primitives like `Clock`).
@@ -310,7 +310,7 @@ Every service receives its dependencies through a single `*ServiceConfig` datacl
 | --- | --- |
 | **LibraryService** | `RommLibraryApi`, `SteamConfigStore`, `MetadataExtractor`, `ArtworkManager`, `Clock`/`UuidGen`/`Sleeper`, persisters, `ShortcutRegistryStore` |
 | **SaveService** | `RommApi`, `RetryStrategy`, `SaveFileStore`, `SaveSyncStatePersister`, `Clock`, `RetroDeckPaths`, core-name/active-core providers, migration-detect callbacks |
-| **DownloadService** | `RommApi`, `DownloadFileStore`, `DownloadQueueStore`, `RetroDeckPaths`, `Clock`/`Sleeper`, migration-pending callback |
+| **DownloadService** | `RommApi`, `DownloadFileStore`, `RetroDeckPaths`, `Clock`/`Sleeper` |
 | **FirmwareService** | `RommApi`, `FirmwareFileStore`, `FirmwareCachePersister`, `CoreInfoProvider`, `RetroDeckPaths` |
 | **SteamGridService** | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `ShortcutRegistryStore`, `PendingSyncReader` |
 | **MigrationService** | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback |

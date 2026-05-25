@@ -18,7 +18,6 @@ from bootstrap import (
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_download_file_store import FakeDownloadFileStore
-from fakes.fake_download_queue_store import FakeDownloadQueueStore
 from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_hostname_reader import FakeHostnameReader
@@ -198,7 +197,6 @@ class TestWireServices:
             "cover_art_file_store": FakeCoverArtFileStore(),
             "sgdb_artwork_cache": FakeSgdbArtworkCache(),
             "download_file_store": FakeDownloadFileStore(),
-            "download_queue": FakeDownloadQueueStore(),
             "firmware_file_store": FakeFirmwareFileStore(),
             "migration_file_store": FakeMigrationFileStore(),
             "rom_file_store": FakeRomFileStore(),
@@ -251,7 +249,6 @@ class TestWireServices:
                 cover_art_file_store=deps["cover_art_file_store"],
                 sgdb_artwork_cache=deps["sgdb_artwork_cache"],
                 download_file_store=deps["download_file_store"],
-                download_queue=deps["download_queue"],
                 firmware_file_store=deps["firmware_file_store"],
                 migration_file_store=deps["migration_file_store"],
                 rom_file_store=deps["rom_file_store"],
@@ -453,18 +450,6 @@ class TestWireServices:
             migration_service.is_retrodeck_migration_pending
         )
         assert save_sync_service._sync_engine._is_retrodeck_migration_pending.__self__ is migration_service  # type: ignore[union-attr]
-        deps["loop"].close()
-
-    def test_download_service_receives_is_retrodeck_migration_pending(self, tmp_path):
-        """Regression test for #251: DownloadService must receive the bound
-        ``migration_service.is_retrodeck_migration_pending`` callback so
-        the download poll loop pauses while a migration is pending."""
-        deps = self._make_deps(tmp_path)
-        result = wire_services(self._make_config(deps))
-        download_service = result["download_service"]
-        migration_service = result["migration_service"]
-        assert download_service._is_retrodeck_migration_pending == migration_service.is_retrodeck_migration_pending
-        assert download_service._is_retrodeck_migration_pending.__self__ is migration_service  # type: ignore[union-attr]
         deps["loop"].close()
 
     def test_save_sync_detect_sort_change_mutates_shared_state(self, tmp_path):

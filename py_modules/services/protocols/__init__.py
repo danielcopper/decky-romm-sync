@@ -44,7 +44,6 @@ from services.protocols.determinism import Clock, Sleeper, UuidGen
 from services.protocols.files import (
     CoverArtFileStore,
     DownloadFileStore,
-    DownloadQueueStore,
     FirmwareFileStore,
     MigrationFileStore,
     RomFileStore,
@@ -110,7 +109,6 @@ __all__ = [
     "DebugLogger",
     "DownloadFileStore",
     "DownloadQueueCleanup",
-    "DownloadQueueStore",
     "EventEmitter",
     "FirmwareCachePersister",
     "FirmwareFileStore",

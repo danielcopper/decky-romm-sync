@@ -21,7 +21,6 @@ from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
-from adapters.download_queue import DownloadQueueAdapter
 from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
@@ -72,7 +71,6 @@ from services.protocols import (
     CoverArtFileStore,
     DebugLogger,
     DownloadFileStore,
-    DownloadQueueStore,
     EventEmitter,
     FirmwareCachePersister,
     FirmwareFileStore,
@@ -129,7 +127,6 @@ class AdapterBundle:
     cover_art_file_store: CoverArtFileStore
     sgdb_artwork_cache: SgdbArtworkCache
     download_file_store: DownloadFileStore
-    download_queue: DownloadQueueStore
     firmware_file_store: FirmwareFileStore
     migration_file_store: MigrationFileStore
     rom_file_store: RomFileStore
@@ -329,7 +326,6 @@ def bootstrap(
     cover_art_file_store = CoverArtFileStoreAdapter()
     sgdb_artwork_cache = SgdbArtworkCacheAdapter(runtime_dir=runtime_dir)
     download_file_store = DownloadFileAdapter()
-    download_queue = DownloadQueueAdapter()
     firmware_file_store = FirmwareFileAdapter()
     migration_file_store = MigrationFileAdapter()
     rom_file_store = RomFileAdapter()
@@ -350,7 +346,6 @@ def bootstrap(
         cover_art_file_store=cover_art_file_store,
         sgdb_artwork_cache=sgdb_artwork_cache,
         download_file_store=download_file_store,
-        download_queue=download_queue,
         firmware_file_store=firmware_file_store,
         migration_file_store=migration_file_store,
         rom_file_store=rom_file_store,
@@ -546,17 +541,14 @@ def wire_services(cfg: WiringConfig) -> dict:
             romm_api=cfg.adapters.romm_api,
             state=cfg.stores.state,
             download_file_store=cfg.adapters.download_file_store,
-            download_queue=cfg.adapters.download_queue,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            runtime_dir=cfg.runtime.runtime_dir,
             emit=cfg.runtime.emit,
             clock=cfg.runtime.clock,
             sleeper=cfg.runtime.sleeper,
             state_persister=cfg.callbacks.state_persister,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
-            is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
         ),
     )
 

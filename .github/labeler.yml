@@ -36,7 +36,6 @@ area:downloads:
       - any-glob-to-any-file:
           - 'py_modules/services/downloads.py'
           - 'py_modules/adapters/download_file.py'
-          - 'py_modules/adapters/download_queue.py'
 
 area:firmware:
   - changed-files:

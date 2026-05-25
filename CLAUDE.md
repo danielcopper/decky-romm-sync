@@ -128,7 +128,7 @@ The full Cosmic Python migration is tracked under [#277](https://github.com/dani
 - **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2) — **complete**
   Every backend service refactored: I/O behind Protocol-typed adapters, Clock/UuidGen/Sleeper injected, pure logic in `domain/`, ctors decomposed via frozen `*ServiceConfig` dataclasses where they exceeded S107.
   - ~~#299~~ ArtworkService + SteamGridService — shipped as #321 (`CoverArtFileStore`) + #322 (`SgdbArtworkCache` + `SgdbApiError` + `SteamGridDirMissingError` + `write_shortcut_icon` on `SteamConfigAdapter`; `SteamGridConfig` decomposition + `PendingSyncReader` Protocol).
-  - ~~#297~~ DownloadService — shipped as #323 (`DownloadFileAdapter` for filesystem + `DownloadQueueAdapter` for fcntl-locked queue; ZIP-slip protection; ctor 13 → 5 via `DownloadServiceConfig`).
+  - ~~#297~~ DownloadService — shipped as #323 (`DownloadFileAdapter` for filesystem; ZIP-slip protection; ctor 13 → 5 via `DownloadServiceConfig`).
   - ~~#298~~ FirmwareService — shipped as #324 (`FirmwareFileAdapter` with `checksum_md5` using `usedforsecurity=False`; closed #170 — `_enrich_firmware_file` returns new dict).
   - ~~#301~~ GameDetailService — closed as superseded. All scope (Clock + CoreInfoProvider) wired in Wave 1.
   - ~~#302~~ MigrationService — shipped as #325 (`MigrationFileAdapter` with cross-device `move` (`shutil.move`) vs same-fs `rename` (`os.replace`) distinction; ctor 13 → 2 via `MigrationServiceConfig`; closed discussion #293 with "extract" verdict).

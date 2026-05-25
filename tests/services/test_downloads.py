@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
@@ -14,7 +13,6 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
 from adapters.download_file import DownloadFileAdapter
-from adapters.download_queue import DownloadQueueAdapter
 from adapters.registry_store import RegistryStoreAdapter
 from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -67,11 +65,9 @@ def plugin():
             romm_api=p._romm_api,
             state=p._state,
             download_file_store=DownloadFileAdapter(),
-            download_queue=DownloadQueueAdapter(),
             resolve_system=p._resolve_system,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
             emit=decky.emit,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             sleeper=FakeSleeper(),
@@ -80,7 +76,6 @@ def plugin():
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
-            is_retrodeck_migration_pending=lambda: False,
         ),
     )
     p._rom_removal_service = RomRemovalService(
@@ -289,7 +284,6 @@ class TestRemoveRom:
     async def test_deletes_file_and_clears_state(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -328,7 +322,6 @@ class TestUninstallAllRoms:
     async def test_removes_all_installed(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -360,7 +353,6 @@ class TestUninstallAllRoms:
     async def test_clears_state(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -381,7 +373,6 @@ class TestUninstallAllRoms:
     async def test_handles_missing_files(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -561,100 +552,12 @@ class TestDiskSpaceMultiFile:
         assert result["success"] is True
 
 
-class TestDownloadRequestPolling:
-    @pytest.mark.asyncio
-    async def test_processes_download_request(self, plugin, tmp_path):
-        from unittest.mock import AsyncMock, patch
-
-        plugin._download_service._runtime_dir = str(tmp_path)
-
-        requests_path = tmp_path / "download_requests.json"
-        requests_path.write_text(json.dumps([{"rom_id": 42}]))
-
-        with patch.object(plugin, "start_download", new_callable=AsyncMock) as mock_start:
-            # Call internal logic directly: read file, process, clear
-            with open(requests_path) as f:
-                requests = json.load(f)
-            with open(requests_path, "w") as f:
-                json.dump([], f)
-            for req in requests:
-                rom_id = req.get("rom_id")
-                if rom_id:
-                    await plugin.start_download(rom_id)
-
-            mock_start.assert_called_once_with(42)
-
-    @pytest.mark.asyncio
-    async def test_cleans_up_request_file(self, plugin, tmp_path):
-        plugin._download_service._runtime_dir = str(tmp_path)
-
-        requests_path = tmp_path / "download_requests.json"
-        requests_path.write_text(json.dumps([{"rom_id": 1}, {"rom_id": 2}]))
-
-        # Simulate the cleanup logic from _poll_download_requests
-        with open(requests_path) as f:
-            requests = json.load(f)
-        with open(requests_path, "w") as f:
-            json.dump([], f)
-
-        # Verify file was cleared
-        with open(requests_path) as f:
-            remaining = json.load(f)
-        assert remaining == []
-        assert len(requests) == 2
-
-
-class TestPollDownloadRequestsMigrationPause:
-    """Verify the poll loop pauses (does NOT read+clear the request file)
-    while a RetroDECK migration is pending — would otherwise drop queued
-    download requests on the floor (#251)."""
-
-    @pytest.mark.asyncio
-    async def test_poll_download_requests_pauses_when_migration_pending(self, plugin, tmp_path):
-        plugin._download_service._runtime_dir = str(tmp_path)
-        plugin._download_service._is_retrodeck_migration_pending = lambda: True
-
-        requests_path = tmp_path / "download_requests.json"
-        original_payload = [{"rom_id": 42}, {"rom_id": 99}]
-        requests_path.write_text(json.dumps(original_payload))
-
-        # Stub the injected Sleeper so we can run a single iteration
-        # deterministically: first call sleeps normally (returns immediately),
-        # second call cancels the loop so we exit after one pass.
-        class _CancellingSleeper:
-            def __init__(self):
-                self.calls = 0
-
-            async def sleep(self, _seconds):
-                self.calls += 1
-                if self.calls >= 2:
-                    raise asyncio.CancelledError
-
-        plugin._download_service._sleeper = _CancellingSleeper()
-
-        # Track whether the request file IO was invoked via the queue adapter.
-        from fakes.fake_download_queue_store import FakeDownloadQueueStore
-
-        tracking_queue = FakeDownloadQueueStore()
-        plugin._download_service._download_queue_io = tracking_queue
-
-        with pytest.raises(asyncio.CancelledError):
-            await plugin._download_service.poll_download_requests()
-
-        # IO must NOT have been called while migration was pending.
-        assert tracking_queue.poll_count == 0
-        # Request file must still hold its original contents — not truncated.
-        with open(requests_path) as f:
-            assert json.load(f) == original_payload
-
-
 class TestMultiFileRomDeletion:
     @pytest.mark.asyncio
     async def test_remove_rom_deletes_rom_dir(self, plugin, tmp_path):
         """Multi-file ROM with rom_dir should delete the entire directory."""
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -688,7 +591,6 @@ class TestMultiFileRomDeletion:
         """uninstall_all_roms should delete multi-file ROM directories."""
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -792,7 +694,6 @@ class TestDoDownloadSingleFile:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -854,7 +755,6 @@ class TestDoDownloadMultiFile:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -926,7 +826,6 @@ class TestDoDownloadNestedSingleFile:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -975,7 +874,6 @@ class TestDoDownloadNestedSingleFile:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1206,7 +1104,6 @@ class TestPathTraversalDeleteRomFiles:
     async def test_rejects_rom_dir_outside_roms_base(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1240,7 +1137,6 @@ class TestPathTraversalDeleteRomFiles:
     async def test_rejects_file_path_outside_roms_base(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1357,7 +1253,6 @@ class TestDoDownloadCancelled:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1406,7 +1301,6 @@ class TestDoDownloadZipFailure:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1454,7 +1348,6 @@ class TestDoDownloadFailureEmit:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1600,7 +1493,6 @@ class TestUninstallAllRomsMixedResults:
     async def test_mixed_success_and_failure(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1645,7 +1537,6 @@ class TestRemoveRomFileAlreadyGone:
     async def test_file_already_gone_cleans_state(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1677,7 +1568,6 @@ class TestUrlEncodedFilenameRename:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1734,7 +1624,6 @@ class TestUrlEncodedFilenameRename:
 
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1932,7 +1821,6 @@ class TestRemoveRomCleansSaveSyncState:
     async def test_remove_rom_cleans_save_sync_state(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -1980,7 +1868,6 @@ class TestRemoveRomCleansSaveSyncState:
     async def test_uninstall_all_cleans_save_sync_state(self, plugin, tmp_path):
         import decky
 
-        plugin._download_service._runtime_dir = str(tmp_path)
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
             roms=str(tmp_path / "retrodeck" / "roms"),
@@ -2158,108 +2045,6 @@ class TestShutdown:
         assert plugin._download_service._download_tasks == {}
 
 
-class TestStartShutdownLifecycle:
-    """Tests for DownloadService.start / shutdown — poll-task ownership.
-
-    The service owns its background ``poll_download_requests`` task so
-    ``main._unload`` can cancel it via ``await shutdown()``. Covers the
-    spawn, idempotent re-spawn, await-cancellation, and combined
-    shutdown-with-active-downloads paths.
-    """
-
-    @pytest.mark.asyncio
-    async def test_start_spawns_poll_task(self, plugin):
-        plugin._download_service._loop = asyncio.get_event_loop()
-        # Stub the poll coroutine so we don't run the real polling
-        # loop — we only care that start() owns the task handle.
-
-        async def _noop_poll():
-            await asyncio.sleep(0.01)
-
-        plugin._download_service.poll_download_requests = _noop_poll  # type: ignore[method-assign]
-
-        plugin._download_service.start()
-        poll_task = plugin._download_service._poll_task
-        assert isinstance(poll_task, asyncio.Task)
-
-        # Let the stub task finish so the loop has nothing pending.
-        await poll_task
-
-    @pytest.mark.asyncio
-    async def test_start_is_idempotent_when_task_running(self, plugin):
-        plugin._download_service._loop = asyncio.get_event_loop()
-
-        async def _long_poll():
-            await asyncio.sleep(5)
-
-        plugin._download_service.poll_download_requests = _long_poll  # type: ignore[method-assign]
-
-        plugin._download_service.start()
-        first_task = plugin._download_service._poll_task
-        plugin._download_service.start()
-        second_task = plugin._download_service._poll_task
-
-        assert first_task is second_task
-
-        # Clean up — cancel + await to let the loop tear down without
-        # an unawaited-task warning.
-        await plugin._download_service.shutdown()
-
-    @pytest.mark.asyncio
-    async def test_start_after_previous_task_done_spawns_new(self, plugin):
-        plugin._download_service._loop = asyncio.get_event_loop()
-
-        async def _quick_poll():
-            return None
-
-        plugin._download_service.poll_download_requests = _quick_poll  # type: ignore[method-assign]
-
-        plugin._download_service.start()
-        first_task = plugin._download_service._poll_task
-        assert first_task is not None
-        await first_task
-
-        plugin._download_service.start()
-        second_task = plugin._download_service._poll_task
-        assert second_task is not None
-        assert second_task is not first_task
-
-        await second_task
-
-    @pytest.mark.asyncio
-    async def test_shutdown_cancels_poll_task_and_awaits_exit(self, plugin):
-        plugin._download_service._loop = asyncio.get_event_loop()
-
-        async def _long_poll():
-            await asyncio.sleep(30)
-
-        plugin._download_service.poll_download_requests = _long_poll  # type: ignore[method-assign]
-
-        plugin._download_service.start()
-        poll_task = plugin._download_service._poll_task
-        assert poll_task is not None
-        assert not poll_task.done()
-
-        await plugin._download_service.shutdown()
-
-        assert poll_task.done()
-        assert poll_task.cancelled()
-        assert plugin._download_service._poll_task is None
-
-    @pytest.mark.asyncio
-    async def test_shutdown_handles_missing_poll_task(self, plugin):
-        # Never called start() — shutdown must still tear down per-ROM
-        # tasks without touching the missing poll handle.
-        task_a = MagicMock()
-        plugin._download_service._download_tasks[7] = task_a
-
-        await plugin._download_service.shutdown()
-
-        task_a.cancel.assert_called_once_with()
-        assert plugin._download_service._download_tasks == {}
-        assert plugin._download_service._poll_task is None
-
-
 class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
     """Tests for cleanup_leftover_tmp_files when retrodeck paths resolve to empty.
 
@@ -2280,131 +2065,6 @@ class TestCleanupLeftoverTmpFilesNoRetrodeckPaths:
         plugin._download_service.cleanup_leftover_tmp_files()
 
         assert fake.walk_calls == []
-
-
-class TestPollDownloadRequestsLoopBody:
-    """Tests for poll_download_requests — request dispatch + error swallowing.
-
-    Covers the loop body that reads from the queue adapter, dispatches
-    each rom_id via start_download, and the bare-except branch that
-    swallows + logs exceptions other than CancelledError so the poll
-    keeps running across transient failures.
-    """
-
-    @pytest.mark.asyncio
-    async def test_dispatches_queued_request_to_start_download(self, plugin, tmp_path):
-        from unittest.mock import AsyncMock, patch
-
-        from fakes.fake_download_queue_store import FakeDownloadQueueStore
-
-        plugin._download_service._runtime_dir = str(tmp_path)
-        # No migration pending — must not block the loop body.
-        plugin._download_service._is_retrodeck_migration_pending = lambda: False
-
-        # Sleeper cancels after one full iteration so the body runs
-        # exactly once.
-        class _CancellingSleeper:
-            def __init__(self):
-                self.calls = 0
-
-            async def sleep(self, _seconds):
-                self.calls += 1
-                if self.calls >= 2:
-                    raise asyncio.CancelledError
-
-        plugin._download_service._sleeper = _CancellingSleeper()
-
-        tracking_queue = FakeDownloadQueueStore(entries=[{"rom_id": 42}, {"rom_id": 99}, {"no_rom_id": True}])
-        plugin._download_service._download_queue_io = tracking_queue
-        plugin._download_service._loop = asyncio.get_event_loop()
-
-        with patch.object(plugin._download_service, "start_download", new_callable=AsyncMock) as mock_start:
-            with pytest.raises(asyncio.CancelledError):
-                await plugin._download_service.poll_download_requests()
-
-            assert tracking_queue.poll_count >= 1
-            # Both entries with rom_id should be dispatched; the
-            # malformed entry without rom_id is skipped.
-            mock_start.assert_any_await(42)
-            mock_start.assert_any_await(99)
-            assert mock_start.await_count == 2
-
-    @pytest.mark.asyncio
-    async def test_empty_poll_continues_without_dispatch(self, plugin, tmp_path):
-        from unittest.mock import AsyncMock, patch
-
-        from fakes.fake_download_queue_store import FakeDownloadQueueStore
-
-        plugin._download_service._runtime_dir = str(tmp_path)
-        plugin._download_service._is_retrodeck_migration_pending = lambda: False
-
-        class _CancellingSleeper:
-            def __init__(self):
-                self.calls = 0
-
-            async def sleep(self, _seconds):
-                self.calls += 1
-                if self.calls >= 2:
-                    raise asyncio.CancelledError
-
-        plugin._download_service._sleeper = _CancellingSleeper()
-
-        tracking_queue = FakeDownloadQueueStore(entries=[])
-        plugin._download_service._download_queue_io = tracking_queue
-        plugin._download_service._loop = asyncio.get_event_loop()
-
-        with patch.object(plugin._download_service, "start_download", new_callable=AsyncMock) as mock_start:
-            with pytest.raises(asyncio.CancelledError):
-                await plugin._download_service.poll_download_requests()
-
-            assert tracking_queue.poll_count >= 1
-            mock_start.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_swallows_non_cancelled_exception_and_keeps_polling(self, plugin, tmp_path, caplog):
-        import logging
-
-        plugin._download_service._runtime_dir = str(tmp_path)
-        plugin._download_service._is_retrodeck_migration_pending = lambda: False
-
-        # Sleeper cancels after a couple of iterations so the loop
-        # body runs at least once after the failing poll.
-        class _CancellingSleeper:
-            def __init__(self):
-                self.calls = 0
-
-            async def sleep(self, _seconds):
-                self.calls += 1
-                if self.calls >= 3:
-                    raise asyncio.CancelledError
-
-        plugin._download_service._sleeper = _CancellingSleeper()
-
-        # Queue adapter that raises on poll — exercises the bare-except
-        # branch which must log a warning and continue the loop.
-        class _ExplodingQueue:
-            def __init__(self):
-                self.poll_count = 0
-
-            def poll_and_clear(self, _path):
-                self.poll_count += 1
-                raise RuntimeError("boom: queue read failed")
-
-        exploding = _ExplodingQueue()
-        plugin._download_service._download_queue_io = exploding
-        plugin._download_service._loop = asyncio.get_event_loop()
-
-        with (
-            caplog.at_level(logging.WARNING, logger="test_romm"),
-            pytest.raises(asyncio.CancelledError),
-        ):
-            await plugin._download_service.poll_download_requests()
-
-        # Loop must have re-entered after the first failure (sleeper hit
-        # at least twice before the cancelling iteration).
-        assert exploding.poll_count >= 1
-        # Warning must mention the underlying error message.
-        assert any("Download request poll error" in rec.message and "boom" in rec.message for rec in caplog.records)
 
 
 class TestMakeProgressCallback:
