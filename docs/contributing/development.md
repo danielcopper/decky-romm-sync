@@ -133,6 +133,8 @@ py_modules/
     state_migrations.py / sync_state.py / emulator_tag.py / version.py
   models/                            # Data shapes (TypedDicts/dataclasses) — independent of other layers
   lib/                               # Cross-cutting utilities (errors, list_result, iso_time, path_safety, late_binding, ...)
+  _vendor/                           # Vendored third-party deps — not our code, only imported by adapters
+    vdf/                             # Valve Data Format parser (Steam shortcuts.vdf)
 src/                                 # Frontend TypeScript
   index.tsx                          # Plugin entry, event listeners, QAM router
   components/                        # React components (QAM pages, game detail UI)

@@ -10,7 +10,7 @@ import contextlib
 import logging
 import os
 
-import vdf
+from _vendor import vdf
 
 from lib.errors import SteamGridDirMissingError
 

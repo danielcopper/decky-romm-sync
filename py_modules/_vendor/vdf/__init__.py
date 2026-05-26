@@ -16,7 +16,7 @@ try:
 except:
     from collections import Mapping
 
-from vdf.vdict import VDFDict
+from .vdict import VDFDict
 
 # Py2 & Py3 compatibility
 if sys.version_info[0] >= 3:

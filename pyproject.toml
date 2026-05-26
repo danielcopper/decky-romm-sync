@@ -3,7 +3,7 @@ pythonVersion = "3.11"
 extraPaths = ["py_modules"]
 stubPath = "typings"
 typeCheckingMode = "basic"
-exclude = ["py_modules/vdf", "scripts", ".venv"]
+exclude = ["py_modules/_vendor", "scripts", ".venv"]
 reportMissingModuleSource = "none"
 reportMissingImports = "warning"
 reportRedeclaration = "none"
@@ -13,7 +13,7 @@ reportUnusedVariable = "warning"
 [tool.ruff]
 target-version = "py311"
 line-length = 120
-extend-exclude = ["py_modules/vdf", "scripts"]
+extend-exclude = ["py_modules/_vendor", "scripts"]
 
 [tool.ruff.lint]
 select = [
@@ -34,7 +34,7 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["lib", "domain", "services", "adapters"]
-known-third-party = ["decky"]
+known-third-party = ["_vendor", "decky"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

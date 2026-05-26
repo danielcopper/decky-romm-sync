@@ -3,7 +3,7 @@ import os
 from unittest.mock import patch
 
 import pytest
-import vdf
+from _vendor import vdf
 
 from adapters.steam_config import SteamConfigAdapter
 from lib.errors import SteamGridDirMissingError
