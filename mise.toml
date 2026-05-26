@@ -2,13 +2,14 @@
 node = "lts"
 pnpm = "latest"
 python = "3.11"  # match Decky Loader's embedded Python (libpython3.11)
+uv = "latest"    # mise creates venvs via uv internally; expose it so the setup task can install deps without bootstrapping pip
 
 [env]
 _.python.venv = { path = ".venv", create = true }
 
 [tasks.setup]
 description = "Install JS and Python dependencies"
-run = ["pnpm install", "pip install -r requirements-dev.txt", "git config core.hooksPath .githooks"]
+run = ["pnpm install", "uv pip install -r requirements-dev.txt", "git config core.hooksPath .githooks"]
 
 [tasks.build]
 description = "Build frontend (dev: with source maps)"
