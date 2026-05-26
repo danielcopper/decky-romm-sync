@@ -2,6 +2,13 @@ site_name: decky-romm-sync
 site_description: Decky Loader plugin to sync your RomM library to Steam as non-steam shortcuts
 site_url: https://danielcopper.github.io/decky-romm-sync/
 
+# Architectural Decision Records (`docs/adr/`) are kept in the repo for
+# contributors and AI agents — they're internal design history, not user
+# documentation. Exclude them from the published MkDocs site so they
+# don't appear as orphan pages or in on-site search.
+exclude_docs: |
+  adr/
+
 repo_url: https://github.com/danielcopper/decky-romm-sync
 repo_name: danielcopper/decky-romm-sync
 edit_uri: edit/main/docs/
