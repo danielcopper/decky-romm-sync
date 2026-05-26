@@ -39,6 +39,7 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 - **Setup**: `mise run setup` (installs JS + Python dependencies)
 - **Dev reload**: `mise run dev` (build + restart plugin_loader)
 - **Tooling**: mise manages node, pnpm, python. Venv auto-activates via `_.python.venv` in mise.toml.
+- **Pre-commit hook** (`.githooks/pre-commit`, wired by `mise run setup` via `core.hooksPath`): runs `ruff format` + `ruff check` on staged Python files. Stays fast (<2s) so commits don't become friction — heavy validation (basedpyright, lint-imports, cosmic bans, pytest) is CI-only on PR push, never in the commit hook. CI + branch protection enforces correctness; don't re-introduce heavy checks here.
 
 ## Code Quality
 
