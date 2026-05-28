@@ -218,7 +218,9 @@ This path varies depending on where RetroDECK was installed:
 - **Internal SSD**: `/home/deck/retrodeck/saves/`
 - **SD card**: `/run/media/deck/Emulation/retrodeck/saves/`
 
-The backend reads `retrodeck.json` as the primary source, with RetroArch's `retroarch.cfg` → `savefile_directory` as a fallback. The path is never hardcoded.
+The backend reads `retrodeck.json` → `paths.saves_path` as the source of truth (`py_modules/adapters/retrodeck_paths.py`). When that file is unreadable — e.g. a fresh install with no RetroDECK configured yet — it falls back to the hardcoded RetroDECK default `~/retrodeck/saves`.
+
+The plugin deliberately does **not** read `savefile_directory` from `retroarch.cfg`. RetroDECK re-derives `savefile_directory = saves_path` on every launch/reset/move (its `component_prepare.sh` rewrites the key, and the "move data" flow updates `retrodeck.json` and `retroarch.cfg` in lockstep), so `retrodeck.json` is the single source of truth and reading the cfg key would only track a value RetroDECK is about to overwrite.
 
 ### RetroArch .srm pattern
 
