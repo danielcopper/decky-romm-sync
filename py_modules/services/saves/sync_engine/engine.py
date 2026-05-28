@@ -279,7 +279,7 @@ class SyncEngine:
                     "save_sort_changed": True,
                 }
 
-            if not self._state_svc.state.settings.sync_before_launch:
+            if not self._state_svc.get_settings().sync_before_launch:
                 return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
 
             if not self._state_svc.state.device_id:
@@ -323,7 +323,7 @@ class SyncEngine:
                     "blocked_by_migration": True,
                 }
 
-            if not self._state_svc.state.settings.sync_after_exit:
+            if not self._state_svc.get_settings().sync_after_exit:
                 self._logger.info("post_exit_sync skipped: sync_after_exit disabled")
                 return {"success": True, "message": "Post-exit sync disabled", "synced": 0}
 

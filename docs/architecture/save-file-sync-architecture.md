@@ -582,11 +582,12 @@ Save sync state is stored in a separate file from the main `state.json` to avoid
 
 Location: `~/homebrew/data/decky-romm-sync/save_sync_state.json`
 
+The save-sync **feature toggles** (`save_sync_enabled`, `sync_before_launch`, `sync_after_exit`, `default_slot`, `autocleanup_limit`) and the **device label** (`device_name`) live in `settings.json`, not here — they are user-intent config, not synced relational state (ADR-0003). `StateService` reads and writes them through the live settings dict; only `device_id` / `server_device_id` (server-issued identity) remain on this file.
+
 ```json
 {
   "version": 1,
   "device_id": "550e8400-e29b-41d4-a716-446655440000",
-  "device_name": null,
   "server_device_id": "81445610-e5a1-46b5-9389-9d159f99c21c",
   "saves": {
     "42": {
@@ -618,13 +619,6 @@ Location: `~/homebrew/data/decky-romm-sync/save_sync_state.json`
       "last_session_duration_sec": 1800,
       "note_id": 456
     }
-  },
-  "settings": {
-    "save_sync_enabled": false,
-    "sync_before_launch": true,
-    "sync_after_exit": true,
-    "default_slot": "default",
-    "autocleanup_limit": 10
   }
 }
 ```
@@ -635,7 +629,6 @@ Location: `~/homebrew/data/decky-romm-sync/save_sync_state.json`
 | --- | --- | --- |
 | `version` | integer | State schema version (currently 1) |
 | `device_id` | string (UUID v4) | Unique identifier for this machine, generated on first use |
-| `device_name` | string / null | Human-readable device name (reserved for future use) |
 | `server_device_id` | string / null | RomM server device UUID. Null until first device registration. |
 | `saves` | object | Per-ROM sync metadata, keyed by `rom_id` (string) |
 | `saves.<id>.system` | string | RetroDECK system slug (e.g. `"gba"`, `"snes"`) |
@@ -659,12 +652,8 @@ Location: `~/homebrew/data/decky-romm-sync/save_sync_state.json`
 | `playtime.<id>.last_session_start` | ISO-8601 / null | Start time of current session (null when not playing). |
 | `playtime.<id>.last_session_duration_sec` | integer / null | Duration of last completed session. |
 | `playtime.<id>.note_id` | integer / null | Cached RomM note ID for playtime storage (avoids ROM detail fetch). |
-| `settings` | object | Save sync settings. |
-| `settings.save_sync_enabled` | boolean | Master toggle for save sync feature. |
-| `settings.sync_before_launch` | boolean | Auto-sync saves before game launch. |
-| `settings.sync_after_exit` | boolean | Auto-sync saves after game exit. |
-| `settings.default_slot` | string | Default slot name for new games (default: `"default"`). |
-| `settings.autocleanup_limit` | integer | Max save versions per slot on server (default: 10). |
+
+The save-sync feature toggles (`save_sync_enabled`, `sync_before_launch`, `sync_after_exit`, `default_slot`, `autocleanup_limit`) and the device label (`device_name`) live in `settings.json` (ADR-0003), not in this file. `save_sync_enabled` is the master feature toggle; `sync_before_launch` / `sync_after_exit` gate the automatic pre-launch / post-exit syncs; `default_slot` is the slot new games adopt (`"default"`); `autocleanup_limit` caps retained save versions per slot on the server (10).
 
 Conflicts are no longer persisted. They are returned ephemerally from `_sync_rom_saves` and `_get_save_status_io` and surfaced via the modal at the moment of the sync. If the user dismisses the modal (Cancel), the conflict re-fires on the next sync as long as the underlying state still produces matrix row 12.
 
@@ -674,8 +663,7 @@ Conflicts are no longer persisted. They are returned ephemerally from `_sync_rom
 
 - **`saves.<id>.active_core`** → renamed to `saves.<id>.last_synced_core` (per-game; `last_synced_core` wins if both are present).
 - **`saves.<id>.files.<fn>.dismissed_newer_save_id`** → dropped. Was used by the removed newer-in-slot detection. Users upgrading from v0.15.x and earlier may have this field; it's silently removed.
-- **`settings.conflict_mode`** → dropped. The `ask_me` / `prefer_local` / `prefer_remote` setting was removed in v0.18.x; conflicts are now always surfaced via the conflict modal.
-- **`settings.clock_skew_tolerance_sec`** → dropped. The newest-wins matrix model in v0.16.x made the tolerance window irrelevant; comparisons are exact.
+- **`settings` block + `device_name`** → no longer parsed from or written to this file. The save-sync feature toggles and the device label moved to `settings.json` (ADR-0003); a one-time `settings.json` schema bump (v3 → v4) reads the legacy values out of `save_sync_state.json` and folds them in. On the next state write they disappear from this file. The legacy `settings.conflict_mode` / `settings.clock_skew_tolerance_sec` keys (dropped in earlier releases) are not carried over.
 
 The dropped `pending_conflicts`, `dismissed_saves_state`, and other obsolete sync-state fields are simply not loaded. They never appear in the rebuilt aggregate, and the next state write produces a clean file.
 

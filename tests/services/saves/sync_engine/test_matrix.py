@@ -189,7 +189,7 @@ class TestV47SyncFlow:
     def test_list_saves_passes_device_id(self, tmp_path):
         """v4.7: list_saves receives server_device_id."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "local-id"
         svc._save_sync_state.server_device_id = "server-dev-123"
         _install_rom(svc, tmp_path)
@@ -204,7 +204,7 @@ class TestV47SyncFlow:
     def test_upload_passes_device_id_and_slot(self, tmp_path):
         """v4.7: upload_save receives device_id and slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "local-id"
         svc._save_sync_state.server_device_id = "server-dev-123"
         _install_rom(svc, tmp_path)
@@ -220,7 +220,7 @@ class TestV47SyncFlow:
     def test_v47_skip_when_is_current(self, tmp_path):
         """v4.7: server says is_current=True, local unchanged → skip."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         content = b"same content"
@@ -259,7 +259,7 @@ class TestV47SyncFlow:
     def test_v47_download_when_not_current(self, tmp_path):
         """v4.7: server says is_current=False, local unchanged → download."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
         content = b"old content"
@@ -414,7 +414,7 @@ class TestTrackedSaveIdMatching:
     def test_timestamp_server_save_not_treated_as_separate_download(self, tmp_path):
         """Server save matched by tracked_save_id should not appear as server-only download."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
@@ -460,7 +460,7 @@ class TestTrackedSaveIdMatching:
     async def test_get_save_status_uses_tracked_save_id(self, tmp_path):
         """get_save_status should not show timestamp-named server save as separate file."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -505,7 +505,7 @@ class TestTrackedSaveIdMatching:
     async def test_status_fallback_matches_newest_no_phantom_downloads(self, tmp_path):
         """Status with no tracked_save_id matches newest server save, no phantom downloads."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -553,7 +553,7 @@ class TestTrackedSaveIdMatching:
         """Case 2: no local file, server has multiple timestamped saves.
         Should download only the newest, saved as the correct local filename."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         # NO local save created — Case 2
@@ -600,7 +600,7 @@ class TestTrackedSaveIdMatching:
     async def test_status_server_only_shows_local_filename(self, tmp_path):
         """Status display should show local filename for server-only saves, not timestamp."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         # NO local save
@@ -639,7 +639,7 @@ class TestOlderVersionSkipping:
     def test_different_slot_filtered_out(self, tmp_path):
         """Saves in a different slot should be filtered out entirely."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"local save")
@@ -692,7 +692,7 @@ class TestOwnUploadIds:
     async def test_post_upload_appends_own_upload_id(self, tmp_path):
         """After a POST upload (new save), the returned save_id is added to own_upload_ids."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -795,7 +795,7 @@ class TestOwnUploadIds:
         """When rom state exists but own_upload_ids key is absent, uploaded_by_us is None."""
         svc, fake = make_service(tmp_path)
         _install_rom(svc, tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         fake.saves[26] = _server_save(save_id=26, rom_id=42, filename="pokemon.srm")
 

@@ -26,17 +26,24 @@ class _RecordingStatePersister:
         self._saved.append(True)
 
 
-def make_service(tmp_path=None, fake_api=None, clock=None, **overrides):
-    """Create a PlaytimeService with sensible defaults."""
+def make_service(tmp_path=None, fake_api=None, clock=None, settings=None, **overrides):
+    """Create a PlaytimeService with sensible defaults.
+
+    Returns ``(svc, fake, state, saved)``. The device label stamped onto
+    synced playtime notes is read from the live settings.json view (#822),
+    reachable in tests as ``svc._settings``.
+    """
     fake = fake_api or FakeSaveApi()
     state = SaveSyncState()
     saved: list[bool] = []
     clk = clock or FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
+    settings_dict = settings if settings is not None else {}
 
     defaults: dict[str, Any] = dict(
         romm_api=fake,
         retry=_make_retry(),
         save_sync_state=state,
+        settings=settings_dict,
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
         clock=clk,
@@ -129,7 +136,7 @@ class TestSyncPlaytime:
             session_count=1,
             last_session_duration_sec=120,
         )
-        state.device_name = "deck"
+        svc._settings["device_name"] = "deck"
 
         svc._sync_playtime_to_romm(42, 120)
 
@@ -148,7 +155,7 @@ class TestSyncPlaytime:
             session_count=2,
             last_session_duration_sec=80,
         )
-        state.device_name = "deck"
+        svc._settings["device_name"] = "deck"
 
         # Pre-existing note on server
         fake.notes[42] = [
@@ -174,7 +181,7 @@ class TestSyncPlaytime:
             session_count=3,
             last_session_duration_sec=60,
         )
-        state.device_name = "deck"
+        svc._settings["device_name"] = "deck"
 
         fake.notes[42] = [
             {
@@ -259,7 +266,7 @@ class TestEdgeCases:
             session_count=1,
             last_session_duration_sec=60,
         )
-        state.device_name = "deck"
+        svc._settings["device_name"] = "deck"
         fake.fail_on_next(RommApiError("Oops"))
 
         # Should not raise
@@ -273,7 +280,7 @@ class TestEdgeCases:
             session_count=1,
             last_session_duration_sec=60,
         )
-        state.device_name = "deck"
+        svc._settings["device_name"] = "deck"
 
         fake.notes[42] = [
             {

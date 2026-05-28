@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         SaveFileStore,
         SaveSortChangeFn,
         SaveSyncStatePersister,
+        SettingsPersister,
     )
 
 
@@ -60,6 +61,12 @@ class SaveServiceConfig:
         Protocol-typed I/O wrapper for ``save_sync_state.json``. The
         ``StateService`` uses ``.save(data)`` / ``.load() -> dict | None``
         — file path, locking, and atomic-write are adapter-internal.
+    settings_persister:
+        Protocol-typed zero-arg flush for ``settings.json``. The
+        ``StateService`` calls ``.save_settings()`` after mutating the
+        save-sync feature toggles or the device label in the live
+        ``settings`` dict — those values live in settings.json, not the
+        save-sync aggregate.
     save_file_store:
         Protocol-typed filesystem adapter for local save files. Owns the
         raw POSIX, ``open()``, ``tempfile``, and ``hashlib``-on-file
@@ -131,6 +138,7 @@ class SaveServiceConfig:
     state: PluginState
     save_sync_state: SaveSyncState
     save_sync_state_persister: SaveSyncStatePersister
+    settings_persister: SettingsPersister
     save_file_store: SaveFileStore
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger

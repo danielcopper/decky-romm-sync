@@ -99,7 +99,7 @@ class DeviceRegistry:
             return {
                 "success": True,
                 "device_id": sync_state.device_id,
-                "device_name": sync_state.device_name or "",
+                "device_name": self._state_svc.get_device_name() or "",
                 "server_device_id": has_server_id,
             }
 
@@ -118,8 +118,8 @@ class DeviceRegistry:
             server_device_id = result.get("id") or result.get("device_id")
             if server_device_id:
                 sync_state.device_id = str(server_device_id)
-                sync_state.device_name = hostname
                 sync_state.server_device_id = str(server_device_id)
+                self._state_svc.set_device_name(hostname)
                 self._state_svc.save_state()
                 self._logger.info(f"Device registered with server: {server_device_id} ({hostname})")
                 return {

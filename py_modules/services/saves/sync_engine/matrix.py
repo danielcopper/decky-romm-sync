@@ -147,7 +147,7 @@ class MatrixExecutor:
         """Update per-file sync tracking after a successful sync operation."""
         saves = self._state_svc.state.saves
         if rom_id_str not in saves:
-            settings_default_slot = self._state_svc.state.settings.default_slot or "default"
+            settings_default_slot = self._state_svc.get_settings().default_slot or "default"
             saves[rom_id_str] = RomSaveState(
                 emulator=emulator_tag or "retroarch",
                 system=system,

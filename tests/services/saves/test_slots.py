@@ -23,7 +23,7 @@ class TestSaveSlots:
     @pytest.mark.asyncio
     async def test_get_save_slots(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "server-dev-1"
 
@@ -51,7 +51,7 @@ class TestSaveSlots:
     async def test_get_save_slots_latest_updated_at_from_server(self, tmp_path):
         """latest_updated_at is populated from nested latest.updated_at, not a flat key."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "server-dev-1"
 
@@ -100,7 +100,7 @@ class TestSaveSlots:
         though they were still on the server.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
 
@@ -144,7 +144,7 @@ class TestSaveSlots:
         merged map (which keeps the active slot) is written back to disk.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
         # Active slot persists through the merge (kept even when server is empty).
@@ -168,7 +168,7 @@ class TestSaveSlots:
 
     def test_set_active_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.saves["123"] = RomSaveState(system="gba", active_slot="default")
         result = svc._slots.set_active_slot(123, "desktop")
         assert result["success"] is True
@@ -176,7 +176,7 @@ class TestSaveSlots:
 
     def test_set_active_slot_creates_entry(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         result = svc._slots.set_active_slot(456, "my-slot")
         assert result["success"] is True
         assert svc._save_sync_state.saves["456"].active_slot == "my-slot"
@@ -253,7 +253,7 @@ class TestGetSaveSetupInfo:
     async def test_scenario_a_no_local_server_has_saves(self, tmp_path):
         """Scenario A: No local save, server has saves."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         # Don't create local save
@@ -272,7 +272,7 @@ class TestGetSaveSetupInfo:
     async def test_scenario_b_local_no_server(self, tmp_path):
         """Scenario B: Local save exists, no server saves."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -288,7 +288,7 @@ class TestGetSaveSetupInfo:
     async def test_scenario_c_local_and_server_different_slots(self, tmp_path):
         """Scenario C: Local save, server has saves in different slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -304,7 +304,7 @@ class TestGetSaveSetupInfo:
     async def test_scenario_e_local_and_server_same_default_slot(self, tmp_path):
         """Scenario E: Local save, server has saves in default slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -320,7 +320,7 @@ class TestGetSaveSetupInfo:
     async def test_already_confirmed(self, tmp_path):
         """When slot is already confirmed, report it."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
             {
@@ -339,7 +339,7 @@ class TestGetSaveSetupInfo:
     async def test_multiple_server_slots(self, tmp_path):
         """Server saves across multiple slots are grouped correctly."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot="default")
@@ -359,7 +359,7 @@ class TestGetSaveSetupInfo:
         first post-confirmation sync could clobber real server saves.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -376,7 +376,7 @@ class TestGetSaveSetupInfo:
     async def test_server_error_with_oserror_recommends_server_unreachable(self, tmp_path):
         """OSError (transport-layer) failure routes to server_unreachable too."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -390,7 +390,7 @@ class TestGetSaveSetupInfo:
     async def test_server_error_preserves_local_info_in_response(self, tmp_path):
         """On server failure we still surface what we know locally."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -407,7 +407,7 @@ class TestGetSaveSetupInfo:
     async def test_no_rom_installed(self, tmp_path):
         """No installed ROM means no local files."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # Don't install any ROM
         result = await svc.get_save_setup_info(42)
         assert result["has_local_saves"] is False
@@ -417,7 +417,7 @@ class TestGetSaveSetupInfo:
     async def test_get_save_setup_info_recommends_auto_confirm_when_local_saves_no_server_slots(self, tmp_path):
         """Local saves + no server slots -> wizard should auto-confirm the default slot."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -433,7 +433,7 @@ class TestGetSaveSetupInfo:
     async def test_get_save_setup_info_recommends_wizard_when_server_has_slots(self, tmp_path):
         """Local saves + server has slots -> user must choose, wizard required."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -449,7 +449,7 @@ class TestGetSaveSetupInfo:
     async def test_get_save_setup_info_recommends_wizard_when_no_local_saves(self, tmp_path):
         """No local saves -> wizard required regardless of server state."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         _install_rom(svc, tmp_path)
         # No _create_save call - no local saves
@@ -465,7 +465,7 @@ class TestConfirmSlotChoice:
     @pytest.mark.asyncio
     async def test_confirm_sets_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         result = await svc.confirm_slot_choice(42, "default")
         assert result["success"] is True
         state = svc._save_sync_state.saves["42"]
@@ -523,7 +523,7 @@ class TestConfirmSlotChoice:
         where the legacy ``None`` semantics still live.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
@@ -547,7 +547,7 @@ class TestConfirmSlotChoice:
     async def test_confirm_migration_no_old_saves(self, tmp_path):
         """Migration with no matching old saves is a no-op."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
@@ -572,7 +572,7 @@ class TestConfirmSlotChoice:
         semantics live on the slots service.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
@@ -595,7 +595,7 @@ class TestConfirmSlotChoice:
     async def test_facade_translates_none_to_no_migration(self, tmp_path):
         """Facade: ``None`` for ``migrate_from_slot`` skips migration."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
@@ -615,7 +615,7 @@ class TestConfirmSlotChoice:
     async def test_facade_translates_no_migration_string_to_no_migration(self, tmp_path):
         """Facade: ``"__no_migration__"`` string (from frontend) skips migration."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
         _install_rom(svc, tmp_path)
@@ -649,7 +649,7 @@ class TestGetSlotSaves:
     async def test_happy_path(self, tmp_path):
         """Returns mapped save dicts for the requested slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = "server-dev-1"
 
         fake.saves[1] = {
@@ -688,7 +688,7 @@ class TestGetSlotSaves:
     async def test_empty_slot(self, tmp_path):
         """Returns empty saves list when server has no saves for the slot."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = "server-dev-1"
         # No saves added to fake
 
@@ -702,7 +702,7 @@ class TestGetSlotSaves:
     async def test_server_error(self, tmp_path):
         """Returns error response when list_saves raises an exception."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = "server-dev-1"
         fake.fail_on_next(RommApiError("connection timeout"))
 
@@ -753,7 +753,7 @@ class TestSwitchSlot:
     async def test_happy_path(self, tmp_path):
         """Files fully synced + server has saves in new slot → downloads and returns success."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
@@ -778,7 +778,7 @@ class TestSwitchSlot:
     async def test_pending_uploads_blocked(self, tmp_path):
         """Local file changed since last sync → switch blocked with reason + file list."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"modified save data")
 
@@ -815,7 +815,7 @@ class TestSwitchSlot:
         After the switch to an empty slot the local file should be gone.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
@@ -838,7 +838,7 @@ class TestSwitchSlot:
     async def test_server_unreachable(self, tmp_path):
         """list_saves raises → switch blocked with reason=server_unreachable."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
@@ -870,7 +870,7 @@ class TestSwitchSlot:
     async def test_not_installed(self, tmp_path):
         """ROM not installed → returns not_installed error."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # ROM 42 is NOT installed
 
         result = await svc.switch_slot(42, "desktop")
@@ -882,7 +882,7 @@ class TestSwitchSlot:
     async def test_empty_new_slot(self, tmp_path):
         """New slot has no saves on server → deletes local files and updates active_slot."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
@@ -909,7 +909,7 @@ class TestSwitchSlot:
     async def test_empty_slot_deletes_local_files(self, tmp_path):
         """New slot is empty → local save files deleted and file tracking cleared."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
@@ -934,7 +934,7 @@ class TestSwitchSlot:
     async def test_with_server_saves_downloads(self, tmp_path):
         """New slot has server saves → downloads them, replacing local file."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path, content=b"old local save")
         local_hash = _file_md5(str(save_path))
@@ -957,7 +957,7 @@ class TestSwitchSlot:
     async def test_no_local_files_is_ready(self, tmp_path):
         """ROM installed but no local save files → readiness check passes (nothing pending)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         # No save file created on disk
         svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
@@ -979,7 +979,7 @@ class TestSwitchSlot:
     async def test_switch_to_legacy_slot(self, tmp_path):
         """switch_slot("") sets active_slot=None, persists "" in slots dict, returns success."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
         local_hash = _file_md5(str(save_path))
@@ -1005,7 +1005,7 @@ class TestSwitchSlot:
     async def test_legacy_slot_persisted_in_get_save_slots(self, tmp_path):
         """get_save_slots includes the "" entry when active_slot is None and "" is in slots dict."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         # Set up state with legacy slot explicitly
         svc._save_sync_state.saves["99"] = RomSaveState.from_dict(
@@ -1031,7 +1031,7 @@ class TestSwitchSlot:
     async def test_server_legacy_save_maps_to_empty_string_not_default(self, tmp_path):
         """Server saves with slot=None (legacy) must map to "" not "default" in get_save_slots."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "dev-1"
 
@@ -1066,7 +1066,7 @@ class TestDeleteSlot:
         files_state=None,
     ):
         """Set up a ROM with slot state for deletion tests."""
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "dev-1"
         svc._save_sync_state.server_device_id = "server-dev-1"
         _install_rom(svc, tmp_path)
@@ -1347,7 +1347,7 @@ class TestDeleteSlot:
     async def test_delete_slot_not_installed_rom(self, tmp_path):
         """ROM not installed returns failure."""
         svc, _fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # Don't install any ROM
 
         result = await svc.delete_slot(42, "default")

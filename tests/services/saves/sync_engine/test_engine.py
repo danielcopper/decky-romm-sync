@@ -22,7 +22,7 @@ from tests.services.saves._helpers import (
 class TestSyncRomSaves:
     def test_local_only_uploads(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
@@ -34,7 +34,7 @@ class TestSyncRomSaves:
 
     def test_server_only_downloads(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         # Add server save but no local file
         ss = _server_save()
@@ -73,7 +73,7 @@ class TestSyncRomSaves:
     def test_sync_rom_saves_skips_server_only_downloads_during_pending_migration(self, tmp_path):
         """server_only matches must be skipped while migration is pending (#238)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         # Mark migration pending — detect has fired, user hasn't resolved yet.
         svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
@@ -96,7 +96,7 @@ class TestSyncRomSaves:
     def test_sync_rom_saves_uploads_local_only_during_pending_migration(self, tmp_path):
         """local_only matches must still upload during pending migration (#238)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
         svc._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
@@ -127,7 +127,7 @@ class TestSyncRomSaves:
             call_order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
@@ -156,7 +156,7 @@ class TestSyncRomSaves:
         was needed.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -178,7 +178,7 @@ class TestSyncAllSaves:
     @pytest.mark.asyncio
     async def test_syncs_multiple_roms(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
@@ -201,7 +201,7 @@ class TestSyncAllSaves:
     @pytest.mark.asyncio
     async def test_partial_failure(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
@@ -240,7 +240,7 @@ class TestSyncAllSaves:
             call_order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
@@ -269,7 +269,7 @@ class TestSyncAllSaves:
         flag must stay reserved for actual errors.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
 
@@ -290,7 +290,7 @@ class TestPreLaunchSync:
     @pytest.mark.asyncio
     async def test_downloads_server_saves(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -311,8 +311,8 @@ class TestPreLaunchSync:
     @pytest.mark.asyncio
     async def test_pre_launch_disabled_in_settings(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
-        svc._save_sync_state.settings.sync_before_launch = False
+        svc._config.settings["save_sync_enabled"] = True
+        svc._config.settings["sync_before_launch"] = False
         svc._save_sync_state.device_id = "test-device"
 
         result = await svc.pre_launch_sync(42)
@@ -328,7 +328,7 @@ class TestPreLaunchSync:
             order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
 
         # Track when is_save_sort_changed is consulted.
@@ -351,7 +351,7 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_uploads_changed_saves(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"new save data")
@@ -370,8 +370,8 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_post_exit_disabled_in_settings(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
-        svc._save_sync_state.settings.sync_after_exit = False
+        svc._config.settings["save_sync_enabled"] = True
+        svc._config.settings["sync_after_exit"] = False
         svc._save_sync_state.device_id = "test-device"
 
         result = await svc.post_exit_sync(42)
@@ -380,7 +380,7 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_auto_registers_device(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # No device_id set
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
@@ -407,7 +407,7 @@ class TestPostExitSync:
             call_order.append("detect")
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
@@ -436,7 +436,7 @@ class TestPostExitSync:
             raise RuntimeError("cfg file unreadable")
 
         svc, _ = make_service(tmp_path, detect_sort_change=boom)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
@@ -458,7 +458,7 @@ class TestPostExitSync:
         signal that sync is blocked on manual resolution.
         """
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -520,7 +520,7 @@ class TestMigrationPendingGuards:
             tmp_path,
             is_retrodeck_migration_pending=lambda: True,
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"unsyncable")
@@ -540,7 +540,7 @@ class TestMigrationPendingGuards:
             tmp_path,
             is_retrodeck_migration_pending=lambda: True,
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"unsyncable")
@@ -560,7 +560,7 @@ class TestPostExitServerOfflineGuard:
     @pytest.mark.asyncio
     async def test_post_exit_sync_returns_offline_when_heartbeat_raises(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
@@ -600,7 +600,7 @@ class TestSyncCallableErrorMessages:
     @pytest.mark.asyncio
     async def test_pre_launch_sync_message_includes_error_count(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -618,7 +618,7 @@ class TestSyncCallableErrorMessages:
     @pytest.mark.asyncio
     async def test_post_exit_sync_message_includes_error_count(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -636,7 +636,7 @@ class TestSyncCallableErrorMessages:
     @pytest.mark.asyncio
     async def test_sync_rom_saves_message_includes_error_count(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -688,7 +688,7 @@ class TestSyncEngineDelegates:
     async def test_list_devices_delegates_to_device_registry(self, tmp_path):
         """SyncEngine.list_devices forwards to DeviceRegistry.list_devices."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = "device-1"
         # Seed a registered device on the fake so list_devices returns non-empty.
         fake._registered_devices.append({"id": "device-1", "name": "test-host"})
@@ -707,7 +707,7 @@ class TestPreLaunchSaveSortGate:
     @pytest.mark.asyncio
     async def test_pre_launch_sync_returns_save_sort_changed(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         # Flag save-sort changed via the rom_info state path used by RomInfoService.

@@ -23,7 +23,7 @@ class TestEnsureDeviceRegisteredFailurePaths:
     @pytest.mark.asyncio
     async def test_pre_launch_sync_returns_device_not_registered_on_failure(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # No device_id set — triggers ensure_device_registered.
         _install_rom(svc, tmp_path)
         # register_device raises → ensure_device_registered returns success=False.
@@ -39,7 +39,7 @@ class TestEnsureDeviceRegisteredFailurePaths:
     @pytest.mark.asyncio
     async def test_post_exit_sync_returns_device_not_registered_on_failure(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # No device_id set.
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
@@ -55,7 +55,7 @@ class TestEnsureDeviceRegisteredFailurePaths:
     @pytest.mark.asyncio
     async def test_sync_rom_saves_returns_device_not_registered_on_failure(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # No device_id set.
         _install_rom(svc, tmp_path)
         fake.fail_on_next(RommApiError("Server unreachable"))
@@ -69,7 +69,7 @@ class TestEnsureDeviceRegisteredFailurePaths:
     @pytest.mark.asyncio
     async def test_sync_all_saves_returns_device_not_registered_on_failure(self, tmp_path):
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # No device_id set.
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         fake.fail_on_next(RommApiError("Server unreachable"))

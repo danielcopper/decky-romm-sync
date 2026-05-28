@@ -5,10 +5,17 @@ Pure data shapes — no I/O, no logging, no service/adapter imports.
 JSON via ``SaveSyncState.from_dict`` / ``SaveSyncState.to_dict``.
 Legacy schema migrations apply inside ``from_dict``.
 
-Aggregate root is :class:`SaveSyncState`. Per-ROM, per-file, playtime,
-and settings shapes are reflected in dedicated dataclasses. Mutation
-is supported (dataclasses are *not* frozen) so existing code paths
-that update nested fields in place continue to work.
+The on-disk file carries device identity (``device_id`` /
+``server_device_id``), per-ROM save state, and playtime tracking. The
+save-sync feature toggles and the device label live in ``settings.json``
+(owned by ``StateService`` over the live settings dict), not here.
+
+Aggregate root is :class:`SaveSyncState`. Per-ROM, per-file, and
+playtime shapes are reflected in dedicated dataclasses. Mutation is
+supported (dataclasses are *not* frozen) so existing code paths that
+update nested fields in place continue to work. :class:`SaveSyncSettings`
+is a read-view value object built by ``StateService`` from the settings
+dict — it is no longer parsed from or persisted to this file.
 """
 
 from __future__ import annotations
@@ -254,11 +261,13 @@ class PlaytimeEntry:
 
 @dataclass
 class SaveSyncSettings:
-    """Save-sync feature settings (user-toggleable).
+    """Read-view value object for the five save-sync feature toggles.
 
-    Legacy keys (``conflict_mode``, ``clock_skew_tolerance_sec``)
-    are dropped at :meth:`from_dict`. Any forward-compatible unknown
-    keys are preserved in ``extra``.
+    The authoritative store is ``settings.json`` — ``StateService``
+    builds this object from the live settings dict on demand. It is not
+    parsed from or persisted to ``save_sync_state.json``; :meth:`to_dict`
+    exists only to surface the five knobs to the frontend in the shape it
+    already expects.
     """
 
     save_sync_enabled: bool = False
@@ -266,73 +275,35 @@ class SaveSyncSettings:
     sync_after_exit: bool = True
     default_slot: str | None = "default"
     autocleanup_limit: int = 10
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    _KNOWN_KEYS = frozenset(
-        {
-            "save_sync_enabled",
-            "sync_before_launch",
-            "sync_after_exit",
-            "default_slot",
-            "autocleanup_limit",
-        }
-    )
-    _LEGACY_DROPPED_KEYS = frozenset({"conflict_mode", "clock_skew_tolerance_sec"})
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> SaveSyncSettings:
-        """Build from a raw dict, dropping legacy keys."""
-        if not isinstance(data, dict):
-            return cls()
-        extra = {k: v for k, v in data.items() if k not in cls._KNOWN_KEYS and k not in cls._LEGACY_DROPPED_KEYS}
-        # ``default_slot=None`` is the legacy ("no slots") mode; preserve it
-        # rather than collapsing it to the "default" string default.
-        raw_slot = data.get("default_slot", "default") if "default_slot" in data else "default"
-        if raw_slot is None:
-            default_slot: str | None = None
-        else:
-            slot_str = str(raw_slot)
-            default_slot = slot_str if slot_str else None
-        return cls(
-            save_sync_enabled=bool(data.get("save_sync_enabled", False)),
-            sync_before_launch=bool(data.get("sync_before_launch", True)),
-            sync_after_exit=bool(data.get("sync_after_exit", True)),
-            default_slot=default_slot,
-            autocleanup_limit=int(data.get("autocleanup_limit", 10) or 10),
-            extra=extra,
-        )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialise to the on-disk JSON dict."""
-        out: dict[str, Any] = {
+        """Serialise the five knobs to the frontend-facing dict shape."""
+        return {
             "save_sync_enabled": self.save_sync_enabled,
             "sync_before_launch": self.sync_before_launch,
             "sync_after_exit": self.sync_after_exit,
             "default_slot": self.default_slot,
             "autocleanup_limit": self.autocleanup_limit,
         }
-        for k, v in self.extra.items():
-            out[k] = v
-        return out
 
 
 @dataclass
 class SaveSyncState:
     """Aggregate root for the on-disk ``save_sync_state.json``.
 
-    Carries device identity, per-ROM save state, playtime tracking,
-    and feature settings. Persistence flows through :meth:`to_dict` /
-    :meth:`from_dict`; schema migrations apply on load. Mutation is
-    in-place — held by reference across services.
+    Carries device identity, per-ROM save state, and playtime tracking.
+    The save-sync feature toggles and the device label live in
+    ``settings.json`` (owned by ``StateService``), not on this aggregate.
+    Persistence flows through :meth:`to_dict` / :meth:`from_dict`; schema
+    migrations apply on load. Mutation is in-place — held by reference
+    across services.
     """
 
     version: int = _SCHEMA_VERSION
     device_id: str | None = None
-    device_name: str | None = None
     server_device_id: int | str | None = None
     saves: dict[str, RomSaveState] = field(default_factory=dict)
     playtime: dict[str, PlaytimeEntry] = field(default_factory=dict)
-    settings: SaveSyncSettings = field(default_factory=SaveSyncSettings)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SaveSyncState:
@@ -352,11 +323,9 @@ class SaveSyncState:
         return cls(
             version=int(data.get("version", _SCHEMA_VERSION) or _SCHEMA_VERSION),
             device_id=data.get("device_id"),
-            device_name=data.get("device_name"),
             server_device_id=data.get("server_device_id"),
             saves=saves,
             playtime=playtime,
-            settings=SaveSyncSettings.from_dict(data.get("settings", {})),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -368,11 +337,9 @@ class SaveSyncState:
         return {
             "version": self.version,
             "device_id": self.device_id,
-            "device_name": self.device_name,
             "server_device_id": self.server_device_id,
             "saves": {rid: rs.to_dict() for rid, rs in self.saves.items()},
             "playtime": {rid: pe.to_dict() for rid, pe in self.playtime.items()},
-            "settings": self.settings.to_dict(),
         }
 
     def replace_with(self, other: SaveSyncState) -> None:
@@ -384,11 +351,9 @@ class SaveSyncState:
         """
         self.version = other.version
         self.device_id = other.device_id
-        self.device_name = other.device_name
         self.server_device_id = other.server_device_id
         self.saves = other.saves
         self.playtime = other.playtime
-        self.settings = other.settings
 
 
 __all__ = [

@@ -11,6 +11,7 @@ from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
+from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.system_time import FakeClock
 from models.state import make_default_plugin_state
 
@@ -50,6 +51,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         state=make_default_plugin_state(),
         save_sync_state=SaveService.make_default_state(),
         save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
+        settings_persister=FakeSettingsPersister(),
         save_file_store=save_file_store,
         loop=asyncio.get_event_loop(),
         logger=logging.getLogger("test"),
@@ -135,7 +137,7 @@ def _file_md5(path):
 
 def _enable_sync_with_device(svc, device_id: str = "device-1") -> None:
     """Flip on save sync and bind a server device id (matches FakeSaveApi)."""
-    svc._save_sync_state.settings.save_sync_enabled = True
+    svc._config.settings["save_sync_enabled"] = True
     svc._save_sync_state.device_id = device_id
     svc._save_sync_state.server_device_id = device_id
 

@@ -81,12 +81,15 @@ def plugin(tmp_path):
     fake_api = FakeSaveApi(save_file_store=save_file_adapter)
     p._save_sync_state = SaveService.make_default_state()
     saves_path = str(tmp_path / "retrodeck" / "saves")
+    # Shared settings.json view: the save-sync toggles + device label live
+    # here (#822), read by both SaveService's StateService and PlaytimeService.
+    p._save_settings = {"log_level": "debug"}
 
     p._save_sync_service = SaveService(
         config=SaveServiceConfig(
             romm_api=fake_api,
             retry=_make_retry(),
-            settings={"log_level": "debug"},
+            settings=p._save_settings,
             state=p._state,
             save_sync_state=p._save_sync_state,
             loop=asyncio.get_event_loop(),
@@ -99,6 +102,7 @@ def plugin(tmp_path):
                     logger=logging.getLogger("test"),
                 )
             ),
+            settings_persister=MagicMock(),
             save_file_store=save_file_adapter,
             retrodeck_paths=FakeRetroDeckPaths(
                 saves=saves_path,
@@ -122,6 +126,7 @@ def plugin(tmp_path):
             romm_api=fake_api,
             retry=_make_retry(),
             save_sync_state=p._save_sync_state,
+            settings=p._save_settings,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
@@ -139,7 +144,7 @@ def plugin(tmp_path):
     p._migration_service.is_retrodeck_migration_pending.return_value = False
 
     # Enable save sync for tests — matches pre-feature-flag behavior
-    p._save_sync_state.settings.save_sync_enabled = True
+    p._save_settings["save_sync_enabled"] = True
     return p
 
 
@@ -223,7 +228,7 @@ class TestDeviceRegistration:
     async def test_already_registered_returns_cached(self, plugin):
         """If device_id and server_device_id already set, returns immediately."""
         plugin._save_sync_state.device_id = "existing-uuid"
-        plugin._save_sync_state.device_name = "myhost"
+        plugin._save_settings["device_name"] = "myhost"
         plugin._save_sync_state.server_device_id = "server-uuid"
 
         result = await plugin.ensure_device_registered()
@@ -241,7 +246,7 @@ class TestDeviceRegistration:
         result = await plugin.ensure_device_registered()
 
         assert result["device_name"] == "steamdeck"
-        assert plugin._save_sync_state.device_name == "steamdeck"
+        assert plugin._save_settings["device_name"] == "steamdeck"
 
     @pytest.mark.asyncio
     async def test_generates_unique_ids(self, plugin):
@@ -283,7 +288,7 @@ class TestListDevices:
     @pytest.mark.asyncio
     async def test_list_devices_disabled_when_sync_off(self, plugin):
         """Returns disabled=True when save sync is disabled."""
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
 
         result = await plugin.list_devices()
 
@@ -302,7 +307,7 @@ class TestPreLaunchSync:
     @pytest.mark.asyncio
     async def test_skips_when_disabled(self, plugin):
         """Returns early when sync_before_launch is false."""
-        plugin._save_sync_state.settings.sync_before_launch = False
+        plugin._save_settings["sync_before_launch"] = False
 
         result = await plugin.pre_launch_sync(42)
 
@@ -321,7 +326,7 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_skips_when_disabled(self, plugin):
         """Returns early when sync_after_exit is false."""
-        plugin._save_sync_state.settings.sync_after_exit = False
+        plugin._save_settings["sync_after_exit"] = False
 
         result = await plugin._save_sync_service.post_exit_sync(42)
 
@@ -685,10 +690,10 @@ class TestSaveSyncSettings:
         # sync_after_exit unchanged
         assert result["settings"]["sync_after_exit"] is True
 
-        # Persisted
-        path = tmp_path / "save_sync_state.json"
-        data = json.loads(path.read_text())
-        assert data["settings"]["save_sync_enabled"] is True
+        # Persisted into the live settings.json view (#822), flushed via the
+        # settings persister — not save_sync_state.json.
+        assert plugin._save_settings["save_sync_enabled"] is True
+        assert plugin._save_settings["sync_before_launch"] is False
 
     @pytest.mark.asyncio
     async def test_unknown_keys_ignored(self, plugin):
@@ -783,15 +788,15 @@ class TestSaveSyncFeatureFlag:
 
     @pytest.mark.asyncio
     async def test_default_disabled(self, plugin):
-        """save_sync_enabled defaults to False in fresh state."""
-        # Reset to defaults (no test fixture override).
-        plugin._save_sync_state.replace_with(SaveService.make_default_state())
-        assert plugin._save_sync_state.settings.save_sync_enabled is False
+        """save_sync_enabled defaults to False when absent from settings.json."""
+        # Reset to defaults — the toggle lives in settings.json now (#822).
+        plugin._save_settings.pop("save_sync_enabled", None)
+        assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is False
 
     @pytest.mark.asyncio
     async def test_ensure_device_disabled(self, plugin):
         """ensure_device_registered returns disabled marker when save sync off."""
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
         result = await plugin.ensure_device_registered()
         assert result["success"] is False
         assert result.get("disabled") is True
@@ -800,7 +805,7 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_pre_launch_sync_disabled(self, plugin):
         """pre_launch_sync skips when save sync disabled."""
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
         result = await plugin.pre_launch_sync(42)
         assert result["success"] is True
         assert result["synced"] == 0
@@ -809,7 +814,7 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_post_exit_sync_disabled(self, plugin):
         """post_exit_sync skips when save sync disabled."""
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
         result = await plugin._save_sync_service.post_exit_sync(42)
         assert result["success"] is True
         assert result["synced"] == 0
@@ -818,7 +823,7 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_sync_rom_saves_disabled(self, plugin):
         """sync_rom_saves returns error when save sync disabled."""
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
         result = await plugin.sync_rom_saves(42)
         assert result["success"] is False
         assert "disabled" in result["message"].lower()
@@ -826,7 +831,7 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_sync_all_saves_disabled(self, plugin):
         """sync_all_saves returns error when save sync disabled."""
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
         result = await plugin.sync_all_saves()
         assert result["success"] is False
         assert "disabled" in result["message"].lower()
@@ -834,17 +839,17 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_enable_via_settings_update(self, plugin):
         """save_sync_enabled can be toggled via update_save_sync_settings."""
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
         result = await plugin.update_save_sync_settings({"save_sync_enabled": True})
         assert result["success"] is True
-        assert plugin._save_sync_state.settings.save_sync_enabled is True
+        assert plugin._save_settings["save_sync_enabled"] is True
 
     @pytest.mark.asyncio
     async def test_disable_via_settings_update(self, plugin):
         """save_sync_enabled can be disabled via update_save_sync_settings."""
         result = await plugin.update_save_sync_settings({"save_sync_enabled": False})
         assert result["success"] is True
-        assert plugin._save_sync_state.settings.save_sync_enabled is False
+        assert plugin._save_settings["save_sync_enabled"] is False
 
     @pytest.mark.asyncio
     async def test_get_settings_includes_flag(self, plugin):
@@ -855,9 +860,9 @@ class TestSaveSyncFeatureFlag:
     @pytest.mark.asyncio
     async def test_is_save_sync_enabled_helper(self, plugin):
         """is_save_sync_enabled (on StateService) reflects the settings value."""
-        plugin._save_sync_state.settings.save_sync_enabled = True
+        plugin._save_settings["save_sync_enabled"] = True
         assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is True
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin._save_settings["save_sync_enabled"] = False
         assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is False
 
 

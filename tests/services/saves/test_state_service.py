@@ -1,9 +1,12 @@
-"""Tests for StateService (state.py) — save_sync_state.json persistence and migrations."""
+"""Tests for StateService (state.py) — save_sync_state.json persistence,
+migrations, and the settings.json-backed save-sync feature toggles + device
+label (#822)."""
 
 import json
 import os
 from typing import cast
 
+from fakes.fake_settings_persister import FakeSettingsPersister
 from models.state import ShortcutRegistryEntry
 
 from domain.save_state import (
@@ -25,11 +28,10 @@ class TestStateManagement:
         state = SaveService.make_default_state()
         assert state.device_id is None
         assert state.saves == {}
-        assert state.settings.save_sync_enabled is False
 
     def test_init_state_populates_defaults(self, tmp_path):
         svc, _ = make_service(tmp_path, save_sync_state=SaveSyncState())
-        assert svc._save_sync_state.settings.save_sync_enabled is False
+        assert svc.get_save_sync_settings()["save_sync_enabled"] is False
         assert svc._save_sync_state.saves == {}
 
     def test_init_state_preserves_existing(self, tmp_path):
@@ -143,15 +145,14 @@ class TestStateManagement:
         # domain-level coverage in tests/domain/test_save_state.py.
         assert files["good.srm"].tracked_save_id == 100
 
-    def test_settings_legacy_keys_stripped_on_load(self, tmp_path):
-        """Legacy ``conflict_mode`` and ``clock_skew_tolerance_sec`` settings
-        are dropped when state loads from disk. Other keys survive."""
+    def test_settings_and_device_name_not_persisted_to_state_file(self, tmp_path):
+        """The feature toggles + device label live in settings.json (#822),
+        so the save_sync_state.json file no longer carries a ``settings``
+        block or a ``device_name`` key — even a legacy file's settings are
+        not round-tripped back to disk."""
         legacy = {
-            "settings": {
-                "conflict_mode": "ask_me",
-                "clock_skew_tolerance_sec": 60,
-                "save_sync_enabled": True,
-            },
+            "settings": {"save_sync_enabled": True},
+            "device_name": "old-deck",
         }
         (tmp_path / "save_sync_state.json").write_text(json.dumps(legacy))
 
@@ -160,9 +161,8 @@ class TestStateManagement:
         svc.save_state()
 
         on_disk = json.loads((tmp_path / "save_sync_state.json").read_text())
-        assert "conflict_mode" not in on_disk["settings"]
-        assert "clock_skew_tolerance_sec" not in on_disk["settings"]
-        assert on_disk["settings"]["save_sync_enabled"] is True
+        assert "settings" not in on_disk
+        assert "device_name" not in on_disk
 
     def test_save_and_load_state(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -287,7 +287,7 @@ class TestStateBackwardCompat:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
@@ -314,3 +314,129 @@ class TestStateBackwardCompat:
         file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
         assert file_state.tracked_save_id == 99
         assert file_state.last_sync_server_save_id == 99
+
+
+class TestSaveSyncSettingsOwnership:
+    """The five feature toggles + device label live in settings.json (#822).
+
+    StateService reads them straight out of the injected settings dict and
+    flushes mutations through the SettingsPersister — never the save-sync
+    aggregate.
+    """
+
+    def _make(self, tmp_path, settings):
+        persister = FakeSettingsPersister()
+        svc, _ = make_service(tmp_path, settings=settings, settings_persister=persister)
+        return svc, persister
+
+    def test_is_save_sync_enabled_reads_settings_dict(self, tmp_path):
+        svc, _ = self._make(tmp_path, {"save_sync_enabled": True})
+        assert svc._state_svc.is_save_sync_enabled() is True
+
+    def test_is_save_sync_enabled_defaults_false_when_missing(self, tmp_path):
+        svc, _ = self._make(tmp_path, {})
+        assert svc._state_svc.is_save_sync_enabled() is False
+
+    def test_get_settings_builds_view_from_settings_dict(self, tmp_path):
+        svc, _ = self._make(
+            tmp_path,
+            {
+                "save_sync_enabled": True,
+                "sync_before_launch": False,
+                "sync_after_exit": False,
+                "default_slot": "alt",
+                "autocleanup_limit": 5,
+            },
+        )
+        settings = svc._state_svc.get_settings()
+        assert settings.save_sync_enabled is True
+        assert settings.sync_before_launch is False
+        assert settings.sync_after_exit is False
+        assert settings.default_slot == "alt"
+        assert settings.autocleanup_limit == 5
+
+    def test_get_settings_applies_default_coercions(self, tmp_path):
+        """Missing keys fall back to the legacy defaults."""
+        svc, _ = self._make(tmp_path, {})
+        settings = svc._state_svc.get_settings()
+        assert settings.save_sync_enabled is False
+        assert settings.sync_before_launch is True
+        assert settings.sync_after_exit is True
+        assert settings.default_slot == "default"
+        assert settings.autocleanup_limit == 10
+
+    def test_get_settings_preserves_none_default_slot(self, tmp_path):
+        """``default_slot=None`` is the no-slots mode and must survive."""
+        svc, _ = self._make(tmp_path, {"default_slot": None})
+        assert svc._state_svc.get_settings().default_slot is None
+
+    def test_get_settings_empty_default_slot_collapses_to_none(self, tmp_path):
+        svc, _ = self._make(tmp_path, {"default_slot": ""})
+        assert svc._state_svc.get_settings().default_slot is None
+
+    def test_get_settings_autocleanup_zero_guarded_to_ten(self, tmp_path):
+        svc, _ = self._make(tmp_path, {"autocleanup_limit": 0})
+        assert svc._state_svc.get_settings().autocleanup_limit == 10
+
+    def test_get_save_sync_settings_returns_five_knob_dict(self, tmp_path):
+        svc, _ = self._make(tmp_path, {"save_sync_enabled": True, "default_slot": "alt"})
+        result = svc._state_svc.get_save_sync_settings()
+        assert result == {
+            "save_sync_enabled": True,
+            "sync_before_launch": True,
+            "sync_after_exit": True,
+            "default_slot": "alt",
+            "autocleanup_limit": 10,
+        }
+
+    def test_update_writes_to_settings_dict_and_flushes(self, tmp_path):
+        settings = {"save_sync_enabled": False}
+        svc, persister = self._make(tmp_path, settings)
+
+        result = svc._state_svc.update_save_sync_settings(
+            {"save_sync_enabled": True, "default_slot": "alt", "autocleanup_limit": 3}
+        )
+
+        assert result["success"] is True
+        assert result["settings"]["save_sync_enabled"] is True
+        assert result["settings"]["default_slot"] == "alt"
+        assert result["settings"]["autocleanup_limit"] == 3
+        # Written into the live settings dict, not the aggregate.
+        assert settings["save_sync_enabled"] is True
+        assert settings["default_slot"] == "alt"
+        assert settings["autocleanup_limit"] == 3
+        # Flushed through the settings persister, not save_sync_state.json.
+        assert persister.save_count == 1
+
+    def test_update_ignores_unknown_keys(self, tmp_path):
+        settings = {}
+        svc, persister = self._make(tmp_path, settings)
+
+        svc._state_svc.update_save_sync_settings({"not_a_knob": "x", "save_sync_enabled": True})
+
+        assert "not_a_knob" not in settings
+        assert settings["save_sync_enabled"] is True
+        assert persister.save_count == 1
+
+    def test_update_autocleanup_limit_floored_to_one(self, tmp_path):
+        settings = {}
+        svc, _ = self._make(tmp_path, settings)
+        svc._state_svc.update_save_sync_settings({"autocleanup_limit": 0})
+        assert settings["autocleanup_limit"] == 1
+
+    def test_get_device_name_reads_settings_dict(self, tmp_path):
+        svc, _ = self._make(tmp_path, {"device_name": "steamdeck"})
+        assert svc._state_svc.get_device_name() == "steamdeck"
+
+    def test_get_device_name_none_when_unset(self, tmp_path):
+        svc, _ = self._make(tmp_path, {})
+        assert svc._state_svc.get_device_name() is None
+
+    def test_set_device_name_writes_to_settings_and_flushes(self, tmp_path):
+        settings = {}
+        svc, persister = self._make(tmp_path, settings)
+
+        svc._state_svc.set_device_name("steamdeck")
+
+        assert settings["device_name"] == "steamdeck"
+        assert persister.save_count == 1

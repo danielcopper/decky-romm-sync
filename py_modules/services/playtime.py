@@ -32,14 +32,16 @@ class PlaytimeServiceConfig:
     """Frozen wiring bundle handed to ``PlaytimeService.__init__``.
 
     Holds the Protocol-typed RomM adapter and retry strategy, the typed
-    save-sync aggregate, runtime infrastructure, clock/debug-logger
-    seams, and the persistence callback PlaytimeService needs at
-    construction time.
+    save-sync aggregate, the live ``settings.json`` dict (home of the
+    device label stamped onto synced playtime notes), runtime
+    infrastructure, clock/debug-logger seams, and the persistence
+    callback PlaytimeService needs at construction time.
     """
 
     romm_api: RommPlaytimeApi
     retry: RetryStrategy
     save_sync_state: SaveSyncState
+    settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
@@ -56,6 +58,7 @@ class PlaytimeService:
         self._romm_api = config.romm_api
         self._retry = config.retry
         self._save_sync_state = config.save_sync_state
+        self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
         self._clock = config.clock
@@ -135,7 +138,7 @@ class PlaytimeService:
             return
 
         local_total = entry.total_seconds
-        device_name = self._save_sync_state.device_name or ""
+        device_name = self._settings.get("device_name") or ""
 
         try:
             note = self._retry.with_retry(self._get_playtime_note, rom_id)

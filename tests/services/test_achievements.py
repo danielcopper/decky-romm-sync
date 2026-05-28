@@ -89,6 +89,7 @@ def plugin(clock):
             state=p._state,
             metadata_cache=p._metadata_cache,
             save_sync_state=p._save_sync_state,
+            settings=p.settings,
             logger=decky.logger,
             clock=clock,
             bios_checker=bios_checker,

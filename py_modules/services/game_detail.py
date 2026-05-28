@@ -32,15 +32,16 @@ ACHIEVEMENT_TTL_SEC = 3600  # 1 hour
 class GameDetailServiceConfig:
     """Frozen wiring bundle handed to ``GameDetailService.__init__``.
 
-    Holds the live state and metadata cache dicts, the typed save-sync
-    aggregate, runtime infrastructure, clock seam, and the Protocol-
-    typed reader adapters (``BiosChecker``, ``AchievementsReader``)
+    Holds the live state, metadata cache, and settings dicts, the typed
+    save-sync aggregate, runtime infrastructure, clock seam, and the
+    Protocol-typed reader adapters (``BiosChecker``, ``AchievementsReader``)
     GameDetailService consults to assemble the game-detail payload.
     """
 
     state: PluginState
     metadata_cache: MetadataCache
     save_sync_state: SaveSyncState
+    settings: dict
     logger: logging.Logger
     clock: Clock
     bios_checker: BiosChecker
@@ -54,6 +55,7 @@ class GameDetailService:
         self._state = config.state
         self._metadata_cache = config.metadata_cache
         self._save_sync_state = config.save_sync_state
+        self._settings = config.settings
         self._logger = config.logger
         self._clock = config.clock
         self._bios_checker = config.bios_checker
@@ -159,7 +161,7 @@ class GameDetailService:
         installed = rom_id_str in self._state["installed_roms"]
 
         # Save sync
-        save_sync_enabled = self._save_sync_state.settings.save_sync_enabled
+        save_sync_enabled = bool(self._settings.get("save_sync_enabled", False))
         save_status = self._build_save_status(rom_id_str)
         save_sync_display = None
         if save_status is not None:

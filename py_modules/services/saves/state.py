@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     import logging
 
     from services.protocols import SaveSyncStatePersister
+    from services.protocols.persistence import SettingsPersister
 
 
 @dataclass(frozen=True)
@@ -34,23 +35,35 @@ class StateServiceConfig:
 
     Holds the live :class:`SaveSyncState` aggregate, the main plugin
     state dict (used for orphan-pruning against the shortcut registry),
-    the Protocol-typed persister, and the standard-library logger.
+    the live ``settings.json`` dict + its Protocol-typed persister (the
+    home of the save-sync feature toggles and the device label), the
+    save-sync-state persister, and the standard-library logger.
     """
 
     save_sync_state: SaveSyncState
     state: PluginState
+    settings: dict
     persister: SaveSyncStatePersister
+    settings_persister: SettingsPersister
     logger: logging.Logger
 
 
 class StateService:
-    """Owns the live ``SaveSyncState`` aggregate and its persistence."""
+    """Owns the live ``SaveSyncState`` aggregate and its persistence.
+
+    Also the settings.json-backed owner of the five save-sync feature
+    toggles and the device label: those values live in the injected
+    settings dict and flush through the ``SettingsPersister``, not the
+    save-sync aggregate.
+    """
 
     def __init__(self, *, config: StateServiceConfig) -> None:
         self._config = config
         self._save_sync_state = config.save_sync_state
         self._state = config.state
+        self._settings = config.settings
         self._persister = config.persister
+        self._settings_persister = config.settings_persister
         self._logger = config.logger
 
     @property
@@ -104,8 +117,26 @@ class StateService:
         return rom.files.get(filename)
 
     def get_settings(self) -> SaveSyncSettings:
-        """Return the live settings dataclass."""
-        return self._save_sync_state.settings
+        """Build a read-view of the five save-sync knobs from the settings dict.
+
+        Applies the same coercions the legacy on-disk parse did: booleans
+        via ``bool(...)``; ``default_slot`` keeps ``None`` (no-slots mode)
+        and collapses empty strings to ``None``; ``autocleanup_limit`` via
+        ``int(...)`` with a ``or 10`` guard against ``0`` / ``None``.
+        """
+        raw_slot = self._settings.get("default_slot", "default")
+        if raw_slot is None:
+            default_slot: str | None = None
+        else:
+            slot_str = str(raw_slot)
+            default_slot = slot_str if slot_str else None
+        return SaveSyncSettings(
+            save_sync_enabled=bool(self._settings.get("save_sync_enabled", False)),
+            sync_before_launch=bool(self._settings.get("sync_before_launch", True)),
+            sync_after_exit=bool(self._settings.get("sync_after_exit", True)),
+            default_slot=default_slot,
+            autocleanup_limit=int(self._settings.get("autocleanup_limit", 10) or 10),
+        )
 
     # ------------------------------------------------------------------
     # File tracking mutations
@@ -150,7 +181,7 @@ class StateService:
 
     def is_save_sync_enabled(self) -> bool:
         """Whether the save-sync feature toggle is on."""
-        return self._save_sync_state.settings.save_sync_enabled
+        return bool(self._settings.get("save_sync_enabled", False))
 
     def get_server_device_id(self) -> str | None:
         """Server-side device id (None when this device is not yet registered)."""
@@ -158,11 +189,11 @@ class StateService:
         return str(sid) if sid is not None else None
 
     def get_save_sync_settings(self) -> dict:
-        """Return current save sync settings as the on-disk dict shape."""
-        return self._save_sync_state.settings.to_dict()
+        """Return current save sync settings as the frontend dict shape."""
+        return self.get_settings().to_dict()
 
     def update_save_sync_settings(self, settings: dict) -> dict:
-        """Update save sync settings (sync toggles, slot, etc.)."""
+        """Update save sync settings (sync toggles, slot, etc.) in settings.json."""
         allowed_keys = {
             "save_sync_enabled",
             "sync_before_launch",
@@ -171,18 +202,25 @@ class StateService:
             "autocleanup_limit",
         }
 
-        current = self._save_sync_state.settings
-
         for key, value in settings.items():
             if key not in allowed_keys:
                 continue
             value, skip = self._sanitize_setting(key, value)
             if skip:
                 continue
-            setattr(current, key, value)
+            self._settings[key] = value
 
-        self.save_state()
-        return {"success": True, "settings": current.to_dict()}
+        self._settings_persister.save_settings()
+        return {"success": True, "settings": self.get_settings().to_dict()}
+
+    def get_device_name(self) -> str | None:
+        """Return the user-set device label from settings.json (``None`` if unset)."""
+        return self._settings.get("device_name")
+
+    def set_device_name(self, name: str) -> None:
+        """Persist the device label to settings.json."""
+        self._settings["device_name"] = name
+        self._settings_persister.save_settings()
 
     @staticmethod
     def _sanitize_setting(key: str, value: object) -> tuple[object, bool]:

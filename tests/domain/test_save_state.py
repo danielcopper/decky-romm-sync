@@ -212,6 +212,8 @@ class TestPlaytimeEntry:
 
 
 class TestSaveSyncSettings:
+    """Read-view value object — built by StateService from settings.json (#822)."""
+
     def test_defaults(self) -> None:
         s = SaveSyncSettings()
         assert s.save_sync_enabled is False
@@ -220,31 +222,21 @@ class TestSaveSyncSettings:
         assert s.default_slot == "default"
         assert s.autocleanup_limit == 10
 
-    def test_from_dict_round_trip(self) -> None:
-        payload = {
+    def test_to_dict_surfaces_five_knobs(self) -> None:
+        s = SaveSyncSettings(
+            save_sync_enabled=True,
+            sync_before_launch=False,
+            sync_after_exit=False,
+            default_slot="main",
+            autocleanup_limit=5,
+        )
+        assert s.to_dict() == {
             "save_sync_enabled": True,
             "sync_before_launch": False,
             "sync_after_exit": False,
             "default_slot": "main",
             "autocleanup_limit": 5,
         }
-        s = SaveSyncSettings.from_dict(payload)
-        assert s.to_dict() == payload
-
-    def test_drops_legacy_conflict_mode(self) -> None:
-        s = SaveSyncSettings.from_dict({"conflict_mode": "ask"})
-        out = s.to_dict()
-        assert "conflict_mode" not in out
-
-    def test_drops_legacy_clock_skew(self) -> None:
-        s = SaveSyncSettings.from_dict({"clock_skew_tolerance_sec": 60})
-        out = s.to_dict()
-        assert "clock_skew_tolerance_sec" not in out
-
-    def test_unknown_keys_preserved_in_extra(self) -> None:
-        s = SaveSyncSettings.from_dict({"future_toggle": True})
-        assert s.extra == {"future_toggle": True}
-        assert s.to_dict()["future_toggle"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -256,17 +248,9 @@ def _default_state_dict() -> dict:
     return {
         "version": 1,
         "device_id": None,
-        "device_name": None,
         "server_device_id": None,
         "saves": {},
         "playtime": {},
-        "settings": {
-            "save_sync_enabled": False,
-            "sync_before_launch": True,
-            "sync_after_exit": True,
-            "default_slot": "default",
-            "autocleanup_limit": 10,
-        },
     }
 
 
@@ -283,7 +267,6 @@ class TestSaveSyncState:
         payload = {
             "version": 1,
             "device_id": "abc",
-            "device_name": "deck",
             "server_device_id": "server-1",
             "saves": {
                 "42": {
@@ -319,13 +302,6 @@ class TestSaveSyncState:
                     "note_id": 7,
                 },
             },
-            "settings": {
-                "save_sync_enabled": True,
-                "sync_before_launch": True,
-                "sync_after_exit": True,
-                "default_slot": "default",
-                "autocleanup_limit": 10,
-            },
         }
         s = SaveSyncState.from_dict(payload)
         assert s.to_dict() == payload
@@ -335,11 +311,9 @@ class TestSaveSyncState:
         payload = {
             "version": 1,
             "device_id": "d",
-            "device_name": None,
             "server_device_id": None,
             "saves": {"7": {"emulator": "retroarch", "system": "snes"}},
             "playtime": {"7": {"total_seconds": 100}},
-            "settings": {"save_sync_enabled": True},
         }
         s = SaveSyncState.from_dict(payload)
         s2 = SaveSyncState.from_dict(s.to_dict())
@@ -352,14 +326,21 @@ class TestSaveSyncState:
         assert s.saves["1"].last_synced_core == "core_libretro"
         assert "active_core" not in s.to_dict()["saves"]["1"]
 
-    def test_legacy_settings_keys_stripped(self) -> None:
+    def test_legacy_settings_and_device_name_ignored_on_load(self) -> None:
+        """The toggles + device label moved to settings.json (#822), so a
+        legacy file's ``settings`` block and ``device_name`` are not parsed
+        onto the aggregate and never written back to disk."""
         s = SaveSyncState.from_dict(
-            {"settings": {"conflict_mode": "ask", "clock_skew_tolerance_sec": 60, "save_sync_enabled": True}},
+            {
+                "settings": {"save_sync_enabled": True},
+                "device_name": "old-deck",
+                "device_id": "kept",
+            },
         )
-        out = s.to_dict()["settings"]
-        assert "conflict_mode" not in out
-        assert "clock_skew_tolerance_sec" not in out
-        assert out["save_sync_enabled"] is True
+        assert s.device_id == "kept"
+        out = s.to_dict()
+        assert "settings" not in out
+        assert "device_name" not in out
 
     def test_dismissed_newer_save_id_stripped(self) -> None:
         s = SaveSyncState.from_dict(

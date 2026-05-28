@@ -4,6 +4,7 @@ import logging
 from typing import cast
 
 from fakes.fake_save_sync_state_persister import FakeSaveSyncStatePersister
+from fakes.fake_settings_persister import FakeSettingsPersister
 from models.state import ShortcutRegistryEntry, make_default_plugin_state
 
 from domain.save_state import FileSyncState, PlaytimeEntry, RomSaveState
@@ -12,6 +13,7 @@ from services.saves.state import StateService, StateServiceConfig
 
 def _make_state_svc(
     persister: FakeSaveSyncStatePersister | None = None,
+    settings: dict | None = None,
 ) -> tuple[StateService, FakeSaveSyncStatePersister]:
     save_sync_state = StateService.make_default_state()
     state = make_default_plugin_state()
@@ -21,7 +23,9 @@ def _make_state_svc(
             config=StateServiceConfig(
                 save_sync_state=save_sync_state,
                 state=state,
+                settings=settings if settings is not None else {},
                 persister=p,
+                settings_persister=FakeSettingsPersister(),
                 logger=logging.getLogger("test"),
             ),
         ),
@@ -117,35 +121,37 @@ class TestLoadState:
 
         assert persister.load_count == 1
         assert svc.state.device_id == "preserved"
-        # Default settings still present (not wiped or overwritten with None).
-        assert svc.state.settings.save_sync_enabled is False
+        # The feature toggle reads from settings.json (empty → default False).
+        assert svc.is_save_sync_enabled() is False
 
     def test_load_state_merges_top_level_fields(self):
         canned = {
             "version": 1,
             "device_id": "dev-1",
-            "device_name": "deck",
+            "device_name": "deck",  # ignored — lives in settings.json now (#822)
             "server_device_id": "srv-1",
             "saves": {"42": {"files": {}}},
             "playtime": {"42": {"total_seconds": 3600}},
-            "settings": {"save_sync_enabled": True, "default_slot": "alt"},
+            "settings": {"save_sync_enabled": True, "default_slot": "alt"},  # ignored
         }
         svc, _ = _make_state_svc(FakeSaveSyncStatePersister(canned_load=canned))
 
         svc.load_state()
 
         assert svc.state.device_id == "dev-1"
-        assert svc.state.device_name == "deck"
         assert svc.state.server_device_id == "srv-1"
         assert "42" in svc.state.saves
         assert svc.state.playtime["42"].total_seconds == 3600
-        # Settings merge with defaults — explicit keys win, others stay default.
-        assert svc.state.settings.save_sync_enabled is True
-        assert svc.state.settings.default_slot == "alt"
-        assert svc.state.settings.sync_before_launch is True  # default kept
+        # The legacy settings + device_name on the loaded payload are NOT
+        # parsed onto the aggregate — they moved to settings.json (#822).
+        on_disk = svc.state.to_dict()
+        assert "settings" not in on_disk
+        assert "device_name" not in on_disk
 
     def test_load_state_runs_migration_on_loaded_payload(self):
-        """active_core → last_synced_core, drops dismissed_newer_save_id, strips legacy settings."""
+        """active_core → last_synced_core, drops dismissed_newer_save_id; the
+        settings block on a legacy payload is ignored (it moved to
+        settings.json, #822)."""
         canned = {
             "saves": {
                 "42": {
@@ -155,11 +161,7 @@ class TestLoadState:
                     },
                 }
             },
-            "settings": {
-                "save_sync_enabled": True,
-                "conflict_mode": "newest",  # legacy
-                "clock_skew_tolerance_sec": 5,  # legacy
-            },
+            "settings": {"save_sync_enabled": True},  # ignored on load
         }
         svc, _ = _make_state_svc(FakeSaveSyncStatePersister(canned_load=canned))
 
@@ -173,8 +175,7 @@ class TestLoadState:
         on_disk = svc.state.to_dict()
         assert "active_core" not in on_disk["saves"]["42"]
         assert "dismissed_newer_save_id" not in on_disk["saves"]["42"]["files"]["game.srm"]
-        assert "conflict_mode" not in on_disk["settings"]
-        assert "clock_skew_tolerance_sec" not in on_disk["settings"]
+        assert "settings" not in on_disk
 
 
 class TestPruneOrphanedState:

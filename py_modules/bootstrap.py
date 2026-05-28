@@ -52,7 +52,7 @@ from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
 from domain.save_state import SaveSyncState
-from domain.state_migrations import migrate_settings, migrate_state
+from domain.state_migrations import fold_legacy_save_sync_settings, migrate_settings, migrate_state
 from lib.late_binding import LateBinding
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.artwork import ArtworkService, ArtworkServiceConfig
@@ -314,6 +314,12 @@ def bootstrap(
     firmware_cache_persister = FirmwareCachePersisterAdapter(persistence)
     save_sync_state_persister = SaveSyncStatePersisterAdapter(persistence)
     settings = persistence.load_settings()
+    # One-time JSON→JSON lift (ADR-0003): fold the legacy save-sync knobs +
+    # device_name out of save_sync_state.json before the schema bump stamps
+    # version 4. Idempotent — after the first run save_settings stamps the
+    # new version and this branch is skipped.
+    if settings.get("version", 0) < 4:
+        settings = fold_legacy_save_sync_settings(settings, persistence.load_save_sync_state())
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
     # Persistence + migration round-trip through bare ``dict`` because
@@ -456,6 +462,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         state=cfg.stores.state,
         save_sync_state=cfg.stores.save_sync_state,
         save_sync_state_persister=cfg.callbacks.save_sync_state_persister,
+        settings_persister=cfg.callbacks.settings_persister,
         save_file_store=cfg.adapters.save_file_store,
         loop=cfg.runtime.loop,
         logger=cfg.runtime.logger,
@@ -479,6 +486,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             romm_api=cfg.adapters.romm_api,
             retry=cfg.adapters.http_adapter,
             save_sync_state=cfg.stores.save_sync_state,
+            settings=cfg.stores.settings,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
@@ -636,6 +644,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             state=cfg.stores.state,
             metadata_cache=cfg.stores.metadata_cache,
             save_sync_state=cfg.stores.save_sync_state,
+            settings=cfg.stores.settings,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
             bios_checker=firmware_service,

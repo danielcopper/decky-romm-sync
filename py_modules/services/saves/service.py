@@ -52,7 +52,9 @@ class SaveService:
             config=StateServiceConfig(
                 save_sync_state=config.save_sync_state,
                 state=config.state,
+                settings=config.settings,
                 persister=config.save_sync_state_persister,
+                settings_persister=config.settings_persister,
                 logger=config.logger,
             ),
         )

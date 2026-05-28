@@ -63,7 +63,7 @@ class SlotListing:
         rom_id_str = str(rom_id)
         device_id = self._state_svc.get_server_device_id()
         rom_state = self._state_svc.state.saves.get(rom_id_str)
-        default_slot = self._state_svc.state.settings.default_slot or "default"
+        default_slot = self._state_svc.get_settings().default_slot or "default"
         # ROM not tracked → fall back to the global default slot. ROM
         # tracked with ``active_slot=None`` → preserve legacy mode (None
         # means "no slots"; the persisted slots dict will contain ``""``).

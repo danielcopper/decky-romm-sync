@@ -95,6 +95,7 @@ def plugin(tmp_path):
                     logger=logging.getLogger("test"),
                 )
             ),
+            settings_persister=MagicMock(),
             save_file_store=SaveFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(
                 saves=saves_path,
@@ -118,6 +119,7 @@ def plugin(tmp_path):
             romm_api=fake_api,
             retry=_make_retry(),
             save_sync_state=p._save_sync_state,
+            settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
@@ -157,7 +159,7 @@ def plugin(tmp_path):
     # Store fake_api on plugin for test access
     p._fake_api = fake_api
 
-    p._save_sync_state.settings.save_sync_enabled = False
+    p.settings["save_sync_enabled"] = False
     return p
 
 
@@ -175,6 +177,7 @@ def game_detail_service(plugin, clock):
             state=plugin._state,
             metadata_cache=plugin._metadata_cache,
             save_sync_state=plugin._save_sync_state,
+            settings=plugin.settings,
             logger=logging.getLogger("test"),
             clock=clock,
             bios_checker=plugin._firmware_service,
@@ -243,7 +246,7 @@ class TestGetCachedGameDetailFound:
             "file_path": "/roms/snes/smw.sfc",
             "system": "snes",
         }
-        plugin._save_sync_state.settings.save_sync_enabled = True
+        plugin.settings["save_sync_enabled"] = True
         plugin._save_sync_state.saves["123"] = RomSaveState(
             files={
                 "smw.srm": FileSyncState(
@@ -356,7 +359,7 @@ class TestGetCachedGameDetailPartialData:
             "platform_slug": "snes",
             "platform_name": "Super Nintendo",
         }
-        plugin._save_sync_state.settings.save_sync_enabled = False
+        plugin.settings["save_sync_enabled"] = False
         result = game_detail_service.get_cached_game_detail(50000)
         assert result["save_sync_enabled"] is False
 
@@ -667,7 +670,7 @@ class TestGetCachedGameDetailSaveStatusConflicts:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._save_sync_state.settings.save_sync_enabled = True
+        plugin.settings["save_sync_enabled"] = True
         plugin._save_sync_state.saves["42"] = RomSaveState(
             files={"test.srm": FileSyncState(last_sync_hash="abc", last_sync_at="2026-01-01T00:00:00Z")},
             last_sync_check_at="2026-01-01T00:00:00Z",
@@ -781,7 +784,7 @@ class TestComputedFields:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._save_sync_state.settings.save_sync_enabled = True
+        plugin.settings["save_sync_enabled"] = True
         plugin._save_sync_state.saves["42"] = RomSaveState(
             files={"test.srm": FileSyncState(last_sync_hash="abc", last_sync_at="2026-01-01T00:00:00Z")},
             last_sync_check_at="2026-01-01T00:00:00Z",

@@ -23,7 +23,7 @@ class TestDeviceRegistration:
     @pytest.mark.asyncio
     async def test_registers_new_device(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         result = await svc.ensure_device_registered()
         assert result["success"] is True
@@ -35,9 +35,9 @@ class TestDeviceRegistration:
     @pytest.mark.asyncio
     async def test_returns_existing_device(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "existing"
-        svc._save_sync_state.device_name = "deck"
+        svc._config.settings["device_name"] = "deck"
         svc._save_sync_state.server_device_id = "server-existing"
 
         result = await svc.ensure_device_registered()
@@ -59,7 +59,7 @@ class TestDeviceRegistrationServer:
     async def test_registers_with_server(self, tmp_path):
         """Calls register_device and stores server_device_id."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         result = await svc.ensure_device_registered()
         assert result["success"] is True
@@ -78,7 +78,7 @@ class TestDeviceRegistrationServer:
         fake = FakeSaveApi()
         fake.fail_on_next(Exception("server error"))
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         result = await svc.ensure_device_registered()
         assert result["success"] is False
@@ -89,9 +89,9 @@ class TestDeviceRegistrationServer:
     async def test_returns_existing_with_server_device_id(self, tmp_path):
         """If already registered, returns existing IDs including server_device_id."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "existing-id"
-        svc._save_sync_state.device_name = "deck"
+        svc._config.settings["device_name"] = "deck"
         svc._save_sync_state.server_device_id = "server-id-123"
 
         result = await svc.ensure_device_registered()
@@ -102,10 +102,10 @@ class TestDeviceRegistrationServer:
     async def test_upgrades_local_uuid_to_server(self, tmp_path):
         """Local-only UUID gets upgraded to server registration."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # Simulate existing local-only UUID (from failed registration)
         svc._save_sync_state.device_id = "local-only-uuid"
-        svc._save_sync_state.device_name = "deck"
+        svc._config.settings["device_name"] = "deck"
         svc._save_sync_state.server_device_id = None
 
         result = await svc.ensure_device_registered()
@@ -120,9 +120,9 @@ class TestDeviceRegistrationServer:
     async def test_ensure_device_registered_reconciles_client_version(self, tmp_path):
         """Already-registered path calls update_device with current plugin_version."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "existing-id"
-        svc._save_sync_state.device_name = "deck"
+        svc._config.settings["device_name"] = "deck"
         svc._save_sync_state.server_device_id = "server-abc"
 
         result = await svc.ensure_device_registered()
@@ -138,9 +138,9 @@ class TestDeviceRegistrationServer:
         """PUT raises, ensure_device_registered still returns success."""
         fake = FakeSaveApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "existing-id"
-        svc._save_sync_state.device_name = "deck"
+        svc._config.settings["device_name"] = "deck"
         svc._save_sync_state.server_device_id = "server-abc"
 
         # Make update_device fail silently
@@ -165,7 +165,7 @@ class TestDeviceRegistrationServer:
 
         fake = VersionedFakeApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         await svc.ensure_device_registered()
 
@@ -188,7 +188,7 @@ class TestDeviceRegistrationServer:
         fake = VersionedFakeApi()
         fake.set_version("4.8.1")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         await svc.ensure_device_registered()
 
@@ -201,7 +201,7 @@ class TestDeviceRegistrationServer:
         fake = FakeSaveApi()
         fake.heartbeat_raises = ConnectionError("offline")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         result = await svc.ensure_device_registered()
 
@@ -236,7 +236,7 @@ class TestListDevices:
     async def test_list_devices_marks_own_device(self, tmp_path):
         """own device_id present in state — is_current_device is True on matching entry."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = "device-1"
 
         # Register two devices in fake
@@ -269,7 +269,7 @@ class TestListDevices:
         """Adapter raises — returns error response."""
         fake = FakeSaveApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
 
         fake.fail_on_next(Exception("server unavailable"))
         result = await svc.list_devices()
@@ -280,7 +280,7 @@ class TestListDevices:
     async def test_list_devices_no_own_id_all_false(self, tmp_path):
         """No server_device_id in state — all is_current_device are False."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = None
 
         fake._registered_devices = [{"id": "device-1", "name": "steamdeck"}]
@@ -293,7 +293,7 @@ class TestListDevices:
     async def test_list_devices_handles_null_id(self, tmp_path):
         """Device with id=None must not match own_id=None (avoid 'None'=='None' trap)."""
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.server_device_id = None
 
         fake._registered_devices = [{"id": None, "name": "unknown"}]
@@ -309,7 +309,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
     @pytest.mark.asyncio
     async def test_pre_launch_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
         svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -322,7 +322,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
     @pytest.mark.asyncio
     async def test_post_exit_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
         svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
@@ -343,7 +343,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
         from main import Plugin
 
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
@@ -369,7 +369,7 @@ class TestPostExitSyncConnectivity:
         fake = FakeSaveApi()
         fake.heartbeat_raises = ConnectionError("unreachable")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
 
         result = await svc.post_exit_sync(42)
@@ -382,7 +382,7 @@ class TestPostExitSyncConnectivity:
     async def test_proceeds_when_heartbeat_succeeds(self, tmp_path):
         """post_exit_sync proceeds normally when server is reachable."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
@@ -398,7 +398,7 @@ class TestPostExitSyncConnectivity:
         fake = FakeSaveApi()
         fake.heartbeat_raises = OSError("connection refused")
         svc, _ = make_service(tmp_path, fake_api=fake)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # No device_id — would trigger registration if heartbeat passed
 
         result = await svc.post_exit_sync(42)
@@ -526,7 +526,7 @@ class TestEmulatorTag:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -540,7 +540,7 @@ class TestEmulatorTag:
     def test_upload_uses_fallback_when_no_core(self, tmp_path):
         """When core resolver returns None, upload falls back to 'retroarch'."""
         svc, fake = make_service(tmp_path)  # default: get_active_core returns (None, None)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
@@ -638,15 +638,15 @@ class TestSaveSyncSettingsSlotAndCleanup:
 
     def test_update_default_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         result = svc.update_save_sync_settings({"default_slot": "desktop"})
         assert result["success"] is True
         assert result["settings"]["default_slot"] == "desktop"
 
     def test_update_default_slot_empty_string_becomes_none(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
-        svc._save_sync_state.settings.default_slot = "default"
+        svc._config.settings["save_sync_enabled"] = True
+        svc._config.settings["default_slot"] = "default"
         result = svc.update_save_sync_settings({"default_slot": ""})
         assert result["settings"]["default_slot"] is None
 
@@ -683,14 +683,14 @@ class TestSaveSyncSettingsSlotAndCleanup:
 
     def test_update_autocleanup_limit(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         result = svc.update_save_sync_settings({"autocleanup_limit": 5})
         assert result["success"] is True
         assert result["settings"]["autocleanup_limit"] == 5
 
     def test_update_autocleanup_limit_clamped(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         result = svc.update_save_sync_settings({"autocleanup_limit": 0})
         assert result["settings"]["autocleanup_limit"] == 1
 
@@ -723,7 +723,7 @@ class TestCheckCoreChange:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core="snes9x_libretro",
@@ -743,7 +743,7 @@ class TestCheckCoreChange:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core="snes9x_libretro",
@@ -756,7 +756,7 @@ class TestCheckCoreChange:
     def test_never_synced(self, tmp_path):
         """Returns changed=False when rom_id has no save entry (never synced)."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         # No entry for rom_id 42
 
         result = svc.check_core_change(42)
@@ -769,7 +769,7 @@ class TestCheckCoreChange:
             tmp_path,
             get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core=None,
@@ -785,7 +785,7 @@ class TestCheckCoreChange:
             tmp_path,
             # default: get_active_core returns (None, None)
         )
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.saves["42"] = self._make_save_entry(
             system="snes",
             last_synced_core="snes9x_libretro",
@@ -820,7 +820,7 @@ class TestCheckCoreChange:
             return ("supafaust_libretro", "Supafaust")
 
         svc, _ = make_service(tmp_path, get_active_core=capture_core)
-        svc._save_sync_state.settings.save_sync_enabled = True
+        svc._config.settings["save_sync_enabled"] = True
         svc._save_sync_state.saves["42"] = self._make_save_entry(system="snes")
         _install_rom(svc, tmp_path, rom_id=42, system="snes", file_name="mario.sfc")
 

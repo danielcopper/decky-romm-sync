@@ -109,7 +109,7 @@ class SetupWizard:
                 f"get_save_setup_info({rom_id}): failed to list server saves: {e}",
             )
             game_state = self._state_svc.state.saves.get(rom_id_str)
-            default_slot = self._state_svc.state.settings.default_slot or "default"
+            default_slot = self._state_svc.get_settings().default_slot or "default"
             slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
             active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
             return {
@@ -152,7 +152,7 @@ class SetupWizard:
 
         # State info
         game_state = self._state_svc.state.saves.get(rom_id_str)
-        default_slot = self._state_svc.state.settings.default_slot or "default"
+        default_slot = self._state_svc.get_settings().default_slot or "default"
         slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
         active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
 

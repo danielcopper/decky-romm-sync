@@ -17,7 +17,7 @@ from models.state import MetadataCache, PluginState
 _STATE_VERSION = 1
 _METADATA_CACHE_VERSION = 1
 _FIRMWARE_CACHE_VERSION = 1
-_SETTINGS_VERSION = 3
+_SETTINGS_VERSION = 4
 _LOCK_EXT = ".lock"
 
 DEFAULT_SETTINGS: dict = {
@@ -31,6 +31,12 @@ DEFAULT_SETTINGS: dict = {
     "steamgriddb_api_key": "",
     "romm_allow_insecure_ssl": False,
     "log_level": "warn",
+    "save_sync_enabled": False,
+    "sync_before_launch": True,
+    "sync_after_exit": True,
+    "default_slot": "default",
+    "autocleanup_limit": 10,
+    "device_name": None,
 }
 
 
