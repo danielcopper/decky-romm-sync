@@ -17,12 +17,9 @@ _V1_TABLES = {
     "rom_playtime",
     "rom_save_states",
     "rom_save_files",
-    "platforms",
     "downloaded_bios",
     "firmware_cache",
     "sync_runs",
-    "device",
-    "sync_settings",
     "kv_config",
 }
 

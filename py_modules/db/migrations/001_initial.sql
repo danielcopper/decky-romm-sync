@@ -43,23 +43,23 @@
 --   Repository per aggregate (CONTEXT.md) maps 1:1 onto these tables. Rationale
 --   and the rejected mega-table alternative: docs/adr/0002.
 --
--- Foreign keys: per-ROM child tables CASCADE to roms; cross-aggregate slug
---   references carry NO FK. The epic locked "one FK only" for the mega-table
---   world, where the only candidates were platform_slug (a cross-reference) and
---   the lone rom_save_files child. The split creates a new category — per-ROM
---   tables that are true parent-child (per-ROM state is owned by the ROM) — so
---   they take ON DELETE CASCADE, same as rom_save_files. platform_slug stays a
---   logical/join reference with no enforced FK: an FK there would force sync
---   ordering (platforms before ROMs) and block platform pruning while ROMs
---   exist, fighting the disk-truth-pruning model. "Playtime survives shortcut
---   removal" is preserved — shortcut removal does not delete the roms row; only
---   a deliberate full prune does, and cascading then is correct.
+-- Foreign keys: per-ROM child tables CASCADE to roms; the platform_slug carried
+--   on rom rows is a plain denormalized string, NOT a foreign key. The epic
+--   locked "one FK only" for the mega-table world, where the only candidates were
+--   platform_slug (a cross-reference) and the lone rom_save_files child. The
+--   split creates a new category — per-ROM tables that are true parent-child
+--   (per-ROM state is owned by the ROM) — so they take ON DELETE CASCADE, same as
+--   rom_save_files. platform_slug is a denormalized RomM platform slug: there is
+--   no platforms table to reference (ADR-0003 dropped the Platform aggregate), so
+--   it is just a string, consistent with the disk-truth-pruning model where ROM
+--   rows are pruned only when the ROM is gone from RomM. "Playtime survives
+--   shortcut removal" is preserved — shortcut removal does not delete the roms
+--   row; only a deliberate full prune does, and cascading then is correct.
 --
 -- No lookup/normalization tables for `system` (#2). ~15-30 distinct values over
---   ~20k rows is trivial storage; a `systems` table owns no state (unlike
---   `platforms`, which is a real aggregate per ADR-0001) and would fight the
---   deliberate denormalization of `system` onto rom_installs. `system` stays
---   TEXT. `platforms` exists as an aggregate table, not a lookup table.
+--   ~20k rows is trivial storage; a `systems` table would own no state and would
+--   fight the deliberate denormalization of `system` onto rom_installs. `system`
+--   stays TEXT; no `systems` lookup table is added.
 --
 -- No blanket audit columns (#5). No generic created_at / updated_at. The
 --   aggregates already model the timestamps that matter (last_synced_at,
@@ -99,7 +99,7 @@
 -- -----------------------------------------------------------------------------
 CREATE TABLE roms (
     rom_id          INTEGER PRIMARY KEY,            -- RomM id; server-issued, stable
-    platform_slug   TEXT    NOT NULL,               -- logical ref to platforms.slug (NO FK — see header)
+    platform_slug   TEXT    NOT NULL,               -- denormalized RomM platform slug (no platforms table — see header)
     name            TEXT    NOT NULL,
     fs_name         TEXT    NOT NULL,
     shortcut_app_id INTEGER NOT NULL,               -- Steam non-Steam shortcut app id
@@ -123,7 +123,7 @@ CREATE TABLE rom_installs (
     rom_id        INTEGER PRIMARY KEY REFERENCES roms(rom_id) ON DELETE CASCADE,
     file_path     TEXT NOT NULL,                    -- the specific launch file
     install_path  TEXT NOT NULL,                    -- the install directory
-    platform_slug TEXT NOT NULL,                    -- denormalized; logical ref (NO FK)
+    platform_slug TEXT NOT NULL,                    -- RomM platform slug (no platforms table)
     system        TEXT NOT NULL,                    -- emulator system slug; plain TEXT (#2, no lookup)
     installed_at  TEXT NOT NULL                     -- ISO-8601
 ) STRICT;
@@ -213,20 +213,6 @@ CREATE TABLE rom_save_files (
 
 
 -- -----------------------------------------------------------------------------
--- platforms — Platform aggregate: per-platform state the plugin owns locally.
--- A real aggregate (ADR-0001), not a normalization lookup: it carries the
--- cached display name (survives RomM downtime) and the exclude-from-sync toggle.
--- Keyed by RomM slug. Referenced by roms / rom_installs / downloaded_bios /
--- firmware_cache via platform_slug, but with NO enforced FK (see header).
--- -----------------------------------------------------------------------------
-CREATE TABLE platforms (
-    slug               TEXT PRIMARY KEY,            -- RomM platform slug
-    display_name       TEXT NOT NULL,               -- cached for QAM display during RomM downtime
-    excluded_from_sync INTEGER NOT NULL DEFAULT 0 CHECK (excluded_from_sync IN (0, 1))  -- bool
-) STRICT;
-
-
--- -----------------------------------------------------------------------------
 -- downloaded_bios — BiosFile aggregate: one downloaded BIOS/firmware file.
 -- Composite identity (platform_slug, file_name): a bare filename is unsafe —
 -- two platforms can ship same-named BIOS. firmware_id is nullable RomM metadata,
@@ -234,7 +220,7 @@ CREATE TABLE platforms (
 -- the file.
 -- -----------------------------------------------------------------------------
 CREATE TABLE downloaded_bios (
-    platform_slug TEXT    NOT NULL,                 -- logical ref (NO FK)
+    platform_slug TEXT    NOT NULL,                 -- RomM platform slug (no platforms table)
     file_name     TEXT    NOT NULL,
     file_path     TEXT    NOT NULL,
     downloaded_at TEXT    NOT NULL,                 -- ISO-8601
@@ -252,7 +238,7 @@ CREATE TABLE downloaded_bios (
 -- whole-cache TTL.
 -- -----------------------------------------------------------------------------
 CREATE TABLE firmware_cache (
-    platform_slug   TEXT    NOT NULL,               -- logical ref (NO FK)
+    platform_slug   TEXT    NOT NULL,               -- RomM platform slug (no platforms table)
     name            TEXT    NOT NULL,               -- firmware filename
     id              INTEGER,                        -- RomM firmware id; NULL for legacy entries
     file_size_bytes INTEGER NOT NULL,
@@ -280,36 +266,6 @@ CREATE TABLE sync_runs (
     platforms_completed   TEXT CHECK (platforms_completed IS NULL OR json_valid(platforms_completed)),    -- JSON array
     collections_completed TEXT CHECK (collections_completed IS NULL OR json_valid(collections_completed)), -- JSON array
     error                 TEXT                      -- NULL unless cancelled / errored
-) STRICT;
-
-
--- -----------------------------------------------------------------------------
--- device — Device aggregate (singleton): the registered device identity.
--- Single-row table guarded by CHECK (id = 1). A singleton with invariants, so
--- per CONTEXT.md it gets its own typed table rather than untyped kv_config rows.
--- device_id collapses the old device_id / server_device_id JSON pair (always the
--- same server row id).
--- -----------------------------------------------------------------------------
-CREATE TABLE device (
-    id          INTEGER PRIMARY KEY CHECK (id = 1),
-    device_id   TEXT NOT NULL,                      -- server-issued
-    device_name TEXT                                -- NULL until the user names it
-) STRICT;
-
-
--- -----------------------------------------------------------------------------
--- sync_settings — SyncSettings aggregate (singleton): save-sync feature knobs.
--- Single-row table guarded by CHECK (id = 1). Distinct from settings.json
--- (which stays JSON per the epic). autocleanup_limit CHECK mirrors the
--- aggregate's >= 0 invariant; default_slot NULL = "no slots" mode (meaningful).
--- -----------------------------------------------------------------------------
-CREATE TABLE sync_settings (
-    id                 INTEGER PRIMARY KEY CHECK (id = 1),
-    save_sync_enabled  INTEGER NOT NULL DEFAULT 0 CHECK (save_sync_enabled IN (0, 1)),  -- bool
-    sync_before_launch INTEGER NOT NULL DEFAULT 1 CHECK (sync_before_launch IN (0, 1)),  -- bool
-    sync_after_exit    INTEGER NOT NULL DEFAULT 1 CHECK (sync_after_exit IN (0, 1)),  -- bool
-    default_slot       TEXT DEFAULT 'default',      -- NULL = "no slots" mode (meaningful, #6)
-    autocleanup_limit  INTEGER NOT NULL DEFAULT 10 CHECK (autocleanup_limit >= 0)
 ) STRICT;
 
 

@@ -2,8 +2,9 @@
 
 Identity, the Steam-shortcut binding, and the external-service ids the plugin
 resolves for a ROM. Created/updated atomically when a ROM is synced from RomM.
-References its Platform by ``platform_slug`` (FK) — the platform's display name
-is resolved through Platform, not carried here.
+``platform_slug`` is a denormalized RomM slug, not a reference to a local
+Platform aggregate (none exists — see ADR-0003); the platform's display name is
+resolved live from RomM, not carried here.
 """
 
 from __future__ import annotations
