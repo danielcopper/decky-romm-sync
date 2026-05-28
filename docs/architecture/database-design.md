@@ -4,9 +4,9 @@
 
 This page is the canonical home for the **aggregate domain model** behind the SQLite persistence migration (epic [#271](https://github.com/danielcopper/decky-romm-sync/issues/271)). The migration replaces the current JSON state files with a SQLite database whose tables back a set of Cosmic Python aggregates.
 
-The migration is phased. As of the first PR of [#788](https://github.com/danielcopper/decky-romm-sync/issues/788), the **enforcement infrastructure** documented below is in place — the decorator, the linters, and the type-check rule that keep aggregates honest. The **aggregate set itself** (the 11 aggregate roots, their fields, and their mutation methods) lands in subsequent PRs of #788, and the SQLite schema and per-aggregate Repository Protocols land in the downstream sub-issues. Those are not documented here yet; see [Coming in later PRs](#coming-in-later-prs).
+The migration is phased. As of [#788](https://github.com/danielcopper/decky-romm-sync/issues/788), the **enforcement infrastructure** (the decorator, the linters, and the type-check rule that keep aggregates honest) and the full **aggregate set** (the 11 aggregate roots, their fields, and their mutation methods) are both in place — documented below. The SQLite schema and the per-aggregate Repository Protocols land in the downstream sub-issues; see [Coming in later PRs](#coming-in-later-prs).
 
-In other words: the rails are laid, the trains haven't arrived. A reader who comes looking for the aggregate table will find it forthcoming, not missing by mistake.
+The aggregate roots are defined but **not yet wired** into any service: they coexist in the source tree alongside the live JSON-era state classes (`domain/save_state.py`) they will replace. Nothing reads or writes them at runtime until the cutover wave ([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)), which is a **hard cut** — SQLite starts empty, the JSON state is not migrated into it, and the old classes are deleted then.
 
 ## What an aggregate is here
 
@@ -115,13 +115,33 @@ White-box testing — inspecting and rebinding the private state of the system u
 
 One corollary worth stating: a method that one sub-service calls on a peer is part of that peer's **public** surface and carries **no** leading underscore. The `_` prefix is reserved for genuinely class-internal helpers, which keeps `reportPrivateUsage` coherent with the saves-style peer-injection carve-out — peers call public methods, never private ones.
 
+## The aggregate set
+
+Eleven aggregate roots model the persisted domain. Each lives in its own `domain/<name>.py` module, is declared with `@cosmic_aggregate`, and mutates only through verb-named methods. The **Carries** column reflects the fields as actually implemented (`?` marks a nullable/optional field); where the shipped shape is intentionally leaner than the original #788 plan, the **Why** column says so. Cross-aggregate references are by id/slug only — the per-ROM aggregates (`RomMetadata`, `RomSaveState`, `Playtime`) are keyed by `rom_id` externally rather than carrying it as a field; only `RomInstall` denormalizes `rom_id` so migration and save-sort can read installs without a join.
+
+| Aggregate root | Carries | Why a separate aggregate |
+|---|---|---|
+| `Rom` (`domain/rom.py`) | `rom_id` (identity), `platform_slug`, `name`, `fs_name`, `shortcut_app_id`, `last_synced_at`, `cover_path?`, `igdb_id?`, `sgdb_id?`, `ra_id?` | Created/updated atomically when a ROM is synced from RomM. `platform_name` is **not** carried — resolved via the `platform_slug` FK into `Platform`. |
+| `Platform` (`domain/platform.py`) | `slug` (identity), `display_name`, `excluded_from_sync` | Per-platform state the plugin owns locally; cached `display_name` survives RomM downtime. Shipped lean per [ADR-0001](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0001-adopt-platform-aggregate.md) — `emulation_stack` / `manual_emulator_path` are deferred future fields, not present yet. RetroDECK-managed per-platform state stays outside. |
+| `RomInstall` (`domain/rom_install.py`) | `rom_id`, `file_path`, `install_path`, `platform_slug`, `system`, `installed_at` | Exists only while a ROM is downloaded — created on download-complete, removed on uninstall. References `Rom` by `rom_id`. Denormalized `platform_slug` / `system` let migration + save-sort read installs without joining the registry. |
+| `RomMetadata` (`domain/rom_metadata.py`) | `summary`, `genres`, `companies`, `first_release_date?`, `average_rating?`, `game_modes`, `player_count`, `cached_at`, `steam_categories` | 7-day staleness signal (`cached_at`), regenerated independently of library sync — staleness, not a schedule, prompts a refresh. Per-ROM, keyed by `rom_id`. |
+| `RomSaveState` (`domain/rom_save_state.py`) | `active_slot?`, `slot_confirmed`, `emulator`, `system`, `last_synced_core?`, `own_upload_ids?`, `slots{}`, `files{}` (a `FileSyncState` value object per filename), `last_sync_check_at?` | Per-ROM saves aggregate. Matrix invariants hold inside: a file baseline always carries its `tracked_save_id`, and a non-legacy `active_slot` always has its `slots` key. Per-ROM, keyed by `rom_id`. |
+| `Playtime` (`domain/playtime.py`) | `total_seconds`, `session_count`, `last_session_start?`, `last_session_duration_sec?`, `note_id?` | Per-ROM, owned by PlaytimeService. Independent lifecycle from saves (`session_lifecycle.py` already treats them as separate concerns). Keyed by `rom_id`. |
+| `Device` (`domain/device.py`) | `device_id` (identity, server-issued string), `device_name?` | Singleton. `device_id` and the old `server_device_id` collapse to a single field — they were always the same server row id JSON-side. |
+| `SyncSettings` (`domain/sync_settings.py`) | `save_sync_enabled`, `sync_before_launch`, `sync_after_exit`, `default_slot?`, `autocleanup_limit` | Singleton. Save-sync feature settings, distinct from `settings.json` (which stays JSON per the epic). |
+| `BiosFile` (`domain/bios_file.py`) | `(platform_slug, file_name)` (composite identity), `file_path`, `downloaded_at`, `firmware_id?` | Per downloaded BIOS file. Composite key — a bare filename is unsafe (two platforms can ship same-named BIOS). `firmware_id` is nullable metadata, not identity. |
+| `FirmwareCacheEntry` (`domain/firmware_cache.py`) | `id?`, `name`, `platform_slug`, `file_size_bytes`, `cached_at` | Per cached firmware item from RomM. TTL-cached server inventory; the cache is replaced wholesale on refresh and the TTL check lives in the service, so the aggregate stays a thin record. |
+| `SyncRun` (`domain/sync_run.py`) | `id`, `started_at`, `status`, `platforms_planned`, `roms_planned`, `finished_at?`, `platforms_completed?`, `collections_completed?`, `error?` | Models sync-as-operation — a `running` → `completed`/`cancelled`/`errored` state machine that terminates exactly once. Replaces scattered scalars (`last_sync`, `sync_stats`, `last_synced_platforms`, `last_synced_collections`). `sync_stats.roms` is not a field — it's a registry-derived count computed at read time. |
+
+`FileSyncState` (inside `RomSaveState`) is a **value object**, not an aggregate: a frozen `@dataclass(frozen=True, slots=True)` built whole by `adopt_baseline(...)`, with no mutation surface of its own.
+
 ## Coming in later PRs
 
-As #788's phased PRs land, this page grows to document:
+With the aggregate set above now in place, the remaining persistence work lands downstream:
 
-- **The 11-aggregate set** — `Rom`, `Platform`, `RomInstall`, `RomMetadata`, `RomSaveState`, `Playtime`, `Device`, `SyncSettings`, `BiosFile`, `FirmwareCacheEntry`, `SyncRun` — each with its carried fields, identity, and the rationale for its boundary.
 - **Per-aggregate Repository Protocols** — one Repository per aggregate root (not per table), defined downstream in [#782](https://github.com/danielcopper/decky-romm-sync/issues/782).
 - **The SQLite schema** — table layouts that back the aggregates (one aggregate may span several tables), designed in [#780](https://github.com/danielcopper/decky-romm-sync/issues/780).
+- **The service cutover** — wiring the aggregates + Repositories into the services and the hard cut off the JSON state, in [#784](https://github.com/danielcopper/decky-romm-sync/issues/784).
 
 Chapter 8+ of the Cosmic Python book (domain events + message bus) is explicitly out of scope for this epic; the triggers for revisiting that scope are recorded in `CLAUDE.md`.
 
