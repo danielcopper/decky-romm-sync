@@ -117,7 +117,7 @@ One corollary worth stating: a method that one sub-service calls on a peer is pa
 
 ## The aggregate set
 
-Eleven aggregate roots model the persisted domain. Each lives in its own `domain/<name>.py` module, is declared with `@cosmic_aggregate`, and mutates only through verb-named methods. The **Carries** column reflects the fields as actually implemented (`?` marks a nullable/optional field); where the shipped shape is intentionally leaner than the original #788 plan, the **Why** column says so. Cross-aggregate references are by id/slug only — the per-ROM aggregates (`RomMetadata`, `RomSaveState`, `Playtime`) are keyed by `rom_id` externally rather than carrying it as a field; only `RomInstall` denormalizes `rom_id` so migration and save-sort can read installs without a join.
+Eleven aggregate roots model the persisted domain. Each lives in its own `domain/<name>.py` module, is declared with `@cosmic_aggregate`, and mutates only through verb-named methods. The **Carries** column reflects the fields as actually implemented (`?` marks a nullable/optional field); where the shipped shape is intentionally leaner than the original #788 plan, the **Why** column says so. Cross-aggregate references are by id/slug only — the per-ROM aggregates (`RomMetadata`, `RomSaveState`, `Playtime`) are keyed by `rom_id` externally rather than carrying it as a field; only `RomInstall` carries `rom_id` as a field rather than keying on it externally, and it also denormalizes `platform_slug`/`system` so migration and save-sort can read installs without a join.
 
 | Aggregate root | Carries | Why a separate aggregate |
 | --- | --- | --- |
@@ -135,12 +135,60 @@ Eleven aggregate roots model the persisted domain. Each lives in its own `domain
 
 `FileSyncState` (inside `RomSaveState`) is a **value object**, not an aggregate: a frozen `@dataclass(frozen=True, slots=True)` built whole by `adopt_baseline(...)`, with no mutation surface of its own.
 
+## The SQLite schema
+
+The tables that back the aggregates, designed in [#780](https://github.com/danielcopper/decky-romm-sync/issues/780). The authoritative DDL — every column type, default, constraint, and the full decision rationale inline — is [`py_modules/db/migrations/001_initial.sql`](https://github.com/danielcopper/decky-romm-sync/blob/main/py_modules/db/migrations/001_initial.sql). This section is the map, not a re-derivation.
+
+### One table per aggregate
+
+Each aggregate gets its own table — the per-ROM cluster is **not** a single wide `roms` mega-table. The epic floated a mega-table as a starting proposal; #780 owns the final layout and split it. The deciding factor was integrity, not speed (read performance is a non-issue at single-user scale): the per-ROM aggregates are **all-or-nothing groups** — an install is either fully present or absent, metadata is cached or not — and separate tables let "state absent" mean "no row" rather than a wide row of NULLs the schema cannot keep internally consistent. The rejected mega-table alternative is recorded in [ADR-0002](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0002-per-rom-table-per-aggregate-split.md). One Repository per aggregate (the [CONTEXT.md](https://github.com/danielcopper/decky-romm-sync/blob/main/CONTEXT.md) rule) maps 1:1 onto these tables.
+
+| Table | Backs | Key | Row present when |
+| --- | --- | --- | --- |
+| `roms` | `Rom` (identity + shortcut) | `rom_id` | ROM is synced from RomM |
+| `rom_installs` | `RomInstall` | `rom_id` | ROM is downloaded |
+| `rom_metadata` | `RomMetadata` | `rom_id` | metadata has been cached |
+| `rom_playtime` | `Playtime` | `rom_id` | ROM has been played |
+| `rom_save_states` | `RomSaveState` (scalars) | `rom_id` | save tracking exists |
+| `rom_save_files` | `FileSyncState` (1:N child) | `(rom_id, filename)` | a file baseline is tracked |
+| `platforms` | `Platform` | `slug` | platform seen / configured |
+| `downloaded_bios` | `BiosFile` | `(platform_slug, file_name)` | a BIOS file is downloaded |
+| `firmware_cache` | `FirmwareCacheEntry` | `(platform_slug, name)` | firmware inventory is cached |
+| `sync_runs` | `SyncRun` | `id` | one row per sync run (history) |
+| `device` | `Device` | `id = 1` (singleton) | after registration |
+| `sync_settings` | `SyncSettings` | `id = 1` (singleton) | always |
+| `kv_config` | misc singleton scalars | `key` | per key |
+
+`Device`, `SyncSettings`, and `SyncRun` carry their own invariants, so per CONTEXT.md they get typed tables rather than untyped `kv_config` rows. `kv_config` is reserved for the truly miscellaneous: `retrodeck_home_path` (+ its pending-migration `_previous`) and `save_sort_settings` (+ `_previous`). The schema version is **not** a `kv_config` key — it is owned by the migration-framework sub-issue ([#782](https://github.com/danielcopper/decky-romm-sync/issues/782), most likely `PRAGMA user_version`).
+
+`SyncRun` is a **history** table, not a single "last run" row: a 1-row table would let a newly-started run (`status='running'`, no stats yet) erase the last completed run's displayable stats. "Last successful sync" is the newest row with `status='completed'`; "is a sync running" is any row with `status='running'`.
+
+### Foreign keys
+
+Most relationships are *not* parent-child (`startup_healing` prunes against disk truth; playtime survives shortcut removal), so foreign keys are deliberately sparse:
+
+- **Per-ROM tables → `roms`, `ON DELETE CASCADE`** (`rom_installs`, `rom_metadata`, `rom_playtime`, `rom_save_states`, `rom_save_files`). Per-ROM state is genuinely owned by the ROM, so a deliberate library prune (`DELETE FROM roms WHERE …`) cascades it all away in one statement.
+- **`platform_slug` → no FK.** Carried on `roms` / `rom_installs` / `downloaded_bios` / `firmware_cache` as a logical/join reference only. An enforced FK would force sync ordering (platforms before ROMs) and block platform pruning while ROMs exist — fighting the disk-truth-pruning model. ADR-0001's "FK" wording means this logical reference, not a DB constraint.
+
+The split moved the FK policy from the epic's "one FK only" (written for the mega-table world) to "CASCADE for the per-ROM ownership relationships the split introduced; no FK for cross-aggregate references" — same intent, applied to the new tables. See [ADR-0002](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0002-per-rom-table-per-aggregate-split.md).
+
+### Type conventions
+
+All tables are `STRICT` (SQLite ≥ 3.37; the Deck ships 3.50). STRICT allows only `INTEGER` / `REAL` / `TEXT` / `BLOB` / `ANY`, so:
+
+- **Booleans** are `INTEGER` 0/1, guarded by `CHECK (col IN (0, 1))`.
+- **Event timestamps** are `TEXT` ISO-8601 (sortable, human-readable); **cache/TTL timestamps** are `REAL` Unix-epoch seconds (cheap age math). The split is aggregate-driven — only the caches do age arithmetic.
+- **JSON** arrays/objects are `TEXT` guarded by `CHECK (json_valid(col))`. They are display/read-model data, never queried by element, so normalization buys nothing.
+- `rom_save_states.own_upload_ids` is nullable `TEXT` where **`NULL` ≠ `'[]'`**: `NULL` means attribution unknown/legacy, `'[]'` means we uploaded nothing — both meaningful.
+
+No blanket `created_at`/`updated_at` audit columns (the aggregates already model the timestamps that matter), no `systems` lookup table (`system` stays `TEXT`), and no secondary indexes yet (every lookup and cascade rides a primary key; further indexing is deferred until profiling justifies it, per the epic).
+
 ## Coming in later PRs
 
 With the aggregate set above now in place, the remaining persistence work lands downstream:
 
 - **Per-aggregate Repository Protocols** — one Repository per aggregate root (not per table), defined downstream in [#782](https://github.com/danielcopper/decky-romm-sync/issues/782).
-- **The SQLite schema** — table layouts that back the aggregates (one aggregate may span several tables), designed in [#780](https://github.com/danielcopper/decky-romm-sync/issues/780).
+- **The migration framework** — how `001_initial.sql` and future numbered migrations are applied (schema versioning, connection PRAGMAs), in [#782](https://github.com/danielcopper/decky-romm-sync/issues/782).
 - **The service cutover** — wiring the aggregates + Repositories into the services and the hard cut off the JSON state, in [#784](https://github.com/danielcopper/decky-romm-sync/issues/784).
 
 Chapter 8+ of the Cosmic Python book (domain events + message bus) is explicitly out of scope for this epic; the triggers for revisiting that scope are recorded in `CLAUDE.md`.
@@ -150,3 +198,4 @@ Chapter 8+ of the Cosmic Python book (domain events + message bus) is explicitly
 - [Backend Architecture](backend-architecture.md) — the four-layer split, the `XxxServiceConfig` pattern, and the boundary-enforcement layers that aggregates build on.
 - [`CONTEXT.md`](https://github.com/danielcopper/decky-romm-sync/blob/main/CONTEXT.md) — the `Aggregate`, `kv_config`, and `Rom`/`ROM`/`RomM` glossary entries.
 - [ADR-0001](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0001-adopt-platform-aggregate.md) — the decision to adopt `Platform` as a full aggregate.
+- [ADR-0002](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0002-per-rom-table-per-aggregate-split.md) — the per-ROM table-per-aggregate split and the per-ROM CASCADE foreign keys.

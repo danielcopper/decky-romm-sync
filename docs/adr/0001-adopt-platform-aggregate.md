@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -46,11 +46,18 @@ Other rationale:
 
 ## Consequences
 
-- `Rom`, `RomInstall`, `BiosFile`, `RomSaveState` carry `platform_slug` as
-  an FK into the `platforms` table — not a free-floating string.
+- `Rom`, `RomInstall`, `BiosFile`, `RomSaveState` carry `platform_slug` as a
+  reference into the `platforms` table — not a free-floating string. This is a
+  **logical / join reference, not a DB-enforced `FOREIGN KEY` constraint**: the
+  selective-FK rule (epic #271, finalized in
+  [ADR-0002](0002-per-rom-table-per-aggregate-split.md)) deliberately keeps no FK
+  on `platform_slug`, because an enforced constraint would force insert ordering
+  and block platform pruning while ROMs exist — fighting the disk-truth-pruning
+  model.
 - `Rom` drops the denormalized `platform_name` column (resolve via JOIN).
-- Sync must refresh `platforms` before refreshing ROMs (foreign-key
-  dependency) — small ordering constraint.
+- Sync should refresh `platforms` before refreshing ROMs so display names
+  resolve — an application-level ordering preference, **not** a DB foreign-key
+  dependency (there is no enforced constraint to violate).
 - Bundled defaults (`core_defaults.json`) and RetroDECK-managed state
   (`gamelist.xml` overrides) stay outside the Platform aggregate. The
   aggregate is for state we own locally, not for caching read-only
