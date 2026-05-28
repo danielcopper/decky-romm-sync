@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0003](0003-json-sqlite-persistence-boundary.md). Platform is
+**not** adopted as an aggregate — it reverts to a denormalised `platform_slug`
+string (this document's rejected option 1), and the platform sync-exclusion
+toggle stays as `enabled_platforms` in `settings.json`. See ADR-0003 for the
+reasoning (YAGNI: `excluded_from_sync` was dead code, `emulation_stack` /
+`manual_emulator_path` never existed, display-name caching is covered by
+denormalisation). The decision below is retained as historical context.
 
 ## Context
 
