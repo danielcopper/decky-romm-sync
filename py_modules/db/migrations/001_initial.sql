@@ -8,10 +8,10 @@
 -- empty and the library re-syncs (BREAKING CHANGE, beta plugin).
 --
 -- HOW THIS FILE IS LOADED is intentionally out of scope here. Connection-level
--- PRAGMAs (journal_mode=WAL, synchronous=NORMAL, busy_timeout, temp_store,
--- foreign_keys=ON, isolation_level) are set per-connection by the adapter, and
--- schema versioning (PRAGMA user_version vs a schema_migrations table) is owned
--- by the migration-framework sub-issue (#782). This file only declares tables.
+-- PRAGMAs (synchronous=NORMAL, busy_timeout, temp_store, isolation_level) are
+-- set per-connection by the runtime UoW adapter (#783), and schema versioning
+-- (PRAGMA user_version) is applied by the migration runner
+-- (adapters/sqlite_migrations.py, #781). This file only declares tables.
 --
 -- NOTE: foreign_keys must be ON at runtime for the ON DELETE CASCADE clauses
 -- below to fire. That PRAGMA is per-connection (the epic locks foreign_keys=ON)
@@ -325,8 +325,8 @@ CREATE TABLE sync_settings (
 --   retrodeck_home_path_previous  pending-migration previous home (TEXT)
 --   save_sort_settings            {sort_by_content, sort_by_core} (JSON)
 --   save_sort_settings_previous   pending save-sort change (JSON)
--- Schema version is NOT a kv_config key — it is owned by the migration framework
--- (#782), most likely PRAGMA user_version.
+-- Schema version is NOT a kv_config key — it is tracked in PRAGMA user_version
+-- by the migration runner (adapters/sqlite_migrations.py, #781).
 -- -----------------------------------------------------------------------------
 CREATE TABLE kv_config (
     key   TEXT PRIMARY KEY,

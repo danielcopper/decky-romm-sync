@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import cast
 
@@ -45,6 +46,7 @@ from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.sgdb_artwork_cache import SgdbArtworkCacheAdapter
+from adapters.sqlite_migrations import MIGRATIONS_DIR, apply_migrations
 from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
@@ -102,6 +104,10 @@ from services.settings import SettingsService, SettingsServiceConfig
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 from services.steamgrid import SteamGridService, SteamGridServiceConfig
+
+# Filename of the SQLite database inside the plugin runtime dir. Created by the
+# migration runner at startup; unused until the service cutover (#784).
+_DB_FILENAME = "romm_sync.db"
 
 
 def _default_state() -> PluginState:
@@ -284,6 +290,16 @@ def bootstrap(
         ``stores``, ``callbacks``) plus the small set of Plugin-only
         handles ``main.py`` itself binds (``handles.debug_logger``).
     """
+    # Bring the on-disk SQLite schema up to date before any service is wired —
+    # the composition root owns startup infra. Pre-cutover (#784) nothing reads
+    # romm_sync.db, so creating the schema now is harmless; a failed migration
+    # is logged but not fatal (cutover-aware fatal/non-fatal handling is #784).
+    db_path = os.path.join(runtime_dir, _DB_FILENAME)
+    try:
+        apply_migrations(db_path, MIGRATIONS_DIR, logger=logger)
+    except Exception:
+        logger.exception("SQLite schema migration failed; database left at last good version")
+
     retrodeck_paths = RetroDeckPathsAdapter(user_home=user_home, logger=logger)
     retroarch_config = RetroArchConfigAdapter(user_home=user_home, logger=logger)
     retroarch_core_info = RetroArchCoreInfoAdapter(user_home=user_home, logger=logger)

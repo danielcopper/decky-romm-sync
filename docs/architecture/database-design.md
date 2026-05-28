@@ -159,7 +159,7 @@ Each aggregate gets its own table — the per-ROM cluster is **not** a single wi
 | `sync_settings` | `SyncSettings` | `id = 1` (singleton) | always |
 | `kv_config` | misc singleton scalars | `key` | per key |
 
-`Device`, `SyncSettings`, and `SyncRun` carry their own invariants, so per CONTEXT.md they get typed tables rather than untyped `kv_config` rows. `kv_config` is reserved for the truly miscellaneous: `retrodeck_home_path` (+ its pending-migration `_previous`) and `save_sort_settings` (+ `_previous`). The schema version is **not** a `kv_config` key — it is owned by the migration-framework sub-issue ([#782](https://github.com/danielcopper/decky-romm-sync/issues/782), most likely `PRAGMA user_version`).
+`Device`, `SyncSettings`, and `SyncRun` carry their own invariants, so per CONTEXT.md they get typed tables rather than untyped `kv_config` rows. `kv_config` is reserved for the truly miscellaneous: `retrodeck_home_path` (+ its pending-migration `_previous`) and `save_sort_settings` (+ `_previous`). The schema version is **not** a `kv_config` key — it is tracked in `PRAGMA user_version` by the [migration runner](#the-migration-framework) ([#781](https://github.com/danielcopper/decky-romm-sync/issues/781)).
 
 `SyncRun` is a **history** table, not a single "last run" row: a 1-row table would let a newly-started run (`status='running'`, no stats yet) erase the last completed run's displayable stats. "Last successful sync" is the newest row with `status='completed'`; "is a sync running" is any row with `status='running'`.
 
@@ -183,12 +183,30 @@ All tables are `STRICT` (SQLite ≥ 3.37; the Deck ships 3.50). STRICT allows on
 
 No blanket `created_at`/`updated_at` audit columns (the aggregates already model the timestamps that matter), no `systems` lookup table (`system` stays `TEXT`), and no secondary indexes yet (every lookup and cascade rides a primary key; further indexing is deferred until profiling justifies it, per the epic).
 
+## The migration framework
+
+The schema above is not loaded as a special case — it is migration `001`, applied by the same runner that applies every future schema change. The runner lives in [`py_modules/adapters/sqlite_migrations.py`](https://github.com/danielcopper/decky-romm-sync/blob/main/py_modules/adapters/sqlite_migrations.py) ([#781](https://github.com/danielcopper/decky-romm-sync/issues/781)) — it does file + database I/O, so it is an adapter — and is invoked from `bootstrap()` at plugin startup, before any service is wired. stdlib `sqlite3` only; no Alembic or other third-party migration tooling.
+
+**Versioning — `PRAGMA user_version`.** SQLite keeps a single integer in the database header, readable and writable via `PRAGMA user_version`. The runner uses it as the applied-schema marker: a fresh database reports `0`; after migration `NNN` is applied the runner stamps `user_version = NNN`. There is no separate `schema_migrations` table — `user_version` is the whole mechanism (the same lean approach SDH-PlayTime and Junk-Store use). This is why the schema version is deliberately **not** a `kv_config` key.
+
+**Discovery — `NNN_descriptive_name.sql`.** Migrations are plain `.sql` files under `py_modules/db/migrations/`, named with a leading integer (`001_initial.sql`). At startup the runner scans that directory, parses the integer prefix off each filename, sorts ascending **numerically** (so `10` follows `2`, not lexically), and applies only the files whose number is greater than the database's current `user_version`. Files that don't match `NNN_*.sql` are ignored.
+
+**Atomic per migration.** Each migration runs inside its own transaction: `BEGIN` → the migration's DDL → `PRAGMA user_version = NNN` → `COMMIT`. The version bump rides the same transaction as the DDL, so a migration is all-or-nothing: if any statement fails, the transaction rolls back (DDL **and** version bump both undone) and the runner re-raises, leaving the database at the last successfully-applied version. Migration files therefore contain transaction-safe DDL only and must **not** carry their own `BEGIN`/`COMMIT` — the runner supplies the transaction.
+
+**Connection PRAGMAs.** The runner sets `journal_mode=WAL` (persistent — recorded in the database file, so it carries over to runtime connections) and `foreign_keys=ON` (so `CASCADE`-bearing DDL behaves here as it will at runtime). The full per-connection PRAGMA set for runtime Unit-of-Work connections is a separate concern ([#783](https://github.com/danielcopper/decky-romm-sync/issues/783)).
+
+**Database location.** The database is `romm_sync.db` in the plugin runtime directory (`decky.DECKY_PLUGIN_RUNTIME_DIR`), alongside today's JSON state files. Pre-cutover ([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)) nothing reads it, so creating the schema at startup is a harmless but visible behavior change; a migration failure is logged and startup continues — whether a failure should ever become fatal is a cutover-era decision, deferred to #784.
+
+### How to add a v2 migration
+
+Drop a new file `002_descriptive_name.sql` into `py_modules/db/migrations/` containing the schema change (e.g. `ALTER TABLE roms ADD COLUMN …;` or a fresh `CREATE TABLE …;`) as transaction-safe DDL with no `BEGIN`/`COMMIT`. That's the whole change — on the next startup the runner sees `002 > user_version`, applies it inside its own transaction, and bumps `user_version` to `2`. Existing databases receive only the new migration; fresh databases receive `001` then `002` in order. No code change is needed to register the file.
+
 ## Coming in later PRs
 
-With the aggregate set above now in place, the remaining persistence work lands downstream:
+With the aggregate set and the schema (applied by the migration framework above) now in place, the remaining persistence work lands downstream:
 
 - **Per-aggregate Repository Protocols** — one Repository per aggregate root (not per table), defined downstream in [#782](https://github.com/danielcopper/decky-romm-sync/issues/782).
-- **The migration framework** — how `001_initial.sql` and future numbered migrations are applied (schema versioning, connection PRAGMAs), in [#782](https://github.com/danielcopper/decky-romm-sync/issues/782).
+- **The runtime Unit-of-Work + connection PRAGMAs** — how services open and share a database connection per operation, in [#783](https://github.com/danielcopper/decky-romm-sync/issues/783).
 - **The service cutover** — wiring the aggregates + Repositories into the services and the hard cut off the JSON state, in [#784](https://github.com/danielcopper/decky-romm-sync/issues/784).
 
 Chapter 8+ of the Cosmic Python book (domain events + message bus) is explicitly out of scope for this epic; the triggers for revisiting that scope are recorded in `CLAUDE.md`.
