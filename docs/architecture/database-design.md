@@ -59,7 +59,7 @@ The decorator applies `@dataclass(slots=True)`, so the root gets `__init__`, `__
 How it works:
 
 1. It walks `py_modules/domain/`, parses every file, and collects the class names decorated with `@cosmic_aggregate`.
-2. It walks `py_modules/services/` and flags every assignment whose target is `<receiver>.<field> = ...` where the receiver's variable name matches an aggregate class name (case-insensitive substring). It skips `self.x = ...` (method-body internals) and subscript receivers (`d["k"].x = ...`).
+2. It walks `py_modules/services/` and flags every assignment whose target is `<receiver>.<field> = ...` where the receiver's variable name matches an aggregate class name (exact snake_case identifier match — variable `rom` matches aggregate `Rom`, `rom_state` does not). It skips `self.x = ...` (method-body internals) and subscript receivers (`d["k"].x = ...`).
 
 The heuristic is conservative by design — a guardrail, not a prover. It can false-positive (a variable named `rom` holding something else) and false-negative (assignment through a complex expression). The escape hatch is a trailing comment on the offending line:
 

@@ -14,9 +14,10 @@ Heuristic (conservative by design):
      ``cosmic_aggregate``). Build a lowercase-name set.
   2. Parse every file under ``py_modules/services/``; flag every ``Assign``
      node whose target is an ``Attribute`` on a plain ``Name`` whose name
-     (case-insensitively) contains one of the aggregate names as a substring.
-     Skip ``self.x = ...`` and ``some[key].x = ...`` — those are method-body
-     internals and subscript-receiver patterns, not aggregate-field
+     (case-insensitively) exactly equals the snake_case form of one of the
+     aggregate names (variable ``rom`` matches aggregate ``Rom``; ``rom_state``
+     does not). Skip ``self.x = ...`` and ``some[key].x = ...`` — those are
+     method-body internals and subscript-receiver patterns, not aggregate-field
      assignments.
 
 The heuristic can produce both false positives (variable named ``rom``
@@ -36,6 +37,7 @@ Exit 0 on no findings, exit 1 if any findings (one line per finding).
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -91,11 +93,28 @@ def _receiver_name(target: ast.expr) -> str | None:
     return receiver.id
 
 
+def _to_snake(class_name: str) -> str:
+    """Convert a CamelCase class name to its snake_case identifier form.
+
+    ``RomInstall`` -> ``rom_install``; ``Rom`` -> ``rom``.
+    """
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower()
+
+
 def _name_matches_any_aggregate(name: str, aggregate_names: set[str]) -> str | None:
-    """Return the matching aggregate class name if ``name`` (case-insensitive substring) hits one."""
+    """Return the aggregate class name whose snake_case form exactly equals ``name``.
+
+    Exact-identifier match (not substring): the variable ``rom_state`` does not
+    match the aggregate ``Rom`` — only a variable named exactly ``rom`` does.
+    This keeps short aggregate names (``Rom``) from false-matching the many
+    unrelated ``rom*`` variables in the codebase. The trade-off is recall (a Rom
+    held in a differently-named variable won't be caught), accepted because this
+    is a guardrail — with the ``# pragma: no aggregate-check`` escape hatch and
+    code review as backstops — not a prover.
+    """
     lowered = name.lower()
     for agg in aggregate_names:
-        if agg.lower() in lowered:
+        if _to_snake(agg) == lowered:
             return agg
     return None
 

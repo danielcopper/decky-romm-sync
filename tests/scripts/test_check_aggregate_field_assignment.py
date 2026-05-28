@@ -209,20 +209,38 @@ class TestFindViolationsSkipPatterns:
 
 
 class TestFindViolationsHeuristicEdges:
-    def test_partial_substring_match_documented_false_positive(self, patched_check):
-        # Variable named ``romm_api`` partially matches class ``Rom`` — the
-        # substring heuristic flags it. This is the documented trade-off:
-        # rename the variable or use the escape hatch.
+    def test_substring_variable_not_flagged_only_exact_snake_match(self, patched_check):
+        # Variables named ``romm_api`` and ``rom_state`` merely *contain* the
+        # snake form of class ``Rom`` — the exact-identifier matcher does NOT
+        # flag them. Only a variable named exactly ``rom`` matches.
         _, findings = patched_check(
             domain_files={
                 "rom.py": ("from domain._aggregate import cosmic_aggregate\n@cosmic_aggregate\nclass Rom:\n    pass\n"),
             },
             services_files={
-                "fetcher.py": ("def setup(romm_api):\n    romm_api.timeout = 30\n"),
+                "fetcher.py": (
+                    "def setup(romm_api, rom_state):\n    romm_api.timeout = 30\n    rom_state.files = {}\n"
+                ),
+            },
+        )
+        assert findings == []
+
+    def test_exact_snake_match_flagged(self, patched_check):
+        # The variable named exactly ``rom_install`` matches aggregate
+        # ``RomInstall`` (snake_case of the CamelCase class name).
+        _, findings = patched_check(
+            domain_files={
+                "rom_install.py": (
+                    "from domain._aggregate import cosmic_aggregate\n@cosmic_aggregate\nclass RomInstall:\n    pass\n"
+                ),
+            },
+            services_files={
+                "download.py": ("def update(rom_install):\n    rom_install.file_path = '/x'\n"),
             },
         )
         assert len(findings) == 1
-        assert "romm_api.timeout" in findings[0]
+        assert "rom_install.file_path" in findings[0]
+        assert "RomInstall is @cosmic_aggregate" in findings[0]
 
     def test_escape_hatch_suppresses_finding(self, patched_check):
         _, findings = patched_check(
@@ -286,6 +304,17 @@ class TestFindViolationsHeuristicEdges:
         )
         assert names == set()
         assert findings == []
+
+
+class TestToSnake:
+    def test_single_word_lowercased(self):
+        assert check._to_snake("Rom") == "rom"
+
+    def test_camel_case_split_with_underscore(self):
+        assert check._to_snake("RomInstall") == "rom_install"
+
+    def test_multi_word_camel_case(self):
+        assert check._to_snake("FirmwareCacheEntry") == "firmware_cache_entry"
 
 
 class TestMainEntryPoint:

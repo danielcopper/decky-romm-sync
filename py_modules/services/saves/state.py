@@ -120,7 +120,7 @@ class StateService:
         via :meth:`save_state`.
         """
         rom = self.ensure_rom_state(rom_id_str)
-        rom.files = {}
+        rom.files = {}  # pragma: no aggregate-check  (rom is a RomSaveState; becomes a method in #788 PR4)
 
     def prune_orphaned_state(self) -> None:
         """Remove save-sync state entries for rom_ids no longer in the shortcut registry."""
