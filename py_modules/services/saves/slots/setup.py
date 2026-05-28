@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from services.saves.state import StateService
 
 
-_NO_MIGRATION = object()  # sentinel: no slot migration requested
+NO_MIGRATION = object()  # sentinel: no slot migration requested
 
 
 class SetupWizard:
@@ -180,7 +180,7 @@ class SetupWizard:
         self,
         rom_id: int,
         chosen_slot: str,
-        migrate_from_slot: str | None | object = _NO_MIGRATION,
+        migrate_from_slot: str | None | object = NO_MIGRATION,
     ) -> dict:
         """Confirm which slot to use for a game's save sync.
 
@@ -188,7 +188,7 @@ class SetupWizard:
 
         If migrate_from_slot is provided (can be None for legacy no-slot saves),
         migrates saves: upload local files to chosen_slot, then delete old server saves.
-        Pass _NO_MIGRATION sentinel (the default) to skip migration.
+        Pass NO_MIGRATION sentinel (the default) to skip migration.
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
@@ -202,7 +202,7 @@ class SetupWizard:
         rom_state.slot_confirmed = True
 
         # Migration: re-upload local files to new slot, delete old server saves
-        if migrate_from_slot is not _NO_MIGRATION:
+        if migrate_from_slot is not NO_MIGRATION:
             # migrate_from_slot can be None (legacy no-slot) or a string slot name
             from_slot: str | None = migrate_from_slot if isinstance(migrate_from_slot, str) else None
             try:

@@ -30,7 +30,7 @@ from domain.sync_action import (
     compute_sync_action,
 )
 from lib.errors import RommApiError, classify_error
-from services.saves._helpers import _local_save_target
+from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
     import logging
@@ -389,10 +389,10 @@ class MatrixExecutor:
         if action.adopt_baseline and local_hash is not None:
             # State-only mutation: write the current local_hash as the baseline
             # so future runs can detect drift. No I/O, no synced count.
-            self._log_debug(f"_sync_rom_saves({rom_id}): skip + adopt_baseline {filename} ({action.reason})")
+            self._log_debug(f"do_sync_rom_saves({rom_id}): skip + adopt_baseline {filename} ({action.reason})")
             self.adopt_baseline_hash(rom_id_str, filename, local_hash)
         else:
-            self._log_debug(f"_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
+            self._log_debug(f"do_sync_rom_saves({rom_id}): skip {filename} ({action.reason})")
 
     def _dispatch_upload(
         self,
@@ -556,7 +556,7 @@ class MatrixExecutor:
         # compute_sync_action picks newest-in-group internally.
         server_only_groups: dict[str, list[dict]] = {}
         for ss in server_in_slot:
-            target = _local_save_target(ss, rom_name)
+            target = local_save_target(ss, rom_name)
             if target in handled_filenames:
                 continue
             server_only_groups.setdefault(target, []).append(ss)
@@ -594,7 +594,7 @@ class MatrixExecutor:
 
         info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
-            self._log_debug(f"_sync_rom_saves({rom_id}): no save info, skipping")
+            self._log_debug(f"do_sync_rom_saves({rom_id}): no save info, skipping")
             return 0, [], []
         system = info["system"]
         saves_dir = info["saves_dir"]
@@ -604,17 +604,17 @@ class MatrixExecutor:
             device_id = self._state_svc.get_server_device_id()
             server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id))
         except Exception as e:
-            self._logger.error(f"_sync_rom_saves({rom_id}): failed to list saves: {e}")
+            self._logger.error(f"do_sync_rom_saves({rom_id}): failed to list saves: {e}")
             _code, _msg = classify_error(e)
             return 0, [f"Failed to fetch saves: {_msg}"], []
-        self._log_debug(f"[TIMING] _sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
+        self._log_debug(f"[TIMING] do_sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
 
         save_state = self._state_svc.state.saves.get(rom_id_str)
         active_slot = save_state.active_slot if save_state else None
         server_in_slot = self.filter_server_saves_to_slot(server_saves, active_slot)
 
         self._log_debug(
-            f"_sync_rom_saves({rom_id}): system={system}, rom_name={info['rom_name']}, "
+            f"do_sync_rom_saves({rom_id}): system={system}, rom_name={info['rom_name']}, "
             f"server_saves={len(server_saves)}, saves_dir={saves_dir}"
         )
 
@@ -626,11 +626,11 @@ class MatrixExecutor:
         for outcome in self.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
             origin = "local" if outcome.local_path is not None else "server-only"
             self._log_debug(
-                f"_sync_rom_saves({rom_id}): {origin} {outcome.filename} -> {type(outcome.action).__name__}"
+                f"do_sync_rom_saves({rom_id}): {origin} {outcome.filename} -> {type(outcome.action).__name__}"
             )
             if outcome.local_path is None and pending_migration:
                 self._log_debug(
-                    f"_sync_rom_saves({rom_id}): skipping server_only {outcome.filename} — migration pending"
+                    f"do_sync_rom_saves({rom_id}): skipping server_only {outcome.filename} — migration pending"
                 )
                 continue
             if self._dispatch_sync_action(
@@ -653,7 +653,7 @@ class MatrixExecutor:
         save_entry.last_sync_check_at = self._clock.now().isoformat()
 
         self._log_debug(
-            f"[TIMING] _sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"
+            f"[TIMING] do_sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"
             f" synced={synced} errors={len(errors)}"
         )
         return synced, errors, conflicts

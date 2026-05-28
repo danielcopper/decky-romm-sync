@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lib.iso_time import parse_iso_to_epoch
+from domain.iso_time import parse_iso_to_epoch
 
 # ---------------------------------------------------------------------------
 # SyncAction variants

@@ -1,7 +1,7 @@
 """Active-slot mutation and the destructive slot-switch flow.
 
 Anything that flips the active slot on a ROM lives here — the simple
-state-only ``_set_active_slot`` flip and the full ``switch_slot`` flow
+state-only ``set_active_slot`` flip and the full ``switch_slot`` flow
 that synchronises the local saves directory to the new slot's contents.
 Slot listing, the setup wizard, and slot deletion belong in their own
 sub-modules.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from lib.list_result import ErrorCode
-from services.saves._helpers import _local_save_target
+from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
     import asyncio
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 class SlotSwitcher:
     """Active-slot setter + the destructive slot-switch flow.
 
-    Owns ``_set_active_slot`` (the lightweight active-slot flip used
+    Owns ``set_active_slot`` (the lightweight active-slot flip used
     elsewhere in the slots package and by the setup wizard) and
     ``switch_slot`` (the full pre-check + state-sync flow surfaced as a
     public callable).
@@ -64,7 +64,7 @@ class SlotSwitcher:
         self._save_file_store = save_file_store
         self._log_debug = log_debug
 
-    def _set_active_slot(self, rom_id: int, slot: str) -> dict:
+    def set_active_slot(self, rom_id: int, slot: str) -> dict:
         """Set the active save slot for a specific game.
 
         If the slot doesn't exist yet (not on server), it is persisted
@@ -186,7 +186,7 @@ class SlotSwitcher:
         slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
 
         # 6. Update active slot in state
-        self._set_active_slot(rom_id, new_slot)
+        self.set_active_slot(rom_id, new_slot)
 
         # 7. Sync local state to match the new slot
         if slot_saves:
@@ -234,8 +234,8 @@ class SlotSwitcher:
         ``run_in_executor``.
         """
         for server_save in slot_saves:
-            target = _local_save_target(server_save, rom_name)
-            self._sync_engine._do_download_save(server_save, saves_dir, target, rom_id_str, system)
+            target = local_save_target(server_save, rom_name)
+            self._sync_engine.do_download_save(server_save, saves_dir, target, rom_id_str, system)
 
     def _delete_local_saves_for_switch(self, rom_id: int, rom_id_str: str) -> None:
         """Delete local save files and clear file tracking state for a slot switch.

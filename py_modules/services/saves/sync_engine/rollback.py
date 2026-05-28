@@ -18,11 +18,11 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from domain.iso_time import parse_iso_to_epoch
 from domain.save_path import sanitize_save_filename
 from domain.save_state import FileSyncState
 from lib.errors import classify_error
-from lib.iso_time import parse_iso_to_epoch
-from services.saves._helpers import _local_save_target
+from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
     import asyncio
@@ -90,7 +90,7 @@ class RollbackOrchestrator:
         live (test-rebindable) ``_loop`` attribute through without this
         orchestrator caching a stale reference. The rom-level lock must
         be held by the caller — every save-sync entry point serialises
-        through ``SyncEngine._rom_lock(rom_id)``.
+        through ``SyncEngine.rom_lock(rom_id)``.
         """
         rom_id = int(rom_id)
         rom_id_str = str(rom_id)
@@ -229,7 +229,7 @@ class RollbackOrchestrator:
         ``update_file_sync_state`` receives the same target name the file
         lands at.
         """
-        target = _local_save_target(server, rom_name)
+        target = local_save_target(server, rom_name)
         self._matrix.do_download_save(server, saves_dir, target, rom_id_str, system)
         self._state_svc.save_state()
 
@@ -246,7 +246,7 @@ class RollbackOrchestrator:
         local content already matches the server's content hash.
 
         The on-disk name is resolved from the server save's ``file_extension``
-        via :func:`_local_save_target` — the same canonical
+        via :func:`local_save_target` — the same canonical
         ``<rom_name>.<server.file_extension>`` rule
         :meth:`_resolve_conflict_use_server` and every other download path uses.
         This keeps the two resolve paths symmetric: the state key and on-disk
@@ -256,7 +256,7 @@ class RollbackOrchestrator:
         :class:`FileNotFoundError` is raised — we never silently rename across
         extensions.
         """
-        target = _local_save_target(server, rom_name)
+        target = local_save_target(server, rom_name)
         local_path = os.path.join(saves_dir, target)
         if not self._save_file_store.is_file(local_path):
             raise FileNotFoundError(f"Local save not found: {local_path}")

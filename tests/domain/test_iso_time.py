@@ -1,10 +1,10 @@
-"""Unit tests for lib.iso_time — ISO-8601 timestamp helpers."""
+"""Unit tests for domain.iso_time — ISO-8601 timestamp helpers."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
 
-from lib.iso_time import parse_iso, parse_iso_to_epoch
+from domain.iso_time import parse_iso, parse_iso_to_epoch
 
 
 class TestParseIso:

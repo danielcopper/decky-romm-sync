@@ -13,7 +13,7 @@ from domain.save_state import SaveSyncState
 from services.saves._config import SaveServiceConfig
 from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
 from services.saves.slots import SlotsService, SlotsServiceConfig
-from services.saves.slots.service import _NO_MIGRATION
+from services.saves.slots.service import NO_MIGRATION
 from services.saves.state import StateService, StateServiceConfig
 from services.saves.status import StatusService, StatusServiceConfig
 from services.saves.sync_engine import SyncEngine, SyncEngineConfig
@@ -262,16 +262,16 @@ class SaveService:
         self,
         rom_id: int,
         chosen_slot: str,
-        migrate_from_slot: str | None | object = _NO_MIGRATION,
+        migrate_from_slot: str | None | object = NO_MIGRATION,
     ) -> dict:
         """Confirm which slot to use for a game's save sync.
 
-        ``migrate_from_slot`` may be the ``_NO_MIGRATION`` sentinel, ``None``,
+        ``migrate_from_slot`` may be the ``NO_MIGRATION`` sentinel, ``None``,
         or ``"__no_migration__"`` (the string the frontend sends when no
         migration is requested). All three are treated as "no migration".
         """
         if migrate_from_slot is None or migrate_from_slot == "__no_migration__":
-            migrate_from_slot = _NO_MIGRATION
+            migrate_from_slot = NO_MIGRATION
         return await self._slots.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)
 
     async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict:

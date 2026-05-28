@@ -1,7 +1,4 @@
-"""ISO-8601 timestamp parsing helpers.
-
-Layer-agnostic utilities — domain and services may both import from here.
-"""
+"""ISO-8601 timestamp parsing helpers — pure compute, stdlib only."""
 
 from __future__ import annotations
 

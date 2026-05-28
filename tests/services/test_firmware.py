@@ -10,12 +10,12 @@ from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.bios import BiosFileEntry
 from models.state import PluginState, make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.bios import BiosFileEntry
 
 # conftest.py patches decky before this import
 from main import Plugin

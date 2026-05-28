@@ -15,7 +15,7 @@ Two production seams remain mockable per test:
   orchestrator tests do not exercise artwork I/O. Replaced with an
   ``AsyncMock``.
 
-``_emit_progress`` is intentionally **not** mocked when the test asserts on
+``emit_progress`` is intentionally **not** mocked when the test asserts on
 ``decky.emit.call_args_list`` — driving real emissions keeps the
 assertions honest. The fetcher's runtime methods (``build_work_queue``,
 ``fetch_platform_unit``, ``fetch_collection_unit``) are reached through
@@ -226,7 +226,7 @@ class TestSyncPreview:
         result = await plugin.sync_preview()
         assert plugin._sync_service._pending_delta is not None
         assert plugin._sync_service._pending_delta.preview_id == result["preview_id"]
-        assert plugin._sync_service._pending_delta.created_at == plugin._sync_service._clock.time()
+        assert plugin._sync_service._pending_delta.created_at == plugin._sync_service._orchestrator._clock.time()
         assert plugin._sync_service._pending_delta.platforms_count == 1
         assert plugin._sync_service._pending_delta.total_roms == 1
 
@@ -320,7 +320,7 @@ class TestSyncApplyDelta:
         """Helper to populate _pending_delta with valid data."""
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id=preview_id,
-            created_at=plugin._sync_service._clock.time(),
+            created_at=plugin._sync_service._orchestrator._clock.time(),
             platforms_count=1,
             total_roms=3,
         )
@@ -349,7 +349,7 @@ class TestSyncApplyDelta:
         """
         self._setup_pending_delta(plugin, "preview-abc")
         # Advance the clock past the 30-minute max age.
-        plugin._sync_service._clock.advance(1801)
+        plugin._sync_service._orchestrator._clock.advance(1801)
 
         result = await plugin.sync_apply_delta("preview-abc")
 
@@ -376,7 +376,7 @@ class TestSyncApplyDelta:
         # pipeline (the per-unit driver is covered in TestDoSyncPerUnit).
         plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
         # Just under the 30-minute window.
-        plugin._sync_service._clock.advance(1799)
+        plugin._sync_service._orchestrator._clock.advance(1799)
 
         result = await plugin.sync_apply_delta("preview-xyz")
 
@@ -454,7 +454,7 @@ class TestSyncCancelPreview:
     async def test_clears_pending_delta(self, plugin):
         plugin._sync_service._pending_delta = PreviewDelta(
             preview_id="some-id",
-            created_at=plugin._sync_service._clock.time(),
+            created_at=plugin._sync_service._orchestrator._clock.time(),
             platforms_count=0,
             total_roms=0,
         )
@@ -499,7 +499,7 @@ class TestSyncControl:
     def test_sync_heartbeat(self, plugin):
         old = plugin._sync_service._sync_last_heartbeat
         # Advance the injected FakeClock so monotonic moves forward.
-        plugin._sync_service._clock.advance(0.01)
+        plugin._sync_service._orchestrator._clock.advance(0.01)
         result = plugin._sync_service.sync_heartbeat()
         assert result["success"] is True
         assert plugin._sync_service._sync_last_heartbeat > old
@@ -1134,7 +1134,7 @@ class TestWaitForUnitComplete:
         event = asyncio.Event()
         event.set()
         plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic()
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
         plugin._sync_service._box.last_unit_results = {"10": 9000}
 
         results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
@@ -1145,7 +1145,7 @@ class TestWaitForUnitComplete:
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()
         plugin._sync_service._sync_state = SyncState.CANCELLING
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic()
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
 
         results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
         assert results is None
@@ -1156,7 +1156,7 @@ class TestWaitForUnitComplete:
         event = asyncio.Event()
         plugin._sync_service._sync_state = SyncState.RUNNING
         # Heartbeat is way too old — should timeout immediately on first loop check
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic() - 999.0
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic() - 999.0
 
         results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
         assert results is None
@@ -1882,9 +1882,9 @@ class TestWaitForUnitCompleteCancelled:
             async def sleep(self, _seconds: float) -> None:
                 raise asyncio.CancelledError()
 
-        plugin._sync_service._sleeper = _CancellingSleeper()
+        plugin._sync_service._orchestrator._sleeper = _CancellingSleeper()
         plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._clock.monotonic()
+        plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()  # never set — wait will enter the sleep path

@@ -9,7 +9,7 @@ from domain.save_path import compute_local_save_target
 _logger = logging.getLogger(__name__)
 
 
-def _local_save_target(server_save: dict, rom_name: str) -> str:
+def local_save_target(server_save: dict, rom_name: str) -> str:
     """Resolve the local filename for *server_save*, logging any sanitization."""
     result = compute_local_save_target(server_save, rom_name)
     if result.fallback_extension is not None:

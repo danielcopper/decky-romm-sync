@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from models.state import PluginState
 
 from domain.emulator_tag import detect_core_change
+from domain.iso_time import parse_iso_to_epoch
 from domain.save_attribution import compute_uploaded_by_us
 from domain.save_status import compute_save_sync_display
 from domain.save_status_builders import (
@@ -15,7 +16,6 @@ from domain.save_status_builders import (
     status_from_action,
 )
 from domain.sync_action import Conflict, Skip
-from lib.iso_time import parse_iso_to_epoch
 
 if TYPE_CHECKING:
     import asyncio
@@ -109,7 +109,7 @@ class StatusService:
                 f"_get_save_status_io({rom_id}): conflict {outcome.filename} "
                 f"server_save_id={action.server_save.get('id')}"
             )
-            conflict_entry = self._sync_engine._build_sync_conflict_entry(
+            conflict_entry = self._sync_engine.build_sync_conflict_entry(
                 rom_id, outcome.filename, action.server_save, outcome.local_path, outcome.local_hash
             )
         return status_entry, conflict_entry
@@ -135,7 +135,7 @@ class StatusService:
         server_only_outcomes: list[MatrixOutcome] = []
         for outcome in self._sync_engine.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
             if isinstance(outcome.action, Skip) and outcome.action.adopt_baseline and outcome.local_hash:
-                self._sync_engine._adopt_baseline_hash(rom_id_str, outcome.filename, outcome.local_hash)
+                self._sync_engine.adopt_baseline_hash(rom_id_str, outcome.filename, outcome.local_hash)
             if outcome.local_path is None:
                 server_only_outcomes.append(outcome)
             elif local_outcome is None:
@@ -187,7 +187,7 @@ class StatusService:
 
         save_state = self._state_svc.state.saves.get(rom_id_str)
         active_slot = save_state.active_slot if save_state else None
-        server_in_slot = self._sync_engine._filter_server_saves_to_slot(server_saves, active_slot)
+        server_in_slot = self._sync_engine.filter_server_saves_to_slot(server_saves, active_slot)
 
         own_upload_ids: list[int] | None = save_state.own_upload_ids if save_state else None
 

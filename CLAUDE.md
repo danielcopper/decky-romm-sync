@@ -61,7 +61,7 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 
 **Services**:
 
-- `[CP]` Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes. (Canonical dependency inversion.) Carve-out: sub-services within a single bounded context (e.g. all of `services/saves/`) may hold concrete peer-service refs in their `*ServiceConfig` dataclass when they share an aggregate (e.g. `SaveSyncState`). The `[CP]` Protocol rule applies to services across bounded contexts and to adapters.
+- `[CP]` Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes. (Canonical dependency inversion.) Carve-out: sub-services within a single bounded context (e.g. all of `services/saves/`) may hold concrete peer-service refs in their `*ServiceConfig` dataclass when they share an aggregate (e.g. `SaveSyncState`). The `[CP]` Protocol rule applies to services across bounded contexts and to adapters. `[ours]` A method that one sub-service calls on a peer is part of that peer's **public** surface — no leading underscore. The `_` prefix is reserved for genuinely class-internal helpers, so `reportPrivateUsage` stays coherent with this carve-out: peers call public methods, not private ones.
 - `[CP]` No raw I/O.
   - `[ours]` Concrete allow/deny list: forbidden in `services/`: `os.*` (except pure path algebra: `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`. (Our enforcement surface; CP says "no I/O" without spelling out the call list.)
 - `[CP]` No clocks or randomness — inject side-effecting deps via abstractions.
@@ -105,6 +105,16 @@ Protocol names carry a suffix that signals shape, so the call site reads correct
 - Bare names — pervasive cross-cutting primitives (`Clock`, `Sleeper`, `UuidGen`, `DebugLogger`).
 
 When a sibling Protocol set mixes shapes (e.g. `RetroArchConfigReader` next to `RetroArchSaveSortingProvider`), that mix is intentional and reflects the shape difference, not a naming inconsistency.
+
+## Async/sync method naming `[ours]`
+
+- Async methods carry the bare domain-verb name — no `_async` / `Async` suffix. `await` marks them at the call site (Python norm; unlike .NET).
+- When an async method needs a **synchronous twin** — typically a lock-free worker run via `run_in_executor` that a peer must call directly to avoid re-entering a lock the async path already holds — name the sync worker:
+  - `do_<verb>` if it's **public / peer-called** (e.g. `do_download_save`, `do_upload_save`, `do_sync_rom_saves`).
+  - `_<verb>_io` if it's **private / internal-only** (e.g. `_remove_rom_io`, `_uninstall_all_roms_io`).
+- The async public method keeps the bare verb (`sync_rom_saves`); never disambiguate by marking the async side.
+
+The two sync-worker idioms (`do_` prefix for public, `_io` suffix for private) coexist by access level — that split is the current state, not a settled ideal. Unification (converge `do_` onto `_io`) is tracked in #813.
 
 ## Callable response shapes — canonical failure shape
 

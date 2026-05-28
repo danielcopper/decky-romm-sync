@@ -9,8 +9,8 @@ state, or network — belongs here. Code that needs the live
 
 from __future__ import annotations
 
+from domain.iso_time import parse_iso_to_epoch
 from domain.sync_action import Conflict, Download, Skip, Upload
-from lib.iso_time import parse_iso_to_epoch
 
 
 def build_file_status(

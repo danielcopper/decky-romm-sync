@@ -26,7 +26,7 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
-        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine.do_sync_rom_saves(42)
         assert synced == 1
         assert errors == []
         assert conflicts == []
@@ -40,7 +40,7 @@ class TestSyncRomSaves:
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, _ = svc._sync_engine._sync_rom_saves(42)
+        synced, errors, _ = svc._sync_engine.do_sync_rom_saves(42)
         assert synced == 1
         assert errors == []
         # Verify the file was downloaded
@@ -49,7 +49,7 @@ class TestSyncRomSaves:
 
     def test_rom_not_installed(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        synced, errors, _ = svc._sync_engine._sync_rom_saves(999)
+        synced, errors, _ = svc._sync_engine.do_sync_rom_saves(999)
         assert synced == 0
         assert errors == []
 
@@ -58,7 +58,7 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         fake.fail_on_next(RommApiError("Server error"))
 
-        synced, errors, _ = svc._sync_engine._sync_rom_saves(42)
+        synced, errors, _ = svc._sync_engine.do_sync_rom_saves(42)
         assert synced == 0
         assert len(errors) == 1
         assert "Failed to fetch saves" in errors[0]
@@ -82,7 +82,7 @@ class TestSyncRomSaves:
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine.do_sync_rom_saves(42)
 
         assert synced == 0
         assert errors == []
@@ -103,7 +103,7 @@ class TestSyncRomSaves:
         # Local save at the (previous == current, same layout) location.
         _create_save(tmp_path, content=b"user progress")
 
-        synced, errors, conflicts = svc._sync_engine._sync_rom_saves(42)
+        synced, errors, conflicts = svc._sync_engine.do_sync_rom_saves(42)
 
         assert synced == 1
         assert errors == []
@@ -132,13 +132,13 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
-        orig_sync = svc._sync_engine._sync_rom_saves
+        orig_sync = svc._sync_engine.do_sync_rom_saves
 
         def wrapped_sync(rom_id):
             call_order.append("sync")
             return orig_sync(rom_id)
 
-        svc._sync_engine._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
         result = await svc.sync_rom_saves(42)
 
@@ -160,11 +160,11 @@ class TestSyncRomSaves:
         svc._save_sync_state.device_id = "test-device"
         _install_rom(svc, tmp_path)
 
-        # Stub _sync_rom_saves to return 1 conflict, 0 synced, 0 errors
+        # Stub do_sync_rom_saves to return 1 conflict, 0 synced, 0 errors
         def stub_sync(rom_id):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
-        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.sync_rom_saves(42)
 
@@ -245,13 +245,13 @@ class TestSyncAllSaves:
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
-        orig_sync = svc._sync_engine._sync_rom_saves
+        orig_sync = svc._sync_engine.do_sync_rom_saves
 
         def wrapped_sync(rom_id):
             call_order.append("sync")
             return orig_sync(rom_id)
 
-        svc._sync_engine._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
         result = await svc.sync_all_saves()
 
@@ -277,7 +277,7 @@ class TestSyncAllSaves:
         def stub_sync(rom_id):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
-        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.sync_all_saves()
 
@@ -412,14 +412,14 @@ class TestPostExitSync:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
-        # Patch _sync_rom_saves to record call ordering.
-        orig_sync = svc._sync_engine._sync_rom_saves
+        # Patch do_sync_rom_saves to record call ordering.
+        orig_sync = svc._sync_engine.do_sync_rom_saves
 
         def wrapped_sync(rom_id):
             call_order.append("sync")
             return orig_sync(rom_id)
 
-        svc._sync_engine._sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
         result = await svc.post_exit_sync(42)
 
@@ -465,7 +465,7 @@ class TestPostExitSync:
         def stub_sync(rom_id):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
-        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.post_exit_sync(42)
 
@@ -594,7 +594,7 @@ class TestSyncRomSavesDisabledGuard:
 
 class TestSyncCallableErrorMessages:
     """The error-count clause in each public callable's success message
-    (engine.py lines 318 / 380 / 414). Driven by stubbing _sync_rom_saves
+    (engine.py lines 318 / 380 / 414). Driven by stubbing do_sync_rom_saves
     to return a non-empty errors list."""
 
     @pytest.mark.asyncio
@@ -607,7 +607,7 @@ class TestSyncCallableErrorMessages:
         def stub_sync(rom_id):
             return (0, ["pokemon.srm: bad gateway"], [])
 
-        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.pre_launch_sync(42)
 
@@ -625,7 +625,7 @@ class TestSyncCallableErrorMessages:
         def stub_sync(rom_id):
             return (0, ["pokemon.srm: timeout"], [])
 
-        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.post_exit_sync(42)
 
@@ -643,7 +643,7 @@ class TestSyncCallableErrorMessages:
         def stub_sync(rom_id):
             return (0, ["pokemon.srm: 502 bad gateway"], [])
 
-        svc._sync_engine._sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
         result = await svc.sync_rom_saves(42)
 
@@ -656,20 +656,20 @@ class TestSyncEngineDelegates:
     or DeviceRegistry (engine.py lines 204 / 220 / 239)."""
 
     def test_adopt_baseline_hash_delegates_to_matrix(self, tmp_path):
-        """SyncEngine._adopt_baseline_hash writes through to the matrix's state."""
+        """SyncEngine.adopt_baseline_hash writes through to the matrix's state."""
         svc, _ = make_service(tmp_path)
 
-        svc._sync_engine._adopt_baseline_hash("42", "pokemon.srm", "deadbeef" * 4)
+        svc._sync_engine.adopt_baseline_hash("42", "pokemon.srm", "deadbeef" * 4)
 
         file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
         assert file_state.last_sync_hash == "deadbeef" * 4
 
     def test_build_sync_conflict_entry_delegates_to_matrix(self, tmp_path):
-        """SyncEngine._build_sync_conflict_entry builds the same dict shape as the matrix."""
+        """SyncEngine.build_sync_conflict_entry builds the same dict shape as the matrix."""
         svc, _ = make_service(tmp_path)
         server = _server_save(save_id=77, filename="pokemon.srm", file_size_bytes=2048)
 
-        entry = svc._sync_engine._build_sync_conflict_entry(
+        entry = svc._sync_engine.build_sync_conflict_entry(
             rom_id=42,
             filename="pokemon.srm",
             server=server,

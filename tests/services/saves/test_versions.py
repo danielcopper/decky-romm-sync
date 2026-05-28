@@ -650,7 +650,7 @@ class TestRollbackToVersion:
     async def test_rollback_ignores_confirm_download_failure(self, tmp_path):
         """confirm_download failure is non-fatal — rollback still reports ok and updates state.
 
-        ``_do_upload_save`` swallows confirm_download errors (debug-logged).
+        ``do_upload_save`` swallows confirm_download errors (debug-logged).
         From the rollback's perspective the PUT succeeded, so cross-device
         propagation works (the next list_saves still picks our bumped
         ``updated_at``). is_current may not be set on our device until the next

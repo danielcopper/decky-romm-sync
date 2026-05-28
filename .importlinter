@@ -43,17 +43,32 @@ forbidden_modules =
     adapters
     domain
 
-# Domain must not import services or adapters. lib is allowed: lib hosts
-# layer-agnostic utilities (e.g. ISO timestamp parsing) shared by both
-# domain and services.
+# Domain is pure compute — no dependencies on any other internal layer.
+# Services, adapters, lib, and models are all forbidden. Anything domain
+# needs from "shared utilities" (e.g. ISO timestamp parsing) lives inside
+# domain itself.
 [importlinter:contract:domain-independence]
-name = Domain must not import services or adapters
+name = Domain must not import services, adapters, lib, or models
 type = forbidden
 source_modules =
     domain
 forbidden_modules =
     services
     adapters
+    lib
+    models
+
+# Domain is pure compute, stdlib + self only. ``_vendor`` hosts vendored
+# third-party packages and is the only entry point for non-stdlib code
+# into the codebase; banning it from domain enforces the CP doctrine
+# that domain has no external runtime dependencies.
+[importlinter:contract:domain-stdlib-only]
+name = Domain must not import vendored third-party packages
+type = forbidden
+source_modules =
+    domain
+forbidden_modules =
+    _vendor
 
 # Models must not import services, adapters, domain, or lib
 [importlinter:contract:models-independence]

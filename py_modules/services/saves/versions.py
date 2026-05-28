@@ -14,7 +14,7 @@ import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from services.saves._helpers import _local_save_target
+from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
     import asyncio
@@ -74,7 +74,7 @@ class VersionsService:
         """Look up the per-file sync state for *filename* (canonical local name).
 
         State keys are always ``<rom_name>.<ext>`` — the same canonical
-        local filename produced by ``_local_save_target`` and consumed by
+        local filename produced by ``local_save_target`` and consumed by
         RetroArch — so a single dict lookup is enough. The previous
         ``file_name_no_tags``-anchored slow path is gone.
         """
@@ -156,17 +156,17 @@ class VersionsService:
         This function is purely the destructive switch:
 
         1. Download id=save_id content → overwrite local file.
-           ``_do_download_save`` updates ``tracked_save_id`` /
+           ``do_download_save`` updates ``tracked_save_id`` /
            ``last_sync_hash`` to point at the target version locally.
         2. PUT id=save_id with the same content. RomM v4.8.1 fires the
            SQLAlchemy ``onupdate=utc_now`` hook, so ``save.updated_at``
            becomes NOW and id=save_id is now newest in the slot — beating
            anything else there.
-        3. ``_do_upload_save`` calls ``confirm_download(save_id, device_id)``,
+        3. ``do_upload_save`` calls ``confirm_download(save_id, device_id)``,
            setting our ``last_synced_at = save.updated_at`` so
            ``is_current`` evaluates true for us. Required because v4.8.1
            PUT does NOT auto-upsert sync rows.
-        4. ``_do_upload_save`` refreshes local sync state via
+        4. ``do_upload_save`` refreshes local sync state via
            ``update_file_sync_state`` to match the post-PUT response.
 
         After this, the next ``compute_sync_action`` run picks id=save_id
@@ -185,13 +185,13 @@ class VersionsService:
         saves_dir = info["saves_dir"]
         system = info["system"]
         rom_name = info["rom_name"]
-        target_filename = _local_save_target(target_save, rom_name)
+        target_filename = local_save_target(target_save, rom_name)
         local_path = os.path.join(saves_dir, target_filename)
 
-        self._sync_engine._do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
+        self._sync_engine.do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
 
         try:
-            self._sync_engine._do_upload_save(
+            self._sync_engine.do_upload_save(
                 rom_id=int(rom_id_str),
                 file_path=local_path,
                 filename=target_filename,
@@ -219,7 +219,7 @@ class VersionsService:
 
         Flow:
 
-        1. Run ``_sync_rom_saves`` as a matrix pre-flight on the
+        1. Run ``do_sync_rom_saves`` as a matrix pre-flight on the
            currently-tracked save. The matrix decides:
 
            - ``Skip(synced)`` / ``Skip(adopt_baseline=True)`` — proceed.
@@ -268,7 +268,7 @@ class VersionsService:
         rom_id_str = str(rom_id)
         save_id = int(save_id)
 
-        async with self._sync_engine._rom_lock(rom_id):
+        async with self._sync_engine.rom_lock(rom_id):
             info = self._rom_info.get_rom_save_info(rom_id)
             if not info:
                 return {"status": "rom_not_installed"}
@@ -276,7 +276,7 @@ class VersionsService:
             # Matrix pre-flight: get the tracked save in sync first, or surface
             # a conflict that the user must resolve before any switch can run.
             _synced, errors, conflicts = await self._loop.run_in_executor(
-                None, self._sync_engine._sync_rom_saves, rom_id
+                None, self._sync_engine.do_sync_rom_saves, rom_id
             )
             if conflicts:
                 self._state_svc.save_state()

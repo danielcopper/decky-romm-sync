@@ -337,7 +337,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
     async def test_sync_all_saves_respects_migration_block_via_decorator_chain(self, tmp_path):
         """End-to-end chain check: Plugin.sync_all_saves must be blocked by the
         @migration_blocked decorator before SaveService.sync_all_saves runs, so
-        the internal _sync_rom_saves call path is never reached when migration
+        the internal do_sync_rom_saves call path is never reached when migration
         is pending. Protects against accidental decorator removal at the public
         callable layer."""
         from main import Plugin
@@ -352,8 +352,8 @@ class TestRetroDeckMigrationBlocksSaveSync:
         plugin._migration_service = MagicMock()
         plugin._migration_service.is_retrodeck_migration_pending.return_value = True
 
-        spy = MagicMock(name="_sync_rom_saves_spy")
-        svc._sync_engine._sync_rom_saves = spy  # type: ignore[method-assign]
+        spy = MagicMock(name="do_sync_rom_saves_spy")
+        svc._sync_engine.do_sync_rom_saves = spy  # type: ignore[method-assign]
 
         result = await plugin.sync_all_saves()
 
@@ -530,9 +530,7 @@ class TestEmulatorTag:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
-        svc._sync_engine._do_upload_save(
-            42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba"
-        )
+        svc._sync_engine.do_upload_save(42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba")
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -546,9 +544,7 @@ class TestEmulatorTag:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
-        svc._sync_engine._do_upload_save(
-            42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba"
-        )
+        svc._sync_engine.do_upload_save(42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba")
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -837,16 +833,16 @@ class TestCheckCoreChange:
 class TestPathTraversalDefense:
     """Defense in depth against malicious filenames at the two choke points.
 
-    1. Server-supplied ``file_extension`` flowing through ``_local_save_target``.
+    1. Server-supplied ``file_extension`` flowing through ``local_save_target``.
     2. Frontend-supplied ``filename`` arriving at ``resolve_sync_conflict``.
     """
 
     def test_local_save_target_strips_traversal_in_extension(self, caplog):
         """A malicious ``file_extension`` cannot produce a path-escape filename."""
-        from services.saves._helpers import _local_save_target
+        from services.saves._helpers import local_save_target
 
         with caplog.at_level(logging.WARNING):
-            target = _local_save_target({"file_extension": "../etc/passwd"}, "pokemon")
+            target = local_save_target({"file_extension": "../etc/passwd"}, "pokemon")
         # Sanitization reduces to a simple basename — no separators, no parent refs.
         assert "/" not in target
         assert ".." not in target.split(".")
@@ -856,18 +852,18 @@ class TestPathTraversalDefense:
 
     def test_local_save_target_happy_path_unchanged(self):
         """Clean ``file_extension`` produces ``<rom_name>.<ext>`` unchanged."""
-        from services.saves._helpers import _local_save_target
+        from services.saves._helpers import local_save_target
 
-        assert _local_save_target({"file_extension": "srm"}, "pokemon") == "pokemon.srm"
+        assert local_save_target({"file_extension": "srm"}, "pokemon") == "pokemon.srm"
 
     def test_local_save_target_falls_back_to_srm_on_unusable_ext(self, caplog):
         """When the server's extension produces an empty/dot-only name, fall back to ``srm``."""
-        from services.saves._helpers import _local_save_target
+        from services.saves._helpers import local_save_target
 
         with caplog.at_level(logging.WARNING):
             # An ``ext`` that drives the basename to ``""`` after sanitization
             # (e.g. trailing separator) — the helper degrades to ``"srm"``.
-            target = _local_save_target({"file_extension": "evil/"}, "pokemon")
+            target = local_save_target({"file_extension": "evil/"}, "pokemon")
         # Either the sanitized basename or the safe default — never traversal.
         assert "/" not in target
         assert target.endswith(".srm") or target == "pokemon.srm"
@@ -932,11 +928,11 @@ class TestPerRomLockSerialization:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"local data")
 
-        # Spy timing on _sync_rom_saves entry/exit. The lock is held in the
+        # Spy timing on do_sync_rom_saves entry/exit. The lock is held in the
         # async wrapper around run_in_executor, so the inner call's
         # entry/exit windows for two concurrent invocations must not overlap.
         events: list[tuple[str, float]] = []
-        original = svc._sync_engine._sync_rom_saves
+        original = svc._sync_engine.do_sync_rom_saves
 
         def wrapped(rom_id: int):
             events.append(("enter", time.time()))
@@ -947,7 +943,7 @@ class TestPerRomLockSerialization:
             finally:
                 events.append(("exit", time.time()))
 
-        svc._sync_engine._sync_rom_saves = wrapped  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = wrapped  # type: ignore[method-assign]
 
         await asyncio.gather(svc.sync_rom_saves(42), svc.sync_rom_saves(42))
 
@@ -966,7 +962,7 @@ class TestPerRomLockSerialization:
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"b")
 
         events: list[tuple[int, str, float]] = []
-        original = svc._sync_engine._sync_rom_saves
+        original = svc._sync_engine.do_sync_rom_saves
 
         def wrapped(rom_id: int):
             events.append((rom_id, "enter", time.time()))
@@ -976,7 +972,7 @@ class TestPerRomLockSerialization:
             finally:
                 events.append((rom_id, "exit", time.time()))
 
-        svc._sync_engine._sync_rom_saves = wrapped  # type: ignore[method-assign]
+        svc._sync_engine.do_sync_rom_saves = wrapped  # type: ignore[method-assign]
 
         await asyncio.gather(svc.sync_rom_saves(1), svc.sync_rom_saves(2))
 

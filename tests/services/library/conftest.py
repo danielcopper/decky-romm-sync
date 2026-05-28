@@ -33,6 +33,7 @@ from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
+from tests.services.library._helpers import rebind_loop
 
 
 @pytest.fixture
@@ -139,7 +140,7 @@ def plugin(tmp_path):
 async def _set_event_loop(plugin):
     """Ensure plugin.loop matches the running event loop for async tests."""
     plugin.loop = asyncio.get_event_loop()
-    plugin._sync_service._loop = asyncio.get_event_loop()
+    rebind_loop(plugin._sync_service, asyncio.get_event_loop())
     plugin._artwork_service._loop = asyncio.get_event_loop()
     plugin._shortcut_removal_service._loop = asyncio.get_event_loop()
     plugin._metadata_service._loop = asyncio.get_event_loop()

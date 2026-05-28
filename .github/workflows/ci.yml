@@ -113,6 +113,9 @@ jobs:
       - name: Check Cosmic Python call bans
         run: bash scripts/check_cosmic_call_bans.sh
 
+      - name: Check aggregate field-assignment ban
+        run: python scripts/check_aggregate_field_assignment.py
+
   sonarcloud:
     runs-on: ubuntu-latest
     needs: [test, frontend-test]

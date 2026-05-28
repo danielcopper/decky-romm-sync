@@ -6,7 +6,7 @@ preview (read-only), and dispatching the per-unit sync pipeline on
 apply. The heartbeat clock — refreshed on every progress emission and
 inspected by per-unit waits — lives here too. Progress emission also
 lives here — sub-services that need to surface progress receive the
-orchestrator's ``_emit_progress`` callback through their config.
+orchestrator's ``emit_progress`` callback through their config.
 Anything that fetches ROMs belongs in :class:`LibraryFetcher`;
 anything that finalises shortcuts after the apply completes belongs
 in :class:`SyncReporter`. The metadata-cache is only stamped per
@@ -171,7 +171,7 @@ class SyncOrchestrator:
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
         try:
-            await self._emit_progress(SyncStage.DISCOVERING, message="Fetching platforms...")
+            await self.emit_progress(SyncStage.DISCOVERING, message="Fetching platforms...")
             work_queue = await self._fetcher.build_work_queue()
 
             all_roms: list[dict] = []
@@ -183,7 +183,7 @@ class SyncOrchestrator:
             for unit_index, unit in enumerate(work_queue, 1):
                 if box.sync_state == SyncState.CANCELLING:
                     raise asyncio.CancelledError(_SYNC_CANCELLED)
-                await self._emit_progress(
+                await self.emit_progress(
                     SyncStage.FETCHING,
                     current=len(all_roms),
                     message=f"Fetching {unit.name}... ({unit_index}/{total_units})",
@@ -219,7 +219,7 @@ class SyncOrchestrator:
                 total_roms=len(all_roms),
             )
 
-            await self._emit_progress(SyncStage.DONE, message="Preview ready", running=False)
+            await self.emit_progress(SyncStage.DONE, message="Preview ready", running=False)
 
             return {
                 "success": True,
@@ -254,7 +254,7 @@ class SyncOrchestrator:
             self._logger.error(f"Sync preview failed: {e}\n{traceback.format_exc()}")
             box.pending_delta = None
             _code, _msg = classify_error(e)
-            await self._emit_progress(SyncStage.ERROR, message=_msg, running=False)
+            await self.emit_progress(SyncStage.ERROR, message=_msg, running=False)
             return {"success": False, "message": _msg, "error_code": _code}
         finally:
             box.sync_state = SyncState.IDLE
@@ -296,7 +296,7 @@ class SyncOrchestrator:
 
     # ── Progress & safety ────────────────────────────────────────
 
-    async def _emit_progress(self, stage, current=0, total=0, message="", running=True, step=0, total_steps=0):
+    async def emit_progress(self, stage, current=0, total=0, message="", running=True, step=0, total_steps=0):
         """Persist the progress snapshot and emit the sync_progress event.
 
         ``stage`` is a :class:`SyncStage` (or its string value); ``step``
@@ -323,7 +323,7 @@ class SyncOrchestrator:
         """Return the persisted progress snapshot — the authoritative sync state.
 
         Idle returns the default ``running: False`` snapshot; a live run
-        returns the latest snapshot written by :meth:`_emit_progress`.
+        returns the latest snapshot written by :meth:`emit_progress`.
         """
         return self._sync_state.sync_progress
 
@@ -380,7 +380,7 @@ class SyncOrchestrator:
             except Exception as e:
                 self._logger.error(f"Failed to build work queue: {e}")
                 _code, _msg = classify_error(e)
-                await self._emit_progress(SyncStage.ERROR, message=_msg, running=False)
+                await self.emit_progress(SyncStage.ERROR, message=_msg, running=False)
                 box.sync_state = SyncState.IDLE
                 return
 
@@ -397,7 +397,7 @@ class SyncOrchestrator:
             )
 
             if total_units == 0:
-                await self._emit_progress(SyncStage.DONE, message="Nothing to sync", running=False)
+                await self.emit_progress(SyncStage.DONE, message="Nothing to sync", running=False)
                 box.sync_state = SyncState.IDLE
                 box.current_sync_id = None
                 return
@@ -427,7 +427,7 @@ class SyncOrchestrator:
             # commits collections. Cancelled runs skip it — their next emit
             # is the terminal cancelled snapshot from the reporter.
             if not cancelled:
-                await self._emit_progress(
+                await self.emit_progress(
                     SyncStage.FINALIZING,
                     message="Finalizing…",
                     step=total_units,
@@ -486,7 +486,7 @@ class SyncOrchestrator:
         ``total_games_applied`` total returned to the user.
         """
         box = self._sync_state
-        await self._emit_progress(
+        await self.emit_progress(
             SyncStage.APPLYING,
             message=f"{unit.name} ({unit_index + 1}/{total_units})",
             step=unit_index + 1,
@@ -688,7 +688,7 @@ class SyncOrchestrator:
         box = self._sync_state
         return await self._artwork.download_artwork(
             all_roms,
-            emit_progress=self._emit_progress,
+            emit_progress=self.emit_progress,
             is_cancelling=lambda: box.sync_state == SyncState.CANCELLING,
             progress_step=progress_step,
             progress_total_steps=progress_total_steps,

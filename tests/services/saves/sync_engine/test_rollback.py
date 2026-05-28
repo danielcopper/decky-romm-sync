@@ -245,7 +245,7 @@ class TestResolveSyncConflict:
         """Empty slot post-fetch returns success=False with a clear message.
 
         Implementation note: ``resolve_sync_conflict`` reaches the slot-empty
-        branch via ``_filter_server_saves_to_slot`` and returns
+        branch via ``filter_server_saves_to_slot`` and returns
         ``{"success": False, "message": "No server save in active slot"}``.
         """
         svc, _ = make_service(tmp_path)

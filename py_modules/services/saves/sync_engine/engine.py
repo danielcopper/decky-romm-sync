@@ -134,7 +134,7 @@ class SyncEngine:
             log_debug=config.log_debug,
         )
 
-    def _rom_lock(self, rom_id: int) -> asyncio.Lock:
+    def rom_lock(self, rom_id: int) -> asyncio.Lock:
         """Return the lock for this rom_id, creating it lazily."""
         if rom_id not in self._rom_sync_locks:
             self._rom_sync_locks[rom_id] = asyncio.Lock()
@@ -143,20 +143,20 @@ class SyncEngine:
     # ------------------------------------------------------------------
     # Matrix-executor delegates — consumed by tests, peer services, and
     # internal orchestration. Kept on SyncEngine so monkey-patching
-    # `svc._sync_engine._sync_rom_saves = stub` continues to short-circuit
-    # the public callables that drive `_sync_rom_saves` through
-    # `self._sync_rom_saves`.
+    # `svc._sync_engine.do_sync_rom_saves = stub` continues to short-circuit
+    # the public callables that drive `do_sync_rom_saves` through
+    # `self.do_sync_rom_saves`.
     # ------------------------------------------------------------------
 
-    def _sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[dict]]:
+    def do_sync_rom_saves(self, rom_id: int) -> tuple[int, list[str], list[dict]]:
         """Sync saves for a single ROM (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.sync_rom_saves(rom_id)
 
-    def _do_download_save(self, server_save: dict, saves_dir: str, filename: str, rom_id_str: str, system: str) -> None:
+    def do_download_save(self, server_save: dict, saves_dir: str, filename: str, rom_id_str: str, system: str) -> None:
         """Download a save file from server (delegate to :class:`MatrixExecutor`)."""
         self._matrix.do_download_save(server_save, saves_dir, filename, rom_id_str, system)
 
-    def _do_upload_save(
+    def do_upload_save(
         self,
         rom_id: int,
         file_path: str,
@@ -178,16 +178,16 @@ class SyncEngine:
         """Yield one :class:`MatrixOutcome` per save file in the ROM's active slot."""
         return self._matrix.iter_matrix_outcomes(rom_id, server_in_slot, info=info)
 
-    def _adopt_baseline_hash(self, rom_id_str: str, filename: str, local_hash: str) -> None:
+    def adopt_baseline_hash(self, rom_id_str: str, filename: str, local_hash: str) -> None:
         """Persist ``local_hash`` as the file's ``last_sync_hash`` baseline."""
         self._matrix.adopt_baseline_hash(rom_id_str, filename, local_hash)
 
     @staticmethod
-    def _filter_server_saves_to_slot(server_saves: list[dict], active_slot: str | None) -> list[dict]:
+    def filter_server_saves_to_slot(server_saves: list[dict], active_slot: str | None) -> list[dict]:
         """Filter server saves to the active slot."""
         return MatrixExecutor.filter_server_saves_to_slot(server_saves, active_slot)
 
-    def _build_sync_conflict_entry(
+    def build_sync_conflict_entry(
         self,
         rom_id: int,
         filename: str,
@@ -250,14 +250,14 @@ class SyncEngine:
     async def pre_launch_sync(self, rom_id: int) -> dict:
         """Download newer saves from server before game launch."""
         rom_id = int(rom_id)
-        async with self._rom_lock(rom_id):
+        async with self.rom_lock(rom_id):
             if not self._state_svc.is_save_sync_enabled():
                 return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
             # Defense in depth: block pre_launch_sync if a future caller bypasses
             # the @migration_blocked decorator at the public callable. saves_dir
             # would otherwise resolve under the new home and silently desync from
-            # files still living at the old home. Internal _sync_rom_saves callers
+            # files still living at the old home. Internal do_sync_rom_saves callers
             # (sync_all_saves, rollback_to_version) are protected by the decorator
             # on their own public callables — this guard is for pre_launch_sync.
             if self._is_retrodeck_migration_pending():
@@ -287,7 +287,7 @@ class SyncEngine:
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
-            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            synced, errors, conflicts = await self._loop.run_in_executor(None, self.do_sync_rom_saves, rom_id)
             self._state_svc.save_state()
 
             msg = f"Downloaded {synced} save(s)"
@@ -306,13 +306,13 @@ class SyncEngine:
         self._logger.info("post_exit_sync called for rom_id=%d", rom_id)
         rom_id = int(rom_id)
 
-        async with self._rom_lock(rom_id):
+        async with self.rom_lock(rom_id):
             if not self._state_svc.is_save_sync_enabled():
                 self._logger.info("post_exit_sync skipped: save sync disabled")
                 return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
             # Defense in depth: same rationale as pre_launch_sync — internal
-            # _sync_rom_saves callers are protected by @migration_blocked on
+            # do_sync_rom_saves callers are protected by @migration_blocked on
             # their public callables; this guard covers post_exit_sync only.
             if self._is_retrodeck_migration_pending():
                 self._logger.info("post_exit_sync skipped: retrodeck migration pending")
@@ -327,7 +327,7 @@ class SyncEngine:
                 self._logger.info("post_exit_sync skipped: sync_after_exit disabled")
                 return {"success": True, "message": "Post-exit sync disabled", "synced": 0}
 
-            # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+            # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
             await self._refresh_save_sort_state("post_exit_sync")
 
             try:
@@ -341,7 +341,7 @@ class SyncEngine:
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
-            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            synced, errors, conflicts = await self._loop.run_in_executor(None, self.do_sync_rom_saves, rom_id)
             self._state_svc.save_state()
 
             self._logger.info(
@@ -368,11 +368,11 @@ class SyncEngine:
     async def sync_rom_saves(self, rom_id: int) -> dict:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""
         rom_id = int(rom_id)
-        async with self._rom_lock(rom_id):
+        async with self.rom_lock(rom_id):
             if not self._state_svc.is_save_sync_enabled():
                 return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
-            # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+            # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
             # Manual sync paths must observe fresh sort state too: a user could
             # edit retroarch.cfg outside of a session and then trigger a manual
             # sync before any detect has fired.
@@ -383,7 +383,7 @@ class SyncEngine:
                 if not reg.get("success"):
                     return {"success": False, "message": DEVICE_NOT_REGISTERED}
 
-            synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id)
+            synced, errors, conflicts = await self._loop.run_in_executor(None, self.do_sync_rom_saves, rom_id)
             self._state_svc.save_state()
 
             msg = f"Synced {synced} save(s)"
@@ -404,7 +404,7 @@ class SyncEngine:
         if not self._state_svc.is_save_sync_enabled():
             return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0, "conflicts": 0}
 
-        # Refresh save-sort state before _sync_rom_saves reads saves_dir — see #238.
+        # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
         # Manual sync paths must observe fresh sort state too: a user could
         # edit retroarch.cfg outside of a session and then trigger a manual
         # sync before any detect has fired.
@@ -427,8 +427,8 @@ class SyncEngine:
         for rom_id_str in sorted(rom_ids):
             rom_count += 1
             rom_id_int = int(rom_id_str)
-            async with self._rom_lock(rom_id_int):
-                synced, errors, conflicts = await self._loop.run_in_executor(None, self._sync_rom_saves, rom_id_int)
+            async with self.rom_lock(rom_id_int):
+                synced, errors, conflicts = await self._loop.run_in_executor(None, self.do_sync_rom_saves, rom_id_int)
             total_synced += synced
             total_errors.extend(errors)
             all_conflicts.extend(conflicts)
@@ -479,7 +479,7 @@ class SyncEngine:
         - ``"use_server"`` — download the current server save, replacing local.
         """
         rom_id_int = int(rom_id)
-        async with self._rom_lock(rom_id_int):
+        async with self.rom_lock(rom_id_int):
             return await self._rollback.resolve(
                 rom_id_int,
                 filename,

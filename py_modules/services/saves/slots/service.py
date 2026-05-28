@@ -21,7 +21,7 @@ from models.state import PluginState
 
 from services.saves.slots.deletion import SlotDeleter
 from services.saves.slots.listing import SlotListing
-from services.saves.slots.setup import _NO_MIGRATION, SetupWizard
+from services.saves.slots.setup import NO_MIGRATION, SetupWizard
 from services.saves.slots.switching import SlotSwitcher
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from services.saves.sync_engine import SyncEngine
 
 
-__all__ = ["_NO_MIGRATION", "SlotsService", "SlotsServiceConfig"]
+__all__ = ["NO_MIGRATION", "SlotsService", "SlotsServiceConfig"]
 
 
 @dataclass(frozen=True)
@@ -133,13 +133,13 @@ class SlotsService:
 
     # ------------------------------------------------------------------
     # Active slot mutation + slot switching — delegate to :class:`SlotSwitcher`.
-    # Kept on the facade so tests that reach for ``svc._slots._set_active_slot``
+    # Kept on the facade so tests that reach for ``svc._slots.set_active_slot``
     # continue to drive the same code path.
     # ------------------------------------------------------------------
 
-    def _set_active_slot(self, rom_id: int, slot: str) -> dict:
+    def set_active_slot(self, rom_id: int, slot: str) -> dict:
         """Set the active save slot for a specific game."""
-        return self._switcher._set_active_slot(rom_id, slot)
+        return self._switcher.set_active_slot(rom_id, slot)
 
     async def switch_slot(self, rom_id: int, new_slot: str) -> dict:
         """Switch the active save slot with immediate state sync."""
@@ -161,7 +161,7 @@ class SlotsService:
         self,
         rom_id: int,
         chosen_slot: str,
-        migrate_from_slot: str | None | object = _NO_MIGRATION,
+        migrate_from_slot: str | None | object = NO_MIGRATION,
     ) -> dict:
         """Confirm which slot to use for a game's save sync."""
         return await self._setup.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)

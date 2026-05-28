@@ -6,9 +6,20 @@ typeCheckingMode = "basic"
 exclude = ["py_modules/_vendor", "scripts", ".venv"]
 reportMissingModuleSource = "none"
 reportMissingImports = "warning"
+reportPrivateUsage = "error"
 reportRedeclaration = "none"
 reportUnusedParameter = "none"
 reportUnusedVariable = "warning"
+
+# Tests inspect and rebind private state of the system under test —
+# white-box testing is a deliberate, accepted pattern here. The
+# reportPrivateUsage guardrail targets production encapsulation, not
+# test setup, so it's disabled under tests/. extraPaths is repeated
+# because execution environments do not inherit the top-level value.
+[[tool.basedpyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["py_modules"]
+reportPrivateUsage = "none"
 
 [tool.ruff]
 target-version = "py311"

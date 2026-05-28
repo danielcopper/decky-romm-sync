@@ -15,6 +15,7 @@ from tests.services.library._helpers import (
     _make_loop_raising,
     _make_loop_with_executor,
     _make_registry_entry,
+    rebind_loop,
 )
 
 
@@ -32,7 +33,7 @@ class TestGetPlatforms:
                 {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
             ]
         )
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.get_platforms()
         assert result["success"] is True
@@ -52,7 +53,7 @@ class TestGetPlatforms:
                 {"id": 2, "name": "Empty", "slug": "empty", "rom_count": 0},
             ]
         )
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.get_platforms()
         assert result["success"] is True
@@ -70,7 +71,7 @@ class TestGetPlatforms:
                 {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
             ]
         )
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
         plugin.settings["enabled_platforms"] = {"1": True, "2": False}
 
         result = await plugin._sync_service.get_platforms()
@@ -83,7 +84,7 @@ class TestGetPlatforms:
 
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(return_value=[{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}])
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
         plugin.settings["enabled_platforms"] = {}
 
         result = await plugin._sync_service.get_platforms()
@@ -95,7 +96,7 @@ class TestGetPlatforms:
 
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(side_effect=Exception("Connection refused"))
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.get_platforms()
         assert result["success"] is False
@@ -107,7 +108,7 @@ class TestGetPlatforms:
 
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(return_value="not a list")
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.get_platforms()
         assert result["success"] is False
@@ -143,7 +144,7 @@ class TestSetAllPlatformsSync:
                 {"id": 2, "name": "SNES"},
             ]
         )
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.set_all_platforms_sync(True)
         assert result["success"] is True
@@ -156,7 +157,7 @@ class TestSetAllPlatformsSync:
 
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(return_value=[{"id": 1, "name": "N64"}])
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.set_all_platforms_sync(False)
         assert result["success"] is True
@@ -168,7 +169,7 @@ class TestSetAllPlatformsSync:
 
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(side_effect=Exception("timeout"))
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.set_all_platforms_sync(True)
         assert result["success"] is False
@@ -183,7 +184,7 @@ class TestGetCollections:
         user = [{"id": 1, "name": "My Faves", "rom_count": 3, "is_favorite": False}]
         smart = [{"id": 5, "name": "Recent Adds", "rom_count": 12}]
         franchise = [{"id": 101, "name": "Mario", "rom_count": 5, "is_favorite": False}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, smart, franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, smart, franchise))
 
         result = await plugin._sync_service.get_collections()
 
@@ -198,7 +199,7 @@ class TestGetCollections:
     async def test_user_collection_has_user_kind(self, plugin):
         """Non-favorite user collections carry kind='user' and is_favorite=False."""
         user = [{"id": 1, "name": "RPGs", "rom_count": 2, "is_favorite": False}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
 
         result = await plugin._sync_service.get_collections()
 
@@ -209,7 +210,7 @@ class TestGetCollections:
     async def test_franchise_collection_has_franchise_kind(self, plugin):
         """Franchise collections carry kind='franchise'."""
         franchise = [{"id": 101, "name": "Zelda", "rom_count": 4}]
-        plugin._sync_service._loop = _make_loop_with_executor([], [], franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor([], [], franchise))
 
         result = await plugin._sync_service.get_collections()
 
@@ -219,7 +220,7 @@ class TestGetCollections:
     async def test_smart_collection_has_smart_kind(self, plugin):
         """Smart collections carry kind='smart' and is_favorite=False."""
         smart = [{"id": 7, "name": "Filter A", "rom_count": 10}]
-        plugin._sync_service._loop = _make_loop_with_executor([], smart, [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor([], smart, []))
 
         result = await plugin._sync_service.get_collections()
 
@@ -232,7 +233,7 @@ class TestGetCollections:
         user = [{"id": 1, "name": "U1", "rom_count": 1, "is_favorite": False}]
         smart = [{"id": 5, "name": "S1", "rom_count": 1}]
         franchise = [{"id": 101, "name": "F1", "rom_count": 1}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, smart, franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, smart, franchise))
 
         result = await plugin._sync_service.get_collections()
 
@@ -246,7 +247,7 @@ class TestGetCollections:
     async def test_favorite_collection_has_is_favorite_true(self, plugin):
         """Collections with is_favorite=True carry kind='user' and is_favorite=True."""
         user = [{"id": 1, "name": "Top Picks", "rom_count": 5, "is_favorite": True}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
 
         result = await plugin._sync_service.get_collections()
 
@@ -260,7 +261,7 @@ class TestGetCollections:
             {"id": 1, "name": "RPGs", "rom_count": 2, "is_favorite": False},
             {"id": 2, "name": "Shooters", "rom_count": 3, "is_favorite": False},
         ]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
         plugin._sync_service._settings["enabled_collections"] = {
             "user": {"1": True, "2": False},
             "smart": {},
@@ -277,7 +278,7 @@ class TestGetCollections:
     async def test_respects_smart_bucket_enabled_settings(self, plugin):
         """Smart-collection sync_enabled comes from the smart bucket only."""
         smart = [{"id": 7, "name": "Filter A", "rom_count": 1}]
-        plugin._sync_service._loop = _make_loop_with_executor([], smart, [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor([], smart, []))
         plugin._sync_service._settings["enabled_collections"] = {
             "user": {"7": True},  # same id under a different bucket — must not leak
             "smart": {"7": False},
@@ -294,7 +295,7 @@ class TestGetCollections:
         """When enabled_collections is absent all collections default to sync_enabled=False."""
         user = [{"id": 1, "name": "RPGs", "rom_count": 2, "is_favorite": False}]
         franchise = [{"id": 101, "name": "Zelda", "rom_count": 3}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], franchise))
         plugin._sync_service._settings.pop("enabled_collections", None)
 
         result = await plugin._sync_service.get_collections()
@@ -305,7 +306,7 @@ class TestGetCollections:
     @pytest.mark.asyncio
     async def test_api_error_returns_error_response(self, plugin):
         """When list_collections raises an exception the response has success=False."""
-        plugin._sync_service._loop = _make_loop_raising(Exception("Connection refused"))
+        rebind_loop(plugin._sync_service, _make_loop_raising(Exception("Connection refused")))
 
         result = await plugin._sync_service.get_collections()
 
@@ -316,7 +317,7 @@ class TestGetCollections:
     @pytest.mark.asyncio
     async def test_empty_collections(self, plugin):
         """All endpoints returning [] still yields success=True with empty list."""
-        plugin._sync_service._loop = _make_loop_with_executor([], [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor([], [], []))
 
         result = await plugin._sync_service.get_collections()
 
@@ -341,7 +342,7 @@ class TestGetCollections:
             raise Exception("Franchise endpoint unavailable")
 
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.get_collections()
 
@@ -368,7 +369,7 @@ class TestGetCollections:
             return franchise
 
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.get_collections()
 
@@ -381,7 +382,7 @@ class TestGetCollections:
     async def test_rom_count_falls_back_to_rom_ids_length(self, plugin):
         """When rom_count is absent, len(rom_ids) is used."""
         user = [{"id": 1, "name": "RPGs", "rom_ids": [10, 20, 30], "is_favorite": False}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
 
         result = await plugin._sync_service.get_collections()
 
@@ -394,7 +395,7 @@ class TestGetCollections:
             {"id": 2, "name": "Zelda", "rom_count": 1, "is_favorite": False},
             {"id": 1, "name": "Metroid", "rom_count": 1, "is_favorite": False},
         ]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
 
         result = await plugin._sync_service.get_collections()
 
@@ -405,7 +406,7 @@ class TestGetCollections:
     async def test_collection_id_is_string(self, plugin):
         """IDs are always returned as strings regardless of the API response type."""
         user = [{"id": 42, "name": "Favorites", "rom_count": 1, "is_favorite": False}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
 
         result = await plugin._sync_service.get_collections()
 
@@ -485,7 +486,7 @@ class TestSaveCollectionSync:
     def test_calls_save_settings(self, plugin):
         """settings_persister is triggered after updating the setting."""
         recorder = FakeSettingsPersister()
-        plugin._sync_service._settings_persister = recorder
+        plugin._sync_service._fetcher._settings_persister = recorder
 
         plugin._sync_service.save_collection_sync("1", "user", True)
 
@@ -494,7 +495,7 @@ class TestSaveCollectionSync:
     def test_does_not_call_save_settings_on_invalid_kind(self, plugin):
         """Invalid kind short-circuits before persistence."""
         recorder = FakeSettingsPersister()
-        plugin._sync_service._settings_persister = recorder
+        plugin._sync_service._fetcher._settings_persister = recorder
 
         plugin._sync_service.save_collection_sync("1", "bogus", True)
 
@@ -518,7 +519,7 @@ class TestSetAllCollectionsSync:
         ]
         smart = [{"id": 5, "name": "Filter A"}]
         franchise = [{"id": 101, "name": "Mario"}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, smart, franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, smart, franchise))
 
         result = await plugin._sync_service.set_all_collections_sync(True)
 
@@ -535,7 +536,7 @@ class TestSetAllCollectionsSync:
         user = [{"id": 1, "name": "RPGs", "is_favorite": False}]
         smart = [{"id": 5, "name": "Filter"}]
         franchise = [{"id": 101, "name": "Mario"}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, smart, franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, smart, franchise))
         plugin._sync_service._settings["enabled_collections"] = {
             "user": {"1": True},
             "smart": {"5": True},
@@ -555,7 +556,7 @@ class TestSetAllCollectionsSync:
         """Passing scope='franchise' only touches franchise collections."""
         franchise = [{"id": 101, "name": "Mario"}]
         # Only franchise is fetched when scope='franchise'.
-        plugin._sync_service._loop = _make_loop_with_executor(franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(franchise))
 
         result = await plugin._sync_service.set_all_collections_sync(True, scope="franchise")
 
@@ -569,7 +570,7 @@ class TestSetAllCollectionsSync:
     async def test_filter_by_smart_scope(self, plugin):
         """Passing scope='smart' only touches smart collections."""
         smart = [{"id": 7, "name": "Filter A"}, {"id": 8, "name": "Filter B"}]
-        plugin._sync_service._loop = _make_loop_with_executor(smart)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(smart))
 
         result = await plugin._sync_service.set_all_collections_sync(True, scope="smart")
 
@@ -587,7 +588,7 @@ class TestSetAllCollectionsSync:
             {"id": 1, "name": "RPGs", "is_favorite": False},
             {"id": 2, "name": "Faves", "is_favorite": True},
         ]
-        plugin._sync_service._loop = _make_loop_with_executor(user)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user))
 
         result = await plugin._sync_service.set_all_collections_sync(True, scope="my")
 
@@ -617,7 +618,7 @@ class TestSetAllCollectionsSync:
     @pytest.mark.asyncio
     async def test_api_error_returns_error_response(self, plugin):
         """When list_collections raises, the response has success=False."""
-        plugin._sync_service._loop = _make_loop_raising(Exception("timeout"))
+        rebind_loop(plugin._sync_service, _make_loop_raising(Exception("timeout")))
 
         result = await plugin._sync_service.set_all_collections_sync(True)
 
@@ -627,7 +628,7 @@ class TestSetAllCollectionsSync:
     @pytest.mark.asyncio
     async def test_smart_scope_api_error_returns_error_response(self, plugin):
         """When scope='smart' and list_smart_collections raises, surface the failure."""
-        plugin._sync_service._loop = _make_loop_raising(Exception("smart endpoint down"))
+        rebind_loop(plugin._sync_service, _make_loop_raising(Exception("smart endpoint down")))
 
         result = await plugin._sync_service.set_all_collections_sync(True, scope="smart")
 
@@ -640,7 +641,7 @@ class TestSetAllCollectionsSync:
     @pytest.mark.asyncio
     async def test_franchise_scope_api_error_returns_error_response(self, plugin):
         """When scope='franchise' and list_virtual_collections raises, surface the failure."""
-        plugin._sync_service._loop = _make_loop_raising(Exception("franchise endpoint down"))
+        rebind_loop(plugin._sync_service, _make_loop_raising(Exception("franchise endpoint down")))
 
         result = await plugin._sync_service.set_all_collections_sync(True, scope="franchise")
 
@@ -669,7 +670,7 @@ class TestSetAllCollectionsSync:
             raise Exception("Franchise endpoint unavailable")
 
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.set_all_collections_sync(True)
 
@@ -697,7 +698,7 @@ class TestSetAllCollectionsSync:
             return franchise
 
         mock_loop.run_in_executor = AsyncMock(side_effect=_executor)
-        plugin._sync_service._loop = mock_loop
+        rebind_loop(plugin._sync_service, mock_loop)
 
         result = await plugin._sync_service.set_all_collections_sync(True)
 
@@ -710,10 +711,10 @@ class TestSetAllCollectionsSync:
     async def test_calls_save_settings(self, plugin):
         """settings_persister is triggered after updating collections."""
         user = [{"id": 1, "name": "RPGs", "is_favorite": False}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
 
         recorder = FakeSettingsPersister()
-        plugin._sync_service._settings_persister = recorder
+        plugin._sync_service._fetcher._settings_persister = recorder
 
         await plugin._sync_service.set_all_collections_sync(True)
 
@@ -723,7 +724,7 @@ class TestSetAllCollectionsSync:
     async def test_enabled_param_coerced_to_bool(self, plugin):
         """Truthy/falsy values are coerced to bool."""
         user = [{"id": 1, "name": "RPGs", "is_favorite": False}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, [], [])
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
 
         await plugin._sync_service.set_all_collections_sync(1)  # truthy int
 
@@ -738,7 +739,7 @@ class TestSetAllCollectionsSync:
         ]
         smart = [{"id": 5, "name": "Filter"}]
         franchise = [{"id": 101, "name": "Mario"}]
-        plugin._sync_service._loop = _make_loop_with_executor(user, smart, franchise)
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, smart, franchise))
 
         await plugin._sync_service.set_all_collections_sync(True, scope=None)
 

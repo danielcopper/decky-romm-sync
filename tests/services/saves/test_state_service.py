@@ -291,7 +291,7 @@ class TestStateBackwardCompat:
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
-        svc._sync_engine._do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
+        svc._sync_engine.do_upload_save(42, str(save_path), "pokemon.srm", "42", "gba")
 
         game_state = svc._save_sync_state.saves["42"]
         assert game_state.emulator == "retroarch-mgba"
@@ -309,7 +309,7 @@ class TestStateBackwardCompat:
         os.makedirs(saves_dir, exist_ok=True)
         server_save = _server_save(save_id=99)
 
-        svc._sync_engine._do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
+        svc._sync_engine.do_download_save(server_save, saves_dir, "pokemon.srm", "42", "gba")
 
         file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
         assert file_state.tracked_save_id == 99

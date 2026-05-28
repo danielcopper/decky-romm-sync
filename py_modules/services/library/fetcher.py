@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     )
 
     # Orchestrator-supplied progress emitter. Matches the kw-only signature
-    # of ``SyncOrchestrator._emit_progress``: stage positional, every other
+    # of ``SyncOrchestrator.emit_progress``: stage positional, every other
     # field keyword. Sub-services consume this through the Config seam.
     EmitProgressFn = Callable[..., Awaitable[None]]
 

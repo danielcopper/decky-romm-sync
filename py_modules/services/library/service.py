@@ -161,13 +161,13 @@ class LibraryService:
         reporter_binding.set(lambda: self._reporter)
 
     async def _emit_progress_proxy(self, stage, **kwargs):
-        """Late-bound proxy to the orchestrator's _emit_progress.
+        """Late-bound proxy to the orchestrator's emit_progress.
 
         Threaded into the fetcher's config at ctor time before
         ``self._orchestrator`` exists — calls resolve at invocation
         time, by which point both sub-services are wired.
         """
-        await self._orchestrator._emit_progress(stage, **kwargs)
+        await self._orchestrator.emit_progress(stage, **kwargs)
 
     # ── Public properties ────────────────────────────────────────
 
@@ -253,19 +253,6 @@ class LibraryService:
         self._box.current_sync_id = value
 
     @property
-    def _loop(self) -> asyncio.AbstractEventLoop:
-        return self._fetcher._loop
-
-    @_loop.setter
-    def _loop(self, value: asyncio.AbstractEventLoop) -> None:
-        # Test fixtures rebind the loop after construction; propagate the
-        # override to every sub-service so async calls land on the live
-        # asyncio loop.
-        self._fetcher._loop = value
-        self._orchestrator._loop = value
-        self._reporter._loop = value
-
-    @property
     def _state(self) -> PluginState:
         return self._config.state
 
@@ -276,35 +263,6 @@ class LibraryService:
     @property
     def _metadata_cache(self) -> MetadataCache:
         return self._config.metadata_cache
-
-    # Getters mirror the pre-decomposition attribute shape for external
-    # readers (tests, bootstrap-style callbacks). Only attributes still
-    # poked at by tests at the façade level are surfaced; sub-services
-    # read these directly via their own ctor-bound references.
-
-    @property
-    def _romm_api(self):
-        return self._fetcher._romm_api
-
-    @property
-    def _clock(self):
-        return self._orchestrator._clock
-
-    @property
-    def _sleeper(self):
-        return self._orchestrator._sleeper
-
-    @_sleeper.setter
-    def _sleeper(self, value) -> None:
-        self._orchestrator._sleeper = value
-
-    @property
-    def _settings_persister(self):
-        return self._fetcher._settings_persister
-
-    @_settings_persister.setter
-    def _settings_persister(self, value) -> None:
-        self._fetcher._settings_persister = value
 
     # ── Public callable surface ──────────────────────────────────
 

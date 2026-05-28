@@ -11,8 +11,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from domain.iso_time import parse_iso
 from domain.save_state import PlaytimeEntry, SaveSyncState
-from lib.iso_time import parse_iso
 
 if TYPE_CHECKING:
     import asyncio

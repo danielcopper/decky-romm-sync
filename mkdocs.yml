@@ -67,6 +67,7 @@ nav:
       - Troubleshooting: user-guide/troubleshooting.md
   - Architecture:
       - Backend Architecture: architecture/backend-architecture.md
+      - Database Design: architecture/database-design.md
       - Save File Sync Architecture: architecture/save-file-sync-architecture.md
       - Config Source Parsers: architecture/config-source-parsers.md
       - Steam Non-Steam Shortcuts: architecture/steam-non-steam-shortcuts.md
