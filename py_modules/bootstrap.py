@@ -11,6 +11,7 @@ caller to keep as its source of truth.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ from adapters.persistence import (
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
 from adapters.registry_store import RegistryStoreAdapter
+from adapters.repositories.unit_of_work import SqliteUnitOfWork
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
@@ -95,6 +97,7 @@ from services.protocols import (
     Sleeper,
     StatePersister,
     SteamConfigStore,
+    UnitOfWorkFactory,
     UuidGen,
 )
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
@@ -183,6 +186,7 @@ class CallbackBundle:
     metadata_store: MetadataCacheStore
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
+    uow_factory: UnitOfWorkFactory
 
 
 @dataclass(frozen=True)
@@ -300,6 +304,11 @@ def bootstrap(
     except Exception:
         logger.exception("SQLite schema migration failed; database left at last good version")
 
+    # The runtime Unit-of-Work factory: each call opens a fresh sync sqlite3
+    # connection on db_path (ADR-0004). Wired here but not yet threaded into any
+    # service config — the service cutover (#784) consumes it.
+    uow_factory: UnitOfWorkFactory = functools.partial(SqliteUnitOfWork, db_path)
+
     retrodeck_paths = RetroDeckPathsAdapter(user_home=user_home, logger=logger)
     retroarch_config = RetroArchConfigAdapter(user_home=user_home, logger=logger)
     retroarch_core_info = RetroArchCoreInfoAdapter(user_home=user_home, logger=logger)
@@ -395,6 +404,7 @@ def bootstrap(
         metadata_store=metadata_store,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
+        uow_factory=uow_factory,
     )
     runtime_adapters = RuntimeAdaptersBundle(
         clock=clock,

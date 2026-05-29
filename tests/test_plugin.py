@@ -921,6 +921,7 @@ class TestMainStartupOrdering:
                 metadata_store=MagicMock(),
                 log_debug=MagicMock(),
                 plugin_metadata=MagicMock(),
+                uow_factory=MagicMock(),
             ),
             runtime_adapters=RuntimeAdaptersBundle(
                 clock=MagicMock(),

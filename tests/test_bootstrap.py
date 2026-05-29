@@ -28,6 +28,7 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_rom_file_store import FakeRomFileStore
 from fakes.fake_save_file_store import FakeSaveFileStore
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import ShortcutRegistryEntry, make_default_plugin_state
 
@@ -235,6 +236,7 @@ class TestWireServices:
             "metadata_store": MetadataCacheStoreAdapter(metadata_cache=metadata_cache),
             "log_debug": MagicMock(),
             "plugin_metadata": FakePluginMetadataReader(version="0.14.0"),
+            "uow_factory": FakeUnitOfWorkFactory(),
         }
 
     @staticmethod
@@ -287,6 +289,7 @@ class TestWireServices:
                 metadata_store=deps["metadata_store"],
                 log_debug=deps["log_debug"],
                 plugin_metadata=deps["plugin_metadata"],
+                uow_factory=deps["uow_factory"],
             ),
             min_required_version=deps["min_required_version"],
         )

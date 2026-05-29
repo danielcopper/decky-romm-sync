@@ -106,6 +106,7 @@ from services.protocols.transport import (
     SteamConfigStore,
     SteamGridDbApi,
 )
+from services.protocols.uow import UnitOfWork, UnitOfWorkFactory
 
 __all__ = [
     "AchievementsReader",
@@ -178,5 +179,7 @@ __all__ = [
     "SteamGridDbApi",
     "SyncRunRepository",
     "SystemResolver",
+    "UnitOfWork",
+    "UnitOfWorkFactory",
     "UuidGen",
 ]
