@@ -48,6 +48,7 @@ Roadmap and open work: [GitHub Projects board](https://github.com/users/danielco
 - **basedpyright**: Type checking in CI.
 - **import-linter**: Layer boundary enforcement in CI (services ↛ adapters, adapters ↛ services, services independent).
 - **Cosmic Python call bans**: `scripts/check_cosmic_call_bans.sh` — services may not call `datetime.now()` / `asyncio.sleep()` / `time.time()` / `time.monotonic()` / `uuid.uuid4()` / `random.*` directly (use the corresponding Protocol).
+- **Aggregate field-assignment ban**: `scripts/check_aggregate_field_assignment.py` — AST check that fails CI if `services/` assigns `aggregate.field = value` on a `@cosmic_aggregate` root (mutation must go through verb-named methods). Enforces the Aggregates `[CP]` rule.
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
 ## Architecture — Cosmic Python rules
@@ -61,7 +62,7 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 
 **Services**:
 
-- `[CP]` Depend on Protocols (defined in `services/protocols.py`), never on concrete adapter classes. (Canonical dependency inversion.) Carve-out: sub-services within a single bounded context (e.g. all of `services/saves/`) may hold concrete peer-service refs in their `*ServiceConfig` dataclass when they share an aggregate (e.g. `SaveSyncState`). The `[CP]` Protocol rule applies to services across bounded contexts and to adapters. `[ours]` A method that one sub-service calls on a peer is part of that peer's **public** surface — no leading underscore. The `_` prefix is reserved for genuinely class-internal helpers, so `reportPrivateUsage` stays coherent with this carve-out: peers call public methods, not private ones.
+- `[CP]` Depend on Protocols (defined in the `services/protocols/` package — re-exported from `__init__`, topically split across `transport`/`determinism`/`persistence`/`paths`/`infra`/`files`/`cross_service`; import via `from services.protocols import X`), never on concrete adapter classes. (Canonical dependency inversion.) Carve-out: sub-services within a single bounded context (e.g. all of `services/saves/`) may hold concrete peer-service refs in their `*ServiceConfig` dataclass when they share an aggregate (e.g. `SaveSyncState`). The `[CP]` Protocol rule applies to services across bounded contexts and to adapters. `[ours]` A method that one sub-service calls on a peer is part of that peer's **public** surface — no leading underscore. The `_` prefix is reserved for genuinely class-internal helpers, so `reportPrivateUsage` stays coherent with this carve-out: peers call public methods, not private ones.
 - `[CP]` No raw I/O.
   - `[ours]` Concrete allow/deny list: forbidden in `services/`: `os.*` (except pure path algebra: `relpath`, `join`, `splitext`, `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`, `subprocess.*`, `hashlib.<x>(open(...))`. (Our enforcement surface; CP says "no I/O" without spelling out the call list.)
 - `[CP]` No clocks or randomness — inject side-effecting deps via abstractions.
@@ -72,11 +73,11 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 - `[ours]` **Debug logging: inject the `DebugLogger` Protocol.** Don't add per-service `_log_debug` methods that re-read settings at call time, and don't reach for `decky.logger.info` to bypass log-level filtering. The Protocol's wiring decision is the only knob.
 - `[ours]` God-class signal: services > ~700 LOC — decompose into sub-services with constructor injection (see `services/saves/` for the reference pattern). Matches the `bootstrap.py` split threshold below. The S107 ctor-param threshold no longer fires because all Protocol-typed deps live in the config. (Our taste/threshold. Earlier wording said ~600 LOC; raised after audit #485 found 5 stable cohesive files in the 656-749 range — fetcher, sync_orchestrator, migration, slots/service, sync_engine/matrix.)
 
-**Adapters**: `[CP]` Own all I/O. Never import from `services/`. Implement Protocols defined in `services/protocols.py`. (Canonical ports-and-adapters.)
+**Adapters**: `[CP]` Own all I/O. Never import from `services/`. Implement Protocols defined in the `services/protocols/` package. (Canonical ports-and-adapters.)
 
 **Domain**: `[CP]` Pure compute only. No I/O, no state mutation, no service or adapter imports. Functions take inputs, return outputs. Anything stateless and I/O-free that's currently in a service belongs here. (Canonical domain-model purity.)
 
-**Aggregates** (CP chapters 1–7 scope — locked in #788, applies as the SQLite migration #271 lands):
+**Aggregates** (CP chapters 1–7 scope — locked in #788, refined by [ADR-0003](docs/adr/0003-json-sqlite-persistence-boundary.md)). The aggregate roots, their tables, and the enforcement layers live in `docs/architecture/database-design.md` (canonical — 8 roots after ADR-0003). Persistence boundary: config-shaped toggles (`save_sync_enabled`, `sync_before_launch`, `sync_after_exit`, `default_slot`, `autocleanup_limit`, `device_name`, `enabled_platforms`) live in `settings.json`, not SQLite — `SyncSettings`/`Platform`/`Device` were considered as aggregates and dropped. The rules below apply to the relational state that *does* live in SQLite:
 
 - `[CP]` One Repository Protocol per aggregate root, not per table. Aggregate boundaries are domain-modeling decisions; table layout is downstream and may need multiple tables to back one aggregate.
 - `[CP]` Aggregate methods are the **only** mutation API for the aggregate's state. No external field assignment (`aggregate.field = value`) from services. Services call methods; methods enforce invariants and update internal state. Field access for reads is fine.
@@ -87,7 +88,7 @@ Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pur
 
 - `[ours]` `WiringConfig` holds the wiring; protocols come in, services come out. Adapter instantiation never happens in `main.py` — if a service needs a Protocol-wrapped persister, the wrapper adapter is built in `bootstrap()` and passed through `CallbackBundle`. (Our concrete shape for the composition root.)
 
-**Vendored deps (`_vendor/`)**: `[ours]` Decky Loader has no plugin-level package manager, so third-party runtime deps are vendored under `py_modules/_vendor/<package>/` and imported as `from _vendor import <package>`. Only adapters import from `_vendor.*`; services/domain/lib stay third-party-free. The whole `_vendor/` namespace is excluded from ruff, basedpyright, and Sonar (analysis + coverage) so any future vendored package is automatically out of scope — it's not our code, we don't lint or coverage-track it, but we may patch it (e.g. fix self-imports broken by the move into `_vendor/`). Ruff's isort lists `_vendor` under `known-third-party` so the imports group alongside other third-party deps. `import-linter` doesn't currently enforce a `_vendor.*` rule because no first-party layer is supposed to forbid those imports; add a contract if that changes.
+**Vendored deps (`_vendor/`)**: `[ours]` Decky Loader has no plugin-level package manager, so third-party runtime deps are vendored under `py_modules/_vendor/<package>/` and imported as `from _vendor import <package>`. Only adapters import from `_vendor.*`; services/domain/lib stay third-party-free. The whole `_vendor/` namespace is excluded from ruff, basedpyright, and Sonar (analysis + coverage) so any future vendored package is automatically out of scope — it's not our code, we don't lint or coverage-track it, but we may patch it (e.g. fix self-imports broken by the move into `_vendor/`). Ruff's isort lists `_vendor` under `known-third-party` so the imports group alongside other third-party deps. `import-linter` enforces a `domain-stdlib-only` contract that forbids `domain` from importing `_vendor.*` (domain stays stdlib-only); no other layer forbids `_vendor`, since adapters legitimately import it.
 
 **Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`) and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter instantiation and service wiring. The split is binding — no callables in `bootstrap.py`, no service wiring in `main.py`. Both files grow with the surface they describe (callables for `main.py`, services for `bootstrap.py`); this is unavoidable density, not god-class. Split `bootstrap.py` into `bootstrap/{adapters,services}.py` only when it exceeds ~700 LOC. (Decky-plugin-specific; not a CP concept.)
 
@@ -127,34 +128,13 @@ Two carve-outs:
 
 Full convention paragraph lives in the `lib/list_result.py` module docstring.
 
-## Refactor wave plan (live — see #277 for current status)
+## Cosmic Python migration — status & reference pattern
 
-The full Cosmic Python migration is tracked under [#277](https://github.com/danielcopper/decky-romm-sync/issues/277) (umbrella). Order is chosen to minimize rework: cross-cutting Protocols first, then domain promotions, then per-service vertical refactors smallest-to-largest.
+The full Cosmic Python migration (umbrella [#277](https://github.com/danielcopper/decky-romm-sync/issues/277)) is **complete**: every backend service has I/O behind Protocol-typed adapters, Clock/UuidGen/Sleeper injected, pure logic in `domain/`, and ctors decomposed via frozen `*ServiceConfig` dataclasses. The blow-by-blow (Waves 1–4 + the saves vertical) lives in closed issues #294–#340 and the git log; the only deferred item is #259 (SonarCloud arch rules, blocked on SonarCloud Python support). The separate SQLite persistence epic (#271) is ongoing — tracked via the Aggregates section above + `docs/architecture/database-design.md`.
 
-- **Wave 1 — Cross-cutting infrastructure** ([#256](https://github.com/danielcopper/decky-romm-sync/issues/256)) — **complete except for deferred CI gate**
-  Protocols, persisters, bootstrap cleanup. Done first so every later vertical consumes the Protocols defined here.
-  Done: ~~#294~~ (Clock/UuidGen/Sleeper), ~~#289~~ (FirmwareCachePersister), ~~#292~~ (ArtworkRemover), ~~#296~~ (CoreInfoProvider, shipped as #310), ~~#205~~ (es_de_config I/O split, shipped as #311), ~~#168~~ (sync_state_box dead-code removal, shipped as #312), ~~#169~~ (WiringConfig split, shipped as #313), ~~#303~~ (call-site clock/sleep ban, shipped as #314).
-  Deferred: #259 (SonarCloud arch rules — waiting on SonarCloud Python support).
-- **Wave 2 — Domain promotions** ([#295](https://github.com/danielcopper/decky-romm-sync/issues/295)) — **complete**
-  Pure logic extracted from non-saves services into `domain/`.
-  Done: ~~#315~~ (firmware paths), ~~#316~~ (achievements), ~~#317~~ (path safety + mise lint bundle), ~~#318~~ (filename resolution), ~~#319~~ (sync_diff cluster).
-- **Wave 3 — Per-service verticals** (smallest-to-largest, after Waves 1+2) — **complete**
-  Every backend service refactored: I/O behind Protocol-typed adapters, Clock/UuidGen/Sleeper injected, pure logic in `domain/`, ctors decomposed via frozen `*ServiceConfig` dataclasses where they exceeded S107.
-  - ~~#299~~ ArtworkService + SteamGridService — shipped as #321 (`CoverArtFileStore`) + #322 (`SgdbArtworkCache` + `SgdbApiError` + `SteamGridDirMissingError` + `write_shortcut_icon` on `SteamConfigAdapter`; `SteamGridConfig` decomposition + `PendingSyncReader` Protocol).
-  - ~~#297~~ DownloadService — shipped as #323 (`DownloadFileAdapter` for filesystem; ZIP-slip protection; ctor 13 → 5 via `DownloadServiceConfig`).
-  - ~~#298~~ FirmwareService — shipped as #324 (`FirmwareFileAdapter` with `checksum_md5` using `usedforsecurity=False`; closed #170 — `_enrich_firmware_file` returns new dict).
-  - ~~#301~~ GameDetailService — closed as superseded. All scope (Clock + CoreInfoProvider) wired in Wave 1.
-  - ~~#302~~ MigrationService — shipped as #325 (`MigrationFileAdapter` with cross-device `move` (`shutil.move`) vs same-fs `rename` (`os.replace`) distinction; ctor 13 → 2 via `MigrationServiceConfig`; closed discussion #293 with "extract" verdict).
-  - ~~#300~~ LibraryService — shipped as #326 (ctor 17 → 8 via `LibraryServiceConfig`; no I/O extraction — Waves 1+2 had already removed all violations).
-- **Wave 4 — Close-out** — **complete**
-  - ~~#274~~ shipped as #328 + #329 + #330 + #331 (callable thinness audit)
-  - ~~#277~~ closed: all 11 Cosmic Python compliance items ticked. Final prereqs in #333 (`RomFileAdapter` for `RomRemovalService` raw I/O, `FirmwareServiceConfig` ctor decomposition, `check_cosmic_call_bans.sh` false-positive fix).
+**Why that order** (kept as the playbook for future verticals): cross-cutting Protocols (Clock/UuidGen/Sleeper, #294) first, so every later vertical was a mechanical "drop the import, inject the Protocol"; domain extraction (#295) before LibraryService, to shrink the scariest service before lifting it; LibraryService last (largest blast radius — by then only ctor decomposition remained).
 
-**Saves vertical** ([~~#254~~](https://github.com/danielcopper/decky-romm-sync/issues/254)) — **complete**. Five sub-issues shipped after Wave 4: ~~#272~~ (helpers → domain, #336), ~~#242~~ (`SaveFileAdapter` for local I/O, #337), ~~#307~~ (peer-inject sub-services + collapse SyncEngine forwarder, #338), ~~#273~~ (typed `SaveSyncState` aggregate, #339), ~~#275~~ (`test_saves.py` split per-sub-service, #340). Saves package: zero raw I/O leaks, typed aggregate over the on-disk state, 6 focused test files mirroring the source layout.
-
-**Why the order chosen**: doing #294 (Clock/UuidGen/Sleeper) before any per-service vertical meant every later PR was "drop the import, inject the Protocol" — mechanical. Doing #295 (domain extraction) before LibraryService shrunk the scariest service before lifting it. LibraryService last because it had the largest blast radius — by the time it was lifted, only ctor decomposition remained.
-
-The Cosmic Python migration is complete (modulo deferred #259 — SonarCloud arch rules, blocked on SonarCloud Python support). Wave 3 sister-PR patterns (Protocol + adapter + `FakeXxxAdapter` in conftest + `*ServiceConfig` decomposition) remain the canonical reference for any future service-level work.
+**Canonical reference for any future service-level work**: the Wave 3 sister-PR shape — a Protocol (in `services/protocols/`) + an adapter implementing it + a `FakeXxxAdapter` in `conftest` + `*ServiceConfig` ctor decomposition. `services/saves/` and `services/library/` are the reference decompositions for shared-state sub-services.
 
 **Sub-issue policy**: Epic bodies do **not** carry markdown sub-issue lists — open work is tracked via GitHub's native Sub-Issues panel on each epic. If a new sub-issue is needed, link it natively (don't add a body bullet).
 
@@ -167,7 +147,7 @@ Layer top-level folders (`services/`, `adapters/`, `domain/`, `lib/`, `models/`)
 - `adapters/retroarch/` would NOT qualify: `retroarch_config.py` (RetroArch.cfg reader) and `retroarch_core_info.py` (core lookup) share nothing but a brand name. False cohesion.
 - `adapters/steam/` would NOT qualify: would mix Steam (`steam_config.py`) with SteamGridDB (`steamgriddb.py`, `sgdb_artwork_cache.py`) — different vendor, different concern.
 
-When a service-level decomposition produces sub-services with shared state (e.g. a future `services/library/` decomposition with shared preview-delta state), a subfolder is the right home. Until then, file-level layout is the default.
+When a service-level decomposition produces sub-services with shared state, a subfolder is the right home — `services/saves/` and `services/library/` (fetcher / sync_orchestrator / reporter sharing preview-delta state via `_state.py`) both qualify. Absent shared state, file-level layout is the default.
 
 ## Sub-package `__init__.py` — when populated, when empty
 
