@@ -199,8 +199,8 @@ Drop a new file `002_descriptive_name.sql` into `py_modules/db/migrations/` cont
 
 With the aggregate set and the schema (applied by the migration framework above) now in place, the remaining persistence work lands downstream:
 
-- **Per-aggregate Repository Protocols** — one Repository per aggregate root (not per table), defined downstream in [#782](https://github.com/danielcopper/decky-romm-sync/issues/782).
-- **The runtime Unit-of-Work + connection PRAGMAs** — how services open and share a database connection per operation, in [#783](https://github.com/danielcopper/decky-romm-sync/issues/783).
+- **Per-aggregate Repository Protocols** — defined in `py_modules/services/protocols/repositories.py` ([#782](https://github.com/danielcopper/decky-romm-sync/issues/782)): 9 Protocols, one per aggregate root (not per table), each returning its domain aggregate. The 8 SQLite aggregate roots plus `KvConfigRepository`, the key-value surface over the `kv_config` table. No concrete implementation or wiring yet — that lands downstream.
+- **The runtime Unit-of-Work + connection PRAGMAs** — how services open and share a database connection per operation, plus the concrete repository adapters that implement these Protocols, in [#783](https://github.com/danielcopper/decky-romm-sync/issues/783).
 - **The service cutover** — wiring the aggregates + Repositories into the services and the hard cut off the JSON state, in [#784](https://github.com/danielcopper/decky-romm-sync/issues/784).
 
 Chapter 8+ of the Cosmic Python book (domain events + message bus) is explicitly out of scope for this epic; the triggers for revisiting that scope are recorded in `CLAUDE.md`.
