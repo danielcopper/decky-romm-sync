@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 import pytest
 from fakes.fake_metadata_cache_persister import FakeMetadataCachePersister
 from fakes.fake_settings_persister import FakeSettingsPersister
-from fakes.fake_state_persister import FakeStatePersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -16,7 +15,6 @@ from models.state import make_default_plugin_state
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.metadata_cache_store import MetadataCacheStoreAdapter
 from adapters.persistence import MetadataCachePersisterAdapter, PersistenceAdapter
-from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -62,10 +60,8 @@ def plugin(uow):
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
-    p._state_persister = FakeStatePersister()
     p._settings_persister = FakeSettingsPersister()
     p._metadata_cache_persister = FakeMetadataCachePersister()
-    p._registry_store = RegistryStoreAdapter(state=p._state, logger=decky.logger)
     p._metadata_store = MetadataCacheStoreAdapter(metadata_cache=p._metadata_cache)
 
     metadata_service = MetadataService(
@@ -97,9 +93,7 @@ def plugin(uow):
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            state_persister=p._state_persister,
             settings_persister=p._settings_persister,
-            registry_store=p._registry_store,
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=FakeArtworkManager(),

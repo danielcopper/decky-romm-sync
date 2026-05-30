@@ -22,8 +22,6 @@ if TYPE_CHECKING:
         CoverArtFileStore,
         PendingSyncReader,
         RommRomReader,
-        ShortcutRegistryStore,
-        StatePersister,
         SteamConfigStore,
         UnitOfWorkFactory,
     )
@@ -45,8 +43,6 @@ class ArtworkServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     get_pending_sync: PendingSyncReader
-    registry_store: ShortcutRegistryStore
-    state_persister: StatePersister
     uow_factory: UnitOfWorkFactory
 
 
@@ -61,8 +57,6 @@ class ArtworkService:
         self._loop = config.loop
         self._logger = config.logger
         self._get_pending_sync = config.get_pending_sync
-        self._registry_store = config.registry_store
-        self._state_persister = config.state_persister
         self._uow_factory = config.uow_factory
 
     # ── Existing cover path check ──────────────────────────────────────────

@@ -280,7 +280,6 @@ def _artwork_integration_service(uow, steam_config) -> ShortcutRemovalService:
     from models.state import make_default_plugin_state
 
     from adapters.cover_art_file_store import CoverArtFileStoreAdapter
-    from adapters.registry_store import RegistryStoreAdapter
     from services.artwork import ArtworkService, ArtworkServiceConfig
 
     state = make_default_plugin_state()
@@ -293,8 +292,6 @@ def _artwork_integration_service(uow, steam_config) -> ShortcutRemovalService:
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             get_pending_sync=dict,
-            registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
-            state_persister=MagicMock(),
             uow_factory=FakeUnitOfWorkFactory(uow),
         ),
     )

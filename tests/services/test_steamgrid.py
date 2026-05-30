@@ -5,7 +5,6 @@ import os
 import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
-from fakes.fake_state_persister import FakeStatePersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -13,7 +12,6 @@ from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.metadata_cache_store import MetadataCacheStoreAdapter
-from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from lib.errors import SgdbApiError, SteamGridDirMissingError
@@ -65,9 +63,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
-    p._state_persister = FakeStatePersister()
     p._settings_persister = FakeSettingsPersister()
-    p._registry_store = RegistryStoreAdapter(state=p._state, logger=decky.logger)
     p._metadata_store = MetadataCacheStoreAdapter(metadata_cache=p._metadata_cache)
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
@@ -83,9 +79,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            state_persister=p._state_persister,
             settings_persister=p._settings_persister,
-            registry_store=p._registry_store,
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
@@ -107,9 +101,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
             settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            state_persister=FakeStatePersister(),
             settings_persister=FakeSettingsPersister(),
-            registry_store=p._registry_store,
             get_pending_sync=lambda: p._sync_service._pending_sync,
             log_debug=p._log_debug,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
@@ -1011,7 +1003,6 @@ class TestDebugLoggerProtocolSeam:
         steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
         p._steam_config = steam_config
 
-        registry_store = RegistryStoreAdapter(state=p._state, logger=decky.logger)
         p._sync_service = LibraryService(
             config=LibraryServiceConfig(
                 romm_api=p._romm_api,
@@ -1026,9 +1017,7 @@ class TestDebugLoggerProtocolSeam:
                 clock=FakeClock(),
                 uuid_gen=FakeUuidGen(),
                 sleeper=FakeSleeper(),
-                state_persister=FakeStatePersister(),
                 settings_persister=FakeSettingsPersister(),
-                registry_store=registry_store,
                 log_debug=capture,
                 metadata_service=FakeMetadataExtractor(),
                 artwork=FakeArtworkManager(),
@@ -1047,9 +1036,7 @@ class TestDebugLoggerProtocolSeam:
                 settings=p.settings,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
-                state_persister=FakeStatePersister(),
                 settings_persister=FakeSettingsPersister(),
-                registry_store=registry_store,
                 get_pending_sync=lambda: p._sync_service._pending_sync,
                 log_debug=capture,
                 uow_factory=FakeUnitOfWorkFactory(),

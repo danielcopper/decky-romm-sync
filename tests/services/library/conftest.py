@@ -25,7 +25,6 @@ from adapters.persistence import (
     PersistenceAdapter,
     StatePersisterAdapter,
 )
-from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -60,7 +59,6 @@ def plugin(tmp_path):
     p._state_persister = StatePersisterAdapter(p._persistence, p._state)
     p._settings_persister = FakeSettingsPersister()
     p._metadata_cache_persister = MetadataCachePersisterAdapter(p._persistence, p._metadata_cache)
-    p._registry_store = RegistryStoreAdapter(state=p._state, logger=decky.logger)
     p._metadata_store = MetadataCacheStoreAdapter(metadata_cache=p._metadata_cache)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
@@ -97,8 +95,6 @@ def plugin(tmp_path):
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             get_pending_sync=dict,
-            registry_store=p._registry_store,
-            state_persister=MagicMock(),
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
@@ -118,9 +114,7 @@ def plugin(tmp_path):
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            state_persister=p._state_persister,
             settings_persister=p._settings_persister,
-            registry_store=p._registry_store,
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,

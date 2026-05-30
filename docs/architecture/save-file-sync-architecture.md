@@ -686,7 +686,7 @@ After a game starts, there is a brief window where the app ID may not be fully r
 
 ### App ID to ROM ID mapping
 
-The session manager maintains a cached `appId -> romId` map loaded from the backend shortcut registry. This map is refreshed:
+The session manager maintains a cached `appId -> romId` map loaded from the backend's synced-ROM registry (the `roms` SQLite table, via `get_app_id_rom_id_map`). This map is refreshed:
 
 - On session manager initialization (plugin load)
 - Before each game start event (in case a sync added new shortcuts)

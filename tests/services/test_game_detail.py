@@ -19,7 +19,6 @@ from models.state import make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
-from adapters.registry_store import RegistryStoreAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.save_state import FileSyncState, RomSaveState, SaveSyncState
@@ -63,9 +62,7 @@ def plugin(tmp_path):
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            state_persister=MagicMock(),
             settings_persister=MagicMock(),
-            registry_store=RegistryStoreAdapter(state=p._state, logger=decky.logger),
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),

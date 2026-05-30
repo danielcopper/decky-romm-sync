@@ -30,7 +30,9 @@ inconsistencies surfaced while scoping the Repository Protocols
   is **dead code** — declared on the aggregate and as a SQL column, read/written
   nowhere. Platform's other justification fields (`emulation_stack`,
   `manual_emulator_path`) **do not exist in code**, and its `display_name`
-  caching is already covered by denormalisation onto the ROM rows.
+  caching is already covered: the name resolves live from RomM during sync and,
+  for offline reads, is cached in a single `kv_config` slug→name row — no need
+  for a Platform aggregate.
 
 This forced the underlying question: should `settings.json` move *into* the DB,
 or is the boundary simply mis-drawn? Reviewed from both sides:
@@ -83,7 +85,7 @@ untyped dumping ground (the trap `kv_config` itself is fenced against).
 **Three tables + aggregates are dropped from the #780 schema:**
 
 - `sync_settings` table + `SyncSettings` aggregate — knobs move to `settings.json`.
-- `platforms` table + `Platform` aggregate — **this supersedes ADR-0001.** Platform reverts to a denormalised `platform_slug` string (ADR-0001's rejected option 1). Sync exclusion stays `enabled_platforms` in settings; display name survives RomM downtime via the existing denormalisation onto ROM rows; `excluded_from_sync` (dead) is removed. Rebuild a Platform aggregate when a concrete need lands (the standalone-emulator roadmap), not speculatively.
+- `platforms` table + `Platform` aggregate — **this supersedes ADR-0001.** Platform reverts to a denormalised `platform_slug` string (ADR-0001's rejected option 1). Sync exclusion stays `enabled_platforms` in settings; the `roms` row stores only `platform_slug`, and the display name is resolved live from RomM during each sync — for offline reads it survives RomM downtime via a single `platform_slug → display_name` blob cached in a `kv_config` row (refreshed every sync), **not** denormalised onto each ROM row; `excluded_from_sync` (dead) is removed. Rebuild a Platform aggregate when a concrete need lands (the standalone-emulator roadmap), not speculatively.
 - `device` table + `Device` aggregate — `device_id` → a `kv_config` row, `device_name` → `settings.json`. The two were unrelated scalars sharing a struct, so the split is honest, not a split aggregate.
 
 **The Repository Protocol set (#782) shrinks 12 → 9:** `Rom`, `RomInstall`,

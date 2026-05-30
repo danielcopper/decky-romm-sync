@@ -1358,7 +1358,6 @@ class TestReportUnitResults:
             orig_save_state()
 
         plugin._state_persister.save_state = counting_save
-        plugin._sync_service._reporter._state_persister.save_state = counting_save
         plugin._sync_service._pending_sync = {}
         plugin._sync_service._box.unit_complete_event = asyncio.Event()
 

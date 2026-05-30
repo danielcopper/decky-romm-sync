@@ -37,8 +37,6 @@ if TYPE_CHECKING:
         ArtworkManager,
         Clock,
         EventEmitter,
-        ShortcutRegistryStore,
-        StatePersister,
         SteamConfigStore,
         UnitOfWorkFactory,
     )
@@ -76,8 +74,6 @@ class SyncReporterConfig:
     logger: logging.Logger
     emit: EventEmitter
     clock: Clock
-    state_persister: StatePersister
-    registry_store: ShortcutRegistryStore
     uow_factory: UnitOfWorkFactory
     sync_state_box: LibrarySyncStateBox
     emit_progress: EmitProgressFn
@@ -95,8 +91,6 @@ class SyncReporter:
         self._logger = config.logger
         self._emit = config.emit
         self._clock = config.clock
-        self._state_persister = config.state_persister
-        self._registry_store = config.registry_store
         self._uow_factory = config.uow_factory
         self._sync_state = config.sync_state_box
         self._emit_progress = config.emit_progress

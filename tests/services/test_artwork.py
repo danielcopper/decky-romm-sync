@@ -13,7 +13,6 @@ from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from models.state import make_default_plugin_state
 
-from adapters.registry_store import RegistryStoreAdapter
 from domain.rom import Rom
 from services.artwork import ArtworkService, ArtworkServiceConfig
 
@@ -65,25 +64,13 @@ def pending_sync_data() -> dict:
 
 
 @pytest.fixture
-def registry_store(state) -> RegistryStoreAdapter:
-    return RegistryStoreAdapter(state=state, logger=decky.logger)
-
-
-@pytest.fixture
-def state_persister() -> MagicMock:
-    p = MagicMock()
-    p.save_state = MagicMock(return_value=None)
-    return p
-
-
-@pytest.fixture
 def uow() -> FakeUnitOfWork:
     """Shared in-memory UoW the tests seed (``uow.roms``) and assert against."""
     return FakeUnitOfWork()
 
 
 @pytest.fixture
-def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data, registry_store, state_persister, uow):
+def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data, uow):
     # _loop is replaced by the autouse fixture below for async tests; for
     # sync tests it is never touched, so a MagicMock is fine here.
     return ArtworkService(
@@ -95,8 +82,6 @@ def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data
             loop=MagicMock(),
             logger=decky.logger,
             get_pending_sync=lambda: pending_sync_data,
-            registry_store=registry_store,
-            state_persister=state_persister,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )

@@ -37,7 +37,6 @@ class Plugin:
     _state_persister: Any
     _settings_persister: Any
     _metadata_cache_persister: Any
-    _registry_store: Any
     _metadata_store: Any
     _http_adapter: Any
     _romm_api: Any

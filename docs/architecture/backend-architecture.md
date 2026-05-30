@@ -32,7 +32,8 @@ bootstrap.py (composition root: bootstrap() builds adapters, wire_services() bui
 │   SteamConfigAdapter — Steam VDF, grid dir, Steam Input │
 │   SteamGridDbAdapter / SgdbArtworkCacheAdapter — SGDB   │
 │   PersistenceAdapter (+ persister adapters) — JSON I/O  │
-│   RegistryStoreAdapter / MetadataCacheStoreAdapter      │
+│   SqliteUnitOfWork (+ repository adapters) — SQLite I/O │
+│   MetadataCacheStoreAdapter                             │
 │   CoverArtFileStore / DownloadFile                      │
 │   FirmwareFile / MigrationFile / RomFile / SaveFile     │
 │   RetroDeckPaths / RetroArchConfig / RetroArchCoreInfo  │
@@ -78,7 +79,7 @@ sync_service = LibraryService(
         clock=...,              # Clock Protocol
         uuid_gen=...,           # UuidGen Protocol
         sleeper=...,            # Sleeper Protocol
-        state_persister=...,    # StatePersister Protocol
+        uow_factory=...,        # UnitOfWorkFactory Protocol (roms / sync_runs / kv_config)
         metadata_service=...,   # cross-service Protocol-typed peer
         artwork=...,
         # ...
@@ -96,7 +97,7 @@ Two services are large enough to be decomposed into sub-service packages (`servi
 
 | Module | Domain |
 | --- | --- |
-| `library/` | LibraryService façade — fetch ROMs, preview/apply sync, per-unit shortcut delivery, registry queries (decomposed; see below) |
+| `library/` | LibraryService façade — fetch ROMs, preview/apply sync, per-unit shortcut delivery, `roms`/`SyncRun` writes + queries (decomposed; see below) |
 | `saves/` | SaveService aggregate — `.srm` upload/download, conflict detection, slots, versions (decomposed; see below) |
 | `downloads.py` | DownloadService — ZIP extraction, M3U, fcntl-locked queue, progress |
 | `firmware.py` | FirmwareService — BIOS registry, downloads, per-core filtering |
@@ -110,10 +111,10 @@ Two services are large enough to be decomposed into sub-service packages (`servi
 | `settings.py` | SettingsService — settings reads/writes, Steam Input config |
 | `rom_removal.py` | RomRemovalService — ROM file deletion + state cleanup |
 | `cores.py` | CoreService — active-core lookup, core switching, gamelist edits |
-| `shortcut_removal.py` | ShortcutRemovalService — shortcut removal + state cleanup |
+| `shortcut_removal.py` | ShortcutRemovalService — shortcut removal; unbinds the ROM in `roms` (keeps the row per ADR-0007) |
 | `metadata.py` | MetadataService — ROM metadata caching, 7-day TTL, app_id mapping |
 | `launch_gate.py` | LaunchGateService — pre-launch gate (rom lookup, install check, save status) |
-| `startup_healing.py` | StartupHealingService — registry/disk reconciliation on load |
+| `startup_healing.py` | StartupHealingService — disk reconciliation on load + reconciles orphaned `running` SyncRuns (a hard crash leaves a `running` row → marked errored) |
 | `connection.py` | ConnectionService — connection test + RomM minimum-version gate |
 | `protocols/` | Protocol interfaces grouped by concern (see [Protocol Interfaces](#protocol-interfaces)) |
 
@@ -126,10 +127,12 @@ The library sync subsystem is a façade over three sub-services that coordinate 
 | `service.py` | `LibraryService` façade — public callable surface; wires the sub-services and delegates |
 | `fetcher.py` | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction |
 | `sync_orchestrator.py` | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission |
-| `reporter.py` | `SyncReporter` — post-apply finalisation (artwork filenames, registry append, last-sync metadata) and registry-derived queries |
+| `reporter.py` | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries |
 | `_state.py` | `LibrarySyncStateBox` — shared mutable in-flight sync state; the single source of truth threaded through every sub-service |
 
-The pipeline is split **fetch (read-only) / apply (owns persistence)**: the fetcher never mutates the metadata cache or registry, and the metadata cache is stamped per applied unit (`MetadataExtractor.record_unit_metadata`). So a preview never mutates state, and an interrupted apply leaves only the units it already applied stamped — incremental, per-unit delivery.
+The pipeline is split **fetch (read-only) / apply (owns persistence)**: the fetcher never mutates the metadata cache or the `roms` registry, and the metadata cache is stamped per applied unit (`MetadataExtractor.record_unit_metadata`). So a preview never mutates state, and an interrupted apply leaves only the units it already applied stamped — incremental, per-unit delivery.
+
+**Where the synced-ROM state lives.** The registry of synced ROMs, the last-sync timestamp, and the sync stats are SQLite, not JSON. The reporter upserts each acked ROM into the `roms` table via `Rom.synced(...)` / `update_cover_path` / `assign_sgdb_id` (artwork and steamgrid patch `cover_path` / `sgdb_id` on the same aggregate during the per-unit commit), and the orchestrator drives the `SyncRun` lifecycle (`start` at apply-dispatch, `complete` / `mark_cancelled` / `mark_errored` at finalize). `sync_stats.roms` is a derived `uow.roms.count()`, not a stored scalar. The old JSON `shortcut_registry` / `last_sync` / `sync_stats` are gone from this path; all writes go through the `roms` / `sync_runs` Repository Protocols behind a narrow Unit of Work (per [ADR-0006](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0006-narrow-unit-of-work-scope.md) the UoW spans only the DB write, never the up-to-60s frontend ack). The platform `slug → display_name` map resolves live from RomM each sync and is cached in a `kv_config` row for offline reads. Removing a shortcut **unbinds** the ROM (`Rom.unbind_shortcut()` NULLs `shortcut_app_id`, keeping the row and its per-ROM children) rather than deleting it, per [ADR-0007](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0007-rom-retention-identity-anchor.md). The full schema and aggregate model are in [Database Design](database-design.md).
 
 #### DownloadService notes
 
@@ -160,7 +163,9 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 | `sgdb_artwork_cache.py` | `SgdbArtworkCacheAdapter` — on-disk SGDB artwork cache |
 | `cover_art_file_store.py` | `CoverArtFileStoreAdapter` — RomM cover art staging on disk |
 | `persistence.py` | `PersistenceAdapter` + per-domain persister adapters — settings/state/cache/save-sync JSON I/O |
-| `registry_store.py` | `RegistryStoreAdapter` — shortcut registry reads/writes |
+| `repositories/` | `SqliteUnitOfWork` + per-aggregate repository adapters — SQLite I/O (the live persistence path; see [Database Design](database-design.md)) |
+| `sqlite_migrations.py` | `apply_migrations` — schema migration runner (`db/migrations/NNN_*.sql`, `PRAGMA user_version`) |
+| `registry_store.py` | `RegistryStoreAdapter` — JSON shortcut-registry reads/writes; no longer wired (the library slice moved to `roms`), kept until teardown for the not-yet-migrated readers |
 | `metadata_cache_store.py` | `MetadataCacheStoreAdapter` — metadata cache reads/writes |
 | `download_file.py` | `DownloadFileAdapter` — download filesystem |
 | `firmware_file.py` / `migration_file.py` / `rom_files.py` / `save_file.py` | per-subtree filesystem adapters (BIOS, RetroDECK migration, ROM removal, local saves) |
@@ -323,15 +328,15 @@ Every service receives its dependencies through a single `*ServiceConfig` datacl
 
 | Service | Key injected dependencies |
 | --- | --- |
-| **LibraryService** | `RommLibraryApi`, `SteamConfigStore`, `MetadataExtractor`, `ArtworkManager`, `Clock`/`UuidGen`/`Sleeper`, persisters, `ShortcutRegistryStore` |
+| **LibraryService** | `RommLibraryApi`, `SteamConfigStore`, `MetadataExtractor`, `ArtworkManager`, `Clock`/`UuidGen`/`Sleeper`, `SettingsPersister`, `UnitOfWorkFactory` (roms / sync_runs / kv_config) |
 | **SaveService** | `RommApi`, `RetryStrategy`, `SaveFileStore`, `SaveSyncStatePersister`, `Clock`, `RetroDeckPaths`, core-name/active-core providers, migration-detect callbacks |
 | **DownloadService** | `RommApi`, `DownloadFileStore`, `RetroDeckPaths`, `Clock`/`Sleeper` |
 | **FirmwareService** | `RommApi`, `FirmwareFileStore`, `FirmwareCachePersister`, `CoreInfoProvider`, `RetroDeckPaths` |
-| **SteamGridService** | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `ShortcutRegistryStore`, `PendingSyncReader` |
+| **SteamGridService** | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `UnitOfWorkFactory` (sgdb_id on `roms`), `PendingSyncReader` |
 | **MigrationService** | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback |
 | **GameDetailService** | `BiosChecker`, `AchievementsReader` (cross-service), `Clock` |
 | **RomRemovalService** | `RomFileStore`, `RetroDeckPaths`, `StatePersister`, `SaveSyncStatePersister`-writer peer, `DownloadQueueCleanup` peer |
-| **ShortcutRemovalService** | `SteamConfigStore`, `ArtworkRemover` peer, `StatePersister`, `ShortcutRegistryStore` |
+| **ShortcutRemovalService** | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`) |
 | **SessionLifecycleService** | `Session*` cross-service seams (playtime / post-exit sync / achievement sync / migration reader) |
 | **LaunchGateService** | `LaunchGateRomLookup`, `LaunchGateInstalledChecker`, `LaunchGateSaveStatusReader` cross-service seams |
 | **ConnectionService** | `RommConnectionApi`, `min_required_version` |

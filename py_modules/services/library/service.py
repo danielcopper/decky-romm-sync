@@ -39,9 +39,7 @@ if TYPE_CHECKING:
         MetadataExtractor,
         RommLibraryApi,
         SettingsPersister,
-        ShortcutRegistryStore,
         Sleeper,
-        StatePersister,
         SteamConfigStore,
         UnitOfWorkFactory,
         UuidGen,
@@ -54,9 +52,11 @@ class LibraryServiceConfig:
 
     Holds the Protocol-typed adapters, the live state/settings/metadata
     cache dicts, runtime infrastructure, time/sleep/uuid seams, plugin-
-    dir reference, event emitter, persistence callbacks, debug-logger
-    seam, and the metadata/artwork peer services LibraryService needs
-    at construction time.
+    dir reference, event emitter, the ``settings.json`` persister and the
+    SQLite Unit-of-Work factory (the synced-ROM registry, last-sync
+    timestamp and sync stats now live in ``roms`` / ``sync_runs`` via the
+    UoW, not the JSON state), debug-logger seam, and the metadata/artwork
+    peer services LibraryService needs at construction time.
     """
 
     romm_api: RommLibraryApi
@@ -71,9 +71,7 @@ class LibraryServiceConfig:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
-    state_persister: StatePersister
     settings_persister: SettingsPersister
-    registry_store: ShortcutRegistryStore
     log_debug: DebugLogger
     metadata_service: MetadataExtractor
     artwork: ArtworkManager
@@ -136,7 +134,6 @@ class LibraryService:
                 clock=config.clock,
                 uuid_gen=config.uuid_gen,
                 sleeper=config.sleeper,
-                state_persister=config.state_persister,
                 uow_factory=config.uow_factory,
                 sync_state_box=self._box,
                 fetcher=self._fetcher,
@@ -155,8 +152,6 @@ class LibraryService:
                 logger=config.logger,
                 emit=config.emit,
                 clock=config.clock,
-                state_persister=config.state_persister,
-                registry_store=config.registry_store,
                 uow_factory=config.uow_factory,
                 sync_state_box=self._box,
                 emit_progress=self._emit_progress_proxy,

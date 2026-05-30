@@ -99,7 +99,7 @@ See: `py_modules/adapters/steam_config.py`
 
 ## App IDs and Artwork
 
-`SteamClient.Apps.AddShortcut()` returns the real `appId`, so the plugin does **not** compute shortcut app IDs from `exe + name`. The frontend stores the returned `appId` and the backend registry keys ROM entries by it. There is no CRC32 app-ID generator in the codebase.
+`SteamClient.Apps.AddShortcut()` returns the real `appId`, so the plugin does **not** compute shortcut app IDs from `exe + name`. The frontend stores the returned `appId` and the backend persists it as `shortcut_app_id` on the ROM's `roms` row (the synced-ROM registry; reverse-lookupable by `shortcut_app_id`). There is no CRC32 app-ID generator in the codebase.
 
 The only app-ID math the backend does is converting an unsigned Steam app ID to its signed int32 form for `shortcuts.vdf` records — `to_signed_app_id(app_id)` in `py_modules/domain/sgdb_artwork.py`. SGDB endpoint/asset-type maps live in the same module.
 

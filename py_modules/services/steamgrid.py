@@ -39,8 +39,6 @@ if TYPE_CHECKING:
         RommRomReader,
         SettingsPersister,
         SgdbArtworkCache,
-        ShortcutRegistryStore,
-        StatePersister,
         SteamConfigStore,
         SteamGridDbApi,
         UnitOfWorkFactory,
@@ -53,7 +51,9 @@ class SteamGridServiceConfig:
 
     Holds the Protocol-typed adapters (``sgdb_api``, ``romm_api``,
     ``steam_config``, ``sgdb_artwork_cache``), the live state and
-    settings dicts, runtime infrastructure, persistence callbacks, the
+    settings dicts, runtime infrastructure, the ``settings.json``
+    persister, the SQLite Unit-of-Work factory (the ``sgdb_id`` cross-ref
+    is persisted onto the ``roms`` aggregate via the UoW), the
     pending-sync read seam, and the debug-logger seam SteamGridService
     needs at construction time.
     """
@@ -66,9 +66,7 @@ class SteamGridServiceConfig:
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
-    state_persister: StatePersister
     settings_persister: SettingsPersister
-    registry_store: ShortcutRegistryStore
     get_pending_sync: PendingSyncReader
     log_debug: DebugLogger
     uow_factory: UnitOfWorkFactory
@@ -86,9 +84,7 @@ class SteamGridService:
         self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
-        self._state_persister = config.state_persister
         self._settings_persister = config.settings_persister
-        self._registry_store = config.registry_store
         self._get_pending_sync = config.get_pending_sync
         self._log_debug = config.log_debug
         self._uow_factory = config.uow_factory

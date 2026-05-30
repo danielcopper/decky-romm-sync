@@ -38,7 +38,6 @@ from adapters.persistence import (
     StatePersisterAdapter,
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
-from adapters.registry_store import RegistryStoreAdapter
 from adapters.repositories.unit_of_work import SqliteUnitOfWork
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -93,7 +92,6 @@ from services.protocols import (
     SaveSyncStatePersister,
     SettingsPersister,
     SgdbArtworkCache,
-    ShortcutRegistryStore,
     Sleeper,
     StatePersister,
     SteamConfigStore,
@@ -182,7 +180,6 @@ class CallbackBundle:
     metadata_cache_persister: MetadataCachePersister
     firmware_cache_persister: FirmwareCachePersister
     save_sync_state_persister: SaveSyncStatePersister
-    registry_store: ShortcutRegistryStore
     metadata_store: MetadataCacheStore
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
@@ -345,7 +342,6 @@ def bootstrap(
     state_persister = StatePersisterAdapter(persistence, state)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
     metadata_cache_persister = MetadataCachePersisterAdapter(persistence, metadata_cache)
-    registry_store = RegistryStoreAdapter(state=state, logger=logger)
     metadata_store = MetadataCacheStoreAdapter(metadata_cache=metadata_cache)
     plugin_metadata = PluginMetadataAdapter()
     # Single source of truth for outgoing User-Agent — read package.json
@@ -406,7 +402,6 @@ def bootstrap(
         metadata_cache_persister=metadata_cache_persister,
         firmware_cache_persister=firmware_cache_persister,
         save_sync_state_persister=save_sync_state_persister,
-        registry_store=registry_store,
         metadata_store=metadata_store,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
@@ -537,8 +532,6 @@ def wire_services(cfg: WiringConfig) -> dict:
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             get_pending_sync=pending_sync_binding.get,
-            registry_store=cfg.callbacks.registry_store,
-            state_persister=cfg.callbacks.state_persister,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
@@ -567,9 +560,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             clock=cfg.runtime.clock,
             uuid_gen=cfg.runtime.uuid_gen,
             sleeper=cfg.runtime.sleeper,
-            state_persister=cfg.callbacks.state_persister,
             settings_persister=cfg.callbacks.settings_persister,
-            registry_store=cfg.callbacks.registry_store,
             log_debug=cfg.callbacks.log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,
@@ -636,9 +627,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             settings=cfg.stores.settings,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            state_persister=cfg.callbacks.state_persister,
             settings_persister=cfg.callbacks.settings_persister,
-            registry_store=cfg.callbacks.registry_store,
             get_pending_sync=pending_sync_binding.get,
             log_debug=cfg.callbacks.log_debug,
             uow_factory=cfg.callbacks.uow_factory,

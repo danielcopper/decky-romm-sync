@@ -49,7 +49,6 @@ if TYPE_CHECKING:
         EventEmitter,
         MetadataExtractor,
         Sleeper,
-        StatePersister,
         UnitOfWorkFactory,
         UuidGen,
     )
@@ -76,8 +75,10 @@ class SyncOrchestratorConfig:
 
     Holds the live state dict (read for the existing-registry stale
     diff), runtime infrastructure (loop, logger), event emitter, the
-    Clock/UuidGen/Sleeper test seams, state-persistence callback, the
-    plugin-dir reference for shortcut data construction, the shared
+    Clock/UuidGen/Sleeper test seams, the SQLite Unit-of-Work factory
+    (the transactional seam over the ``roms`` / ``sync_runs`` repositories
+    the lifecycle writes through), the plugin-dir reference for shortcut
+    data construction, the shared
     :class:`LibrarySyncStateBox`, and three peer references the
     orchestrator drives at runtime: the :class:`LibraryFetcher` it
     delegates per-unit fetches to, an :class:`ArtworkManager` for the
@@ -97,7 +98,6 @@ class SyncOrchestratorConfig:
     clock: Clock
     uuid_gen: UuidGen
     sleeper: Sleeper
-    state_persister: StatePersister
     uow_factory: UnitOfWorkFactory
     sync_state_box: LibrarySyncStateBox
     fetcher: LibraryFetcher
@@ -119,7 +119,6 @@ class SyncOrchestrator:
         self._clock = config.clock
         self._uuid_gen = config.uuid_gen
         self._sleeper = config.sleeper
-        self._state_persister = config.state_persister
         self._uow_factory = config.uow_factory
         self._sync_state = config.sync_state_box
         self._fetcher = config.fetcher

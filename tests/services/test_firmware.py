@@ -13,7 +13,6 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
-from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.bios import BiosFileEntry
 from domain.bios_file import BiosFile
@@ -126,9 +125,7 @@ def plugin():
             clock=FakeClock(),
             uuid_gen=FakeUuidGen(),
             sleeper=FakeSleeper(),
-            state_persister=MagicMock(),
             settings_persister=MagicMock(),
-            registry_store=RegistryStoreAdapter(state=p._state, logger=decky.logger),
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
