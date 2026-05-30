@@ -9,8 +9,10 @@ the result and guards the slot/file invariants.
 
 Invariants enforced here:
 
-1. Every tracked file (an entry in ``files``) carries both a hash baseline and a
-   server save id — :meth:`adopt_baseline` is the only way in and requires both.
+1. A tracked file (an entry in ``files``) always carries a non-empty hash
+   baseline. :meth:`adopt_baseline` is the strict entry point — it additionally
+   requires a server save id; :meth:`update_baseline_hash` is the relaxed
+   skip-adopt entry point that records only the hash when no server id is known.
 2. A non-legacy active slot always has its key present in ``slots`` (the legacy
    ``None`` slot uses the ``""`` key).
 3. ``own_upload_ids`` never grows by mutating ``None`` — :meth:`track_own_upload`
@@ -22,7 +24,7 @@ whole; it has no behaviour of its own.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from domain._aggregate import cosmic_aggregate
@@ -101,6 +103,25 @@ class RomSaveState:
             last_sync_local_size=last_sync_local_size,
         )
 
+    def update_baseline_hash(self, filename: str, last_sync_hash: str) -> None:
+        """Record only ``filename``'s ``last_sync_hash`` baseline, keeping the rest.
+
+        The relaxed sibling of :meth:`adopt_baseline` for the skip-adopt case:
+        the matrix observed an ``is_current=true`` local file with no server
+        save id to anchor a full baseline, but still wants to record the hash so
+        a later run can detect offline-edit drift. Updates the hash in place when
+        ``filename`` is already tracked (preserving its other anchors), else
+        creates a minimal :class:`FileSyncState` carrying just the hash. Raises
+        ``ValueError`` if the hash is empty.
+        """
+        if not last_sync_hash:
+            raise ValueError("last_sync_hash is required")
+        existing = self.files.get(filename)
+        if existing is None:
+            self.files[filename] = FileSyncState(last_sync_hash=last_sync_hash)
+        else:
+            self.files[filename] = replace(existing, last_sync_hash=last_sync_hash)
+
     def track_own_upload(self, save_id: int) -> None:
         """Attribute ``save_id`` to an upload we made (idempotent).
 
@@ -136,18 +157,60 @@ class RomSaveState:
         self.active_slot = normalized
         self.slots.setdefault(normalized or "", {"source": "local", "count": 0, "latest_updated_at": None})
 
+    def promote_slot_to_server(self, slot: str) -> None:
+        """Mark a local-only ``slot`` as having a server copy after an upload.
+
+        Flips the slot's ``source`` marker from ``local`` to ``server`` and seeds
+        its count at 1 — the state after a local-only slot's first save reaches
+        the server. A no-op when ``slot`` is untracked or already server-sourced,
+        so re-running an upload never double-counts. Raises ``ValueError`` if the
+        slot name is empty.
+        """
+        if not slot:
+            raise ValueError("slot is required")
+        entry = self.slots.get(slot)
+        if entry is not None and entry.get("source") == "local":
+            entry["source"] = "server"
+            entry["count"] = 1
+
     def mark_sync_evaluated(self, at: str) -> None:
         """Record that the sync matrix was last evaluated at ISO timestamp ``at``."""
         self.last_sync_check_at = at
 
-    def record_synced_core(self, core: str, emulator: str) -> None:
-        """Stamp the core and emulator the last sync ran under."""
-        self.last_synced_core = core
+    def record_synced_core(self, core: str | None, emulator: str) -> None:
+        """Stamp the emulator and (optionally) the core the last sync ran under.
+
+        ``emulator`` is always recorded and must be non-empty — a sync always
+        runs under some emulator tag. ``core`` is optional: pass ``None`` to
+        record only the emulator without clobbering a previously-known core
+        (the emulator-only update case). Raises ``ValueError`` on an empty
+        ``emulator``.
+        """
+        if not emulator:
+            raise ValueError("emulator is required")
         self.emulator = emulator
+        if core is not None:
+            self.last_synced_core = core
 
     def refresh_slot_listing(self, merged: dict[str, dict[str, Any]]) -> None:
         """Replace the slot listing with the service-computed ``merged`` view."""
         self.slots = merged
+
+    def delete_file_tracking(self, filename: str) -> None:
+        """Drop ``filename``'s per-file baseline (its server save was deleted).
+
+        Used when a slot's server saves are torn down — the local file-tracking
+        entries that pointed at them are stale. Idempotent: a no-op when
+        ``filename`` is not tracked.
+        """
+        self.files.pop(filename, None)
+
+    def delete_slot_tracking(self, slot: str) -> None:
+        """Drop ``slot`` from the slot listing (the slot was deleted).
+
+        Idempotent: a no-op when ``slot`` is not present.
+        """
+        self.slots.pop(slot, None)
 
     def clear_baselines(self) -> None:
         """Drop all per-file baselines (the active slot changed, invalidating them)."""
