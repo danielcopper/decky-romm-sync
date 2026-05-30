@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         SettingsPersister,
         StatePersister,
+        UnitOfWorkFactory,
     )
 
 
@@ -66,6 +67,7 @@ class MigrationServiceConfig:
     get_retroarch_save_sorting: RetroArchSaveSortingProvider
     get_active_core: CoreResolverFn
     get_core_name: CoreNameProviderFn
+    uow_factory: UnitOfWorkFactory
 
 
 class MigrationService:

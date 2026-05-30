@@ -8,6 +8,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -57,6 +58,7 @@ def plugin():
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._save_sync_state = SaveSyncState()
@@ -76,6 +78,7 @@ def plugin():
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._rom_removal_service = RomRemovalService(
@@ -91,6 +94,7 @@ def plugin():
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
             ),
             download_queue_cleanup=p._download_service,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return p

@@ -10,6 +10,7 @@ from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_state_persister import FakeStatePersister
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -73,6 +74,7 @@ def plugin(tmp_path, fake_romm_api):
             firmware_file_store=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._firmware_service.load_bios_registry()
@@ -97,6 +99,7 @@ def plugin(tmp_path, fake_romm_api):
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -124,6 +127,7 @@ def plugin(tmp_path, fake_romm_api):
             get_retroarch_save_sorting=_default_save_sorting,
             get_active_core=_no_active_core,
             get_core_name=_no_core_name,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return p
@@ -921,6 +925,7 @@ class TestMigrationFailureInjection:
             "get_retroarch_save_sorting": lambda: (False, False),
             "get_active_core": lambda system, rom_filename: (None, None),
             "get_core_name": lambda core_so: None,
+            "uow_factory": FakeUnitOfWorkFactory(),
         }
         defaults.update(overrides)
         return MigrationService(

@@ -22,7 +22,13 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import Clock, DebugLogger, MetadataCachePersister, MetadataCacheStore
+    from services.protocols import (
+        Clock,
+        DebugLogger,
+        MetadataCachePersister,
+        MetadataCacheStore,
+        UnitOfWorkFactory,
+    )
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,7 @@ class MetadataServiceConfig:
     metadata_cache_persister: MetadataCachePersister
     metadata_store: MetadataCacheStore
     log_debug: DebugLogger
+    uow_factory: UnitOfWorkFactory
 
 
 class MetadataService:

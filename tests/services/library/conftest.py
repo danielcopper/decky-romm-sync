@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
@@ -74,6 +75,7 @@ def plugin(tmp_path):
             metadata_cache_persister=p._metadata_cache_persister,
             metadata_store=p._metadata_store,
             log_debug=p._log_debug,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._metadata_service = metadata_service
@@ -89,6 +91,7 @@ def plugin(tmp_path):
             get_pending_sync=dict,
             registry_store=p._registry_store,
             state_persister=MagicMock(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._artwork_service = artwork_service
@@ -113,6 +116,7 @@ def plugin(tmp_path):
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -127,6 +131,7 @@ def plugin(tmp_path):
             state_persister=p._state_persister,
             registry_store=p._registry_store,
             artwork_remover=artwork_service,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     # Default migration service mock — no migration pending. Tests that need

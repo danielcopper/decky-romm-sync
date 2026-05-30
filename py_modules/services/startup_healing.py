@@ -21,7 +21,13 @@ from domain.installed_roms import is_pending_migration_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import PathExistsReader, RetroDeckPaths, ShortcutRegistryStore, StatePersister
+    from services.protocols import (
+        PathExistsReader,
+        RetroDeckPaths,
+        ShortcutRegistryStore,
+        StatePersister,
+        UnitOfWorkFactory,
+    )
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,7 @@ class StartupHealingServiceConfig:
     registry_store: ShortcutRegistryStore
     retrodeck_paths: RetroDeckPaths
     path_probe: PathExistsReader
+    uow_factory: UnitOfWorkFactory
 
 
 class StartupHealingService:

@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         StatePersister,
         SteamConfigStore,
         SteamGridDbApi,
+        UnitOfWorkFactory,
     )
 
 
@@ -71,6 +72,7 @@ class SteamGridServiceConfig:
     registry_store: ShortcutRegistryStore
     get_pending_sync: PendingSyncReader
     log_debug: DebugLogger
+    uow_factory: UnitOfWorkFactory
 
 
 class SteamGridService:

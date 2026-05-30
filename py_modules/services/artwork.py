@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         ShortcutRegistryStore,
         StatePersister,
         SteamConfigStore,
+        UnitOfWorkFactory,
     )
 
 
@@ -47,6 +48,7 @@ class ArtworkServiceConfig:
     get_pending_sync: PendingSyncReader
     registry_store: ShortcutRegistryStore
     state_persister: StatePersister
+    uow_factory: UnitOfWorkFactory
 
 
 class ArtworkService:

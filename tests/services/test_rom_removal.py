@@ -10,6 +10,7 @@ import pytest
 from fakes.fake_download_queue_cleanup import FakeDownloadQueueCleanup
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_rom_file_store import FakeRomFileStore
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from models.state import make_default_plugin_state
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
@@ -61,6 +62,7 @@ def service(state, save_sync_state, logger, queue_cleanup, rom_files):
             rom_file_store=rom_files,
             retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
             download_queue_cleanup=queue_cleanup,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -488,6 +490,7 @@ class TestDownloadQueueCleanup:
                 rom_file_store=rom_files,
                 retrodeck_paths=FakeRetroDeckPaths(roms=_ROMS_BASE),
                 download_queue_cleanup=None,
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
 

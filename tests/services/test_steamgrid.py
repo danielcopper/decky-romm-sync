@@ -6,6 +6,7 @@ import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_state_persister import FakeStatePersister
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -66,6 +67,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -88,6 +90,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
             registry_store=p._registry_store,
             get_pending_sync=lambda: p._sync_service._pending_sync,
             log_debug=p._log_debug,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return p
@@ -1028,6 +1031,7 @@ class TestDebugLoggerProtocolSeam:
                 log_debug=capture,
                 metadata_service=FakeMetadataExtractor(),
                 artwork=FakeArtworkManager(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
 
@@ -1047,6 +1051,7 @@ class TestDebugLoggerProtocolSeam:
                 registry_store=registry_store,
                 get_pending_sync=lambda: p._sync_service._pending_sync,
                 log_debug=capture,
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         return p, captured

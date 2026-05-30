@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 # conftest.py patches decky before this import
 import decky
 import pytest
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from models.state import make_default_plugin_state
 
 from adapters.registry_store import RegistryStoreAdapter
@@ -41,6 +42,7 @@ def svc(state, steam_config, artwork_remover_mock):
             state_persister=MagicMock(),
             registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
             artwork_remover=artwork_remover_mock,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return service
@@ -243,6 +245,7 @@ class TestRemovalCleansUpArtwork:
                 get_pending_sync=dict,
                 registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
                 state_persister=MagicMock(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
 
@@ -257,6 +260,7 @@ class TestRemovalCleansUpArtwork:
                 state_persister=MagicMock(),
                 registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
                 artwork_remover=artwork_svc,
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         svc._loop = asyncio.get_event_loop()
@@ -288,6 +292,7 @@ class TestRemovalCleansUpArtwork:
                 get_pending_sync=dict,
                 registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
                 state_persister=MagicMock(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
 
@@ -302,6 +307,7 @@ class TestRemovalCleansUpArtwork:
                 state_persister=MagicMock(),
                 registry_store=RegistryStoreAdapter(state=state, logger=decky.logger),
                 artwork_remover=artwork_svc,
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         svc._loop = asyncio.get_event_loop()

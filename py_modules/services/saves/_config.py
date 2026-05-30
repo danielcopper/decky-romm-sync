@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         SaveSortChangeFn,
         SaveSyncStatePersister,
         SettingsPersister,
+        UnitOfWorkFactory,
     )
 
 
@@ -130,6 +131,11 @@ class SaveServiceConfig:
         ``DebugLogger`` Protocol seam — routes through the user's QAM
         log-level filter. Injected directly into each sub-service that
         needs it; not reached through the ``_save_service`` back-ref.
+    uow_factory:
+        ``UnitOfWorkFactory`` Protocol seam — opens a fresh transactional
+        Unit of Work over the nine SQLite repositories. Wired in but not
+        yet consumed; the per-method repository cutover (#784) wires the
+        save-state reads/writes through it.
     """
 
     romm_api: RommSyncApi
@@ -153,3 +159,4 @@ class SaveServiceConfig:
     emit: EventEmitter
     detect_sort_change: SaveSortChangeFn
     is_retrodeck_migration_pending: MigrationPendingFn
+    uow_factory: UnitOfWorkFactory

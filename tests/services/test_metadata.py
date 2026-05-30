@@ -8,6 +8,7 @@ import pytest
 from fakes.fake_metadata_cache_persister import FakeMetadataCachePersister
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_state_persister import FakeStatePersister
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -55,6 +56,7 @@ def plugin():
             metadata_cache_persister=p._metadata_cache_persister,
             metadata_store=p._metadata_store,
             log_debug=p._log_debug,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._metadata_service = metadata_service
@@ -79,6 +81,7 @@ def plugin():
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return p

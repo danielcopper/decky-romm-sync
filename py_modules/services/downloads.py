@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         Sleeper,
         StatePersister,
         SystemResolver,
+        UnitOfWorkFactory,
     )
 
 _DOWNLOAD_QUEUE_MAX_TERMINAL = 50
@@ -58,6 +59,7 @@ class DownloadServiceConfig:
     sleeper: Sleeper
     state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths
+    uow_factory: UnitOfWorkFactory
 
 
 class DownloadService:

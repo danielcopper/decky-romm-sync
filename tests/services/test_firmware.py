@@ -8,6 +8,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import PluginState, make_default_plugin_state
@@ -60,6 +61,7 @@ def plugin():
             firmware_file_store=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     # Mirror main.py: load_bios_registry runs at startup so the index is a
@@ -86,6 +88,7 @@ def plugin():
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return p
@@ -1454,6 +1457,7 @@ class TestBiosFilesIndexUnloadedRaises:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
 
@@ -1477,6 +1481,7 @@ class TestBiosFilesIndexUnloadedRaises:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
 
@@ -1624,6 +1629,7 @@ class TestFirmwareListCache:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         fw.load_bios_registry()
@@ -1692,6 +1698,7 @@ class TestFirmwareListCache:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         assert fw._firmware_cache == cached_items
@@ -1775,6 +1782,7 @@ class TestCheckPlatformBiosCached:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=core_info,
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         fw.load_bios_registry()
@@ -1855,6 +1863,7 @@ class TestCheckPlatformBiosCached:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=core_info,
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         fw._firmware_cache = []
@@ -1890,6 +1899,7 @@ class TestFirmwareCachePersistence:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         assert fw._firmware_cache == cached_items
@@ -1914,6 +1924,7 @@ class TestFirmwareCachePersistence:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         assert fw._firmware_cache is None
@@ -1936,6 +1947,7 @@ class TestFirmwareCachePersistence:
                 firmware_file_store=FirmwareFileAdapter(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         assert fw._firmware_cache is None
@@ -2105,6 +2117,7 @@ class TestBadPathFirmwareCallables:
                 firmware_file_store=FakeFirmwareFileStore(),
                 retrodeck_paths=FakeRetroDeckPaths(),
                 core_info=FakeCoreInfoProvider(),
+                uow_factory=FakeUnitOfWorkFactory(),
             ),
         )
         svc.load_bios_registry()

@@ -14,7 +14,13 @@ from lib.path_safety import is_safe_rom_path
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import DownloadQueueCleanup, RetroDeckPaths, RomFileStore, StatePersister
+    from services.protocols import (
+        DownloadQueueCleanup,
+        RetroDeckPaths,
+        RomFileStore,
+        StatePersister,
+        UnitOfWorkFactory,
+    )
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,7 @@ class RomRemovalServiceConfig:
     rom_file_store: RomFileStore
     retrodeck_paths: RetroDeckPaths
     download_queue_cleanup: DownloadQueueCleanup | None
+    uow_factory: UnitOfWorkFactory
 
 
 class RomRemovalService:

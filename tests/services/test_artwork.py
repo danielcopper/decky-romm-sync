@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import decky
 import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from models.state import make_default_plugin_state
 
 from adapters.registry_store import RegistryStoreAdapter
@@ -73,6 +74,7 @@ def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data
             get_pending_sync=lambda: pending_sync_data,
             registry_store=registry_store,
             state_persister=state_persister,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from models.state import InstalledRomEntry, PluginState, ShortcutRegistryEntry, make_default_plugin_state
 
 from adapters.registry_store import RegistryStoreAdapter
@@ -58,6 +59,7 @@ def _make_service(
             registry_store=RegistryStoreAdapter(state=state, logger=logger),
             retrodeck_paths=FakeRetroDeckPaths(home=retrodeck_home),
             path_probe=probe,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         RetryStrategy,
         RommPlaytimeApi,
         StatePersister,
+        UnitOfWorkFactory,
     )
 
 
@@ -47,6 +48,7 @@ class PlaytimeServiceConfig:
     clock: Clock
     state_persister: StatePersister
     log_debug: DebugLogger
+    uow_factory: UnitOfWorkFactory
 
 
 class PlaytimeService:

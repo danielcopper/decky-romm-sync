@@ -12,6 +12,7 @@ from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_settings_persister import FakeSettingsPersister
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock
 from models.state import make_default_plugin_state
 
@@ -69,6 +70,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         get_core_name=lambda core_so: None,
         detect_sort_change=lambda: None,
         is_retrodeck_migration_pending=lambda: False,
+        uow_factory=FakeUnitOfWorkFactory(),
     )
     config_kwargs.update(overrides)
     svc = SaveService(config=SaveServiceConfig(**config_kwargs))

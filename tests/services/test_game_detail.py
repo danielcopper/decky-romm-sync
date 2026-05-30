@@ -13,6 +13,7 @@ from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -69,6 +70,7 @@ def plugin(tmp_path):
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)
@@ -110,6 +112,7 @@ def plugin(tmp_path):
             get_core_name=lambda core_so: None,
             detect_sort_change=lambda: None,
             is_retrodeck_migration_pending=lambda: False,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._save_sync_service.init_state()
@@ -125,6 +128,7 @@ def plugin(tmp_path):
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             state_persister=p._save_sync_service,
             log_debug=p._log_debug,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -152,6 +156,7 @@ def plugin(tmp_path):
             firmware_file_store=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     p._firmware_service.load_bios_registry()

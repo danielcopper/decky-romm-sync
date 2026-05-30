@@ -295,14 +295,17 @@ def bootstrap(
         handles ``main.py`` itself binds (``handles.debug_logger``).
     """
     # Bring the on-disk SQLite schema up to date before any service is wired —
-    # the composition root owns startup infra. Pre-cutover (#784) nothing reads
-    # romm_sync.db, so creating the schema now is harmless; a failed migration
-    # is logged but not fatal (cutover-aware fatal/non-fatal handling is #784).
+    # the composition root owns startup infra. Post-cutover (#784) SQLite is the
+    # sole persistence backend: there is no JSON fallback, so a failed or
+    # unopenable database is fatal. Log the cause, then re-raise so bootstrap
+    # aborts and the plugin stays inert — matching the RomM-minimum-version
+    # gate's "inert until the environment is fixed" posture.
     db_path = os.path.join(runtime_dir, _DB_FILENAME)
     try:
         apply_migrations(db_path, MIGRATIONS_DIR, logger=logger)
     except Exception:
-        logger.exception("SQLite schema migration failed; database left at last good version")
+        logger.exception("SQLite schema migration failed; plugin cannot start")
+        raise
 
     # The runtime Unit-of-Work factory: each call opens a fresh sync sqlite3
     # connection on db_path (ADR-0004). Wired here but not yet threaded into any
@@ -462,6 +465,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
             get_active_core=cfg.adapters.core_info_provider.get_active_core,
             get_core_name=cfg.callbacks.get_core_name,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -488,6 +492,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         # SaveService must observe fresh sort state before computing saves_dir (#238).
         detect_sort_change=migration_service.detect_save_sort_change,
         is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,
+        uow_factory=cfg.callbacks.uow_factory,
     )
     save_sync_service = SaveService(config=save_service_config)
 
@@ -502,6 +507,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             clock=cfg.runtime.clock,
             state_persister=save_sync_service,
             log_debug=cfg.callbacks.log_debug,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -515,6 +521,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             metadata_cache_persister=cfg.callbacks.metadata_cache_persister,
             metadata_store=cfg.callbacks.metadata_store,
             log_debug=cfg.callbacks.log_debug,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -529,6 +536,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             get_pending_sync=pending_sync_binding.get,
             registry_store=cfg.callbacks.registry_store,
             state_persister=cfg.callbacks.state_persister,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -543,6 +551,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             state_persister=cfg.callbacks.state_persister,
             registry_store=cfg.callbacks.registry_store,
             artwork_remover=artwork_service,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -566,6 +575,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             log_debug=cfg.callbacks.log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
     pending_sync_binding.set(lambda: sync_service.pending_sync)
@@ -583,6 +593,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             sleeper=cfg.runtime.sleeper,
             state_persister=cfg.callbacks.state_persister,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -597,6 +608,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             rom_file_store=cfg.adapters.rom_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             download_queue_cleanup=download_service,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -613,6 +625,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             firmware_file_store=cfg.adapters.firmware_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.adapters.core_info_provider,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
     # Load the BIOS registry from disk now so the property does not raise
@@ -635,6 +648,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             registry_store=cfg.callbacks.registry_store,
             get_pending_sync=pending_sync_binding.get,
             log_debug=cfg.callbacks.log_debug,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 
@@ -701,6 +715,7 @@ def wire_services(cfg: WiringConfig) -> dict:
             registry_store=cfg.callbacks.registry_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             path_probe=cfg.adapters.path_probe,
+            uow_factory=cfg.callbacks.uow_factory,
         ),
     )
 

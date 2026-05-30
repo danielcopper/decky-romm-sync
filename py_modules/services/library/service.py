@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         Sleeper,
         StatePersister,
         SteamConfigStore,
+        UnitOfWorkFactory,
         UuidGen,
     )
 
@@ -76,6 +77,7 @@ class LibraryServiceConfig:
     log_debug: DebugLogger
     metadata_service: MetadataExtractor
     artwork: ArtworkManager
+    uow_factory: UnitOfWorkFactory
 
 
 class LibraryService:

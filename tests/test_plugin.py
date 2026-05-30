@@ -10,6 +10,7 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_state_persister import FakeStatePersister
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -76,6 +77,7 @@ def plugin():
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -94,6 +96,7 @@ def plugin():
             registry_store=p._registry_store,
             get_pending_sync=lambda: p._sync_service._pending_sync,
             log_debug=p._log_debug,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -125,6 +128,7 @@ def plugin():
             registry_store=p._registry_store,
             retrodeck_paths=p._retrodeck_paths,
             path_probe=FakePathExistsReader(),
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return p

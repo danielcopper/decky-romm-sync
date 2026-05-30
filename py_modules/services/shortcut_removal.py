@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         ShortcutRegistryStore,
         StatePersister,
         SteamConfigStore,
+        UnitOfWorkFactory,
     )
 
 
@@ -40,6 +41,7 @@ class ShortcutRemovalServiceConfig:
     state_persister: StatePersister
     registry_store: ShortcutRegistryStore
     artwork_remover: ArtworkRemover
+    uow_factory: UnitOfWorkFactory
 
 
 class ShortcutRemovalService:

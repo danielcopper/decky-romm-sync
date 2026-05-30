@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RommFirmwareApi,
         StatePersister,
+        UnitOfWorkFactory,
     )
 
 _FIRMWARE_CACHE_TTL = 3600  # 1 hour
@@ -61,6 +62,7 @@ class FirmwareServiceConfig:
     firmware_file_store: FirmwareFileStore
     retrodeck_paths: RetroDeckPaths
     core_info: CoreInfoProvider
+    uow_factory: UnitOfWorkFactory
 
 
 class FirmwareService:

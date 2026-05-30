@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from models.state import PluginState, SaveSortSettings, make_default_plugin_state
 
 from adapters.migration_file import MigrationFileAdapter
@@ -71,6 +72,7 @@ def _make_service(
             get_retroarch_save_sorting=lambda: sort_settings,
             get_active_core=active_core,
             get_core_name=get_core_name,
+            uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
     return svc, save_state_mock

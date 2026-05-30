@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from conftest import _make_retry
 from fakes.fake_save_api import FakeSaveApi
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock
 
 from domain.save_state import PlaytimeEntry, SaveSyncState
@@ -49,6 +50,7 @@ def make_service(tmp_path=None, fake_api=None, clock=None, settings=None, **over
         clock=clk,
         state_persister=_RecordingStatePersister(saved),
         log_debug=lambda _msg: None,
+        uow_factory=FakeUnitOfWorkFactory(),
     )
     defaults.update(overrides)
     svc = PlaytimeService(config=PlaytimeServiceConfig(**defaults))
