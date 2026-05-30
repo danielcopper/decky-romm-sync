@@ -35,13 +35,17 @@ select = [
     "B",    # bugbear — common pitfalls
     "SIM",  # simplify — unnecessary complexity
     "UP",   # pyupgrade — modern Python syntax
-    "RUF",  # ruff-specific rules
-    "ARG",  # unused arguments
+    "RUF",   # ruff-specific rules
+    "ARG",   # unused arguments
+    "ASYNC", # flake8-async — blocking I/O in async functions
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "main.py" = ["E402"]
-"tests/**" = ["ARG"]
+# pytest-asyncio test bodies legitimately do blocking setup I/O (open,
+# os.path) — ASYNC's event-loop concern is a production-only worry, not
+# a test one, so the group is disabled under tests/ (same rationale as ARG).
+"tests/**" = ["ARG", "ASYNC"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["lib", "domain", "services", "adapters"]
