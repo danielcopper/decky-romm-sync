@@ -161,19 +161,21 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         strDescription: lines.join("\n\n"),
         strOKButtonText: "Delete",
         strCancelButtonText: "Cancel",
-        onOK: async () => {
-          try {
-            const result = await deleteSlot(romId, slotName);
-            if (result.success) {
-              toaster.toast({ title: "RomM Sync", body: `Slot '${slotName}' deleted` });
-              onSlotDeleted();
-            } else {
-              toaster.toast({ title: "RomM Sync", body: result.message ?? "Failed to delete slot" });
+        onOK: () => {
+          void (async () => {
+            try {
+              const result = await deleteSlot(romId, slotName);
+              if (result.success) {
+                toaster.toast({ title: "RomM Sync", body: `Slot '${slotName}' deleted` });
+                onSlotDeleted();
+              } else {
+                toaster.toast({ title: "RomM Sync", body: result.message ?? "Failed to delete slot" });
+              }
+            } catch (e) {
+              debugLog(`SavesTab: deleteSlot error: ${e}`);
+              toaster.toast({ title: "RomM Sync", body: "An error occurred while deleting the slot" });
             }
-          } catch (e) {
-            debugLog(`SavesTab: deleteSlot error: ${e}`);
-            toaster.toast({ title: "RomM Sync", body: "An error occurred while deleting the slot" });
-          }
+          })();
         },
       }));
     } catch (e) {
@@ -214,7 +216,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
     },
     noFocusRing: false,
     onFocus: scrollFocusedToCenter,
-    onClick: handleToggle,
+    onClick: () => { void handleToggle(); },
   },
     // Left: slot name + badges
     createElement("div", { className: "romm-slot-header-left" },
@@ -251,7 +253,9 @@ export const SlotPanel: FC<SlotPanelProps> = ({
       // eslint-disable-next-line react-hooks/refs -- createElement of an FC in a ternary branch trips the new react-hooks/refs rule; the component itself takes no ref.
       : createElement(InactiveSlotBody, {
           key: "body",
-          loadingSlot, slotFiles, switching, switchError, isOffline, handleActivate, handleDelete, deleting,
+          loadingSlot, slotFiles, switching, switchError, isOffline, deleting,
+          handleActivate: () => { void handleActivate(); },
+          handleDelete: () => { void handleDelete(); },
         });
   }
 

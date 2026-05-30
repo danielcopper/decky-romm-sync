@@ -363,7 +363,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
-                onClick={handleApply}
+                onClick={() => { void handleApply(); }}
                 // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
                 onFocus={scrollToTop}
               >
@@ -371,7 +371,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </ButtonItem>
             </PanelSectionRow>
             <PanelSectionRow>
-              <ButtonItem layout="below" onClick={handleDismiss}>
+              <ButtonItem layout="below" onClick={() => { void handleDismiss(); }}>
                 Cancel
               </ButtonItem>
             </PanelSectionRow>
@@ -380,7 +380,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              onClick={handleDismiss}
+              onClick={() => { void handleDismiss(); }}
               // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
               onFocus={scrollToTop}
             >
@@ -435,7 +435,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={handleCancel}
+            onClick={() => { void handleCancel(); }}
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
           >
@@ -450,7 +450,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={handleSync}
+            onClick={() => { void handleSync(); }}
             disabled={loading || connected === false}
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
@@ -471,12 +471,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             <ButtonItem
               layout="below"
               description="Clear cached sync data to re-fetch all platforms"
-              onClick={async () => {
-                const result = await clearSyncCache();
-                setStatus(result.message);
-                if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-                statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
-                getSyncStats().then(setStats);
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const result = await clearSyncCache();
+                    setStatus(result.message);
+                  } catch {
+                    setStatus("Failed to clear sync cache");
+                  }
+                  if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+                  statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
+                  getSyncStats().then(setStats).catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+                })();
               }}
               disabled={loading || connected === false}
             >
@@ -533,15 +539,17 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                     strDescription="This will change input_driver to sdl2 in your RetroArch config. Controllers should work better in RetroArch menus after this change."
                     strOKButtonText="Apply Fix"
                     strCancelButtonText="Cancel"
-                    onOK={async () => {
-                      try {
-                        const result = await fixRetroarchInputDriver();
-                        if (result.success) {
-                          setRetroarchWarning(null);
+                    onOK={() => {
+                      void (async () => {
+                        try {
+                          const result = await fixRetroarchInputDriver();
+                          if (result.success) {
+                            setRetroarchWarning(null);
+                          }
+                        } catch {
+                          // ignore
                         }
-                      } catch {
-                        // ignore
-                      }
+                      })();
                     }}
                   />
                 )}

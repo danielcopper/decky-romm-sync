@@ -15,7 +15,8 @@ let gameActionHook: { unregister: () => void } | null = null;
 
 export function registerLaunchInterceptor(): void {
   gameActionHook = SteamClient.Apps.RegisterForGameActionStart(
-    async (gameActionId: number, appIdStr: string, action: string, _launchSource: number) => {
+    (gameActionId: number, appIdStr: string, action: string, _launchSource: number) => {
+      void (async () => {
       if (action !== "LaunchApp") return;
 
       const appId = Number.parseInt(appIdStr, 10);
@@ -68,6 +69,7 @@ export function registerLaunchInterceptor(): void {
         logError(`Launch interceptor error: ${e}`);
         // On error, don't block the launch.
       }
+      })();
     },
   );
 

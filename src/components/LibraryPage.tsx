@@ -317,12 +317,12 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     return (
       <>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => handleSetAll(true)}>
+          <ButtonItem layout="below" onClick={() => { void handleSetAll(true); }}>
             Enable All
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => handleSetAll(false)}>
+          <ButtonItem layout="below" onClick={() => { void handleSetAll(false); }}>
             Disable All
           </ButtonItem>
         </PanelSectionRow>
@@ -332,9 +332,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               label={platform.name}
               description={`${platform.rom_count} ROMs`}
               checked={platform.sync_enabled}
-              onChange={(value: boolean) =>
-                handleToggle(platform.id, value)
-              }
+              onChange={(value: boolean) => { void handleToggle(platform.id, value); }}
             />
           </PanelSectionRow>
         ))}
@@ -385,9 +383,11 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               label="Show collection games in platform groups"
               description="When syncing a collection, also add its games to their platform-specific Steam group."
               checked={platformGroups}
-              onChange={async (value: boolean) => {
+              onChange={(value: boolean) => {
                 setPlatformGroups(value);
-                try { await saveCollectionPlatformGroups(value); } catch { setPlatformGroups(!value); }
+                void (async () => {
+                  try { await saveCollectionPlatformGroups(value); } catch { setPlatformGroups(!value); }
+                })();
               }}
             />
           </PanelSectionRow>
@@ -397,9 +397,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                 label="Sync RomM favorites"
                 description={favoritesDescription(favoritesCollection.rom_count)}
                 checked={favoritesCollection.sync_enabled}
-                onChange={(value: boolean) =>
-                  handleCollectionToggle(favoritesCollection.id, favoritesCollection.kind, value)
-                }
+                onChange={(value: boolean) => { void handleCollectionToggle(favoritesCollection.id, favoritesCollection.kind, value); }}
               />
             </PanelSectionRow>
           )}
@@ -432,13 +430,13 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
             >
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
-                onClick={() => handleSetAllCollections(true, activeSubTab)}
+                onClick={() => { void handleSetAllCollections(true, activeSubTab); }}
               >
                 Enable All
               </DialogButton>
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
-                onClick={() => handleSetAllCollections(false, activeSubTab)}
+                onClick={() => { void handleSetAllCollections(false, activeSubTab); }}
               >
                 Disable All
               </DialogButton>
@@ -455,9 +453,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                   label={collection.name}
                   description={`${collection.rom_count} ROMs`}
                   checked={collection.sync_enabled}
-                  onChange={(value: boolean) =>
-                    handleCollectionToggle(collection.id, collection.kind, value)
-                  }
+                  onChange={(value: boolean) => { void handleCollectionToggle(collection.id, collection.kind, value); }}
                 />
               </PanelSectionRow>
             ))
@@ -512,16 +508,22 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                 })),
               ]}
               selectedOption={platform.active_core_label || platform.available_cores.find((c) => c.is_default)?.label || ""}
-              onChange={async (option: { data: string }) => {
-                const defaultCore = platform.available_cores?.find((c) => c.is_default);
-                const label = option.data === defaultCore?.label ? "" : option.data;
-                debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`);
-                const result = await setSystemCore(platform.platform_slug, label);
-                debugLog(`setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`);
-                if (result.success) {
-                  await refreshBios();
-                  globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platform.platform_slug } }));
-                }
+              onChange={(option: { data: string }) => {
+                void (async () => {
+                  const defaultCore = platform.available_cores?.find((c) => c.is_default);
+                  const label = option.data === defaultCore?.label ? "" : option.data;
+                  debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`);
+                  try {
+                    const result = await setSystemCore(platform.platform_slug, label);
+                    debugLog(`setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`);
+                    if (result.success) {
+                      await refreshBios();
+                      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platform.platform_slug } }));
+                    }
+                  } catch (e) {
+                    debugLog(`setSystemCore: error: ${e}`);
+                  }
+                })();
               }}
             />
           </PanelSectionRow>
@@ -597,7 +599,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              onClick={() => handleDownloadRequired(platform.platform_slug)}
+              onClick={() => { void handleDownloadRequired(platform.platform_slug); }}
               disabled={isDownloading}
             >
               {isDownloading ? "Downloading..." : "Download Required"}
@@ -608,7 +610,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              onClick={() => handleDownloadAll(platform.platform_slug)}
+              onClick={() => { void handleDownloadAll(platform.platform_slug); }}
               disabled={isDownloading}
             >
               {isDownloading ? "Downloading..." : "Download All"}

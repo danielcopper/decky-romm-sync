@@ -137,23 +137,26 @@ export const SavesTab: FC<SavesTabProps> = ({
   const handleNewSlot = () => {
     showModal(
       createElement(NewSlotModal, {
-        onSubmit: async (name: string) => {
+        onSubmit: (name: string) => {
+          void (async () => {
           if (!name) {
             // Empty = legacy mode — show warning
             showModal(createElement(ConfirmModal, {
               strTitle: "Use Legacy Mode?",
               strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
-              onOK: async () => {
-                try {
-                  const result = await switchSlot(romId, "");
-                  if (result.success && result.save_status) {
-                    onSlotSwitched("", result.save_status);
-                  } else {
-                    debugLog(`SavesTab: legacy switch failed: ${result.reason}`);
+              onOK: () => {
+                void (async () => {
+                  try {
+                    const result = await switchSlot(romId, "");
+                    if (result.success && result.save_status) {
+                      onSlotSwitched("", result.save_status);
+                    } else {
+                      debugLog(`SavesTab: legacy switch failed: ${result.reason}`);
+                    }
+                  } catch (e) {
+                    debugLog(`SavesTab: legacy switch error: ${e}`);
                   }
-                } catch (e) {
-                  debugLog(`SavesTab: legacy switch error: ${e}`);
-                }
+                })();
               },
             }));
             return;
@@ -181,6 +184,7 @@ export const SavesTab: FC<SavesTabProps> = ({
             if (newSlotErrorTimerRef.current) clearTimeout(newSlotErrorTimerRef.current);
             newSlotErrorTimerRef.current = setTimeout(() => setNewSlotError(null), 5000);
           }
+          })();
         },
       }),
     );

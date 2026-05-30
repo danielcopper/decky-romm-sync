@@ -243,7 +243,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           <DialogButton
             className="romm-wizard-btn"
             style={btnStyle}
-            onClick={() => handleConfirm(s.slot ?? defaultSlot)}
+            onClick={() => { void handleConfirm(s.slot ?? defaultSlot); }}
             onFocus={scrollFocusedToCenter}
           >
             Track
@@ -273,7 +273,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
         <DialogButton
           className="romm-wizard-btn romm-wizard-btn-primary"
           style={btnPrimaryStyle}
-          onClick={() => handleConfirm(defaultSlot)}
+          onClick={() => { void handleConfirm(defaultSlot); }}
           onFocus={scrollFocusedToCenter}
         >
           Use slot &lsquo;{defaultSlot}&rsquo;
@@ -300,7 +300,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
                     createElement(ConfirmModal, {
                       strTitle: "Use Legacy Mode?",
                       strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
-                      onOK: () => handleConfirm(""),
+                      onOK: () => { void handleConfirm(""); },
                     }),
                   );
                 }

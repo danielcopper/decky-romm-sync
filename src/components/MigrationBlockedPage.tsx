@@ -81,19 +81,21 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
         }
         strOKButtonText="Dismiss"
         strCancelButtonText="Cancel"
-        onOK={async () => {
-          try {
-            const result = await dismissRetrodeckMigration();
-            if (result.success) {
-              clearMigration();
-              toaster.toast({
-                title: "RomM Sync",
-                body: "Migration dismissed.",
-              });
+        onOK={() => {
+          void (async () => {
+            try {
+              const result = await dismissRetrodeckMigration();
+              if (result.success) {
+                clearMigration();
+                toaster.toast({
+                  title: "RomM Sync",
+                  body: "Migration dismissed.",
+                });
+              }
+            } catch {
+              setMigrateResult("Dismiss failed");
             }
-          } catch {
-            setMigrateResult("Dismiss failed");
-          }
+          })();
         }}
       />,
     );

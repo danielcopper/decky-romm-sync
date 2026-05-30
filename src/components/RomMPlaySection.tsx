@@ -269,17 +269,19 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       setInfo((prev) => ({ ...prev, saveSyncStatus, saveSyncLabel, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
     };
 
-    const onDataChanged = async (e: Event) => {
-      try {
-        const detail = (e as CustomEvent).detail;
-        switch (detail?.type) {
-          case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
-          case "core_changed": await handleCoreChange(); break;
-          case "save_sync": await handleSaveSyncChange(detail); break;
+    const onDataChanged = (e: Event) => {
+      void (async () => {
+        try {
+          const detail = (e as CustomEvent).detail;
+          switch (detail?.type) {
+            case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
+            case "core_changed": await handleCoreChange(); break;
+            case "save_sync": await handleSaveSyncChange(detail); break;
+          }
+        } catch (err) {
+          debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
         }
-      } catch (err) {
-        debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
-      }
+      })();
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
@@ -539,23 +541,25 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         strDescription: "This will delete local save files for this game. Make sure saves are synced to RomM first — the next sync will re-download them from the server.",
         strOKButtonText: "Delete",
         strCancelButtonText: "Cancel",
-        onOK: async () => {
-          setActionPending("deletesaves");
-          try {
-            const result = await deleteLocalSaves(romId);
-            if (result.success) {
-              toaster.toast({ title: "RomM Sync", body: result.message });
-              // Directly update PlaySection status — no local saves remain
-              setInfo((prev) => ({ ...prev, saveSyncStatus: "none" as const, saveSyncLabel: "No saves" }));
-              globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-            } else {
-              toaster.toast({ title: "RomM Sync", body: result.message || "Failed to delete saves" });
+        onOK: () => {
+          void (async () => {
+            setActionPending("deletesaves");
+            try {
+              const result = await deleteLocalSaves(romId);
+              if (result.success) {
+                toaster.toast({ title: "RomM Sync", body: result.message });
+                // Directly update PlaySection status — no local saves remain
+                setInfo((prev) => ({ ...prev, saveSyncStatus: "none" as const, saveSyncLabel: "No saves" }));
+                globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
+              } else {
+                toaster.toast({ title: "RomM Sync", body: result.message || "Failed to delete saves" });
+              }
+            } catch {
+              toaster.toast({ title: "RomM Sync", body: "Failed to delete saves" });
+            } finally {
+              setActionPending(null);
             }
-          } catch {
-            toaster.toast({ title: "RomM Sync", body: "Failed to delete saves" });
-          } finally {
-            setActionPending(null);
-          }
+          })();
         },
       }),
     );
@@ -619,7 +623,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           // override, not the ES-DE default, which is confusing.
           return createElement(MenuItem, {
             key: `core-${c.core_so}`,
-            onClick: () => handleChangeGameCore(c.label),
+            onClick: () => { void handleChangeGameCore(c.label); },
           }, `${c.label}${c.is_default ? " (default)" : ""}${info.activeCoreLabel === c.label ? " \u2713" : ""}`);
         }),
       ),
@@ -630,13 +634,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const showRomMMenu = (e: Event) => {
     showContextMenu(
       createElement(Menu, { label: "RomM Actions" },
-        createElement(MenuItem, { key: "refresh-artwork", onClick: handleRefreshArtwork }, "Refresh Artwork"),
-        createElement(MenuItem, { key: "refresh-metadata", onClick: handleRefreshMetadata }, "Refresh Metadata"),
-        createElement(MenuItem, { key: "sync-saves", onClick: handleSyncSaves }, "Sync Save Files"),
-        createElement(MenuItem, { key: "download-bios", onClick: handleDownloadBios }, "Download BIOS"),
+        createElement(MenuItem, { key: "refresh-artwork", onClick: () => { void handleRefreshArtwork(); } }, "Refresh Artwork"),
+        createElement(MenuItem, { key: "refresh-metadata", onClick: () => { void handleRefreshMetadata(); } }, "Refresh Metadata"),
+        createElement(MenuItem, { key: "sync-saves", onClick: () => { void handleSyncSaves(); } }, "Sync Save Files"),
+        createElement(MenuItem, { key: "download-bios", onClick: () => { void handleDownloadBios(); } }, "Download BIOS"),
         createElement(MenuSeparator, { key: "sep" }),
         createElement(MenuItem, { key: "delete-saves", tone: "destructive", onClick: handleDeleteSaves }, "Delete Local Saves"),
-        createElement(MenuItem, { key: "uninstall", tone: "destructive", onClick: handleUninstall }, "Uninstall"),
+        createElement(MenuItem, { key: "uninstall", tone: "destructive", onClick: () => { void handleUninstall(); } }, "Uninstall"),
       ),
       getEventTarget(e),
     );

@@ -137,15 +137,17 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
           "This will delete every local save file for ROMs on this platform. Any local changes that haven't been uploaded to RomM yet will be lost permanently. Make sure saves are synced first.",
         strOKButtonText: "Delete Save Files",
         strCancelButtonText: "Cancel",
-        onOK: async () => {
-          setActionStatus(`Deleting ${p.name} saves...`);
-          try {
-            const result = await deletePlatformSaves(p.slug);
-            setActionStatus(result.message);
-            globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
-          } catch {
-            setActionStatus("Failed to delete saves");
-          }
+        onOK: () => {
+          void (async () => {
+            setActionStatus(`Deleting ${p.name} saves...`);
+            try {
+              const result = await deletePlatformSaves(p.slug);
+              setActionStatus(result.message);
+              globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
+            } catch {
+              setActionStatus("Failed to delete saves");
+            }
+          })();
         },
       }),
     );
@@ -168,17 +170,21 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     }
     setConfirmRemoveAllRomm(false);
     setStatus("Removing all shortcuts...");
-    const result = await removeAllShortcuts();
-    if (result.app_ids) {
-      for (const appId of result.app_ids) {
-        removeShortcut(appId);
+    try {
+      const result = await removeAllShortcuts();
+      if (result.app_ids) {
+        for (const appId of result.app_ids) {
+          removeShortcut(appId);
+        }
       }
+      if (result.rom_ids?.length) {
+        await reportRemovalResults(result.rom_ids);
+      }
+      await clearAllRomMCollections();
+      setStatus(result.message);
+    } catch {
+      setStatus("Failed to remove shortcuts");
     }
-    if (result.rom_ids?.length) {
-      await reportRemovalResults(result.rom_ids);
-    }
-    await clearAllRomMCollections();
-    setStatus(result.message);
     await refreshPlatforms();
     loadNonSteamApps();
   };
@@ -222,9 +228,9 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             showModal(
               <PlatformActionModal
                 platform={p}
-                onRemoveShortcuts={() => handleRemoveShortcuts(p)}
+                onRemoveShortcuts={() => { void handleRemoveShortcuts(p); }}
                 onDeleteSaves={() => handleDeleteSaves(p)}
-                onDeleteBios={() => handleDeleteBios(p)}
+                onDeleteBios={() => { void handleDeleteBios(p); }}
               />
             );
           }}
@@ -239,7 +245,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     <>
       <PanelSection title="Remove Shortcuts">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={handleRemoveAllRomm}>
+          <ButtonItem layout="below" onClick={() => { void handleRemoveAllRomm(); }}>
             {confirmRemoveAllRomm
               ? <span style={{ color: "#ff8800" }}>Confirm: remove all RomM shortcuts?</span>
               : "Remove All RomM Shortcuts"}
@@ -263,7 +269,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
 
       <PanelSection title="Installed ROMs">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={handleUninstallAll}>
+          <ButtonItem layout="below" onClick={() => { void handleUninstallAll(); }}>
             {confirmUninstall
               ? <span style={{ color: "#ff8800" }}>Confirm: delete all ROM files?</span>
               : "Uninstall All Installed ROMs"}
@@ -471,7 +477,7 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
       ) : (
         <>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={handleRemoveAll}>
+            <ButtonItem layout="below" onClick={() => { void handleRemoveAll(); }}>
               {removeButtonLabel()}
             </ButtonItem>
           </PanelSectionRow>

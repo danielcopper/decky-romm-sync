@@ -234,7 +234,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         }
         strOKButtonText="I am sure"
         strCancelButtonText="Cancel"
-        onOK={() => handleSaveSyncSettingChange({ save_sync_enabled: true })}
+        onOK={() => { void handleSaveSyncSettingChange({ save_sync_enabled: true }); }}
         onCancel={() => {
           setSaveSyncToggleKey((k) => k + 1);
         }}
@@ -406,8 +406,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
           migration={saveSortMigration}
           migrating={saveSortMigrating}
           result={saveSortResult}
-          onMigrate={handleMigrateSaveSort}
-          onDismiss={handleDismissSaveSort}
+          onMigrate={() => { void handleMigrateSaveSort(); }}
+          onDismiss={() => { void handleDismissSaveSort(); }}
         />
       )}
       <ConnectionSection
@@ -421,14 +421,14 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         onUsernameSubmit={handleUsernameSubmit}
         onPasswordSubmit={handlePasswordSubmit}
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
-        onTestConnection={handleTest}
+        onTestConnection={() => { void handleTest(); }}
       />
       <SteamGridDBSection
         sgdbApiKey={sgdbApiKey}
         sgdbStatus={sgdbStatus}
         sgdbVerifying={sgdbVerifying}
-        onSubmitKey={handleSgdbKeySubmit}
-        onVerifyKey={handleSgdbVerify}
+        onSubmitKey={(value: string) => { void handleSgdbKeySubmit(value); }}
+        onVerifyKey={() => { void handleSgdbVerify(); }}
       />
       <SaveSyncSection
         saveSyncSettings={saveSyncSettings}
@@ -437,10 +437,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         syncing={syncing}
         syncStatus={syncStatus}
         onToggleSaveSync={handleToggleSaveSync}
-        onSettingChange={handleSaveSyncSettingChange}
+        onSettingChange={(partial) => { void handleSaveSyncSettingChange(partial); }}
         onDefaultSlotSubmit={handleDefaultSlotSubmit}
         onResetDefaultSlot={handleResetDefaultSlot}
-        onSyncAll={handleSyncAll}
+        onSyncAll={() => { void handleSyncAll(); }}
       />
       {saveSyncEnabled && (devicesLoading || registeredDevices !== null) && (
         <RegisteredDevicesSection
@@ -456,8 +456,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         retroarchFixStatus={retroarchFixStatus}
         loading={loading}
         onModeChange={handleSteamInputModeChange}
-        onApplyMode={handleApplySteamInput}
-        onFixInputDriver={handleFixInputDriver}
+        onApplyMode={() => { void handleApplySteamInput(); }}
+        onFixInputDriver={() => { void handleFixInputDriver(); }}
       />
       <AdvancedSection
         logLevel={logLevel}

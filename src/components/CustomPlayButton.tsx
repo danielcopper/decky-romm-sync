@@ -488,7 +488,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const showDropdownMenu = (e: MouseEvent) => {
     showContextMenu(
       <Menu label="RomM Actions">
-        <MenuItem key="uninstall" tone="destructive" onClick={handleUninstall}>
+        <MenuItem key="uninstall" tone="destructive" onClick={() => { void handleUninstall(); }}>
           Uninstall
         </MenuItem>
       </Menu>,
@@ -612,7 +612,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
             background: baseBg,
             "--romm-pulse-color": pulseColor,
           } as React.CSSProperties}
-          onClick={handleDownload}
+          onClick={() => { void handleDownload(); }}
           disabled={actionPending || isOffline}
         >
           {/* Progress fill bar */}
@@ -723,7 +723,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
             borderRadius: "2px",
             background: "linear-gradient(to right, #d4a72c, #b8941f)",
           }}
-          onClick={handleResolveConflict}
+          onClick={() => { void handleResolveConflict(); }}
         >
           Resolve Conflict
         </DialogButton>
@@ -753,7 +753,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           backgroundPosition: "25%",
           backgroundSize: "330% 100%",
         }}
-        onClick={handlePlay}
+        onClick={() => { void handlePlay(); }}
         onFocus={scrollToTop}
       >
         Play

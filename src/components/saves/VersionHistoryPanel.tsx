@@ -245,7 +245,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
       },
       noFocusRing: false,
       onFocus: scrollFocusedToCenter,
-      onClick: handleToggle,
+      onClick: () => { void handleToggle(); },
     },
       createElement("span", {}, expanded ? "▾" : "▸"),
       createElement("span", {}, expanded && versions !== null

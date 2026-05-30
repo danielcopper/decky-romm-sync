@@ -150,7 +150,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
               <PanelSectionRow key={`cancel-${item.rom_id}`}>
                 <ButtonItem
                   layout="below"
-                  onClick={() => handleCancel(item.rom_id)}
+                  onClick={() => { void handleCancel(item.rom_id); }}
                 >
                   Cancel {item.rom_name}
                 </ButtonItem>

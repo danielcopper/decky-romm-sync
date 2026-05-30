@@ -413,21 +413,23 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       await refreshCoverArtInBackground(romId, () => cancelled, setState);
     };
 
-    const onDataChanged = async (e: Event) => {
-      try {
-        const detail = (e as CustomEvent).detail;
-        if (!romIdRef.current) return;
-        switch (detail?.type) {
-          case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
-          case "save_sync": await handleSaveSyncChange(detail); break;
-          case "bios": await handleBiosChange(detail); break;
-          case "core_changed": await handleCoreChange(); break;
-          case "metadata": await handleMetadataChange(detail); break;
-          case "cover_refreshed": await handleCoverRefreshed(detail); break;
+    const onDataChanged = (e: Event) => {
+      void (async () => {
+        try {
+          const detail = (e as CustomEvent).detail;
+          if (!romIdRef.current) return;
+          switch (detail?.type) {
+            case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
+            case "save_sync": await handleSaveSyncChange(detail); break;
+            case "bios": await handleBiosChange(detail); break;
+            case "core_changed": await handleCoreChange(); break;
+            case "metadata": await handleMetadataChange(detail); break;
+            case "cover_refreshed": await handleCoverRefreshed(detail); break;
+          }
+        } catch (err) {
+          debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`);
         }
-      } catch (err) {
-        debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`);
-      }
+      })();
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
@@ -497,7 +499,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         if (!state.romId) return;
         const result = await getSaveSlots(state.romId);
         if (cancelled) return;
-        applyLoadSlotsResult<PanelState>(result, setState, slotsLoadedRef, debugLog);
+        applyLoadSlotsResult<PanelState>(result, setState, slotsLoadedRef, (msg) => { void debugLog(msg); });
       } catch (e) {
         debugLog(`Failed to load save slots: ${e}`);
         if (!cancelled) {

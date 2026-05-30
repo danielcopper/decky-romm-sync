@@ -222,7 +222,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
             />
           </div>
           <DialogButton
-            onClick={runSearch}
+            onClick={() => { void runSearch(); }}
             onFocus={scrollToTop}
             disabled={searching}
             style={{ width: "120px", height: "40px" }}
@@ -260,7 +260,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
                 thumbUrl={game.thumb_url}
                 title={game.name}
                 subtitle={game.release_year == null ? undefined : String(game.release_year)}
-                onSelect={() => applySelection(game.id)}
+                onSelect={() => { void applySelection(game.id); }}
                 onFocus={scrollFocusedToCenter}
                 disabled={applying}
               />
