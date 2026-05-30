@@ -11,6 +11,7 @@ import {
   type WizardSetupDeps,
 } from "../utils/saveSetup";
 import type { SaveSetupInfo } from "../types";
+import { detach } from "../utils/detach";
 
 // Local @decky/ui re-mock — gives ConfirmModal an inline OK button so RTL can
 // render-and-click the in-tree CustomSlotModal (which owns its own input state
@@ -41,7 +42,7 @@ vi.mock("@decky/ui", () => {
     createElement("div", { "data-testid": "confirm-modal" },
       createElement("button", {
         "data-testid": "confirm-modal-ok",
-        onClick: () => { void p.onOK?.(); },
+        onClick: () => { detach(Promise.resolve(p.onOK?.())); },
       }, "OK"),
       p.children as never,
     );

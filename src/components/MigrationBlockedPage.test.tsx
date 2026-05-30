@@ -476,8 +476,7 @@ describe("useMigrationStatus hook", () => {
     // `not.toThrow()` pattern passed vacuously under React 19's silent
     // no-op-on-unmounted-setState.
     const unsubSpy = vi.fn();
-    vi.spyOn(migrationStore, "onMigrationChange").mockImplementation((cb) => {
-      void cb;
+    vi.spyOn(migrationStore, "onMigrationChange").mockImplementation((_cb) => {
       return unsubSpy;
     });
 

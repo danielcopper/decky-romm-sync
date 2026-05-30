@@ -1,4 +1,5 @@
 import { callable } from "@decky/api";
+import { detach } from "../utils/detach";
 import type { PluginSettings, SyncStats, SyncProgress, DownloadItem, InstalledRom, PlatformSyncSetting, CollectionSyncSetting, CollectionKind, RegistryPlatform, FirmwareStatus, FirmwareDownloadResult, BiosStatus, BiosFileStatus, RomMetadata, SaveSyncSettings, SaveStatus, SaveSyncDisplay, SyncConflict, AvailableCore, RommErrorCode, SyncPreview, AchievementSummary, AchievementList, AchievementProgress, SaveSlotSummary, SaveSetupInfo, SlotSavesResponse, SwitchSlotResponse, LaunchVerdict, SlotDeleteInfo, DeleteSlotResult, MigrationStatus, MigrationResult, SaveSortMigrationStatus, RollbackStatus, ListFileVersionsResult, ListDevicesResponse } from "../types";
 
 export interface BackendResult {
@@ -128,9 +129,9 @@ export const setGameCore = callable<[string, string, string], { success: boolean
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 export const debugLog = callable<[string], void>("debug_log");
 const frontendLog = callable<[string, string], void>("frontend_log");
-export const logInfo = (msg: string) => { void frontendLog("info", msg); };
-export const logWarn = (msg: string) => { void frontendLog("warn", msg); };
-export const logError = (msg: string) => { void frontendLog("error", msg); };
+export const logInfo = (msg: string) => { detach(frontendLog("info", msg)); };
+export const logWarn = (msg: string) => { detach(frontendLog("warn", msg)); };
+export const logError = (msg: string) => { detach(frontendLog("error", msg)); };
 export const fixRetroarchInputDriver = callable<[], { success: boolean; message: string }>("fix_retroarch_input_driver");
 export const getRomMetadata = callable<[number], RomMetadata>("get_rom_metadata");
 export const getAllMetadataCache = callable<[], Record<string, RomMetadata>>("get_all_metadata_cache");

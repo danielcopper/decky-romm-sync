@@ -39,6 +39,7 @@ import { SaveSyncSection } from "./settings/SaveSyncSection";
 import { RegisteredDevicesSection } from "./settings/RegisteredDevicesSection";
 import { ControllerSection } from "./settings/ControllerSection";
 import { AdvancedSection } from "./settings/AdvancedSection";
+import { detach } from "../utils/detach";
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -234,7 +235,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         }
         strOKButtonText="I am sure"
         strCancelButtonText="Cancel"
-        onOK={() => { void handleSaveSyncSettingChange({ save_sync_enabled: true }); }}
+        onOK={() => { detach(handleSaveSyncSettingChange({ save_sync_enabled: true })); }}
         onCancel={() => {
           setSaveSyncToggleKey((k) => k + 1);
         }}
@@ -243,7 +244,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   };
 
   const handleDisableSaveSync = () => {
-    void handleSaveSyncSettingChange({ save_sync_enabled: false });
+    detach(handleSaveSyncSettingChange({ save_sync_enabled: false }));
   };
 
   const handleToggleSaveSync = (value: boolean) => {
@@ -262,7 +263,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         strCancelButtonText="Cancel"
         onOK={() => {
           setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: null } : prev);
-          void handleSaveSyncSettingChange({ default_slot: null });
+          detach(handleSaveSyncSettingChange({ default_slot: null }));
         }}
       />,
     );
@@ -271,15 +272,15 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // --- Connection handlers wired into ConnectionSection ---
   const handleUrlSubmit = (value: string) => {
     setUrl(value);
-    void autoSaveSettings("url", value);
+    detach(autoSaveSettings("url", value));
   };
   const handleUsernameSubmit = (value: string) => {
     setUsername(value);
-    void autoSaveSettings("username", value);
+    detach(autoSaveSettings("username", value));
   };
   const handlePasswordSubmit = (value: string) => {
     setPassword(value);
-    void autoSaveSettings("password", value);
+    detach(autoSaveSettings("password", value));
   };
   const handleAllowInsecureSslChange = (val: boolean) => {
     setAllowInsecureSsl(val);
@@ -317,20 +318,20 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     const trimmed = value.trim();
     if (trimmed) {
       setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: trimmed } : prev);
-      void handleSaveSyncSettingChange({ default_slot: trimmed });
+      detach(handleSaveSyncSettingChange({ default_slot: trimmed }));
     } else {
       confirmClearDefaultSlot();
     }
   };
   const handleResetDefaultSlot = () => {
     setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: "default" } : prev);
-    void handleSaveSyncSettingChange({ default_slot: "default" });
+    detach(handleSaveSyncSettingChange({ default_slot: "default" }));
   };
 
   // --- Controller handlers ---
   const handleSteamInputModeChange = (mode: string) => {
     setSteamInputMode(mode);
-    void saveSteamInputSetting(mode);
+    detach(saveSteamInputSetting(mode));
     setSteamInputStatus("");
   };
   const handleApplySteamInput = async () => {
@@ -358,7 +359,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // --- Advanced handlers ---
   const handleLogLevelChange = (level: string) => {
     setLogLevel(level);
-    void saveLogLevel(level);
+    detach(saveLogLevel(level));
   };
 
   // --- Save sort migration handlers ---
@@ -406,8 +407,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
           migration={saveSortMigration}
           migrating={saveSortMigrating}
           result={saveSortResult}
-          onMigrate={() => { void handleMigrateSaveSort(); }}
-          onDismiss={() => { void handleDismissSaveSort(); }}
+          onMigrate={() => { detach(handleMigrateSaveSort()); }}
+          onDismiss={() => { detach(handleDismissSaveSort()); }}
         />
       )}
       <ConnectionSection
@@ -421,14 +422,14 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         onUsernameSubmit={handleUsernameSubmit}
         onPasswordSubmit={handlePasswordSubmit}
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
-        onTestConnection={() => { void handleTest(); }}
+        onTestConnection={() => { detach(handleTest()); }}
       />
       <SteamGridDBSection
         sgdbApiKey={sgdbApiKey}
         sgdbStatus={sgdbStatus}
         sgdbVerifying={sgdbVerifying}
-        onSubmitKey={(value: string) => { void handleSgdbKeySubmit(value); }}
-        onVerifyKey={() => { void handleSgdbVerify(); }}
+        onSubmitKey={(value: string) => { detach(handleSgdbKeySubmit(value)); }}
+        onVerifyKey={() => { detach(handleSgdbVerify()); }}
       />
       <SaveSyncSection
         saveSyncSettings={saveSyncSettings}
@@ -437,10 +438,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         syncing={syncing}
         syncStatus={syncStatus}
         onToggleSaveSync={handleToggleSaveSync}
-        onSettingChange={(partial) => { void handleSaveSyncSettingChange(partial); }}
+        onSettingChange={(partial) => { detach(handleSaveSyncSettingChange(partial)); }}
         onDefaultSlotSubmit={handleDefaultSlotSubmit}
         onResetDefaultSlot={handleResetDefaultSlot}
-        onSyncAll={() => { void handleSyncAll(); }}
+        onSyncAll={() => { detach(handleSyncAll()); }}
       />
       {saveSyncEnabled && (devicesLoading || registeredDevices !== null) && (
         <RegisteredDevicesSection
@@ -456,8 +457,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         retroarchFixStatus={retroarchFixStatus}
         loading={loading}
         onModeChange={handleSteamInputModeChange}
-        onApplyMode={() => { void handleApplySteamInput(); }}
-        onFixInputDriver={() => { void handleFixInputDriver(); }}
+        onApplyMode={() => { detach(handleApplySteamInput()); }}
+        onFixInputDriver={() => { detach(handleFixInputDriver()); }}
       />
       <AdvancedSection
         logLevel={logLevel}

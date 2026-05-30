@@ -31,6 +31,7 @@ import { scrollToTop } from "../utils/scrollHelpers";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
 import type { RegistryPlatform } from "../types";
+import { detach } from "../utils/detach";
 
 const DEFAULT_WHITELIST_PATTERNS: string[] = [
   "retrodeck", "moonlight", "chiaki", "chrome", "chromium",
@@ -138,7 +139,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         strOKButtonText: "Delete Save Files",
         strCancelButtonText: "Cancel",
         onOK: () => {
-          void (async () => {
+          detach((async () => {
             setActionStatus(`Deleting ${p.name} saves...`);
             try {
               const result = await deletePlatformSaves(p.slug);
@@ -147,7 +148,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             } catch {
               setActionStatus("Failed to delete saves");
             }
-          })();
+          })());
         },
       }),
     );
@@ -228,9 +229,9 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             showModal(
               <PlatformActionModal
                 platform={p}
-                onRemoveShortcuts={() => { void handleRemoveShortcuts(p); }}
+                onRemoveShortcuts={() => { detach(handleRemoveShortcuts(p)); }}
                 onDeleteSaves={() => handleDeleteSaves(p)}
-                onDeleteBios={() => { void handleDeleteBios(p); }}
+                onDeleteBios={() => { detach(handleDeleteBios(p)); }}
               />
             );
           }}
@@ -245,7 +246,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     <>
       <PanelSection title="Remove Shortcuts">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => { void handleRemoveAllRomm(); }}>
+          <ButtonItem layout="below" onClick={() => { detach(handleRemoveAllRomm()); }}>
             {confirmRemoveAllRomm
               ? <span style={{ color: "#ff8800" }}>Confirm: remove all RomM shortcuts?</span>
               : "Remove All RomM Shortcuts"}
@@ -269,7 +270,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
 
       <PanelSection title="Installed ROMs">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => { void handleUninstallAll(); }}>
+          <ButtonItem layout="below" onClick={() => { detach(handleUninstallAll()); }}>
             {confirmUninstall
               ? <span style={{ color: "#ff8800" }}>Confirm: delete all ROM files?</span>
               : "Uninstall All Installed ROMs"}
@@ -477,7 +478,7 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
       ) : (
         <>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => { void handleRemoveAll(); }}>
+            <ButtonItem layout="below" onClick={() => { detach(handleRemoveAll()); }}>
               {removeButtonLabel()}
             </ButtonItem>
           </PanelSectionRow>

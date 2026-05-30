@@ -1,5 +1,6 @@
 import type { RomMetadata } from "../types";
 import { debugLog, logInfo } from "../api/backend";
+import { detach } from "../utils/detach";
 
 // Module-level state
 let metadataCache: Record<string, RomMetadata> = {};
@@ -99,7 +100,7 @@ export function unregisterMetadataPatches() {
 export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updateLastPlayed = true): boolean {
   const overview = appStore.GetAppOverviewByAppID(appId);
   if (!overview) {
-    void debugLog(`updatePlaytimeDisplay: appId=${appId} overview=null, skipping`);
+    detach(debugLog(`updatePlaytimeDisplay: appId=${appId} overview=null, skipping`));
     return false;
   }
 
@@ -114,7 +115,7 @@ export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updat
       overview.rt_last_time_played = Math.floor(Date.now() / 1000);
     }
   });
-  void debugLog(`updatePlaytimeDisplay: appId=${appId} wrote ${totalMinutes}min (was ${prevMinutes}), rt_last_time_played was ${prevLastPlayed}`);
+  detach(debugLog(`updatePlaytimeDisplay: appId=${appId} wrote ${totalMinutes}min (was ${prevMinutes}), rt_last_time_played was ${prevLastPlayed}`));
   return true;
 }
 
@@ -159,7 +160,7 @@ export async function applyAllPlaytime(
     }
   }
 
-  void debugLog(`applyAllPlaytime: ${Object.keys(playtimeMap).length} entries in playtimeMap, ${pending.length} with appId and >0 seconds`);
+  detach(debugLog(`applyAllPlaytime: ${Object.keys(playtimeMap).length} entries in playtimeMap, ${pending.length} with appId and >0 seconds`));
 
   if (pending.length === 0) return;
 
@@ -173,12 +174,12 @@ export async function applyAllPlaytime(
     pending = tryWritePlaytime(pending);
 
     if (pending.length > 0 && attempt < delays.length - 1) {
-      void debugLog(`applyAllPlaytime: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`);
+      detach(debugLog(`applyAllPlaytime: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`));
     }
   }
 
   if (pending.length > 0) {
-    void debugLog(`applyAllPlaytime: ${pending.length} apps still unavailable in appStore after all retries`);
+    detach(debugLog(`applyAllPlaytime: ${pending.length} apps still unavailable in appStore after all retries`));
   }
 }
 

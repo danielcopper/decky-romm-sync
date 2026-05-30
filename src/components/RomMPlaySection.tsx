@@ -95,6 +95,7 @@ interface InfoState {
 import { setRommConnectionState, setVersionError } from "../utils/connectionState";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
+import { detach } from "../utils/detach";
 
 /** Cache-first initial render. Resolves the cached game detail for this appId,
  *  pushes it into InfoState, and fires the background refresh tasks (active
@@ -174,7 +175,7 @@ async function loadCached(
       refreshBiosInBackground(romId, cancelled, setter);
     }
   } catch (e) {
-    void debugLog(`RomMPlaySection: loadCached error: ${e}`);
+    detach(debugLog(`RomMPlaySection: loadCached error: ${e}`));
   }
 }
 
@@ -218,7 +219,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   useEffect(() => {
     let cancelled = false;
 
-    void loadCached(appId, () => cancelled, romIdRef, setInfo);
+    detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
@@ -270,7 +271,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     };
 
     const onDataChanged = (e: Event) => {
-      void (async () => {
+      detach((async () => {
         try {
           const detail = (e as CustomEvent).detail;
           switch (detail?.type) {
@@ -279,9 +280,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             case "save_sync": await handleSaveSyncChange(detail); break;
           }
         } catch (err) {
-          void debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
+          detach(debugLog(`RomMPlaySection: onDataChanged error: ${err}`));
         }
-      })();
+      })());
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
@@ -309,7 +310,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
         setInfo((prev) => ({ ...prev, saveSyncStatus: ss, saveSyncLabel: sl, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
       } catch (e) {
-        void debugLog(`RomMPlaySection: background save check error: ${e}`);
+        detach(debugLog(`RomMPlaySection: background save check error: ${e}`));
       }
     }
 
@@ -345,7 +346,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         }
       }
     };
-    void check();
+    detach(check());
     return () => { cancelled = true; };
   }, [info.saveSyncEnabled]);
 
@@ -376,7 +377,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // render the refreshed image.
       const coverResult = await refreshCoverArtwork(romId).catch(
         (e): { success: boolean; reason?: string; message: string; cover_path?: string } => {
-          void debugLog(`refreshCoverArtwork rejected: ${e}`);
+          detach(debugLog(`refreshCoverArtwork rejected: ${e}`));
           return { success: false, reason: "exception", message: String(e) };
         },
       );
@@ -386,14 +387,14 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           detail: { type: "cover_refreshed", rom_id: romId },
         }));
       } else {
-        void debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
+        detach(debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`));
       }
 
       // Step 2: resolve which SGDB game id to use. The backend either picks
       // one automatically (RomM/IGDB) or hands back manual candidates.
       const resolution = await getSgdbResolution(romId).catch(
         (e): null => {
-          void debugLog(`getSgdbResolution rejected: ${e}`);
+          detach(debugLog(`getSgdbResolution rejected: ${e}`));
           return null;
         },
       );
@@ -542,7 +543,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         strOKButtonText: "Delete",
         strCancelButtonText: "Cancel",
         onOK: () => {
-          void (async () => {
+          detach((async () => {
             setActionPending("deletesaves");
             try {
               const result = await deleteLocalSaves(romId);
@@ -559,7 +560,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             } finally {
               setActionPending(null);
             }
-          })();
+          })());
         },
       }),
     );
@@ -568,16 +569,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const handleChangeGameCore = async (coreLabel: string) => {
     if (!info.platformSlug || !info.romFile) return;
     const romPath = `./${info.romFile}`;
-    void debugLog(`handleChangeGameCore: slug=${info.platformSlug} romPath=${romPath} coreLabel=${coreLabel}`);
+    detach(debugLog(`handleChangeGameCore: slug=${info.platformSlug} romPath=${romPath} coreLabel=${coreLabel}`));
     try {
       const result = await setGameCore(info.platformSlug, romPath, coreLabel);
-      void debugLog(`handleChangeGameCore: result=${JSON.stringify(result)}`);
+      detach(debugLog(`handleChangeGameCore: result=${JSON.stringify(result)}`));
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `Core set to ${coreLabel}` });
         // Use bios_status from the set_game_core response directly (avoids cache staleness).
         // For pre-computed level/label, re-fetch via getBiosStatus which ships them.
         const bios = result.bios_status;
-        void debugLog(`handleChangeGameCore: bios active_core_label=${bios?.active_core_label}`);
+        detach(debugLog(`handleChangeGameCore: bios active_core_label=${bios?.active_core_label}`));
         if (bios && info.romId) {
           const newLabel = bios.active_core_label ?? null;
           const cores = bios.available_cores ?? info.availableCores;
@@ -623,7 +624,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           // override, not the ES-DE default, which is confusing.
           return createElement(MenuItem, {
             key: `core-${c.core_so}`,
-            onClick: () => { void handleChangeGameCore(c.label); },
+            onClick: () => { detach(handleChangeGameCore(c.label)); },
           }, `${c.label}${c.is_default ? " (default)" : ""}${info.activeCoreLabel === c.label ? " \u2713" : ""}`);
         }),
       ),
@@ -634,13 +635,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const showRomMMenu = (e: Event) => {
     showContextMenu(
       createElement(Menu, { label: "RomM Actions" },
-        createElement(MenuItem, { key: "refresh-artwork", onClick: () => { void handleRefreshArtwork(); } }, "Refresh Artwork"),
-        createElement(MenuItem, { key: "refresh-metadata", onClick: () => { void handleRefreshMetadata(); } }, "Refresh Metadata"),
-        createElement(MenuItem, { key: "sync-saves", onClick: () => { void handleSyncSaves(); } }, "Sync Save Files"),
-        createElement(MenuItem, { key: "download-bios", onClick: () => { void handleDownloadBios(); } }, "Download BIOS"),
+        createElement(MenuItem, { key: "refresh-artwork", onClick: () => { detach(handleRefreshArtwork()); } }, "Refresh Artwork"),
+        createElement(MenuItem, { key: "refresh-metadata", onClick: () => { detach(handleRefreshMetadata()); } }, "Refresh Metadata"),
+        createElement(MenuItem, { key: "sync-saves", onClick: () => { detach(handleSyncSaves()); } }, "Sync Save Files"),
+        createElement(MenuItem, { key: "download-bios", onClick: () => { detach(handleDownloadBios()); } }, "Download BIOS"),
         createElement(MenuSeparator, { key: "sep" }),
         createElement(MenuItem, { key: "delete-saves", tone: "destructive", onClick: handleDeleteSaves }, "Delete Local Saves"),
-        createElement(MenuItem, { key: "uninstall", tone: "destructive", onClick: () => { void handleUninstall(); } }, "Uninstall"),
+        createElement(MenuItem, { key: "uninstall", tone: "destructive", onClick: () => { detach(handleUninstall()); } }, "Uninstall"),
       ),
       getEventTarget(e),
     );

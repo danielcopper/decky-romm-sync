@@ -5,6 +5,7 @@ import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { applyWizardInitialSetupResult, applyWizardRetrySetupResult } from "../utils/saveSetup";
 import { formatBytes } from "../utils/formatters";
 import type { SaveSetupInfo } from "../types";
+import { detach } from "../utils/detach";
 
 interface SlotSetupWizardProps {
   romId: number;
@@ -111,7 +112,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       }
     };
 
-    void fetchInfo();
+    detach(fetchInfo());
     return () => { cancelled = true; };
   }, [romId]);
 
@@ -243,7 +244,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           <DialogButton
             className="romm-wizard-btn"
             style={btnStyle}
-            onClick={() => { void handleConfirm(s.slot ?? defaultSlot); }}
+            onClick={() => { detach(handleConfirm(s.slot ?? defaultSlot)); }}
             onFocus={scrollFocusedToCenter}
           >
             Track
@@ -273,7 +274,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
         <DialogButton
           className="romm-wizard-btn romm-wizard-btn-primary"
           style={btnPrimaryStyle}
-          onClick={() => { void handleConfirm(defaultSlot); }}
+          onClick={() => { detach(handleConfirm(defaultSlot)); }}
           onFocus={scrollFocusedToCenter}
         >
           Use slot &lsquo;{defaultSlot}&rsquo;
@@ -293,14 +294,14 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             createElement(CustomSlotModal, {
               onSubmit: (trimmed: string) => {
                 if (trimmed) {
-                  void handleConfirm(trimmed);
+                  detach(handleConfirm(trimmed));
                 } else {
                   // Legacy mode
                   showModal(
                     createElement(ConfirmModal, {
                       strTitle: "Use Legacy Mode?",
                       strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
-                      onOK: () => { void handleConfirm(""); },
+                      onOK: () => { detach(handleConfirm("")); },
                     }),
                   );
                 }

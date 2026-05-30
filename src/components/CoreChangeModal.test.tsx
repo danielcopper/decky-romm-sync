@@ -3,6 +3,7 @@ import { render, fireEvent } from "@testing-library/react";
 import { cloneElement, createElement, type ReactElement } from "react";
 import { showModal } from "@decky/ui";
 import { showCoreChangeModal } from "./CoreChangeModal";
+import { detach } from "../utils/detach";
 
 // Per-file mock for @decky/ui. The global stub renders ModalRoot as a
 // pass-through <div> but discards its `closeModal` prop. Here we capture
@@ -106,7 +107,7 @@ describe("CoreChangeModal", () => {
   describe("CoreChangeModalContent — rendering", () => {
     it("renders title, label arrow, and both warning blocks", () => {
       // Drive via showCoreChangeModal so we don't depend on the non-exported FC.
-      void showCoreChangeModal("CoreA", "CoreB");
+      detach(showCoreChangeModal("CoreA", "CoreB"));
       const { container } = render(lastShownElement());
 
       expect(container.textContent).toContain("Emulator Core Changed");

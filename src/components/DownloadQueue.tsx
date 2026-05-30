@@ -10,6 +10,7 @@ import { getDownloadQueue, cancelDownload } from "../api/backend";
 import { getDownloadState, setDownloads } from "../utils/downloadStore";
 import { formatBytes } from "../utils/formatters";
 import { scrollToTop } from "../utils/scrollHelpers";
+import { detach } from "../utils/detach";
 import type { DownloadItem } from "../types";
 
 interface DownloadQueueProps {
@@ -150,7 +151,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
               <PanelSectionRow key={`cancel-${item.rom_id}`}>
                 <ButtonItem
                   layout="below"
-                  onClick={() => { void handleCancel(item.rom_id); }}
+                  onClick={() => { detach(handleCancel(item.rom_id)); }}
                 >
                   Cancel {item.rom_name}
                 </ButtonItem>

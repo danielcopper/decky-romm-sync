@@ -82,8 +82,7 @@ describe("useVersionError hook", () => {
     // fails this test, where the prior `not.toThrow()` pattern passed
     // vacuously under React 19's silent no-op-on-unmounted-setState.
     const unsubSpy = vi.fn();
-    vi.spyOn(connectionState, "onVersionErrorChange").mockImplementation((cb) => {
-      void cb;
+    vi.spyOn(connectionState, "onVersionErrorChange").mockImplementation((_cb) => {
       return unsubSpy;
     });
 

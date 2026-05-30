@@ -20,6 +20,7 @@ import {
 } from "../utils/migrationStore";
 import { MigrationConflictModal } from "./MigrationConflictModal";
 import { scrollToTop } from "../utils/scrollHelpers";
+import { detach } from "../utils/detach";
 
 /**
  * Subscribe to migration state changes.
@@ -49,7 +50,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
         showModal(
           <MigrationConflictModal
             conflictCount={result.conflict_count ?? 0}
-            onChoice={(s) => { void runMigration(s); }}
+            onChoice={(s) => { detach(runMigration(s)); }}
           />,
         );
         return;
@@ -68,7 +69,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
     setMigrating(false);
   };
 
-  const handleMigrate = () => { void runMigration(null); };
+  const handleMigrate = () => { detach(runMigration(null)); };
 
   const handleDismiss = () => {
     showModal(
@@ -82,7 +83,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
         strOKButtonText="Dismiss"
         strCancelButtonText="Cancel"
         onOK={() => {
-          void (async () => {
+          detach((async () => {
             try {
               const result = await dismissRetrodeckMigration();
               if (result.success) {
@@ -95,7 +96,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
             } catch {
               setMigrateResult("Dismiss failed");
             }
-          })();
+          })());
         }}
       />,
     );

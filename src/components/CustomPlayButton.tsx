@@ -44,6 +44,7 @@ import { handleButtonDownloadFailure } from "../utils/downloadFailure";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { showSyncConflictModal } from "./SyncConflictModal";
 import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent, SyncConflict } from "../types";
+import { detach } from "../utils/detach";
 
 type PlayButtonState = "loading" | "not_romm" | "download" | "conflict" | "syncing" | "play" | "launching" | "dl_complete" | "uninstalling";
 
@@ -135,10 +136,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     async function init() {
       try {
         const cached = await getCachedGameDetail(appId);
-        void debugLog(`CustomPlayButton init: appId=${appId} cached.found=${cached.found} cancelled=${cancelled}`);
+        detach(debugLog(`CustomPlayButton init: appId=${appId} cached.found=${cached.found} cancelled=${cancelled}`));
         if (cancelled) return;
         if (!cached.found) {
-          void debugLog(`CustomPlayButton: -> not_romm (not in cache)`);
+          detach(debugLog(`CustomPlayButton: -> not_romm (not in cache)`));
           setState("not_romm");
           return;
         }
@@ -152,14 +153,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           // Check for conflicts from cached save status
           const hasConflict = hasAnySaveConflict(cached.save_status);
           if (hasConflict) {
-            void debugLog(`CustomPlayButton: -> conflict (from cache)`);
+            detach(debugLog(`CustomPlayButton: -> conflict (from cache)`));
             setState("conflict");
           } else {
-            void debugLog(`CustomPlayButton: -> play`);
+            detach(debugLog(`CustomPlayButton: -> play`));
             setState("play");
           }
         } else {
-          void debugLog(`CustomPlayButton: -> download`);
+          detach(debugLog(`CustomPlayButton: -> download`));
           setState("download");
         }
       } catch (e) {
@@ -170,7 +171,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       }
     }
 
-    void init();
+    detach(init());
     return () => { cancelled = true; };
   }, [appId]);
 
@@ -346,7 +347,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
       ]);
 
-      void debugLog(`CustomPlayButton: preLaunchSync result: synced=${result.synced} conflicts=${result.conflicts?.length ?? 0} success=${result.success}`);
+      detach(debugLog(`CustomPlayButton: preLaunchSync result: synced=${result.synced} conflicts=${result.conflicts?.length ?? 0} success=${result.success}`));
 
       if (result.conflicts && result.conflicts.length > 0) {
         const conflictResult = await handleConflicts(result.conflicts);
@@ -359,7 +360,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       }
 
       if (!result.success && result.errors && result.errors.length > 0) {
-        void debugLog(`CustomPlayButton: pre-launch sync errors: ${result.errors.join(", ")}`);
+        detach(debugLog(`CustomPlayButton: pre-launch sync errors: ${result.errors.join(", ")}`));
         const proceed = await confirmFallbackLaunch();
         return proceed ? "proceed" : "abort";
       }
@@ -368,7 +369,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       }
       return "proceed";
     } catch (e) {
-      void debugLog(`CustomPlayButton: pre-launch sync failed: ${e}`);
+      detach(debugLog(`CustomPlayButton: pre-launch sync failed: ${e}`));
       const proceed = await confirmFallbackLaunch();
       return proceed ? "proceed" : "abort";
     }
@@ -386,7 +387,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     if (state === "syncing" || state === "launching") return; // debounce
     const overview = appStore.GetAppOverviewByAppID(appId);
     const gameId = overview?.GetGameID?.() ?? String(appId);
-    void debugLog(`CustomPlayButton: handlePlay appId=${appId} gameId=${gameId}`);
+    detach(debugLog(`CustomPlayButton: handlePlay appId=${appId} gameId=${gameId}`));
 
     // Pre-launch save sync
     if (romId) {
@@ -444,7 +445,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
       setState("play");
     } catch (e) {
-      void debugLog(`CustomPlayButton: resolve conflict failed: ${e}`);
+      detach(debugLog(`CustomPlayButton: resolve conflict failed: ${e}`));
       toaster.toast({ title: "RomM Sync", body: "Couldn't reach server to resolve conflict" });
       setState("conflict");
     }
@@ -467,7 +468,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
   const handleUninstall = async () => {
     if (!romId) return;
-    void debugLog(`CustomPlayButton: uninstalling romId=${romId}`);
+    detach(debugLog(`CustomPlayButton: uninstalling romId=${romId}`));
     try {
       const result = await removeRom(romId);
       if (result.success) {
@@ -488,7 +489,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const showDropdownMenu = (e: MouseEvent) => {
     showContextMenu(
       <Menu label="RomM Actions">
-        <MenuItem key="uninstall" tone="destructive" onClick={() => { void handleUninstall(); }}>
+        <MenuItem key="uninstall" tone="destructive" onClick={() => { detach(handleUninstall()); }}>
           Uninstall
         </MenuItem>
       </Menu>,
@@ -498,10 +499,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
   // Don't render for non-RomM games
   if (state === "not_romm" || state === "loading") {
-    void debugLog(`CustomPlayButton: returning null (state=${state})`);
+    detach(debugLog(`CustomPlayButton: returning null (state=${state})`));
     return null;
   }
-  void debugLog(`CustomPlayButton: rendering state=${state}`);
+  detach(debugLog(`CustomPlayButton: rendering state=${state}`));
 
   // Dropdown arrow button style
   const dropdownArrowStyle: React.CSSProperties = {
@@ -612,7 +613,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
             background: baseBg,
             "--romm-pulse-color": pulseColor,
           } as React.CSSProperties}
-          onClick={() => { void handleDownload(); }}
+          onClick={() => { detach(handleDownload()); }}
           disabled={actionPending || isOffline}
         >
           {/* Progress fill bar */}
@@ -723,7 +724,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
             borderRadius: "2px",
             background: "linear-gradient(to right, #d4a72c, #b8941f)",
           }}
-          onClick={() => { void handleResolveConflict(); }}
+          onClick={() => { detach(handleResolveConflict()); }}
         >
           Resolve Conflict
         </DialogButton>
@@ -753,7 +754,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           backgroundPosition: "25%",
           backgroundSize: "330% 100%",
         }}
-        onClick={() => { void handlePlay(); }}
+        onClick={() => { detach(handlePlay()); }}
         onFocus={scrollToTop}
       >
         Play

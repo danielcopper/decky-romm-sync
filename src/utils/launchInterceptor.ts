@@ -10,13 +10,14 @@ import { isRomMAppId } from "../patches/gameDetailPatch";
 import { evaluateLaunch, refreshMigrationState, logInfo, logError } from "../api/backend";
 import { getMigrationState, setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
+import { detach } from "./detach";
 
 let gameActionHook: { unregister: () => void } | null = null;
 
 export function registerLaunchInterceptor(): void {
   gameActionHook = SteamClient.Apps.RegisterForGameActionStart(
     (gameActionId: number, appIdStr: string, action: string, _launchSource: number) => {
-      void (async () => {
+      detach((async () => {
       if (action !== "LaunchApp") return;
 
       const appId = Number.parseInt(appIdStr, 10);
@@ -69,7 +70,7 @@ export function registerLaunchInterceptor(): void {
         logError(`Launch interceptor error: ${e}`);
         // On error, don't block the launch.
       }
-      })();
+      })());
     },
   );
 

@@ -39,6 +39,7 @@ import { setVersionError } from "../utils/connectionState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import type { SyncProgress, SyncStage, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem, MigrationStatus } from "../types";
+import { detach } from "../utils/detach";
 
 type Page = "settings" | "library" | "data" | "downloads";
 
@@ -363,7 +364,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
-                onClick={() => { void handleApply(); }}
+                onClick={() => { detach(handleApply()); }}
                 // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
                 onFocus={scrollToTop}
               >
@@ -371,7 +372,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </ButtonItem>
             </PanelSectionRow>
             <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => { void handleDismiss(); }}>
+              <ButtonItem layout="below" onClick={() => { detach(handleDismiss()); }}>
                 Cancel
               </ButtonItem>
             </PanelSectionRow>
@@ -380,7 +381,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              onClick={() => { void handleDismiss(); }}
+              onClick={() => { detach(handleDismiss()); }}
               // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
               onFocus={scrollToTop}
             >
@@ -435,7 +436,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={() => { void handleCancel(); }}
+            onClick={() => { detach(handleCancel()); }}
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
           >
@@ -450,7 +451,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={() => { void handleSync(); }}
+            onClick={() => { detach(handleSync()); }}
             disabled={loading || connected === false}
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
@@ -472,7 +473,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               layout="below"
               description="Clear cached sync data to re-fetch all platforms"
               onClick={() => {
-                void (async () => {
+                detach((async () => {
                   try {
                     const result = await clearSyncCache();
                     setStatus(result.message);
@@ -482,7 +483,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                   if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
                   statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
                   getSyncStats().then(setStats).catch((e) => logError(`Failed to refresh sync stats: ${e}`));
-                })();
+                })());
               }}
               disabled={loading || connected === false}
             >
@@ -540,7 +541,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                     strOKButtonText="Apply Fix"
                     strCancelButtonText="Cancel"
                     onOK={() => {
-                      void (async () => {
+                      detach((async () => {
                         try {
                           const result = await fixRetroarchInputDriver();
                           if (result.success) {
@@ -549,7 +550,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                         } catch {
                           // ignore
                         }
-                      })();
+                      })());
                     }}
                   />
                 )}

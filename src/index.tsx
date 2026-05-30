@@ -26,6 +26,7 @@ import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import { findOutermostScrollParent } from "./utils/scrollHelpers";
+import { detach } from "./utils/detach";
 import type { SyncProgress, DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent, SaveStatus, SyncPlanData, SyncStaleData, SyncCollectionsData } from "./types";
 import { removeShortcut } from "./utils/steamShortcuts";
 
@@ -139,7 +140,7 @@ export default definePlugin(() => {
     }
   }
 
-  void (async () => {
+  detach((async () => {
     while (!initDone && initAttempt < RETRY_DELAYS.length + 1) {
       try {
         await loadAppIdsAndMetadata();
@@ -150,11 +151,11 @@ export default definePlugin(() => {
         initAttempt++;
       }
     }
-  })();
+  })());
 
   // Early version check — populate version error state before any game detail page renders.
   // Retries are handled by MainPage and RomMPlaySection via their own testConnection() calls.
-  void (async () => {
+  detach((async () => {
     try {
       const result = await withTimeout(testConnection(), CALLABLE_TIMEOUT);
       if (result.error_code === "version_error") {
@@ -165,11 +166,11 @@ export default definePlugin(() => {
     } catch {
       // Silent — other components will retry; don't block startup on connection failure
     }
-  })();
+  })());
 
   // Check for pending RetroDECK path migration on startup. The QAM block page
   // and game-detail card surface this to the user — no toast needed.
-  void (async () => {
+  detach((async () => {
     try {
       const status = await getMigrationStatus();
       if (status.pending) {
@@ -178,10 +179,10 @@ export default definePlugin(() => {
     } catch (e) {
       logError(`Failed to check migration status: ${e}`);
     }
-  })();
+  })());
 
   // Check for pending save sort migration on startup
-  void (async () => {
+  detach((async () => {
     try {
       const status = await getSaveSortMigrationStatus();
       if (status.pending) {
@@ -194,10 +195,10 @@ export default definePlugin(() => {
     } catch (e) {
       logError(`Failed to check save sort migration status: ${e}`);
     }
-  })();
+  })());
 
   // Register device and initialize session manager for save sync (if enabled)
-  void (async () => {
+  detach((async () => {
     try {
       const syncSettings = await getSaveSyncSettings();
       if (syncSettings.save_sync_enabled) {
@@ -208,7 +209,7 @@ export default definePlugin(() => {
     } catch (e) {
       logError(`Failed to init save sync: ${e}`);
     }
-  })();
+  })());
 
   const onSyncComplete = (data: {
     platform_app_ids: Record<string, number[]>;
@@ -232,7 +233,7 @@ export default definePlugin(() => {
     }
 
     // Create/update platform and RomM Steam collections + clean stale ones
-    void (async () => {
+    detach((async () => {
       try {
         // Create/update platform collections
         if (data.platform_app_ids && Object.keys(data.platform_app_ids).length > 0) {
@@ -281,10 +282,10 @@ export default definePlugin(() => {
       } catch (e) {
         logError(`Failed to manage RomM collections: ${e}`);
       }
-    })();
+    })());
 
     // Re-apply playtime to Steam UI (app IDs may have changed after re-sync)
-    void (async () => {
+    detach((async () => {
       try {
         const [{ playtime }, appIdMap] = await Promise.all([
           getAllPlaytime(),
@@ -294,7 +295,7 @@ export default definePlugin(() => {
       } catch (e) {
         logError(`Failed to re-apply playtime after sync: ${e}`);
       }
-    })();
+    })());
   };
 
   const syncCompleteListener = addEventListener<

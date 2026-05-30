@@ -37,6 +37,7 @@ import {
 } from "../api/backend";
 import { applyArtwork } from "../utils/artwork";
 import { scrollToTop, scrollFocusedToCenter } from "../utils/scrollHelpers";
+import { detach } from "../utils/detach";
 
 export interface SgdbGamePickerModalProps {
   romId: number;
@@ -127,7 +128,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     try {
       const res = await searchSgdbGames(term).catch(
         (e): { success: boolean; games: SgdbCandidate[] } => {
-          void debugLog(`SgdbGamePickerModal: searchSgdbGames rejected: ${e}`);
+          detach(debugLog(`SgdbGamePickerModal: searchSgdbGames rejected: ${e}`));
           return { success: false, games: [] };
         },
       );
@@ -151,7 +152,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     try {
       const result = await applySgdbGameId(romId, selectedId).catch(
         (e): { success: boolean } => {
-          void debugLog(`SgdbGamePickerModal: applySgdbGameId rejected: ${e}`);
+          detach(debugLog(`SgdbGamePickerModal: applySgdbGameId rejected: ${e}`));
           return { success: false };
         },
       );
@@ -160,7 +161,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         return;
       }
       const applied = await applyArtwork(romId, appId).catch((e): number => {
-        void debugLog(`SgdbGamePickerModal: applyArtwork rejected: ${e}`);
+        detach(debugLog(`SgdbGamePickerModal: applyArtwork rejected: ${e}`));
         return 0;
       });
       if (applied === -1) {
@@ -183,7 +184,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
   // acceptable; the structural nav fix is the primary goal.
   const onBodyButtonDown = (evt: GamepadEvent) => {
     if (evt.detail.button === GamepadButton.TRIGGER_RIGHT) {
-      void runSearch();
+      detach(runSearch());
     }
   };
 
@@ -222,7 +223,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
             />
           </div>
           <DialogButton
-            onClick={() => { void runSearch(); }}
+            onClick={() => { detach(runSearch()); }}
             onFocus={scrollToTop}
             disabled={searching}
             style={{ width: "120px", height: "40px" }}
@@ -260,7 +261,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
                 thumbUrl={game.thumb_url}
                 title={game.name}
                 subtitle={game.release_year == null ? undefined : String(game.release_year)}
-                onSelect={() => { void applySelection(game.id); }}
+                onSelect={() => { detach(applySelection(game.id)); }}
                 onFocus={scrollFocusedToCenter}
                 disabled={applying}
               />

@@ -20,6 +20,7 @@ import { MUTED_COLOR } from "./saves/helpers";
 import { NewSlotModal } from "./saves/NewSlotModal";
 import { SlotPanel } from "./saves/SlotPanel";
 import { renderSaveFileRow } from "./saves/SaveFileRow";
+import { detach } from "../utils/detach";
 
 interface SavesTabProps {
   romId: number;
@@ -138,25 +139,25 @@ export const SavesTab: FC<SavesTabProps> = ({
     showModal(
       createElement(NewSlotModal, {
         onSubmit: (name: string) => {
-          void (async () => {
+          detach((async () => {
           if (!name) {
             // Empty = legacy mode — show warning
             showModal(createElement(ConfirmModal, {
               strTitle: "Use Legacy Mode?",
               strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
               onOK: () => {
-                void (async () => {
+                detach((async () => {
                   try {
                     const result = await switchSlot(romId, "");
                     if (result.success && result.save_status) {
                       onSlotSwitched("", result.save_status);
                     } else {
-                      void debugLog(`SavesTab: legacy switch failed: ${result.reason}`);
+                      detach(debugLog(`SavesTab: legacy switch failed: ${result.reason}`));
                     }
                   } catch (e) {
-                    void debugLog(`SavesTab: legacy switch error: ${e}`);
+                    detach(debugLog(`SavesTab: legacy switch error: ${e}`));
                   }
-                })();
+                })());
               },
             }));
             return;
@@ -167,7 +168,7 @@ export const SavesTab: FC<SavesTabProps> = ({
             if (result.success && result.save_status) {
               onSlotSwitched(name, result.save_status);
             } else {
-              void debugLog(`SavesTab: new slot switch failed: ${result.reason}`);
+              detach(debugLog(`SavesTab: new slot switch failed: ${result.reason}`));
               let msg = "Failed to create slot";
               if (result.reason === "pending_uploads") {
                 msg = "Sync your saves first — local changes haven't been uploaded";
@@ -179,12 +180,12 @@ export const SavesTab: FC<SavesTabProps> = ({
               newSlotErrorTimerRef.current = setTimeout(() => setNewSlotError(null), 5000);
             }
           } catch (e) {
-            void debugLog(`SavesTab: new slot switch error: ${e}`);
+            detach(debugLog(`SavesTab: new slot switch error: ${e}`));
             setNewSlotError("An error occurred while creating the slot");
             if (newSlotErrorTimerRef.current) clearTimeout(newSlotErrorTimerRef.current);
             newSlotErrorTimerRef.current = setTimeout(() => setNewSlotError(null), 5000);
           }
-          })();
+          })());
         },
       }),
     );

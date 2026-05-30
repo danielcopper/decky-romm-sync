@@ -13,6 +13,7 @@ import { showSyncConflictModal } from "../SyncConflictModal";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
 import { formatBytes, formatTimestamp } from "../../utils/formatters";
 import { formatAttributionSegment, formatRelativeTime, pickLastSyncer } from "./helpers";
+import { detach } from "../../utils/detach";
 
 interface VersionHistoryPanelProps {
   romId: number;
@@ -43,12 +44,12 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
       if (result.status === "ok") {
         setVersions(result.versions);
       } else if (result.status === "server_unreachable") {
-        void debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`);
+        detach(debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`));
         setVersions(null);
         setLoadError("Couldn't reach RomM. Tap retry.");
       }
     } catch (e) {
-      void debugLog(`VersionHistoryPanel: failed to load versions for ${filename}: ${e}`);
+      detach(debugLog(`VersionHistoryPanel: failed to load versions for ${filename}: ${e}`));
       setVersions(null);
       setLoadError("Couldn't reach RomM. Tap retry.");
     } finally {
@@ -111,7 +112,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         toaster.toast({ title: "RomM Sync", body: "Version history requires RomM 4.7+" });
       }
     } catch (e) {
-      void debugLog(`VersionHistoryPanel: restore error for save ${version.id}: ${e}`);
+      detach(debugLog(`VersionHistoryPanel: restore error for save ${version.id}: ${e}`));
     } finally {
       setRestoring(null);
     }
@@ -184,7 +185,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         noFocusRing: false,
         onFocus: scrollFocusedToCenter,
         disabled: isThisRestoring || restoring !== null || isOffline,
-        onClick: () => { void handleRestore(v); },
+        onClick: () => { detach(handleRestore(v)); },
       }, isThisRestoring ? "Restoring..." : "Restore"),
     );
   };
@@ -212,7 +213,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
           style: { padding: "2px 8px", minWidth: "auto", fontSize: "11px", width: "auto", flexShrink: 0 },
           noFocusRing: false,
           onFocus: scrollFocusedToCenter,
-          onClick: () => { void loadVersions(); },
+          onClick: () => { detach(loadVersions()); },
         }, "Retry"),
       );
     }
@@ -245,7 +246,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
       },
       noFocusRing: false,
       onFocus: scrollFocusedToCenter,
-      onClick: () => { void handleToggle(); },
+      onClick: () => { detach(handleToggle()); },
     },
       createElement("span", {}, expanded ? "▾" : "▸"),
       createElement("span", {}, expanded && versions !== null

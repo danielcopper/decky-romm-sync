@@ -558,6 +558,39 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
       logSpy.mockRestore();
     });
+
+    it("logs the failure when getSyncStats rejects on mount", async () => {
+      vi.mocked(backend.getSyncStats).mockRejectedValue(new Error("boom"));
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load sync stats"),
+      );
+      logSpy.mockRestore();
+    });
+
+    it("logs the failure when testConnection rejects on mount", async () => {
+      vi.mocked(backend.testConnection).mockRejectedValue(new Error("net"));
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to test connection"),
+      );
+      logSpy.mockRestore();
+    });
+
+    it("logs the failure when getSettings rejects on mount", async () => {
+      vi.mocked(backend.getSettings).mockRejectedValue(new Error("io"));
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load settings"),
+      );
+      logSpy.mockRestore();
+    });
   });
 
   // ===========================================================================

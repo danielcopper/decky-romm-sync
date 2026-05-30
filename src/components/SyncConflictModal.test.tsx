@@ -18,6 +18,7 @@ import { showModal } from "@decky/ui";
 import { showSyncConflictModal } from "./SyncConflictModal";
 import * as backend from "../api/backend";
 import type { SyncConflict } from "../types";
+import { detach } from "../utils/detach";
 
 // Per-file mock so we can capture the closeModal prop the host passes to
 // ModalRoot and assert the isLoading-suppresses-outside-close behavior.
@@ -91,33 +92,33 @@ describe("SyncConflictModal", () => {
   // ---------------------------------------------------------------------------
   describe("formatBytes (via rendered output)", () => {
     it("renders 'unknown' when local_size is null", () => {
-      void showSyncConflictModal(makeConflict({ local_size: null }));
+      detach(showSyncConflictModal(makeConflict({ local_size: null })));
       const { container } = render(lastShownElement());
       // "Your local save" block carries the bytes string.
       expect(container.textContent).toContain("unknown");
     });
 
     it("renders 'unknown' when server_size is 0", () => {
-      void showSyncConflictModal(makeConflict({ server_size: 0, local_size: 100 }));
+      detach(showSyncConflictModal(makeConflict({ server_size: 0, local_size: 100 })));
       const { container } = render(lastShownElement());
       expect(container.textContent).toContain("unknown");
     });
 
     it("renders bytes as 'X B' below 1024", () => {
-      void showSyncConflictModal(makeConflict({ local_size: 500, server_size: 1023 }));
+      detach(showSyncConflictModal(makeConflict({ local_size: 500, server_size: 1023 })));
       const { container } = render(lastShownElement());
       expect(container.textContent).toContain("500 B");
       expect(container.textContent).toContain("1023 B");
     });
 
     it("renders bytes as 'X.X KB' for exact 1024", () => {
-      void showSyncConflictModal(makeConflict({ local_size: 1024 }));
+      detach(showSyncConflictModal(makeConflict({ local_size: 1024 })));
       const { container } = render(lastShownElement());
       expect(container.textContent).toContain("1.0 KB");
     });
 
     it("renders bytes as 'X.X MB' above ~1MB", () => {
-      void showSyncConflictModal(makeConflict({ local_size: 5 * 1024 * 1024 }));
+      detach(showSyncConflictModal(makeConflict({ local_size: 5 * 1024 * 1024 })));
       const { container } = render(lastShownElement());
       expect(container.textContent).toContain("5.0 MB");
     });
@@ -137,7 +138,7 @@ describe("SyncConflictModal", () => {
         local_size: 2048,
         server_size: 4096,
       });
-      void showSyncConflictModal(conflict);
+      detach(showSyncConflictModal(conflict));
       const { container } = render(lastShownElement());
 
       expect(container.textContent).toContain("Save conflict for game.srm");
@@ -152,7 +153,7 @@ describe("SyncConflictModal", () => {
     });
 
     it("does NOT render the error block when errorMessage is null (default)", () => {
-      void showSyncConflictModal(makeConflict());
+      detach(showSyncConflictModal(makeConflict()));
       const { container } = render(lastShownElement());
       // Initial render before any resolveSyncConflict call → no error.
       expect(container.textContent).not.toContain("Failed to resolve conflict");
@@ -218,7 +219,7 @@ describe("SyncConflictModal", () => {
       const conflict = makeConflict({ rom_id: 7, filename: "stale.srm" });
       const resolved = vi.fn();
       const promise = showSyncConflictModal(conflict);
-      void promise.then(resolved);
+      detach(promise.then(resolved));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -254,7 +255,7 @@ describe("SyncConflictModal", () => {
       });
 
       const conflict = makeConflict();
-      void showSyncConflictModal(conflict);
+      detach(showSyncConflictModal(conflict));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -281,7 +282,7 @@ describe("SyncConflictModal", () => {
       const conflict = makeConflict({ rom_id: 11, filename: "x.srm" });
       const resolved = vi.fn();
       const promise = showSyncConflictModal(conflict);
-      void promise.then(resolved);
+      detach(promise.then(resolved));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -307,7 +308,7 @@ describe("SyncConflictModal", () => {
         success: false,
       });
 
-      void showSyncConflictModal(makeConflict());
+      detach(showSyncConflictModal(makeConflict()));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -333,7 +334,7 @@ describe("SyncConflictModal", () => {
       const conflict = makeConflict({ rom_id: 3, filename: "boom.srm" });
       const resolved = vi.fn();
       const promise = showSyncConflictModal(conflict);
-      void promise.then(resolved);
+      detach(promise.then(resolved));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -359,7 +360,7 @@ describe("SyncConflictModal", () => {
       // the `msg || "Failed to resolve conflict"` ternary.
       vi.mocked(backend.resolveSyncConflict).mockRejectedValue("");
 
-      void showSyncConflictModal(makeConflict());
+      detach(showSyncConflictModal(makeConflict()));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -378,7 +379,7 @@ describe("SyncConflictModal", () => {
         .mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockRejectedValue("bare string error");
 
-      void showSyncConflictModal(makeConflict());
+      detach(showSyncConflictModal(makeConflict()));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -404,7 +405,7 @@ describe("SyncConflictModal", () => {
         }),
       );
 
-      void showSyncConflictModal(makeConflict());
+      detach(showSyncConflictModal(makeConflict()));
       const { container } = render(lastShownElement());
 
       await act(async () => {
@@ -430,7 +431,7 @@ describe("SyncConflictModal", () => {
         }),
       );
 
-      void showSyncConflictModal(makeConflict());
+      detach(showSyncConflictModal(makeConflict()));
       render(lastShownElement());
 
       // Initial render: not loading → closeModal === handleCancel (defined).
@@ -479,7 +480,7 @@ describe("SyncConflictModal", () => {
 
       const resolved = vi.fn();
       const promise = showSyncConflictModal(makeConflict());
-      void promise.then(resolved);
+      detach(promise.then(resolved));
       const { container } = render(lastShownElement());
 
       await act(async () => {

@@ -14,6 +14,7 @@ import { MUTED_COLOR, computeSyncSummary, displaySlot, slotDeleteFailureToast } 
 import { renderSaveFileRow } from "./SaveFileRow";
 import { InactiveSlotBody } from "./InactiveSlotBody";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
+import { detach } from "../../utils/detach";
 
 function renderActiveSlotBody(
   saveStatus: SaveStatus | null,
@@ -97,7 +98,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         const result = await getSlotSaves(romId, slotName);
         setSlotFiles(result.success ? result.saves : []);
       } catch (e) {
-        void debugLog(`SavesTab: failed to load slot saves for ${slotName}: ${e}`);
+        detach(debugLog(`SavesTab: failed to load slot saves for ${slotName}: ${e}`));
         setSlotFiles([]);
       } finally {
         setLoadingSlot(false);
@@ -124,7 +125,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         switchErrorTimerRef.current = setTimeout(() => setSwitchError(null), 5000);
       }
     } catch (e) {
-      void debugLog(`SavesTab: switchSlot error: ${e}`);
+      detach(debugLog(`SavesTab: switchSlot error: ${e}`));
       setSwitchError("An error occurred while switching slots");
       if (switchErrorTimerRef.current) clearTimeout(switchErrorTimerRef.current);
       switchErrorTimerRef.current = setTimeout(() => setSwitchError(null), 5000);
@@ -162,7 +163,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         strOKButtonText: "Delete",
         strCancelButtonText: "Cancel",
         onOK: () => {
-          void (async () => {
+          detach((async () => {
             try {
               const result = await deleteSlot(romId, slotName);
               if (result.success) {
@@ -172,14 +173,14 @@ export const SlotPanel: FC<SlotPanelProps> = ({
                 toaster.toast({ title: "RomM Sync", body: result.message ?? "Failed to delete slot" });
               }
             } catch (e) {
-              void debugLog(`SavesTab: deleteSlot error: ${e}`);
+              detach(debugLog(`SavesTab: deleteSlot error: ${e}`));
               toaster.toast({ title: "RomM Sync", body: "An error occurred while deleting the slot" });
             }
-          })();
+          })());
         },
       }));
     } catch (e) {
-      void debugLog(`SavesTab: getSlotDeleteInfo error: ${e}`);
+      detach(debugLog(`SavesTab: getSlotDeleteInfo error: ${e}`));
       toaster.toast({ title: "RomM Sync", body: "Failed to load slot info" });
     } finally {
       setDeleting(false);
@@ -216,7 +217,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
     },
     noFocusRing: false,
     onFocus: scrollFocusedToCenter,
-    onClick: () => { void handleToggle(); },
+    onClick: () => { detach(handleToggle()); },
   },
     // Left: slot name + badges
     createElement("div", { className: "romm-slot-header-left" },
@@ -254,8 +255,8 @@ export const SlotPanel: FC<SlotPanelProps> = ({
       : createElement(InactiveSlotBody, {
           key: "body",
           loadingSlot, slotFiles, switching, switchError, isOffline, deleting,
-          handleActivate: () => { void handleActivate(); },
-          handleDelete: () => { void handleDelete(); },
+          handleActivate: () => { detach(handleActivate()); },
+          handleDelete: () => { detach(handleDelete()); },
         });
   }
 

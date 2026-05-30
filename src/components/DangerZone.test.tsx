@@ -180,6 +180,20 @@ describe("DangerZone", () => {
       // the assert below; loading state is still true while the promise stalls.
       expect(queryAllByTestId("spinner").length).toBeGreaterThan(0);
     });
+
+    it("logs the failure when getWhitelistSettings rejects on mount", async () => {
+      vi.mocked(backend.getWhitelistSettings).mockRejectedValue(
+        new Error("offline"),
+      );
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      // The .catch((e) => logError(...)) on the mount-time load must fire.
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load whitelist settings"),
+      );
+      logSpy.mockRestore();
+    });
   });
 
   describe("loadNonSteamApps", () => {
@@ -987,6 +1001,30 @@ describe("DangerZone", () => {
         [],
         expect.arrayContaining(["Alpha"]),
       );
+    });
+
+    it("logs the failure when updateWhitelistSettings rejects on toggle", async () => {
+      setupApps();
+      vi.mocked(backend.updateWhitelistSettings).mockRejectedValue(
+        new Error("disk full"),
+      );
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      const { getByText, getAllByTestId } = render(
+        <DangerZone onBack={vi.fn()} />,
+      );
+      await flushAsync();
+      fireEvent.click(getByText("Configure Whitelist (1 protected)"));
+      const alphaInput = (
+        getAllByTestId("toggle-input") as HTMLInputElement[]
+      ).find((i) => !i.checked);
+      if (!alphaInput) throw new Error("unchecked toggle not found");
+      fireEvent.click(alphaInput);
+      // The .catch((e) => logError(...)) must surface the rejection.
+      await flushAsync();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to update whitelist settings"),
+      );
+      logSpy.mockRestore();
     });
 
     it("toggle OFF on custom-listed app removes it from customNames", async () => {

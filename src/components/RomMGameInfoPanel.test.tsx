@@ -132,6 +132,7 @@ vi.mock("../utils/saveSortMigrationStore", () => ({
   }),
 }));
 import * as saveSortMigrationStore from "../utils/saveSortMigrationStore";
+import { detach } from "../utils/detach";
 
 // ----- @decky/ui — global stub from test-setup.ts covers Focusable +
 // DialogButton. Pass-through is enough for this panel.
@@ -917,7 +918,7 @@ describe("RomMGameInfoPanel", () => {
         // Already rendered via mountWithRomId — get container via re-render?
         // Use a fresh render that uses the new mock.
         const view = render(<RomMGameInfoPanel appId={testAppId} />);
-        void flushAsync().then(() => resolve({ container: view.container }));
+        detach(flushAsync().then(() => resolve({ container: view.container })));
       });
       await act(async () => {
         globalThis.dispatchEvent(
