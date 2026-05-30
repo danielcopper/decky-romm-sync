@@ -7,6 +7,14 @@ is snapshot/restore: ``__enter__`` snapshots each repo's store, an exceptional
 ``__exit__`` restores them. This matches the real ``SqliteUnitOfWork``, which
 discards uncommitted writes via SQL ``ROLLBACK``.
 
+The clean-commit path also models the schema's ``rom_id`` foreign key: the real
+``SqliteUnitOfWork`` runs with ``PRAGMA foreign_keys=ON``, so committing a
+per-rom child aggregate whose ``rom_id`` has no matching ``roms`` row raises
+``sqlite3.IntegrityError``. The fake reproduces that at commit (see
+``_PER_ROM_FK_CHILD_REPOS``) so tests can't silently rely on the gap. ON DELETE
+CASCADE is intentionally **not** modeled — no consumer deliberately purges a
+``roms`` row yet (ADR-0007); only the orphan-child-on-commit check exists.
+
 The repositories persist across clean ``with`` blocks (the fake's storage is the
 fake's identity), so a service test can open the unit several times and see
 prior committed writes. ``FakeUnitOfWorkFactory`` returns the same unit each call
@@ -15,6 +23,7 @@ so a test can inspect state after the service closes it.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -59,6 +68,14 @@ class _Snapshot:
 class FakeUnitOfWork:
     """In-memory unit of work over nine fake repositories with commit/rollback flags."""
 
+    # Child repos whose aggregate carries a ``rom_id`` foreign key onto ``roms``
+    # (schema: rom_installs / rom_metadata / rom_playtime / rom_save_states +
+    # rom_save_files, the last two backing the one ``rom_save_states`` repo).
+    # Each is keyed by ``rom_id``, so ``repo._snapshot().keys()`` are the FK
+    # values the commit check validates against ``roms``. Adding a new per-rom
+    # vertical means adding its repo attr name here — nothing else.
+    _PER_ROM_FK_CHILD_REPOS = ("rom_installs", "rom_metadata", "playtime", "rom_save_states")
+
     def __init__(self) -> None:
         self.roms = FakeRomRepository()
         self.rom_installs = FakeRomInstallRepository()
@@ -100,6 +117,9 @@ class FakeUnitOfWork:
         snapshot = self._snapshot
         self._snapshot = None
         if exc_type is None:
+            # Mirror PRAGMA foreign_keys=ON: a child row whose rom_id has no
+            # matching roms row aborts the commit with sqlite3.IntegrityError.
+            self._enforce_rom_id_foreign_keys()
             self.committed = True
             return
         if snapshot is not None:
@@ -113,6 +133,23 @@ class FakeUnitOfWork:
             self.sync_runs._restore(snapshot.sync_runs)
             self.kv_config._restore(snapshot.kv_config)
         self.rolled_back = True
+
+    def _enforce_rom_id_foreign_keys(self) -> None:
+        """Raise ``sqlite3.IntegrityError`` if any per-rom child row is orphaned.
+
+        Validates every ``rom_id`` in the FK-bearing child repos against the
+        ``roms`` repo, matching the real schema's ``REFERENCES roms(rom_id)``.
+        The fake leaves ``committed`` untouched on failure (the caller re-raises),
+        so the orphaned write is observable as a non-committed unit.
+        """
+        rom_ids = set(self.roms._snapshot())
+        for repo_name in self._PER_ROM_FK_CHILD_REPOS:
+            repo = getattr(self, repo_name)
+            orphans = sorted(set(repo._snapshot()) - rom_ids)
+            if orphans:
+                raise sqlite3.IntegrityError(
+                    f"FOREIGN KEY constraint failed: {repo_name} rom_id(s) {orphans} not in roms"
+                )
 
 
 class FakeUnitOfWorkFactory:

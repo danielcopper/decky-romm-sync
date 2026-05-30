@@ -583,7 +583,6 @@ def wire_services(cfg: WiringConfig) -> dict:
     download_service = DownloadService(
         config=DownloadServiceConfig(
             romm_api=cfg.adapters.romm_api,
-            state=cfg.stores.state,
             download_file_store=cfg.adapters.download_file_store,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
             loop=cfg.runtime.loop,
@@ -591,7 +590,6 @@ def wire_services(cfg: WiringConfig) -> dict:
             emit=cfg.runtime.emit,
             clock=cfg.runtime.clock,
             sleeper=cfg.runtime.sleeper,
-            state_persister=cfg.callbacks.state_persister,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             uow_factory=cfg.callbacks.uow_factory,
         ),

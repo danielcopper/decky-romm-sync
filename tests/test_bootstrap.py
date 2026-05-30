@@ -310,8 +310,8 @@ class TestWireServices:
     def test_services_share_state_reference(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        # download_service and sync_service should share the same state dict
-        assert result["download_service"]._state is deps["state"]
+        # sync_service still holds the live state dict; download_service no
+        # longer reads JSON state (install records moved to SQLite, #784).
         assert result["sync_service"]._state is deps["state"]
         deps["loop"].close()
 

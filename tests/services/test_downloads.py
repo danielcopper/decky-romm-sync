@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sqlite3
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -8,7 +9,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -17,10 +18,26 @@ from adapters.download_file import DownloadFileAdapter
 from adapters.registry_store import RegistryStoreAdapter
 from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.rom import Rom
+from domain.rom_install import RomInstall
 from domain.save_state import SaveSyncState
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
+
+
+def _seed_rom(uow: FakeUnitOfWork, rom_id: int, *, platform_slug: str = "n64") -> None:
+    """Seed a synced ``Rom`` so a ``RomInstall`` save passes the FK check at commit."""
+    uow.roms.save(
+        Rom.synced(
+            rom_id=rom_id,
+            platform_slug=platform_slug,
+            name=f"Game {rom_id}",
+            fs_name=f"game_{rom_id}.z64",
+            shortcut_app_id=1000 + rom_id,
+            synced_at="2026-01-01T00:00:00+00:00",
+        )
+    )
 
 
 @pytest.fixture
@@ -62,10 +79,13 @@ def plugin():
         ),
     )
     p._save_sync_state = SaveSyncState()
+    # Shared fake Unit of Work — install records flow through it, and tests
+    # inspect ``uow.rom_installs`` after the service has run. Exposed as
+    # ``p._uow`` for assertions.
+    p._uow = FakeUnitOfWork()
     p._download_service = DownloadService(
         config=DownloadServiceConfig(
             romm_api=p._romm_api,
-            state=p._state,
             download_file_store=DownloadFileAdapter(),
             resolve_system=p._resolve_system,
             loop=asyncio.get_event_loop(),
@@ -73,12 +93,11 @@ def plugin():
             emit=decky.emit,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             sleeper=FakeSleeper(),
-            state_persister=MagicMock(),
             retrodeck_paths=FakeRetroDeckPaths(
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(p._uow),
         ),
     )
     p._rom_removal_service = RomRemovalService(
@@ -267,20 +286,54 @@ class TestGetDownloadQueue:
 class TestGetInstalledRom:
     @pytest.mark.asyncio
     async def test_returns_installed_rom(self, plugin):
-        plugin._state["installed_roms"]["42"] = {
-            "rom_id": 42,
-            "file_path": "/roms/n64/zelda.z64",
-            "system": "n64",
-        }
+        _seed_rom(plugin._uow, 42)
+        plugin._uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=42,
+                file_path="/roms/n64/zelda.z64",
+                install_path="/roms/n64",
+                platform_slug="n64",
+                system="n64",
+                installed_at="2026-01-01T00:00:00+00:00",
+            )
+        )
         result = await plugin.get_installed_rom(42)
         assert result is not None
         assert result["rom_id"] == 42
         assert result["system"] == "n64"
+        # file_name is derived from the launch file_path.
+        assert result["file_name"] == "zelda.z64"
+        assert result["file_path"] == "/roms/n64/zelda.z64"
+        assert result["platform_slug"] == "n64"
 
     @pytest.mark.asyncio
     async def test_returns_none_not_installed(self, plugin):
         result = await plugin.get_installed_rom(999)
         assert result is None
+
+
+class TestRomInstallForeignKey:
+    """A RomInstall whose rom_id has no synced Rom is rejected at commit.
+
+    Mirrors the schema's ``rom_installs.rom_id REFERENCES roms(rom_id)`` under
+    ``PRAGMA foreign_keys=ON`` — the FakeUnitOfWork enforces it on commit so the
+    install slice can't silently persist an orphan.
+    """
+
+    def test_orphan_install_save_raises_integrity_error_at_commit(self, plugin):
+        uow = plugin._uow
+        with pytest.raises(sqlite3.IntegrityError, match="rom_installs"), uow:
+            uow.rom_installs.save(
+                RomInstall.mark_installed(
+                    rom_id=42,  # no matching roms row seeded
+                    file_path="/roms/n64/zelda.z64",
+                    install_path="/roms/n64",
+                    platform_slug="n64",
+                    system="n64",
+                    installed_at="2026-01-01T00:00:00+00:00",
+                )
+            )
+        assert uow.committed is False
 
 
 class TestRemoveRom:
@@ -725,6 +778,7 @@ class TestDoDownloadSingleFile:
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 512)
 
+        _seed_rom(plugin._uow, 42)
         plugin._download_service._loop = asyncio.get_event_loop()
         plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "downloading", "progress": 0}
 
@@ -734,13 +788,15 @@ class TestDoDownloadSingleFile:
         # File ends up at target_path (not .tmp)
         assert os.path.exists(target_path)
         assert not os.path.exists(target_path + ".tmp")
-        # installed_roms entry is created
-        installed = plugin._state["installed_roms"].get("42")
+        # RomInstall record persisted via the Unit of Work.
+        installed = plugin._uow.rom_installs.get(42)
         assert installed is not None
-        assert installed["rom_id"] == 42
-        assert installed["file_path"] == target_path
-        assert installed["system"] == "n64"
-        assert "installed_at" in installed
+        assert installed.rom_id == 42
+        assert installed.file_path == target_path
+        assert installed.install_path == os.path.dirname(target_path)
+        assert installed.system == "n64"
+        assert installed.platform_slug == "n64"
+        assert installed.installed_at
         # download_complete event emitted
         emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
         assert len(emit_calls) == 1
@@ -796,6 +852,7 @@ class TestDoDownloadMultiFile:
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
+        _seed_rom(plugin._uow, 55, platform_slug="psx")
         plugin._download_service._loop = asyncio.get_event_loop()
         plugin._download_service._download_queue[55] = {"rom_id": 55, "status": "downloading", "progress": 0}
 
@@ -809,13 +866,13 @@ class TestDoDownloadMultiFile:
         assert (extract_dir / "disc2.cue").exists()
         # .zip.tmp is cleaned up
         assert not os.path.exists(target_path + ".zip.tmp")
-        # installed_roms entry has rom_dir
-        installed = plugin._state["installed_roms"].get("55")
+        # RomInstall record has install_path pointing at the extracted dir.
+        installed = plugin._uow.rom_installs.get(55)
         assert installed is not None
-        assert installed["rom_dir"] == str(extract_dir)
+        assert installed.install_path == str(extract_dir)
         # Launch file detection: M3U generated from 2 cue files, so prefer M3U > CUE
         # (M3U auto-generated by _maybe_generate_m3u)
-        assert installed["file_path"].endswith((".m3u", ".cue"))
+        assert installed.file_path.endswith((".m3u", ".cue"))
         # Status is completed
         assert plugin._download_service._download_queue[55]["status"] == "completed"
 
@@ -859,6 +916,7 @@ class TestDoDownloadNestedSingleFile:
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 64)
 
+        _seed_rom(plugin._uow, 1, platform_slug="gba")
         plugin._download_service._loop = asyncio.get_event_loop()
         plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "downloading", "progress": 0}
 
@@ -866,10 +924,10 @@ class TestDoDownloadNestedSingleFile:
             await plugin._download_service._do_download(1, rom_detail, target_path, "gba", "Game.gba")
 
         assert os.path.exists(target_path)
-        installed = plugin._state["installed_roms"].get("1")
+        installed = plugin._uow.rom_installs.get(1)
         assert installed is not None
-        assert installed["file_name"] == "Game.gba"
-        assert installed["file_path"] == target_path
+        assert os.path.basename(installed.file_path) == "Game.gba"
+        assert installed.file_path == target_path
 
     @pytest.mark.asyncio
     async def test_nested_single_file_uses_files_entry(self, plugin, tmp_path):
@@ -906,6 +964,7 @@ class TestDoDownloadNestedSingleFile:
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 128)
 
+        _seed_rom(plugin._uow, 7, platform_slug="dc")
         plugin._download_service._loop = asyncio.get_event_loop()
         plugin._download_service._download_queue[7] = {"rom_id": 7, "status": "downloading", "progress": 0}
 
@@ -913,10 +972,10 @@ class TestDoDownloadNestedSingleFile:
             await plugin._download_service._do_download(7, rom_detail, target_path, "dc", "My Game.chd")
 
         assert os.path.exists(target_path)
-        installed = plugin._state["installed_roms"].get("7")
+        installed = plugin._uow.rom_installs.get(7)
         assert installed is not None
-        assert installed["file_name"] == "My Game.chd"
-        assert installed["file_path"] == target_path
+        assert os.path.basename(installed.file_path) == "My Game.chd"
+        assert installed.file_path == target_path
         # Must NOT keep the parent-folder name from fs_name as a real on-disk file
         assert not os.path.exists(str(roms_dir / "My Game"))
 
@@ -1293,7 +1352,7 @@ class TestDoDownloadCancelled:
 
         assert plugin._download_service._download_queue[42]["status"] == "cancelled"
         assert not os.path.exists(target_path)
-        assert "42" not in plugin._state["installed_roms"]
+        assert plugin._uow.rom_installs.get(42) is None
 
 
 class TestDoDownloadZipFailure:
@@ -1397,6 +1456,116 @@ class TestDoDownloadFailureEmit:
         # Queue status reflects the failure
         assert plugin._download_service._download_queue[42]["status"] == "failed"
         assert plugin._download_service._download_queue[42]["error"] == "simulated network drop"
+
+
+class TestDoDownloadInvariantFailure:
+    """Tests for _do_download — RomInstall invariant rejects the ROM data.
+
+    A non-positive ``rom_id`` fails ``RomInstall.mark_installed``. The worker
+    catches the ValueError, removes the just-installed artifact, persists no
+    record, and the download is reported as failed — no exception escapes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_single_file_invariant_failure_cleans_up_and_persists_nothing(self, plugin, tmp_path):
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 0,
+            "name": "Bad ROM",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 64)
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        # rom_id=0 violates RomInstall's invariant (rom_id must be positive).
+        plugin._download_service._download_queue[0] = {"rom_id": 0, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(0, rom_detail, target_path, "n64", "zelda.z64")
+
+        # Download reported as failed via the canonical failure path.
+        assert plugin._download_service._download_queue[0]["status"] == "failed"
+        assert "Invalid install metadata" in plugin._download_service._download_queue[0]["error"]
+        # The just-renamed file was cleaned up — nothing left dangling.
+        assert not os.path.exists(target_path)
+        # No RomInstall record persisted.
+        assert plugin._uow.rom_installs.get(0) is None
+        assert list(plugin._uow.rom_installs.iter_all()) == []
+        # download_failed emitted, no download_complete.
+        assert [c for c in decky.emit.call_args_list if c[0][0] == "download_failed"]
+        assert not [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
+
+    @pytest.mark.asyncio
+    async def test_multi_file_invariant_failure_removes_extract_dir(self, plugin, tmp_path):
+        import zipfile as zf
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "psx"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "FF7.zip")
+
+        zip_content_path = tmp_path / "source.zip"
+        with zf.ZipFile(str(zip_content_path), "w") as z:
+            z.writestr("disc1.cue", "FILE disc1.bin BINARY")
+            z.writestr("disc1.bin", b"\x00" * 100)
+        zip_bytes = zip_content_path.read_bytes()
+
+        rom_detail = {
+            "id": 0,
+            "name": "Bad Multi ROM",
+            "fs_name": "FF7.zip",
+            "fs_name_no_ext": "FF7",
+            "platform_slug": "psx",
+            "platform_name": "PlayStation",
+            "has_multiple_files": True,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(zip_bytes)
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[0] = {"rom_id": 0, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(0, rom_detail, target_path, "psx", "FF7.zip")
+
+        assert plugin._download_service._download_queue[0]["status"] == "failed"
+        assert "Invalid install metadata" in plugin._download_service._download_queue[0]["error"]
+        # The extracted directory was removed by the invariant-failure cleanup.
+        assert not (roms_dir / "FF7").exists()
+        # No RomInstall record persisted.
+        assert plugin._uow.rom_installs.get(0) is None
+        assert list(plugin._uow.rom_installs.iter_all()) == []
 
 
 class TestStartDownloadReDownload:
@@ -1607,6 +1776,7 @@ class TestUrlEncodedFilenameRename:
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
+        _seed_rom(plugin._uow, 99, platform_slug="psx")
         plugin._download_service._loop = asyncio.get_event_loop()
         plugin._download_service._download_queue[99] = {"rom_id": 99, "status": "downloading", "progress": 0}
 
@@ -1664,6 +1834,7 @@ class TestUrlEncodedFilenameRename:
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
+        _seed_rom(plugin._uow, 55, platform_slug="psx")
         plugin._download_service._loop = asyncio.get_event_loop()
         plugin._download_service._download_queue[55] = {"rom_id": 55, "status": "downloading", "progress": 0}
 

@@ -14,13 +14,14 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import InstalledRomEntry, PluginState
-
 from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u, resolve_local_file_name
+from domain.rom_install import RomInstall
 from lib.errors import error_response
 
 if TYPE_CHECKING:
     import logging
+
+    from models.state import InstalledRomEntry
 
     from services.protocols import (
         Clock,
@@ -29,7 +30,6 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RommRomReader,
         Sleeper,
-        StatePersister,
         SystemResolver,
         UnitOfWorkFactory,
     )
@@ -43,13 +43,12 @@ _TMP_EXT = ".tmp"
 class DownloadServiceConfig:
     """Frozen wiring bundle handed to ``DownloadService.__init__``.
 
-    Holds the Protocol-typed adapters, the live state dict, runtime
-    infrastructure, time/sleep seams, and path providers DownloadService
-    needs at construction time.
+    Holds the Protocol-typed adapters, runtime infrastructure, time/sleep
+    seams, the SQLite Unit-of-Work factory, and path providers
+    DownloadService needs at construction time.
     """
 
     romm_api: RommRomReader
-    state: PluginState
     download_file_store: DownloadFileStore
     resolve_system: SystemResolver
     loop: asyncio.AbstractEventLoop
@@ -57,7 +56,6 @@ class DownloadServiceConfig:
     emit: EventEmitter
     clock: Clock
     sleeper: Sleeper
-    state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths
     uow_factory: UnitOfWorkFactory
 
@@ -67,7 +65,6 @@ class DownloadService:
 
     def __init__(self, *, config: DownloadServiceConfig) -> None:
         self._romm_api = config.romm_api
-        self._state = config.state
         self._download_file_store = config.download_file_store
         self._resolve_system = config.resolve_system
         self._loop = config.loop
@@ -75,8 +72,8 @@ class DownloadService:
         self._emit = config.emit
         self._clock = config.clock
         self._sleeper = config.sleeper
-        self._state_persister = config.state_persister
         self._retrodeck_paths = config.retrodeck_paths
+        self._uow_factory = config.uow_factory
 
         # Owned state
         self._download_in_progress: set = set()
@@ -220,8 +217,42 @@ class DownloadService:
         self._download_tasks[rom_id] = task
         return {"success": True, "message": "Download started"}
 
+    def _record_install_io(self, *, rom_id, rom_detail, file_path, install_path, system, cleanup):
+        """Build the ``RomInstall`` aggregate and persist it in a short write UoW.
+
+        The filesystem work (rename, extraction, M3U detection) has already run
+        outside any transaction; only the ``RomInstall`` upsert is wrapped here
+        (ADR-0006). If the RomM data fails the aggregate's invariant
+        (non-positive ``rom_id``), nothing is persisted, *cleanup* removes the
+        just-installed artifact, and a failure message is returned.
+
+        Returns ``(file_path, None)`` on success or ``(None, error)`` when the
+        invariant rejects the data.
+        """
+        try:
+            install = RomInstall.mark_installed(
+                rom_id=int(rom_id),
+                file_path=file_path,
+                install_path=install_path,
+                platform_slug=rom_detail.get("platform_slug", ""),
+                system=system,
+                installed_at=self._clock.now().isoformat(),
+            )
+        except ValueError as e:
+            cleanup()
+            return None, f"Invalid install metadata: {e}"
+
+        with self._uow_factory() as uow:
+            uow.rom_installs.save(install)
+        return file_path, None
+
     def _post_download_multi_io(self, rom_id, rom_detail, target_path, file_name, system):
-        """Sync helper for _do_download multi-file — extraction + renames in executor."""
+        """Sync helper for _do_download multi-file — extraction + renames in executor.
+
+        Returns ``(launch_file, error)``. ``error`` is a string when the RomM
+        data fails the ``RomInstall`` invariant — the extracted directory is
+        removed and nothing is persisted — otherwise ``None``.
+        """
         rom_dir_name = os.path.splitext(file_name)[0]
         extract_dir = os.path.join(os.path.dirname(target_path), rom_dir_name)
         self._download_file_store.make_dirs(extract_dir)
@@ -237,36 +268,33 @@ class DownloadService:
         # Detect launch file: prefer M3U > CUE > largest file
         launch_file = self._collect_and_detect_launch_file(extract_dir)
 
-        # Register as installed
-        installed_entry: InstalledRomEntry = {
-            "rom_id": rom_id,
-            "file_name": file_name,
-            "file_path": launch_file,
-            "system": system,
-            "platform_slug": rom_detail.get("platform_slug", ""),
-            "installed_at": self._clock.now().isoformat(),
-            "rom_dir": extract_dir,
-        }
-        self._state["installed_roms"][str(rom_id)] = installed_entry
-        self._state_persister.save_state()
-        return launch_file
+        return self._record_install_io(
+            rom_id=rom_id,
+            rom_detail=rom_detail,
+            file_path=launch_file,
+            install_path=extract_dir,
+            system=system,
+            cleanup=lambda: self._download_file_store.remove_tree(extract_dir),
+        )
 
-    def _post_download_single_io(self, rom_id, rom_detail, target_path, file_name, system):
-        """Sync helper for _do_download single-file — rename + state update in executor."""
+    def _post_download_single_io(self, rom_id, rom_detail, target_path, system):
+        """Sync helper for _do_download single-file — rename + DB persist in executor.
+
+        Returns ``(target_path, error)``. ``error`` is a string when the RomM
+        data fails the ``RomInstall`` invariant — the renamed file is removed
+        and nothing is persisted — otherwise ``None``.
+        """
         tmp_path = target_path + _TMP_EXT
         self._download_file_store.rename(tmp_path, target_path)
 
-        installed_entry: InstalledRomEntry = {
-            "rom_id": rom_id,
-            "file_name": file_name,
-            "file_path": target_path,
-            "system": system,
-            "platform_slug": rom_detail.get("platform_slug", ""),
-            "installed_at": self._clock.now().isoformat(),
-        }
-        self._state["installed_roms"][str(rom_id)] = installed_entry
-        self._state_persister.save_state()
-        return target_path
+        return self._record_install_io(
+            rom_id=rom_id,
+            rom_detail=rom_detail,
+            file_path=target_path,
+            install_path=os.path.dirname(target_path),
+            system=system,
+            cleanup=lambda: self._download_file_store.remove_file(target_path),
+        )
 
     def _make_progress_callback(self, rom_id, rom_name, platform_name, file_name):
         """Build a throttled progress callback for a download."""
@@ -326,7 +354,7 @@ class DownloadService:
                 await self._loop.run_in_executor(
                     None, self._romm_api.download_rom_content, rom_id, file_name, tmp_zip, progress_callback
                 )
-                final_path = await self._loop.run_in_executor(
+                final_path, post_io_error = await self._loop.run_in_executor(
                     None, self._post_download_multi_io, rom_id, rom_detail, target_path, file_name, system
                 )
             else:
@@ -334,9 +362,14 @@ class DownloadService:
                 await self._loop.run_in_executor(
                     None, self._romm_api.download_rom_content, rom_id, file_name, tmp_path, progress_callback
                 )
-                final_path = await self._loop.run_in_executor(
-                    None, self._post_download_single_io, rom_id, rom_detail, target_path, file_name, system
+                final_path, post_io_error = await self._loop.run_in_executor(
+                    None, self._post_download_single_io, rom_id, rom_detail, target_path, system
                 )
+
+            if post_io_error is not None:
+                # The download succeeded but the install record failed its
+                # invariant; the artifact was already cleaned up by the worker.
+                raise ValueError(post_io_error)
 
             self._download_queue[rom_id]["status"] = "completed"
             self._download_queue[rom_id]["progress"] = 1.0
@@ -436,8 +469,27 @@ class DownloadService:
     def get_download_queue(self):
         return {"downloads": list(self._download_queue.values())}
 
-    def get_installed_rom(self, rom_id):
-        return self._state["installed_roms"].get(str(int(rom_id)))
+    def get_installed_rom(self, rom_id: int) -> InstalledRomEntry | None:
+        """Return the install record for *rom_id* as a frontend-shaped dict, or ``None``.
+
+        Reads the ``RomInstall`` aggregate via the Unit of Work and projects it
+        onto the ``InstalledRom`` shape the QAM panel + launch gate consume.
+        ``file_name`` is derived from the launch ``file_path`` (the aggregate
+        stores the launch file, not the original archive name).
+        """
+        with self._uow_factory() as uow:
+            install = uow.rom_installs.get(int(rom_id))
+        if install is None:
+            return None
+        entry: InstalledRomEntry = {
+            "rom_id": install.rom_id,
+            "file_name": os.path.basename(install.file_path),
+            "file_path": install.file_path,
+            "system": install.system,
+            "platform_slug": install.platform_slug,
+            "installed_at": install.installed_at,
+        }
+        return entry
 
     # ── DownloadQueueCleanup Protocol ──────────────────────────────
 

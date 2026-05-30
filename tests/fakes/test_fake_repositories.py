@@ -7,6 +7,10 @@ carry coverage rather than riding on the adapters'.
 
 from __future__ import annotations
 
+import sqlite3
+
+import pytest
+
 from domain.bios_file import BiosFile
 from domain.firmware_cache import FirmwareCacheEntry
 from domain.playtime import Playtime
@@ -330,3 +334,86 @@ class TestFakeUnitOfWork:
     def test_factory_builds_default_unit_when_none_given(self):
         factory = FakeUnitOfWorkFactory()
         assert isinstance(factory(), FakeUnitOfWork)
+
+
+def _save_rom_install(uow: FakeUnitOfWork, rom_id: int) -> None:
+    uow.rom_installs.save(
+        RomInstall(
+            rom_id=rom_id,
+            file_path="/x",
+            install_path="/i",
+            platform_slug="snes",
+            system="snes",
+            installed_at="2026-01-01T00:00:00Z",
+        )
+    )
+
+
+def _save_rom_metadata(uow: FakeUnitOfWork, rom_id: int) -> None:
+    uow.rom_metadata.save(
+        rom_id,
+        RomMetadata(
+            summary="s",
+            genres=(),
+            companies=(),
+            first_release_date=None,
+            average_rating=None,
+            game_modes=(),
+            player_count="1",
+            cached_at=1.0,
+        ),
+    )
+
+
+def _save_playtime(uow: FakeUnitOfWork, rom_id: int) -> None:
+    uow.playtime.save(rom_id, Playtime(total_seconds=10))
+
+
+def _save_save_state(uow: FakeUnitOfWork, rom_id: int) -> None:
+    uow.rom_save_states.save(
+        rom_id, RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")})
+    )
+
+
+# (repo attr name, child-save helper) for every per-rom-FK child aggregate.
+_PER_ROM_FK_SAVERS = [
+    ("rom_installs", _save_rom_install),
+    ("rom_metadata", _save_rom_metadata),
+    ("playtime", _save_playtime),
+    ("rom_save_states", _save_save_state),
+]
+
+
+class TestFakeUnitOfWorkRomIdForeignKey:
+    """The fake enforces the schema's ``rom_id`` FK at commit (PRAGMA foreign_keys=ON)."""
+
+    @pytest.mark.parametrize(("repo_name", "save_child"), _PER_ROM_FK_SAVERS)
+    def test_orphan_child_aborts_commit_with_integrity_error(self, repo_name, save_child):
+        uow = FakeUnitOfWork()
+        with pytest.raises(sqlite3.IntegrityError, match=repo_name), uow:
+            save_child(uow, 42)  # no matching roms row
+        # Commit aborted: the unit is not marked committed.
+        assert uow.committed is False
+
+    @pytest.mark.parametrize(("repo_name", "save_child"), _PER_ROM_FK_SAVERS)
+    def test_child_commits_when_parent_rom_present(self, repo_name, save_child):
+        uow = FakeUnitOfWork()
+        with uow:
+            uow.roms.save(_rom(42))
+            save_child(uow, 42)
+        assert uow.committed is True
+        assert getattr(uow, repo_name).get(42) is not None
+
+    def test_non_fk_repos_commit_without_a_rom(self):
+        """bios_files / firmware_cache / sync_runs / kv_config have no rom_id FK."""
+        uow = FakeUnitOfWork()
+        with uow:
+            uow.bios_files.save(
+                BiosFile(platform_slug="psx", file_name="b.bin", file_path="/b", downloaded_at="2026-01-01T00:00:00Z")
+            )
+            uow.firmware_cache.replace_all(
+                [FirmwareCacheEntry(id=1, name="x.bin", platform_slug="psx", file_size_bytes=10, cached_at=5.0)]
+            )
+            uow.sync_runs.save(SyncRun.start(id="r1", at="2026-01-01T00:00:00Z", platforms_planned=1, roms_planned=1))
+            uow.kv_config.set("k", "v")
+        assert uow.committed is True
