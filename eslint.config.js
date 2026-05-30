@@ -16,6 +16,7 @@ export default tseslint.config(
   {
     files: ["src/**/*.{ts,tsx}"],
     languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
       globals: {
         ...globals.browser,
         SteamClient: "readonly",
@@ -37,6 +38,10 @@ export default tseslint.config(
       // an inline `// eslint-disable-next-line @typescript-eslint/no-explicit-any`
       // with a documented reason.
       "@typescript-eslint/no-explicit-any": "error",
+      // Cherry-picked type-aware rule (#838): enabled via parserOptions.projectService
+      // above, without adopting the full recommendedTypeChecked preset (which drags in
+      // the no-unsafe-* noise family — the JS twin of pyright's rejected reportUnknown*).
+      "@typescript-eslint/await-thenable": "error",
     },
   },
   {

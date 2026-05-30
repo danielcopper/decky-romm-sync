@@ -617,7 +617,7 @@ describe("SettingsPage", () => {
       const ss = capturedSaveSync[capturedSaveSync.length - 1];
       expect(ss?.saveSyncSettings).toBeNull();
       await act(async () => {
-        await ss?.onSettingChange({ sync_before_launch: false });
+        ss?.onSettingChange({ sync_before_launch: false });
       });
       expect(vi.mocked(backend.updateSaveSyncSettings)).not.toHaveBeenCalled();
     });
@@ -631,7 +631,7 @@ describe("SettingsPage", () => {
       globalThis.addEventListener("romm_data_changed", listener);
       try {
         await act(async () => {
-          await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+          capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
             sync_before_launch: false,
           });
         });
@@ -655,7 +655,7 @@ describe("SettingsPage", () => {
       globalThis.addEventListener("romm_data_changed", listener);
       try {
         await act(async () => {
-          await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+          capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
             save_sync_enabled: true,
           });
         });
@@ -686,7 +686,7 @@ describe("SettingsPage", () => {
       globalThis.addEventListener("romm_data_changed", listener);
       try {
         await act(async () => {
-          await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+          capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
             save_sync_enabled: false,
           });
         });
@@ -718,7 +718,7 @@ describe("SettingsPage", () => {
 
       // Disable — this should run setRegisteredDevices(null).
       await act(async () => {
-        await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+        capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
           save_sync_enabled: false,
         });
       });
@@ -733,7 +733,7 @@ describe("SettingsPage", () => {
         () => new Promise(() => { /* stall */ }),
       );
       await act(async () => {
-        await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+        capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
           save_sync_enabled: true,
         });
       });
@@ -751,7 +751,7 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        await capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
+        capturedSaveSync[capturedSaveSync.length - 1]?.onSettingChange({
           sync_before_launch: false,
         });
       });
@@ -774,7 +774,7 @@ describe("SettingsPage", () => {
       globalThis.addEventListener("romm_data_changed", listener);
       try {
         await act(async () => {
-          await capturedSaveSync[capturedSaveSync.length - 1]?.onSyncAll();
+          capturedSaveSync[capturedSaveSync.length - 1]?.onSyncAll();
         });
         expect(capturedSaveSync[capturedSaveSync.length - 1]?.syncStatus).toBe("Synced 4");
         expect(listener).toHaveBeenCalledTimes(1);
@@ -790,7 +790,7 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        await capturedSaveSync[capturedSaveSync.length - 1]?.onSyncAll();
+        capturedSaveSync[capturedSaveSync.length - 1]?.onSyncAll();
       });
       expect(capturedSaveSync[capturedSaveSync.length - 1]?.syncStatus).toBe("Sync failed");
     });
@@ -934,7 +934,7 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        await capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("apikey123");
+        capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("apikey123");
       });
       const sgdb = capturedSgdb[capturedSgdb.length - 1];
       expect(sgdb?.sgdbApiKey).toBe("set");
@@ -948,7 +948,7 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        await capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("");
+        capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("");
       });
       expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbApiKey).toBe("");
     });
@@ -958,7 +958,7 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        await capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("k");
+        capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("k");
       });
       expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbStatus).toBe(
         "Failed to save API key",
