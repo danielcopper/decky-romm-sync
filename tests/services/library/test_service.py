@@ -5,9 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
 
-from adapters.persistence import (
-    PersistenceAdapter,
-)
 from domain.rom import Rom
 from domain.sync_diff import classify_roms
 
@@ -775,14 +772,20 @@ class TestSetAllCollectionsSync:
 # ---------------------------------------------------------------------------
 
 
+def _seed_platform_names(uow, names: dict[str, str]) -> None:
+    """Seed the offline ``platform_slug → display_name`` cache."""
+    import json
+
+    with uow:
+        uow.kv_config.set("platform_names", json.dumps(names))
+
+
 class TestRemoveAllShortcuts:
     @pytest.mark.asyncio
     async def test_returns_app_ids_and_rom_ids(self, plugin):
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A"},
-            "20": {"app_id": 1002, "name": "Game B"},
-            "30": {"name": "Game C"},  # no app_id (edge case)
-        }
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
+        _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Game B")
+        _seed_rom(plugin._uow, 30, app_id=None, platform_slug="snes", name="Game C")  # unbound (edge)
 
         result = await plugin.remove_all_shortcuts()
         assert result["success"] is True
@@ -797,47 +800,38 @@ class TestRemoveAllShortcuts:
         assert result["rom_ids"] == []
 
     @pytest.mark.asyncio
-    async def test_does_not_modify_registry(self, plugin):
-        """remove_all_shortcuts just returns data; registry cleared by report_removal_results."""
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A"},
-        }
+    async def test_does_not_unbind_roms(self, plugin):
+        """remove_all_shortcuts just returns data; unbinding happens in report_removal_results."""
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
         await plugin.remove_all_shortcuts()
-        # Registry should NOT be cleared yet
-        assert "10" in plugin._state["shortcut_registry"]
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id == 1001
 
 
 class TestReportRemovalResults:
     @pytest.mark.asyncio
-    async def test_removes_entries_from_registry(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A", "cover_path": ""},
-            "20": {"app_id": 1002, "name": "Game B", "cover_path": ""},
-        }
+    async def test_unbinds_removed_roms_but_keeps_rows(self, plugin):
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
+        _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Game B")
 
         result = await plugin.report_removal_results([10, 20])
         assert result["success"] is True
-        assert plugin._state["shortcut_registry"] == {}
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id is None
+            assert uow.roms.get(20).shortcut_app_id is None
 
     @pytest.mark.asyncio
     async def test_cleans_up_artwork_cover_path(self, plugin, tmp_path):
         import decky
 
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
         decky.DECKY_USER_HOME = str(tmp_path)
-
-        # Create a fake artwork file
         art_file = tmp_path / "cover.png"
         art_file.write_text("fake")
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A", "cover_path": str(art_file)},
-        }
-        # Mock _grid_dir to return tmp_path
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
+        with plugin._uow as uow:
+            rom = uow.roms.get(10)
+            rom.update_cover_path(str(art_file))
+            uow.roms.save(rom)
         plugin._steam_config.grid_dir = lambda: str(tmp_path)
 
         result = await plugin.report_removal_results([10])
@@ -845,19 +839,12 @@ class TestReportRemovalResults:
         assert not art_file.exists()
 
     @pytest.mark.asyncio
-    async def test_cleans_up_artwork_legacy_id(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
+    async def test_cleans_up_artwork_app_id(self, plugin, tmp_path):
         grid_dir = tmp_path / "grid"
         grid_dir.mkdir()
-        art_file = grid_dir / "12345p.png"
+        art_file = grid_dir / "1001p.png"
         art_file.write_text("fake")
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A", "artwork_id": 12345},
-        }
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
         plugin._steam_config.grid_dir = lambda: str(grid_dir)
 
         result = await plugin.report_removal_results([10])
@@ -865,41 +852,24 @@ class TestReportRemovalResults:
         assert not art_file.exists()
 
     @pytest.mark.asyncio
-    async def test_partial_removal(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A", "cover_path": ""},
-            "20": {"app_id": 1002, "name": "Game B", "cover_path": ""},
-        }
+    async def test_partial_removal(self, plugin):
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
+        _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Game B")
 
         result = await plugin.report_removal_results([10])
         assert result["success"] is True
-        assert "10" not in plugin._state["shortcut_registry"]
-        assert "20" in plugin._state["shortcut_registry"]
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id is None
+            assert uow.roms.get(20).shortcut_app_id == 1002
 
 
 class TestRemovePlatformShortcuts:
     @pytest.mark.asyncio
     async def test_returns_matching_platform_entries(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            return_value=[
-                {"id": 1, "slug": "n64", "name": "Nintendo 64"},
-                {"id": 2, "slug": "snes", "name": "Super Nintendo"},
-            ]
-        )
-        plugin._shortcut_removal_service._loop = mock_loop
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Mario 64", "platform_name": "Nintendo 64"},
-            "20": {"app_id": 1002, "name": "Zelda OOT", "platform_name": "Nintendo 64"},
-            "30": {"app_id": 1003, "name": "DKC", "platform_name": "Super Nintendo"},
-        }
+        _seed_platform_names(plugin._uow, {"n64": "Nintendo 64", "snes": "Super Nintendo"})
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Mario 64")
+        _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Zelda OOT")
+        _seed_rom(plugin._uow, 30, app_id=1003, platform_slug="snes", name="DKC")
 
         result = await plugin.remove_platform_shortcuts("n64")
         assert result["success"] is True
@@ -908,56 +878,31 @@ class TestRemovePlatformShortcuts:
         assert result["platform_name"] == "Nintendo 64"
 
     @pytest.mark.asyncio
-    async def test_platform_not_found(self, plugin):
-        from unittest.mock import AsyncMock, MagicMock
-
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            return_value=[
-                {"id": 1, "slug": "n64", "name": "Nintendo 64"},
-            ]
-        )
-        plugin._shortcut_removal_service._loop = mock_loop
+    async def test_platform_with_no_roms(self, plugin):
+        """A slug with no synced ROMs returns empty sets; name degrades to the slug."""
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Mario 64")
 
         result = await plugin.remove_platform_shortcuts("nonexistent")
-        assert result["success"] is False
+        assert result["success"] is True
         assert result["app_ids"] == []
         assert result["rom_ids"] == []
+        assert result["platform_name"] == "nonexistent"
 
     @pytest.mark.asyncio
-    async def test_does_not_modify_registry(self, plugin):
-        """remove_platform_shortcuts just returns data; registry cleared by report_removal_results."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(
-            return_value=[
-                {"id": 1, "slug": "n64", "name": "Nintendo 64"},
-            ]
-        )
-        plugin._shortcut_removal_service._loop = mock_loop
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Mario 64", "platform_name": "Nintendo 64"},
-        }
+    async def test_does_not_unbind_roms(self, plugin):
+        """remove_platform_shortcuts just returns data; unbinding happens in report_removal_results."""
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Mario 64")
 
         await plugin.remove_platform_shortcuts("n64")
-        # Registry should NOT be modified yet
-        assert "10" in plugin._state["shortcut_registry"]
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id == 1001
 
     @pytest.mark.asyncio
-    async def test_works_offline_with_registry_slug(self, plugin):
-        """When platform_slug is in the registry, no API call needed."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(side_effect=Exception("Server unreachable"))
-        plugin._shortcut_removal_service._loop = mock_loop
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Mario 64", "platform_name": "Nintendo 64", "platform_slug": "n64"},
-            "20": {"app_id": 1002, "name": "Zelda OOT", "platform_name": "Nintendo 64", "platform_slug": "n64"},
-        }
+    async def test_resolves_name_from_cache(self, plugin):
+        """The display name comes from the kv_config cache, working offline."""
+        _seed_platform_names(plugin._uow, {"n64": "Nintendo 64"})
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Mario 64")
+        _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Zelda OOT")
 
         result = await plugin.remove_platform_shortcuts("n64")
         assert result["success"] is True
@@ -970,18 +915,11 @@ class TestRemovalCleansUpAppIdArtwork:
 
     @pytest.mark.asyncio
     async def test_removes_app_id_artwork(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
         grid_dir = tmp_path / "grid"
         grid_dir.mkdir()
         art_file = grid_dir / "100001p.png"
         art_file.write_text("fake")
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 100001, "name": "Game A", "cover_path": ""},
-        }
+        _seed_rom(plugin._uow, 10, app_id=100001, platform_slug="n64", name="Game A")
         plugin._steam_config.grid_dir = lambda: str(grid_dir)
 
         await plugin.report_removal_results([10])
@@ -989,18 +927,11 @@ class TestRemovalCleansUpAppIdArtwork:
 
     @pytest.mark.asyncio
     async def test_removes_staging_leftover(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
         grid_dir = tmp_path / "grid"
         grid_dir.mkdir()
         staging = grid_dir / "romm_10_cover.png"
         staging.write_text("fake")
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 100001, "name": "Game A", "cover_path": ""},
-        }
+        _seed_rom(plugin._uow, 10, app_id=100001, platform_slug="n64", name="Game A")
         plugin._steam_config.grid_dir = lambda: str(grid_dir)
 
         await plugin.report_removal_results([10])
@@ -1008,38 +939,28 @@ class TestRemovalCleansUpAppIdArtwork:
 
 
 class TestReportRemovalSteamInputCleanup:
-    """Tests for Steam Input cleanup in _report_removal_results_io — lines 967-980."""
+    """Tests for Steam Input cleanup in _report_removal_results_io."""
 
     @pytest.mark.asyncio
     async def test_cleans_steam_input_on_removal(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
         plugin._steam_config.grid_dir = lambda: str(tmp_path)
         plugin._steam_config.set_steam_input_config = MagicMock()
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A", "cover_path": ""},
-            "20": {"app_id": 1002, "name": "Game B", "cover_path": ""},
-        }
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
+        _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Game B")
 
         await plugin.report_removal_results([10, 20])
         plugin._steam_config.set_steam_input_config.assert_called_once_with([1001, 1002], mode="default")
 
     @pytest.mark.asyncio
     async def test_steam_input_error_doesnt_crash(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
         plugin._steam_config.grid_dir = lambda: str(tmp_path)
         plugin._steam_config.set_steam_input_config = MagicMock(side_effect=Exception("VDF error"))
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A", "cover_path": ""},
-        }
+        _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
 
         result = await plugin.report_removal_results([10])
         assert result["success"] is True  # Should not crash
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id is None
 
 
 # ---------------------------------------------------------------------------

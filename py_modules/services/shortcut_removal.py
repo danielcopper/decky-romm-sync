@@ -1,130 +1,123 @@
-"""ShortcutRemovalService — shortcut removal and state cleanup."""
+"""ShortcutRemovalService — Steam-shortcut removal and ROM unbinding.
+
+Resolves the Steam ``app_id``/``rom_id`` sets the frontend removes via the
+SteamClient API, then reconciles persistence: removing a shortcut **unbinds**
+the ROM (clears ``shortcut_app_id``, keeps the row and its per-ROM children per
+ADR-0007), never deletes it. Reads the synced-shortcut binding from ``uow.roms``;
+the offline ``platform_slug → display_name`` label comes from the ``kv_config``
+cache the library sync refreshes each run.
+"""
 
 from __future__ import annotations
 
-import asyncio
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.registry_patches import RegistryDeletePatch
-from models.state import PluginState
-
 if TYPE_CHECKING:
+    import asyncio
     import logging
+
+    from models.state import ShortcutRegistryEntry
 
     from services.protocols import (
         ArtworkRemover,
-        EventEmitter,
-        RommPlatformReader,
-        ShortcutRegistryStore,
-        StatePersister,
         SteamConfigStore,
         UnitOfWorkFactory,
     )
+
+# kv_config key for the offline ``platform_slug → display_name`` cache the
+# library sync refreshes every run. Read here so the DangerZone "clear
+# platform" response shows "Nintendo 64" rather than the bare "n64" slug when
+# RomM is unreachable. Mirrors ``library.reporter._PLATFORM_NAMES_KEY``.
+_PLATFORM_NAMES_KEY = "platform_names"
 
 
 @dataclass(frozen=True)
 class ShortcutRemovalServiceConfig:
     """Frozen wiring bundle handed to ``ShortcutRemovalService.__init__``.
 
-    Holds the Protocol-typed adapters, the live state dict, runtime
-    infrastructure, event emitter, and persistence callbacks
-    ShortcutRemovalService needs at construction time.
+    Holds the Protocol-typed Steam-config adapter, runtime infrastructure, the
+    artwork remover peer, and the SQLite Unit-of-Work factory (the transactional
+    seam over the ``roms`` / ``kv_config`` repositories ShortcutRemovalService
+    reads and unbinds).
     """
 
-    romm_api: RommPlatformReader
     steam_config: SteamConfigStore
-    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
-    emit: EventEmitter
-    state_persister: StatePersister
-    registry_store: ShortcutRegistryStore
     artwork_remover: ArtworkRemover
     uow_factory: UnitOfWorkFactory
 
 
 class ShortcutRemovalService:
-    """Handles shortcut removal: identifies app_ids/rom_ids and cleans up state."""
+    """Resolves shortcut removal sets and unbinds the affected ROMs in SQLite."""
 
     def __init__(self, *, config: ShortcutRemovalServiceConfig) -> None:
-        self._romm_api = config.romm_api
         self._steam_config = config.steam_config
-        self._state = config.state
         self._loop = config.loop
         self._logger = config.logger
-        self._emit = config.emit
-        self._state_persister = config.state_persister
-        self._registry_store = config.registry_store
         self._artwork_remover = config.artwork_remover
-
-    # ── Registry helpers ───────────────────────────────────────────────────
-
-    def _find_platform_name_in_registry(self, platform_slug: str) -> str | None:
-        """Look up platform name from the shortcut registry by slug."""
-        for entry in self._state["shortcut_registry"].values():
-            if entry.get("platform_slug") == platform_slug:
-                return entry.get("platform_name")
-        return None
-
-    async def _find_platform_name_from_api(self, platform_slug: str) -> str | None:
-        """Look up platform name from the RomM API by slug."""
-        platforms = await self._loop.run_in_executor(None, self._romm_api.list_platforms)
-        for p in platforms:
-            if p.get("slug") == platform_slug:
-                return p.get("name", "")
-        return None
+        self._uow_factory = config.uow_factory
 
     # ── Removal queries ────────────────────────────────────────────────────
 
     def remove_all_shortcuts(self) -> dict:
-        """Return app_ids and rom_ids for the frontend to remove via SteamClient."""
-        registry = self._state.get("shortcut_registry", {})
-        app_ids = [entry["app_id"] for entry in registry.values() if "app_id" in entry]
-        rom_ids = list(registry.keys())
+        """Return app_ids and rom_ids for the frontend to remove via SteamClient.
+
+        Bound ROMs contribute their ``shortcut_app_id``; every ROM contributes
+        its ``rom_id`` (the frontend reports back the full removed set). Unbound
+        rows (NULL ``shortcut_app_id``) have no Steam shortcut, so they carry no
+        ``app_id``.
+        """
+        with self._uow_factory() as uow:
+            roms = list(uow.roms.iter_all())
+        app_ids = [rom.shortcut_app_id for rom in roms if rom.shortcut_app_id is not None]
+        rom_ids = [str(rom.rom_id) for rom in roms]
         return {"success": True, "app_ids": app_ids, "rom_ids": rom_ids}
 
     async def remove_platform_shortcuts(self, platform_slug: str) -> dict:
-        """Return app_ids and rom_ids for a platform for the frontend to remove via SteamClient."""
+        """Return app_ids and rom_ids for a platform for the frontend to remove via SteamClient.
+
+        Filters ``uow.roms`` by ``platform_slug`` directly; the display name in
+        the response is resolved from the offline ``kv_config`` cache, falling
+        back to the slug when RomM has never been seen for it.
+        """
         try:
-            platform_name = self._find_platform_name_in_registry(platform_slug)
-            if not platform_name:
-                platform_name = await self._find_platform_name_from_api(platform_slug)
-
-            if not platform_name:
-                return {
-                    "success": False,
-                    "message": f"Platform '{platform_slug}' not found",
-                    "app_ids": [],
-                    "rom_ids": [],
-                }
-
-            app_ids = [
-                entry["app_id"]
-                for entry in self._state["shortcut_registry"].values()
-                if entry.get("platform_name") == platform_name and "app_id" in entry
-            ]
-            rom_ids = [
-                rom_id
-                for rom_id, entry in self._state["shortcut_registry"].items()
-                if entry.get("platform_name") == platform_name
-            ]
-
-            return {"success": True, "app_ids": app_ids, "rom_ids": rom_ids, "platform_name": platform_name}
+            return await self._loop.run_in_executor(None, self._remove_platform_shortcuts_io, platform_slug)
         except Exception as e:
             self._logger.error(f"Failed to get platform shortcuts: {e}")
             return {"success": False, "message": f"Failed: {e}", "app_ids": [], "rom_ids": []}
 
+    def _remove_platform_shortcuts_io(self, platform_slug: str) -> dict:
+        with self._uow_factory() as uow:
+            roms = list(uow.roms.iter_by_platform(platform_slug))
+            platform_name = self._read_platform_name_cache(uow).get(platform_slug, platform_slug)
+        app_ids = [rom.shortcut_app_id for rom in roms if rom.shortcut_app_id is not None]
+        rom_ids = [str(rom.rom_id) for rom in roms]
+        return {"success": True, "app_ids": app_ids, "rom_ids": rom_ids, "platform_name": platform_name}
+
+    def _read_platform_name_cache(self, uow) -> dict[str, str]:
+        """Decode the ``platform_slug → display_name`` cache, ``{}`` when absent/corrupt."""
+        raw = uow.kv_config.get(_PLATFORM_NAMES_KEY)
+        if not raw:
+            return {}
+        try:
+            decoded = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+
     # ── Removal results ────────────────────────────────────────────────────
 
     def _report_removal_results_io(self, removed_rom_ids: list) -> None:
-        """Sync helper for report_removal_results — file deletions, state save in executor."""
-        # Clean up Steam Input config for removed shortcuts (always reset to default)
+        """Sync helper for report_removal_results — Steam-Input reset, artwork deletion, unbind."""
+        with self._uow_factory() as uow:
+            roms = {rom_id: uow.roms.get(int(rom_id)) for rom_id in removed_rom_ids}
+
+        # Clean up Steam Input config for removed shortcuts (always reset to default).
         removed_app_ids = [
-            entry["app_id"]
-            for rom_id in removed_rom_ids
-            for entry in [self._state["shortcut_registry"].get(str(rom_id))]
-            if entry and entry.get("app_id")
+            rom.shortcut_app_id for rom in roms.values() if rom is not None and rom.shortcut_app_id is not None
         ]
         if removed_app_ids:
             try:
@@ -134,18 +127,26 @@ class ShortcutRemovalService:
 
         grid = self._steam_config.grid_dir()
         for rom_id in removed_rom_ids:
-            entry = self._registry_store.delete(RegistryDeletePatch(rom_id_str=str(rom_id)))
-            if entry and grid:
-                self._artwork_remover.remove_artwork_files(grid, rom_id, entry)
+            rom = roms.get(rom_id)
+            if rom is not None and grid:
+                self._artwork_remover.remove_artwork_files(grid, rom_id, self._artwork_entry(rom))
 
-        # Update sync_stats to reflect current registry
-        registry = self._state.get("shortcut_registry", {})
-        platforms = {e.get("platform_name", "") for e in registry.values()}
-        self._state["sync_stats"] = {
-            "platforms": len(platforms),
-            "roms": len(registry),
-        }
-        self._state_persister.save_state()
+        # Unbind the removed ROMs — clear the Steam link, keep the row (ADR-0007).
+        with self._uow_factory() as uow:
+            for rom_id in removed_rom_ids:
+                rom = uow.roms.get(int(rom_id))
+                if rom is None or rom.shortcut_app_id is None:
+                    continue
+                rom.unbind_shortcut()
+                uow.roms.save(rom)
+
+    @staticmethod
+    def _artwork_entry(rom) -> ShortcutRegistryEntry:
+        """Project the ROM's artwork-relevant fields into the entry shape the remover reads."""
+        entry: dict[str, object] = {"cover_path": rom.cover_path or ""}
+        if rom.shortcut_app_id is not None:
+            entry["app_id"] = rom.shortcut_app_id
+        return entry  # type: ignore[return-value]
 
     async def report_removal_results(self, removed_rom_ids: list) -> dict:
         """Called by frontend after removing shortcuts via SteamClient."""

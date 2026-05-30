@@ -124,8 +124,8 @@ def plugin():
         config=StartupHealingServiceConfig(
             state=p._state,
             logger=decky.logger,
+            clock=FakeClock(),
             state_persister=p._state_persister,
-            registry_store=p._registry_store,
             retrodeck_paths=p._retrodeck_paths,
             path_probe=FakePathExistsReader(),
             uow_factory=FakeUnitOfWorkFactory(),
@@ -864,7 +864,9 @@ class TestMainStartupOrdering:
         startup_healing_service.prune_stale_installed_roms.side_effect = lambda: call_order.append(
             "prune_stale_installed_roms"
         )
-        startup_healing_service.prune_stale_registry.side_effect = lambda: call_order.append("prune_stale_registry")
+        startup_healing_service.reconcile_orphaned_sync_runs.side_effect = lambda: call_order.append(
+            "reconcile_orphaned_sync_runs"
+        )
 
         wired_services = {
             "save_sync_service": save_sync_service,

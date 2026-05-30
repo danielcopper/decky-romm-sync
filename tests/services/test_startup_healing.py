@@ -9,10 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
-from models.state import InstalledRomEntry, PluginState, ShortcutRegistryEntry, make_default_plugin_state
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from fakes.system_time import FakeClock
+from models.state import InstalledRomEntry, PluginState, make_default_plugin_state
 
-from adapters.registry_store import RegistryStoreAdapter
+from domain.sync_run import SyncRun
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 
 _RETRODECK_HOME = "/run/media/deck/Emulation/retrodeck"
@@ -37,11 +38,6 @@ def _installed(**fields: object) -> InstalledRomEntry:
     return cast("InstalledRomEntry", dict(fields))
 
 
-def _registry(**fields: object) -> ShortcutRegistryEntry:
-    """Build a partial ShortcutRegistryEntry for tests that intentionally probe sparse shapes."""
-    return cast("ShortcutRegistryEntry", dict(fields))
-
-
 def _make_service(
     *,
     state: PluginState,
@@ -49,17 +45,19 @@ def _make_service(
     state_persister: MagicMock,
     retrodeck_home: str = _RETRODECK_HOME,
     path_probe: FakePathExistsReader | None = None,
+    uow: FakeUnitOfWork | None = None,
+    clock: FakeClock | None = None,
 ) -> StartupHealingService:
     probe = path_probe if path_probe is not None else FakePathExistsReader(paths={retrodeck_home})
     return StartupHealingService(
         config=StartupHealingServiceConfig(
             state=state,
             logger=logger,
+            clock=clock if clock is not None else FakeClock(),
             state_persister=state_persister,
-            registry_store=RegistryStoreAdapter(state=state, logger=logger),
             retrodeck_paths=FakeRetroDeckPaths(home=retrodeck_home),
             path_probe=probe,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow) if uow is not None else FakeUnitOfWorkFactory(),
         ),
     )
 
@@ -187,60 +185,54 @@ class TestPruneStaleInstalledRoms:
         state_persister.save_state.assert_called_once()
 
 
-class TestPruneStaleRegistry:
-    def test_prune_missing_app_id(self, logger, state_persister):
-        state = _make_state()
-        state["shortcut_registry"] = {"1": _registry(name="Game")}
-        service = _make_service(state=state, logger=logger, state_persister=state_persister)
-        service.prune_stale_registry()
-        assert "1" not in state["shortcut_registry"]
-        state_persister.save_state.assert_called_once()
+class TestReconcileOrphanedSyncRuns:
+    def _seed_run(self, uow: FakeUnitOfWork, run: SyncRun) -> None:
+        with uow:
+            uow.sync_runs.save(run)
 
-    def test_prune_zero_app_id(self, logger, state_persister):
-        state = _make_state()
-        state["shortcut_registry"] = {"1": _registry(app_id=0, name="Game")}
-        service = _make_service(state=state, logger=logger, state_persister=state_persister)
-        service.prune_stale_registry()
-        assert "1" not in state["shortcut_registry"]
+    def test_running_run_marked_errored(self, logger, state_persister):
+        """A crash-orphaned running run transitions to errored with the restart reason."""
+        uow = FakeUnitOfWork()
+        clock = FakeClock()
+        self._seed_run(
+            uow, SyncRun.start(id="run-1", at="2026-01-01T00:00:00+00:00", platforms_planned=2, roms_planned=5)
+        )
+        service = _make_service(
+            state=_make_state(), logger=logger, state_persister=state_persister, uow=uow, clock=clock
+        )
 
-    def test_prune_string_app_id(self, logger, state_persister):
-        state = _make_state()
-        state["shortcut_registry"] = {"1": _registry(app_id="42", name="Game")}
-        service = _make_service(state=state, logger=logger, state_persister=state_persister)
-        service.prune_stale_registry()
-        assert "1" not in state["shortcut_registry"]
+        service.reconcile_orphaned_sync_runs()
 
-    def test_prune_none_app_id(self, logger, state_persister):
-        state = _make_state()
-        state["shortcut_registry"] = {"1": _registry(app_id=None, name="Game")}
-        service = _make_service(state=state, logger=logger, state_persister=state_persister)
-        service.prune_stale_registry()
-        assert "1" not in state["shortcut_registry"]
+        with uow:
+            healed = uow.sync_runs.get("run-1")
+        assert healed is not None
+        assert healed.status == "errored"
+        assert healed.error == "interrupted by restart"
+        assert healed.finished_at == clock.now().isoformat()
+        assert uow.committed is True
 
-    def test_preserve_valid_app_id(self, logger, state_persister):
-        state = _make_state()
-        state["shortcut_registry"] = {"1": _registry(app_id=1234567890, name="Game")}
-        service = _make_service(state=state, logger=logger, state_persister=state_persister)
-        service.prune_stale_registry()
-        assert "1" in state["shortcut_registry"]
-        state_persister.save_state.assert_not_called()
+    def test_completed_run_untouched(self, logger, state_persister):
+        """A completed run is terminal — reconciliation leaves it exactly as-is."""
+        uow = FakeUnitOfWork()
+        run = SyncRun.start(id="run-1", at="2026-01-01T00:00:00+00:00", platforms_planned=1, roms_planned=3)
+        run.complete(at="2026-01-01T00:05:00+00:00", platforms=["n64"], collections=[])
+        self._seed_run(uow, run)
+        service = _make_service(state=_make_state(), logger=logger, state_persister=state_persister, uow=uow)
 
-    def test_no_prune_does_not_save(self, logger, state_persister):
-        state = _make_state()
-        service = _make_service(state=state, logger=logger, state_persister=state_persister)
-        service.prune_stale_registry()
-        state_persister.save_state.assert_not_called()
+        service.reconcile_orphaned_sync_runs()
 
-    def test_mixed_prune_some_preserve_others(self, logger, state_persister):
-        state = _make_state()
-        state["shortcut_registry"] = {
-            "1": _registry(app_id=100, name="Keep"),
-            "2": _registry(name="Drop"),
-            "3": _registry(app_id="stringy", name="Drop2"),
-        }
-        service = _make_service(state=state, logger=logger, state_persister=state_persister)
-        service.prune_stale_registry()
-        assert "1" in state["shortcut_registry"]
-        assert "2" not in state["shortcut_registry"]
-        assert "3" not in state["shortcut_registry"]
-        state_persister.save_state.assert_called_once()
+        with uow:
+            unchanged = uow.sync_runs.get("run-1")
+        assert unchanged is not None
+        assert unchanged.status == "completed"
+        assert unchanged.error is None
+        assert unchanged.finished_at == "2026-01-01T00:05:00+00:00"
+
+    def test_no_running_run_is_noop(self, logger, state_persister):
+        """No running run → nothing to heal, no save."""
+        uow = FakeUnitOfWork()
+        service = _make_service(state=_make_state(), logger=logger, state_persister=state_persister, uow=uow)
+
+        service.reconcile_orphaned_sync_runs()
+
+        assert uow.sync_runs.save_count == 0

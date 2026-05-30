@@ -6,9 +6,6 @@ import os
 import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 
-from adapters.persistence import (
-    PersistenceAdapter,
-)
 from domain.rom import Rom
 
 # conftest.py patches decky before this import
@@ -85,20 +82,21 @@ class TestGetSyncStats:
         assert stats["total_shortcuts"] == 1
 
     @pytest.mark.asyncio
-    async def test_report_removal_updates_sync_stats_state(self, plugin, tmp_path):
-        """report_removal_results should update sync_stats in state."""
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A", "platform_name": "N64", "cover_path": ""},
-            "20": {"app_id": 1002, "name": "Game B", "platform_name": "SNES", "cover_path": ""},
-        }
+    async def test_report_removal_unbinds_roms_so_stats_drop(self, plugin):
+        """report_removal_results unbinds the ROMs; derived get_sync_stats then counts zero."""
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64", name="Game A")
+        _seed_rom(uow, 20, app_id=1002, platform_slug="snes", name="Game B")
 
         await plugin.report_removal_results([10, 20])
-        assert plugin._state["sync_stats"]["platforms"] == 0
-        assert plugin._state["sync_stats"]["roms"] == 0
+
+        stats = await plugin.get_sync_stats()
+        assert stats["roms"] == 0
+        assert stats["total_shortcuts"] == 0
+        # Rows survive (ADR-0007): they're unbound, not deleted.
+        with uow:
+            assert uow.roms.get(10).shortcut_app_id is None
+            assert uow.roms.get(20).shortcut_app_id is None
 
 
 class TestGetRegistryPlatforms:

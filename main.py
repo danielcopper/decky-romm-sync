@@ -134,7 +134,7 @@ class Plugin:
         # entries living under a pending migration's previous home.
         self._migration_service.detect_retrodeck_path_change()
         self._startup_healing_service.prune_stale_installed_roms()
-        self._startup_healing_service.prune_stale_registry()
+        self._startup_healing_service.reconcile_orphaned_sync_runs()
         # No save-sync orphan prune: roms rows are permanent identity anchors
         # and saves/playtime survive a ROM leaving RomM (ADR-0007).
         self._sgdb_service.prune_orphaned_artwork_cache()

@@ -545,14 +545,9 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     shortcut_removal_service = ShortcutRemovalService(
         config=ShortcutRemovalServiceConfig(
-            romm_api=cfg.adapters.romm_api,
             steam_config=cfg.adapters.steam_config,
-            state=cfg.stores.state,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            emit=cfg.runtime.emit,
-            state_persister=cfg.callbacks.state_persister,
-            registry_store=cfg.callbacks.registry_store,
             artwork_remover=artwork_service,
             uow_factory=cfg.callbacks.uow_factory,
         ),
@@ -709,8 +704,8 @@ def wire_services(cfg: WiringConfig) -> dict:
         config=StartupHealingServiceConfig(
             state=cfg.stores.state,
             logger=cfg.runtime.logger,
+            clock=cfg.runtime.clock,
             state_persister=cfg.callbacks.state_persister,
-            registry_store=cfg.callbacks.registry_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             path_probe=cfg.adapters.path_probe,
             uow_factory=cfg.callbacks.uow_factory,

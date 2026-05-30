@@ -130,14 +130,9 @@ def plugin(tmp_path):
 
     p._shortcut_removal_service = ShortcutRemovalService(
         config=ShortcutRemovalServiceConfig(
-            romm_api=p._romm_api,
             steam_config=steam_config,
-            state=p._state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            emit=decky.emit,
-            state_persister=p._state_persister,
-            registry_store=p._registry_store,
             artwork_remover=artwork_service,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
