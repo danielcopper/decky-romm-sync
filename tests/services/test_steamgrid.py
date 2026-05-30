@@ -278,14 +278,7 @@ class TestGetSgdbArtworkBase64:
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        # ROM in registry but without sgdb_id (only an igdb_id).
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-            "igdb_id": 1234,
-        }
-
+        # roms is empty — no row carries an sgdb_id for rom 42.
         # RomM/IGDB would resolve if (incorrectly) consulted — they must not be.
         fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 9999}
         fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=9999)
@@ -500,7 +493,6 @@ class TestGetSgdbResolution:
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
         fake_romm_api.roms[42] = {"id": 42, "igdb_id": 1234, "name": "Obscure Port"}
         # IGDB cross-ref has no match.
         fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=None)
@@ -586,7 +578,6 @@ class TestApplySgdbGameId:
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
         _seed_all_artwork(fake_steamgrid_db_api, 8888)
 
         result = await plugin.apply_sgdb_game_id(42, 8888)

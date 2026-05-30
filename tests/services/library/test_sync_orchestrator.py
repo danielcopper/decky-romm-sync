@@ -306,6 +306,45 @@ class TestSyncPreview:
         assert plugin._metadata_cache["1"]["summary"] == "Existing populated entry"
 
     @pytest.mark.asyncio
+    async def test_excludes_unbound_rows_from_baseline(self, plugin, fake_romm_api):
+        """An unbound (NULL ``shortcut_app_id``) row must NOT enter the
+        classify baseline, so it cannot inflate ``remove_count`` (R1xR3).
+
+        Setup: rom 1 is bound and still present on the server (unchanged),
+        rom 99 is an unbound leftover that is absent from the live fetch.
+        If ``_read_preview_baseline`` leaked rom 99 into the registry, it
+        would be classified as stale (not in the current fetch) and reported
+        as a removal. The NULL-exclusion guard keeps ``remove_count`` at 0.
+        """
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "Game A", "fs_name": "a.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        # rom 1 bound + present on the server (unchanged); rom 99 unbound
+        # leftover on a now-absent platform (would look stale if leaked).
+        _seed_rom_row(plugin, 1, app_id=1001, platform_slug="n64", name="Game A", fs_name="a.z64")
+        _seed_rom_row(plugin, 99, app_id=None, platform_slug="gba", name="Old Z", fs_name="z.gba")
+
+        result = await plugin.sync_preview()
+        assert result["success"] is True
+        summary = result["summary"]
+        # The unbound row is excluded from the baseline → not counted as stale.
+        assert summary["remove_count"] == 0
+        assert summary["unchanged_count"] == 1
+        assert summary["new_count"] == 0
+
+    @pytest.mark.asyncio
     async def test_returns_error_when_sync_running(self, plugin):
         plugin._sync_service._sync_state = SyncState.RUNNING
         result = await plugin.sync_preview()
@@ -929,15 +968,25 @@ class TestDoSyncPerUnit:
         assert len(stale_events) == 1
         assert stale_events[0] == {"remove_rom_ids": []}
 
+        # Blueprint invariant #1: a delta sync must NOT shrink platform
+        # collections. The skipped platform's unchanged ROM (app_id 1010)
+        # must still appear in the rebuilt ``platform_app_ids`` — the
+        # collection is rebuilt from the full ``roms`` table, so a skipped
+        # unit's rows survive and are re-emitted under their live name.
+        collection_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_collections"]
+        assert len(collection_events) == 1
+        assert collection_events[0]["platform_app_ids"] == {"N64": [1010]}
+
     @pytest.mark.asyncio
-    async def test_stale_entries_pruned_from_registry_after_finalize(self, plugin, fake_romm_api):
-        """End-to-end: a stale registry entry (disabled platform) is removed from the
-        backend registry during finalize, not just from the frontend via ``sync_stale``.
+    async def test_stale_entries_unbound_but_rows_kept_after_finalize(self, plugin, fake_romm_api):
+        """End-to-end: a stale ROM (disabled platform) is unbound during finalize —
+        its ``shortcut_app_id`` is NULLed while the row survives (ADR-0007), not just
+        dropped from the frontend via ``sync_stale``.
 
         Regression for the inflated ``get_sync_stats`` count: the orchestrator emits
-        ``sync_stale`` so the frontend drops the shortcut, and the reporter now also
-        prunes the same rom_ids from ``shortcut_registry`` so ``len(registry)`` matches
-        the still-synced ROMs.
+        ``sync_stale`` so the frontend drops the shortcut, and the reporter unbinds the
+        same rom_ids in ``uow.roms`` (NULL ``shortcut_app_id``, keep the row) so the
+        bound-shortcut count matches the still-synced ROMs.
         """
         import decky
 
@@ -1186,9 +1235,18 @@ class TestSyncRunLifecycle:
         assert run.platforms_completed == ["N64"]
 
     @pytest.mark.asyncio
-    async def test_empty_queue_persists_completed_run(self, plugin, fake_romm_api):
+    async def test_empty_queue_preserves_prior_baseline(self, plugin, fake_romm_api):
+        """A zero-unit sync must NOT open or complete a SyncRun — an empty
+        completed run would reset the preview baseline (next preview would
+        report every platform as 'added'). The prior completed run stays the
+        baseline source, matching the JSON era's return-early behaviour."""
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
+
+        # A prior real sync completed with N64 synced — this is the baseline
+        # the next preview must keep reading.
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z", platforms=["Nintendo 64"], run_id="run-prior")
+
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {}
         plugin._sync_service._sync_state = SyncState.RUNNING
@@ -1197,9 +1255,14 @@ class TestSyncRunLifecycle:
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
         with plugin._uow as uow:
-            run = uow.sync_runs.get("run-empty")
-        assert run is not None
-        assert run.status == "completed"
+            # No empty run was persisted.
+            assert uow.sync_runs.get("run-empty") is None
+            # The prior completed run is still the latest completed → baseline
+            # platforms preserved (not reset to []).
+            latest = uow.sync_runs.get_latest_completed()
+            assert latest is not None
+            assert latest.id == "run-prior"
+            assert latest.platforms_completed == ["Nintendo 64"]
 
     @pytest.mark.asyncio
     async def test_cancelled_run_persists_cancelled(self, plugin, fake_romm_api):
@@ -1251,6 +1314,51 @@ class TestSyncRunLifecycle:
         assert run.status == "errored"
         assert run.finished_at is not None
         assert run.error  # carries a human-readable detail
+
+    @pytest.mark.asyncio
+    async def test_terminal_write_failure_after_finalize_persists_errored(self, plugin, fake_romm_api):
+        """A terminal write that raises AFTER finalize must still mark the run
+        ``errored`` — not leave it stuck ``running``.
+
+        Regression: ``finalize_per_unit_run`` nulls ``box.current_sync_id``
+        before the terminal write. If the error path read that nulled id it
+        would no-op and the run would stay ``running``. The fix captures the
+        run id up front so ``_mark_sync_run_errored`` still targets the run.
+        """
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"10": 9001}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+
+        # The terminal completed-write raises (e.g. a SQLite lock during the
+        # short write UoW) AFTER finalize has already nulled current_sync_id.
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("terminal write boom")
+
+        plugin._sync_service._orchestrator._complete_sync_run = boom  # type: ignore[method-assign]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-terminal-fail"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        # current_sync_id was nulled by finalize, but the run is still recorded errored.
+        assert plugin._sync_service._current_sync_id is None
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-terminal-fail")
+        assert run is not None
+        assert run.status == "errored"
+        assert run.finished_at is not None
+        assert run.error
 
     @pytest.mark.asyncio
     async def test_double_terminal_guard_is_noop(self, plugin, fake_romm_api):

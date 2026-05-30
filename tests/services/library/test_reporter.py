@@ -148,6 +148,21 @@ class TestGetRegistryPlatforms:
         assert result["platforms"][0]["slug"] == "n64"
         assert result["platforms"][0]["count"] == 1
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blob", ["not json at all {", '"a json string, not a dict"', "[1, 2, 3]"])
+    async def test_degrades_to_slug_when_name_cache_corrupt(self, plugin, blob):
+        """A corrupt / non-dict ``platform_names`` blob decodes to ``{}`` so the
+        display name degrades to the slug (bad-path for the decode guard)."""
+        uow = plugin._uow
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64", name="Mario 64")
+        with uow:
+            uow.kv_config.set("platform_names", blob)
+
+        result = await plugin.get_registry_platforms()
+        assert len(result["platforms"]) == 1
+        assert result["platforms"][0]["name"] == "n64"
+        assert result["platforms"][0]["slug"] == "n64"
+
 
 class TestGetRomBySteamAppId:
     @pytest.mark.asyncio
@@ -529,6 +544,36 @@ class TestFinalizePerUnitRun:
         collections_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_collections"]
         payload = collections_events[0][0][1]
         assert set(payload["platform_app_ids"].keys()) == {"Nintendo 64"}
+
+    @pytest.mark.asyncio
+    async def test_stale_unbind_skips_missing_and_already_unbound(self, plugin):
+        """A stale_rom_id with no row (missing) or already-unbound row is skipped
+        without error; the genuinely-bound stale rows still unbind."""
+        import decky
+
+        decky.emit.reset_mock()
+        uow = plugin._uow
+        _seed_rom(uow, 1, app_id=1001, platform_slug="n64", name="Kept")
+        _seed_rom(uow, 2, app_id=1002, platform_slug="snes", name="Stale bound")
+        _seed_rom(uow, 5, app_id=None, platform_slug="gba", name="Already unbound")
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids={1},
+            total_games=1,
+            platform_names={"n64": "Nintendo 64"},
+            stale_rom_ids=[2, 5, 99],  # 2 bound, 5 already unbound, 99 missing
+        )
+
+        assert uow.committed is True
+        with uow:
+            # rom 2 was genuinely stale → unbound; rom 5 stays unbound (skipped,
+            # no error); rom 99 has no row (skipped); rom 1 stays bound.
+            assert uow.roms.get(2).shortcut_app_id is None
+            assert uow.roms.get(5).shortcut_app_id is None
+            assert uow.roms.get(1).shortcut_app_id == 1001
+            assert uow.roms.get(99) is None
+            assert {r.rom_id for r in uow.roms.iter_all()} == {1, 2, 5}
 
     @pytest.mark.asyncio
     async def test_no_unbind_when_stale_rom_ids_default(self, plugin):

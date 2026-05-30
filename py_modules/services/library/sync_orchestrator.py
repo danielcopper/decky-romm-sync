@@ -369,6 +369,12 @@ class SyncOrchestrator:
         platform_rom_ids: set[int] = set()
         total_games_applied = 0
         cancelled = False
+        # Capture the run id up front so the error path can mark the run
+        # ``errored`` even after finalize nulls ``box.current_sync_id``
+        # (reporter.finalize_per_unit_run runs before the terminal write,
+        # both inside this try — a raising terminal write must still record
+        # the failure on the run rather than leave it stuck ``running``).
+        run_id = box.current_sync_id
 
         try:
             try:
@@ -400,19 +406,20 @@ class SyncOrchestrator:
                 },
             )
 
-            # SyncRun.start — short write UoW for the planned counts.
-            await self._loop.run_in_executor(
-                None, self._open_sync_run, box.current_sync_id, platforms_planned, total_roms_planned
-            )
-
             if total_units == 0:
+                # A zero-unit sync MUST NOT open or complete a ``SyncRun``:
+                # an empty completed run would become ``get_latest_completed``
+                # and reset the preview baseline (every platform would then
+                # report as 'added') and the ``last_sync`` timestamp. Leaving
+                # the prior completed run as the baseline matches the JSON era.
                 await self.emit_progress(SyncStage.DONE, message="Nothing to sync", running=False)
-                await self._loop.run_in_executor(None, self._complete_sync_run, box.current_sync_id, [], [])
                 box.sync_state = SyncState.IDLE
                 box.current_sync_id = None
                 return
 
-            run_id = box.current_sync_id
+            # SyncRun.start — short write UoW for the planned counts.
+            await self._loop.run_in_executor(None, self._open_sync_run, run_id, platforms_planned, total_roms_planned)
+
             for unit_index, unit in enumerate(work_queue):
                 if box.sync_state == SyncState.CANCELLING:
                     cancelled = True
@@ -481,7 +488,11 @@ class SyncOrchestrator:
                 "totalSteps": 0,
             }
             self._loop.create_task(self._emit("sync_progress", box.sync_progress))
-            await self._loop.run_in_executor(None, self._mark_sync_run_errored, box.current_sync_id, _msg)
+            # Prefer the captured ``run_id`` — finalize may have already
+            # nulled ``box.current_sync_id`` before a terminal write raised.
+            # ``_mark_sync_run_errored`` no-ops gracefully on a falsy id
+            # (pre-``_open_sync_run`` failures, where the run was never opened).
+            await self._loop.run_in_executor(None, self._mark_sync_run_errored, run_id or box.current_sync_id, _msg)
             box.sync_state = SyncState.IDLE
         finally:
             self._metadata_service.flush_metadata_if_dirty()

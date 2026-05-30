@@ -270,7 +270,7 @@ class SyncReporter:
         ``ValueError`` is caught per-rom so one bad row is skipped while
         the rest of the unit still commits.
 
-        Read-merge for the plugin-resolved ids (mirrors #746's
+        Read-merge for the plugin-resolved ids (mirrors the
         ``_merge_optional_id`` contract): the live RomM fetch does not
         carry a ``sgdb_id`` resolved out-of-band via the IGDB cross-ref
         cascade (steamgrid) or a re-pick, so ``sgdb_id`` / ``ra_id`` /

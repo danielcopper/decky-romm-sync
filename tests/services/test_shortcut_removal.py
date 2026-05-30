@@ -152,6 +152,20 @@ class TestRemovePlatformShortcuts:
         assert result["platform_name"] == "n64"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("blob", ["not json at all {", '"a json string, not a dict"', "[1, 2, 3]"])
+    async def test_degrades_to_slug_when_name_cache_corrupt(self, svc, uow, blob):
+        """A corrupt / non-dict ``platform_names`` blob decodes to ``{}`` so the
+        display name degrades to the slug (bad-path for the decode guard)."""
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64", name="Mario 64")
+        with uow:
+            uow.kv_config.set(_PLATFORM_NAMES_KEY, blob)
+
+        result = await svc.remove_platform_shortcuts("n64")
+        assert result["success"] is True
+        assert result["app_ids"] == [1001]
+        assert result["platform_name"] == "n64"
+
+    @pytest.mark.asyncio
     async def test_does_not_unbind_roms(self, svc, uow):
         """remove_platform_shortcuts just returns data; unbinding happens in report_removal_results."""
         _seed_rom(uow, 10, app_id=1001, platform_slug="n64", name="Mario 64")
