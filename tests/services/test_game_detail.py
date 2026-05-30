@@ -8,7 +8,6 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_retry, _make_testable_plugin
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
-from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
@@ -146,13 +145,10 @@ def plugin(tmp_path):
     p._firmware_service = FirmwareService(
         config=FirmwareServiceConfig(
             romm_api=MagicMock(),
-            state=p._state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             plugin_dir=decky.DECKY_PLUGIN_DIR,
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            state_persister=MagicMock(),
-            firmware_cache_persister=FakeFirmwareCachePersister(),
             firmware_file_store=FirmwareFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),

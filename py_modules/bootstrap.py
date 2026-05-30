@@ -615,13 +615,10 @@ def wire_services(cfg: WiringConfig) -> dict:
     firmware_service = FirmwareService(
         config=FirmwareServiceConfig(
             romm_api=cfg.adapters.romm_api,
-            state=cfg.stores.state,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             plugin_dir=cfg.runtime.plugin_dir,
             clock=cfg.runtime.clock,
-            state_persister=cfg.callbacks.state_persister,
-            firmware_cache_persister=cfg.callbacks.firmware_cache_persister,
             firmware_file_store=cfg.adapters.firmware_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.adapters.core_info_provider,

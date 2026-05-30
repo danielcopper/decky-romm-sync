@@ -17,10 +17,10 @@ import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain import firmware_paths
 from domain.bios import collect_firmware_status
+from domain.bios_file import BiosFile
+from domain.firmware_cache import FirmwareCacheEntry
 from lib.errors import error_response
 
 if TYPE_CHECKING:
@@ -29,11 +29,9 @@ if TYPE_CHECKING:
     from services.protocols import (
         Clock,
         CoreInfoProvider,
-        FirmwareCachePersister,
         FirmwareFileStore,
         RetroDeckPaths,
         RommFirmwareApi,
-        StatePersister,
         UnitOfWorkFactory,
     )
 
@@ -44,21 +42,18 @@ _FIRMWARE_CACHE_TTL = 3600  # 1 hour
 class FirmwareServiceConfig:
     """Frozen wiring bundle handed to ``FirmwareService.__init__``.
 
-    Holds the API adapter, live state dict, runtime infrastructure,
-    Protocol-typed file/cache adapters, and the provider callables
+    Holds the API adapter, runtime infrastructure, Protocol-typed file
+    adapters, the SQLite Unit-of-Work factory, and the provider callables
     FirmwareService needs at construction time. Decomposes the ctor
     so a new dependency does not push past the S107 parameter-count
     limit.
     """
 
     romm_api: RommFirmwareApi
-    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
     clock: Clock
-    state_persister: StatePersister
-    firmware_cache_persister: FirmwareCachePersister
     firmware_file_store: FirmwareFileStore
     retrodeck_paths: RetroDeckPaths
     core_info: CoreInfoProvider
@@ -74,16 +69,14 @@ class FirmwareService:
         config: FirmwareServiceConfig,
     ) -> None:
         self._romm_api = config.romm_api
-        self._state = config.state
         self._loop = config.loop
         self._logger = config.logger
         self._plugin_dir = config.plugin_dir
         self._clock = config.clock
-        self._state_persister = config.state_persister
-        self._firmware_cache_persister = config.firmware_cache_persister
         self._firmware_file_store = config.firmware_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._core_info = config.core_info
+        self._uow_factory = config.uow_factory
         self._bios_registry: dict = {}
         self._bios_files_index: dict | None = None
         self._firmware_cache: list | None = None
@@ -169,24 +162,62 @@ class FirmwareService:
     # ── Firmware list cache ─────────────────────────────────
 
     def _restore_firmware_cache(self) -> None:
-        """Load firmware cache from disk on init."""
+        """Rebuild the in-memory firmware cache from the SQLite cache table.
+
+        The ``firmware_cache`` table is a thin record per ADR-0003 — it carries
+        the already-parsed ``platform_slug`` and ``name`` but not the raw RomM
+        ``file_path`` or ``md5_hash``. We synthesize a ``bios/<slug>/<name>``
+        ``file_path`` that round-trips through ``parse_firmware_slug`` so the
+        cache-only consumers (``check_platform_bios_cached``) keep working after
+        a restart; ``md5_hash`` is intentionally absent (display-only).
+        """
         try:
-            data = self._firmware_cache_persister.load()
-            if data and "items" in data and "cached_at" in data:
-                self._firmware_cache = data["items"]
-                self._firmware_cache_epoch = data["cached_at"]
-                self._logger.info("Restored firmware cache from disk (%d items)", len(data["items"]))
+            with self._uow_factory() as uow:
+                entries = list(uow.firmware_cache.iter_all())
+                epoch = uow.firmware_cache.get_cache_epoch()
         except Exception as e:
-            self._logger.warning(f"Failed to load firmware cache from disk: {e}")
+            self._logger.warning(f"Failed to load firmware cache from DB: {e}")
+            return
+
+        if not entries or epoch is None:
+            return
+
+        self._firmware_cache = [self._entry_to_firmware_dict(entry) for entry in entries]
+        self._firmware_cache_epoch = epoch
+        self._logger.info("Restored firmware cache from DB (%d items)", len(entries))
+
+    @staticmethod
+    def _entry_to_firmware_dict(entry: FirmwareCacheEntry) -> dict:
+        """Reconstruct an in-memory firmware dict from a thin cache aggregate."""
+        return {
+            "id": entry.id,
+            "file_name": entry.name,
+            "file_path": f"bios/{entry.platform_slug}/{entry.name}",
+            "file_size_bytes": entry.file_size_bytes,
+            "md5_hash": "",
+        }
 
     def _persist_firmware_cache(self) -> None:
-        """Write current firmware cache to disk."""
+        """Replace the SQLite firmware cache with the current in-memory listing.
+
+        Maps each raw RomM firmware dict to a thin ``FirmwareCacheEntry`` (slug
+        pre-parsed from ``file_path``) and writes them wholesale.
+        """
         if self._firmware_cache is None:
             return
-        try:
-            self._firmware_cache_persister.save(
-                {"items": self._firmware_cache, "cached_at": self._firmware_cache_epoch}
+        entries = [
+            FirmwareCacheEntry.cached(
+                id=fw.get("id"),
+                name=fw.get("file_name", ""),
+                platform_slug=firmware_paths.parse_firmware_slug(fw.get("file_path", "")),
+                file_size_bytes=fw.get("file_size_bytes", 0),
+                cached_at=self._firmware_cache_epoch,
             )
+            for fw in self._firmware_cache
+        ]
+        try:
+            with self._uow_factory() as uow:
+                uow.firmware_cache.replace_all(entries)
         except Exception as e:
             self._logger.warning(f"Failed to persist firmware cache: {e}")
 
@@ -218,7 +249,8 @@ class FirmwareService:
         self._firmware_cache = None
         self._firmware_cache_epoch = 0
         try:
-            self._firmware_cache_persister.save({})
+            with self._uow_factory() as uow:
+                uow.firmware_cache.clear()
         except Exception as e:
             self._logger.warning(f"Failed to clear persisted firmware cache: {e}")
 
@@ -314,13 +346,13 @@ class FirmwareService:
                 )
         return platforms_map
 
-    def _enrich_platform_map(self, platforms_map):
+    def _read_installed_slugs(self) -> set[str]:
+        """Return the set of platform slugs that have at least one synced ROM."""
+        with self._uow_factory() as uow:
+            return {rom.platform_slug for rom in uow.roms.iter_all() if rom.platform_slug}
+
+    def _enrich_platform_map(self, platforms_map, installed_slugs):
         """Add core info and game-installed flags to each platform entry."""
-        installed_slugs = {
-            entry.get("platform_slug", "")
-            for entry in self._state["shortcut_registry"].values()
-            if entry.get("platform_slug")
-        }
         for plat in platforms_map.values():
             slug = plat["platform_slug"]
             core_so, core_label = self._core_info.get_active_core(slug)
@@ -346,12 +378,23 @@ class FirmwareService:
             server_offline = True
             platforms_map = self._group_registry_firmware()
 
-        self._enrich_platform_map(platforms_map)
+        installed_slugs = await self._loop.run_in_executor(None, self._read_installed_slugs)
+        self._enrich_platform_map(platforms_map, installed_slugs)
         platforms = sorted(platforms_map.values(), key=lambda p: p["platform_slug"])
         return {"success": True, "server_offline": server_offline, "platforms": platforms}
 
     def _download_firmware_post_io(self, fw, firmware_id, dest, tmp_path):
-        """Sync helper for download_firmware — rename, hash verification, state save in executor."""
+        """Sync worker for download_firmware — file rename, hash verification, DB persist.
+
+        Runs in an executor. The filesystem work (rename, checksum) happens
+        outside any transaction; only the ``BiosFile`` upsert is wrapped in a
+        short write UoW (ADR-0006).
+
+        Returns ``(md5_match, registry_hash_valid, error)``. ``error`` is a
+        string when the firmware is malformed — RomM data that fails the
+        ``BiosFile`` invariants (empty slug/file_name) — in which case the
+        renamed file is removed and nothing is persisted; otherwise ``None``.
+        """
         file_name = fw.get("file_name", "")
         self._firmware_file_store.rename(tmp_path, dest)
 
@@ -365,16 +408,25 @@ class FirmwareService:
         md5_match = local_md5 == expected_md5 if expected_md5 and local_md5 is not None else None
         registry_hash_valid = local_md5.lower() == reg_md5.lower() if reg_md5 and local_md5 is not None else None
 
-        # Track in state for migration support
-        self._state["downloaded_bios"][file_name] = {
-            "file_path": dest,
-            "firmware_id": firmware_id,
-            "platform_slug": firmware_paths.parse_firmware_slug(fw.get("file_path", "")),
-            "downloaded_at": self._clock.now().isoformat(),
-        }
-        self._state_persister.save_state()
+        try:
+            bios_file = BiosFile.mark_downloaded(
+                platform_slug=firmware_paths.parse_firmware_slug(fw.get("file_path", "")),
+                file_name=file_name,
+                file_path=dest,
+                downloaded_at=self._clock.now().isoformat(),
+                firmware_id=firmware_id,
+            )
+        except ValueError as e:
+            # Malformed RomM firmware (e.g. file_path with no parseable slug):
+            # the aggregate's invariant rejects it. Drop the renamed file so we
+            # don't leave it untracked, and signal a download failure.
+            self._firmware_file_store.remove_file(dest)
+            return md5_match, registry_hash_valid, f"Invalid firmware metadata: {e}"
 
-        return md5_match, registry_hash_valid
+        with self._uow_factory() as uow:
+            uow.bios_files.save(bios_file)
+
+        return md5_match, registry_hash_valid, None
 
     async def download_firmware(self, firmware_id):
         """Download a single firmware file from RomM."""
@@ -397,9 +449,12 @@ class FirmwareService:
             self._logger.error(f"Failed to download firmware {file_name}: {e}")
             return error_response(e)
 
-        md5_match, registry_hash_valid = await self._loop.run_in_executor(
+        md5_match, registry_hash_valid, post_io_error = await self._loop.run_in_executor(
             None, self._download_firmware_post_io, fw, firmware_id, dest, tmp_path
         )
+        if post_io_error is not None:
+            self._logger.error(f"Failed to persist firmware {file_name}: {post_io_error}")
+            return error_response(ValueError(post_io_error))
 
         self.invalidate_firmware_cache()
         self._logger.info(f"Firmware downloaded: {file_name} -> {dest}")
@@ -553,10 +608,16 @@ class FirmwareService:
             "available_cores": self._core_info.get_available_cores(platform_slug),
         }
 
-    def _delete_platform_bios_io(self, files):
-        """Sync helper for delete_platform_bios — file deletions + state save in executor."""
+    def _delete_platform_bios_io(self, platform_slug, files):
+        """Sync worker for delete_platform_bios — file deletions then DB prune.
+
+        Runs in an executor. Every filesystem removal happens outside any
+        transaction; only the ``BiosFile`` deletes for the files that were
+        actually removed are wrapped in a single short write UoW (ADR-0006).
+        """
         deleted = 0
         errors = []
+        removed_names: list[str] = []
         for f in files:
             if not f.downloaded:
                 continue
@@ -567,13 +628,32 @@ class FirmwareService:
                 errors.append(f"{f.file_name}: {e}")
                 continue
             deleted += 1
-            # Remove from state tracking
-            self._state["downloaded_bios"].pop(f.file_name, None)
+            removed_names.append(f.file_name)
 
-        if deleted:
-            self._state_persister.save_state()
+        if removed_names:
+            self._prune_bios_records(platform_slug, removed_names)
 
         return deleted, errors
+
+    def _prune_bios_records(self, platform_slug, file_names):
+        """Delete the ``BiosFile`` records for *file_names* on *platform_slug*.
+
+        The BIOS rows are keyed by the firmware-directory slug stored at download
+        time, which may differ from the platform slug (e.g. ``psx`` → ``ps``), so
+        we resolve the candidate firmware slugs and match each removed filename
+        against the records under them. One short write UoW.
+        """
+        fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
+        wanted = set(file_names)
+        with self._uow_factory() as uow:
+            keys = [
+                (record.platform_slug, record.file_name)
+                for slug in fw_slugs
+                for record in uow.bios_files.iter_by_platform(slug)
+                if record.file_name in wanted
+            ]
+            for slug, file_name in keys:
+                uow.bios_files.delete(slug, file_name)
 
     async def delete_platform_bios(self, platform_slug):
         """Delete locally downloaded BIOS files for a platform."""
@@ -581,7 +661,9 @@ class FirmwareService:
         if not bios_status.get("needs_bios") or not bios_status.get("files"):
             return {"success": True, "deleted_count": 0, "message": "No BIOS files for this platform"}
 
-        deleted, errors = await self._loop.run_in_executor(None, self._delete_platform_bios_io, bios_status["files"])
+        deleted, errors = await self._loop.run_in_executor(
+            None, self._delete_platform_bios_io, platform_slug, bios_status["files"]
+        )
         self.invalidate_firmware_cache()
 
         if errors:

@@ -5,18 +5,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
-from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import PluginState, make_default_plugin_state
+from models.state import make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.bios import BiosFileEntry
+from domain.bios_file import BiosFile
+from domain.firmware_cache import FirmwareCacheEntry
+from domain.rom import Rom
 
 # conftest.py patches decky before this import
 from main import Plugin
@@ -29,9 +31,61 @@ def _make_clock() -> FakeClock:
     return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
 
 
-def _minimal_state() -> PluginState:
-    """Default PluginState shape for FirmwareService tests."""
-    return make_default_plugin_state()
+def _seed_rom(uow: FakeUnitOfWork, *, rom_id: int, platform_slug: str, app_id: int = 1) -> None:
+    """Seed one ``Rom`` so firmware's installed-platform read sees the platform."""
+    uow.roms.save(
+        Rom(
+            rom_id=rom_id,
+            platform_slug=platform_slug,
+            name=f"rom-{rom_id}",
+            fs_name=f"rom-{rom_id}.zip",
+            shortcut_app_id=app_id,
+            last_synced_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+
+
+def _seed_firmware_cache(uow: FakeUnitOfWork, entries: list[FirmwareCacheEntry]) -> None:
+    """Replace the fake firmware-cache repo's contents in one shot."""
+    uow.firmware_cache.replace_all(entries)
+
+
+def _make_firmware_service(
+    *,
+    romm_api=None,
+    uow_factory: FakeUnitOfWorkFactory | None = None,
+    plugin_dir=None,
+    clock: FakeClock | None = None,
+    firmware_file_store=None,
+    retrodeck_paths: FakeRetroDeckPaths | None = None,
+    core_info: FakeCoreInfoProvider | None = None,
+    logger=None,
+    load_registry: bool = True,
+) -> FirmwareService:
+    """Build a ``FirmwareService`` over fake adapters + a fake Unit of Work.
+
+    Mirrors the SQLite wiring: persistence flows entirely through
+    ``uow_factory`` (no state dict, no persisters). Defaults keep every
+    call-site terse; pass overrides only for the axis under test.
+    """
+    import decky
+
+    fw = FirmwareService(
+        config=FirmwareServiceConfig(
+            romm_api=romm_api if romm_api is not None else MagicMock(),
+            loop=asyncio.get_event_loop(),
+            logger=logger if logger is not None else decky.logger,
+            plugin_dir=plugin_dir if plugin_dir is not None else decky.DECKY_PLUGIN_DIR,
+            clock=clock if clock is not None else _make_clock(),
+            firmware_file_store=firmware_file_store if firmware_file_store is not None else FirmwareFileAdapter(),
+            retrodeck_paths=retrodeck_paths if retrodeck_paths is not None else FakeRetroDeckPaths(),
+            core_info=core_info if core_info is not None else FakeCoreInfoProvider(),
+            uow_factory=uow_factory if uow_factory is not None else FakeUnitOfWorkFactory(),
+        ),
+    )
+    if load_registry:
+        fw.load_bios_registry()
+    return fw
 
 
 @pytest.fixture
@@ -48,25 +102,15 @@ def plugin():
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
-    p._firmware_service = FirmwareService(
-        config=FirmwareServiceConfig(
-            romm_api=p._romm_api,
-            state=p._state,
-            loop=asyncio.get_event_loop(),
-            logger=decky.logger,
-            plugin_dir=decky.DECKY_PLUGIN_DIR,
-            clock=_make_clock(),
-            state_persister=MagicMock(),
-            firmware_cache_persister=FakeFirmwareCachePersister(),
-            firmware_file_store=FirmwareFileAdapter(),
-            retrodeck_paths=FakeRetroDeckPaths(),
-            core_info=FakeCoreInfoProvider(),
-            uow_factory=FakeUnitOfWorkFactory(),
-        ),
+    # Shared fake Unit of Work — firmware persistence flows through it, and tests
+    # inspect the repos (uow.bios_files / uow.firmware_cache / uow.roms) after the
+    # service has run. Exposed on the plugin as ``p._uow`` for assertions.
+    p._uow = FakeUnitOfWork()
+    p._firmware_service = _make_firmware_service(
+        romm_api=p._romm_api,
+        uow_factory=FakeUnitOfWorkFactory(p._uow),
+        clock=_make_clock(),
     )
-    # Mirror main.py: load_bios_registry runs at startup so the index is a
-    # ready-to-use empty dict (or populated, if a fake registry is on disk).
-    p._firmware_service.load_bios_registry()
 
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
@@ -210,6 +254,26 @@ class TestGetFirmwareStatus:
         assert all(not f["downloaded"] for f in dc_plat["files"])  # get_firmware_status files are dicts
 
     @pytest.mark.asyncio
+    async def test_has_games_reflects_synced_roms(self, plugin, fw):
+        """``has_games`` is True only for platforms with a synced ROM in the registry."""
+        firmware_list = [
+            {"id": 1, "file_name": "bios_dc.bin", "file_path": "bios/dc/bios_dc.bin", "file_size_bytes": 100},
+            {"id": 2, "file_name": "scph.bin", "file_path": "bios/ps2/scph.bin", "file_size_bytes": 200},
+        ]
+        # A real loop so the executor-run reads hit the shared fake UoW.
+        fw._loop = asyncio.get_event_loop()
+        # Seed one ROM on "dc" only.
+        _seed_rom(plugin._uow, rom_id=42, platform_slug="dc")
+
+        with patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list):
+            result = await fw.get_firmware_status()
+
+        dc_plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        ps2_plat = next(p for p in result["platforms"] if p["platform_slug"] == "ps2")
+        assert dc_plat["has_games"] is True
+        assert ps2_plat["has_games"] is False
+
+    @pytest.mark.asyncio
     async def test_detects_downloaded_files(self, fw, tmp_path):
         from unittest.mock import AsyncMock, MagicMock
 
@@ -237,13 +301,14 @@ class TestGetFirmwareStatus:
         assert result["platforms"][0]["files"][0]["downloaded"] is True
 
     @pytest.mark.asyncio
-    async def test_handles_api_error_with_offline_fallback(self, fw):
-        from unittest.mock import AsyncMock, MagicMock
+    async def test_handles_api_error_with_offline_fallback(self, plugin, fw):
+        # Real loop: only the HTTP list_firmware fails; the installed-slugs read
+        # against the fake UoW still succeeds.
+        fw._loop = asyncio.get_event_loop()
 
-        fw._loop = MagicMock()
-        fw._loop.run_in_executor = AsyncMock(side_effect=Exception("Connection refused"))
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("Connection refused")):
+            result = await fw.get_firmware_status()
 
-        result = await fw.get_firmware_status()
         assert result["success"] is True
         assert result["server_offline"] is True
         assert "platforms" in result
@@ -284,9 +349,13 @@ class TestDownloadFirmware:
         assert result["success"] is True
         assert result["md5_match"] is True
         assert os.path.exists(result["file_path"])
-        # Verify state tracking
-        assert "bios.bin" in plugin._state["downloaded_bios"]
-        assert plugin._state["downloaded_bios"]["bios.bin"]["firmware_id"] == 10
+        # Verify BIOS record persisted via the Unit of Work. n64/bios.bin parses
+        # to firmware slug "n64".
+        record = plugin._uow.bios_files.get("n64", "bios.bin")
+        assert record is not None
+        assert record.firmware_id == 10
+        assert record.file_path == result["file_path"]
+        assert record.platform_slug == "n64"
 
     @pytest.mark.asyncio
     async def test_handles_download_error(self, plugin, fw, tmp_path):
@@ -367,12 +436,16 @@ class TestDeletePlatformBios:
         bios_file = bios_dir / "scph5501.bin"
         bios_file.write_bytes(b"\x00" * 512)
 
-        # Pre-populate state tracking
-        plugin._state["downloaded_bios"]["scph5501.bin"] = {
-            "file_path": str(bios_file),
-            "firmware_id": 42,
-            "platform_slug": "psx",
-        }
+        # Pre-populate the BIOS registry via the Unit of Work
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="psx",
+                file_name="scph5501.bin",
+                file_path=str(bios_file),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=42,
+            )
+        )
 
         # Mock check_platform_bios to return our test file
         async def mock_check(slug, rom_filename=None):
@@ -401,8 +474,8 @@ class TestDeletePlatformBios:
         assert result["success"] is True
         assert result["deleted_count"] == 1
         assert not bios_file.exists()
-        # Verify state entry removed
-        assert "scph5501.bin" not in plugin._state["downloaded_bios"]
+        # Verify BIOS record removed from the registry
+        assert plugin._uow.bios_files.get("psx", "scph5501.bin") is None
 
     @pytest.mark.asyncio
     async def test_delete_platform_bios_no_files(self, fw):
@@ -1442,50 +1515,15 @@ class TestBiosFilesIndexUnloadedRaises:
 
     def test_property_raises_before_load(self):
         """Accessing bios_files_index before load_bios_registry() raises RuntimeError."""
-        import decky
-
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=MagicMock(),
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
-        )
+        fw = _make_firmware_service(load_registry=False)
 
         with pytest.raises(RuntimeError, match="firmware registry not loaded"):
             _ = fw.bios_files_index
 
     def test_property_returns_dict_after_load(self):
         """After load_bios_registry(), the property returns a dict (possibly empty)."""
-        import decky
+        fw = _make_firmware_service(plugin_dir="/nonexistent")
 
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=MagicMock(),
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir="/nonexistent",
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
-        )
-
-        fw.load_bios_registry()
         # FileNotFoundError path still leaves _bios_files_index initialized to {}.
         assert fw.bios_files_index == {}
 
@@ -1493,7 +1531,7 @@ class TestBiosFilesIndexUnloadedRaises:
 class TestDownloadFirmwarePostIORegistryHash:
     """Tests for _download_firmware_post_io registry hash verification."""
 
-    def test_verifies_registry_hash_when_no_server_md5(self, fw, tmp_path):
+    def test_verifies_registry_hash_when_no_server_md5(self, plugin, fw, tmp_path):
         """Registry hash should be checked even when server md5 is missing."""
 
         bios_dir = tmp_path / "bios"
@@ -1511,14 +1549,18 @@ class TestDownloadFirmwarePostIORegistryHash:
             "md5": expected_md5,
             "platform": "test",
         }
-        fw._state["downloaded_bios"] = {}
 
         fw_data = {"file_name": "test.bin", "file_path": "bios/test/test.bin", "md5_hash": ""}
         with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
-            md5_match, reg_hash_valid = fw._download_firmware_post_io(fw_data, 1, dest, tmp_path_file)
+            md5_match, reg_hash_valid, error = fw._download_firmware_post_io(fw_data, 1, dest, tmp_path_file)
 
         assert md5_match is None
         assert reg_hash_valid is True
+        assert error is None
+        # The BIOS record is persisted via the Unit of Work (firmware slug "test").
+        record = plugin._uow.bios_files.get("test", "test.bin")
+        assert record is not None
+        assert record.firmware_id == 1
 
     def test_registry_hash_mismatch(self, fw, tmp_path):
         """Registry hash mismatch returns False."""
@@ -1535,13 +1577,13 @@ class TestDownloadFirmwarePostIORegistryHash:
             "md5": "0000000000000000000000000000dead",
             "platform": "test",
         }
-        fw._state["downloaded_bios"] = {}
 
         fw_data = {"file_name": "bad.bin", "file_path": "bios/test/bad.bin", "md5_hash": ""}
         with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
-            _md5_match, reg_hash_valid = fw._download_firmware_post_io(fw_data, 2, dest, tmp_path_file)
+            _md5_match, reg_hash_valid, error = fw._download_firmware_post_io(fw_data, 2, dest, tmp_path_file)
 
         assert reg_hash_valid is False
+        assert error is None
 
 
 class TestDownloadFirmwareErrors:
@@ -1557,6 +1599,51 @@ class TestDownloadFirmwareErrors:
 
         result = await fw.download_firmware(999)
         assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_malformed_file_path_returns_failure_and_persists_nothing(self, plugin, fw, tmp_path):
+        """A firmware whose file_path yields an empty slug fails the BiosFile invariant.
+
+        The service catches the aggregate's ValueError, returns the canonical
+        download-failure shape, removes the renamed file, and persists no record
+        — no exception escapes.
+        """
+        content = b"firmware bytes"
+        # file_path has a single segment → parse_firmware_slug returns "" →
+        # BiosFile.mark_downloaded raises ValueError("platform_slug ... required").
+        fw_detail = {
+            "id": 7,
+            "file_name": "orphan.bin",
+            "file_path": "orphan.bin",
+            "file_size_bytes": len(content),
+            "md5_hash": "",
+        }
+
+        bios_dir = tmp_path / "bios"
+        bios_dir.mkdir()
+
+        def fake_download(firmware_id, filename, dest):
+            with open(dest, "wb") as f:
+                f.write(content)
+
+        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        fw._loop = asyncio.get_event_loop()
+
+        with (
+            patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
+            patch.object(plugin._romm_api, "download_firmware", side_effect=fake_download),
+        ):
+            result = await fw.download_firmware(7)
+
+        # Canonical failure shape, no exception escaped.
+        assert result["success"] is False
+        assert "error_code" in result
+        assert "Invalid firmware metadata" in result["message"]
+        # The renamed/downloaded file was cleaned up — nothing left dangling.
+        assert not os.path.exists(os.path.join(str(bios_dir), "orphan.bin"))
+        # No BiosFile record persisted (empty slug key would be ("", "orphan.bin")).
+        assert plugin._uow.bios_files.get("", "orphan.bin") is None
+        assert list(plugin._uow.bios_files.iter_all()) == []
 
 
 class TestGetFirmwareStatusOfflineFallback:
@@ -1586,7 +1673,7 @@ class TestGetFirmwareStatusOfflineFallback:
                 "platform": "dc",
             }
         }
-        plugin._state["shortcut_registry"] = {}
+        # No ROMs seeded in the registry → has_games is False for every platform.
 
         bios_dir = tmp_path / "bios"
         bios_dir.mkdir()
@@ -1613,27 +1700,8 @@ class TestGetFirmwareStatusOfflineFallback:
 class TestFirmwareListCache:
     """Tests for _get_firmware_list caching behaviour."""
 
-    def _make_service(self, romm_api):
-        import decky
-
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=romm_api,
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
-        )
-        fw.load_bios_registry()
-        return fw
+    def _make_service(self, romm_api, uow_factory=None):
+        return _make_firmware_service(romm_api=romm_api, uow_factory=uow_factory)
 
     def test_firmware_list_cached(self):
         """Second call returns cached data without hitting the API again."""
@@ -1669,39 +1737,40 @@ class TestFirmwareListCache:
         assert api.list_firmware.call_count == 2
 
     def test_firmware_cache_ttl_uses_wall_clock_across_restart(self):
-        """Cache restored from disk with stale ``cached_at`` must re-fetch.
+        """Cache restored from the DB with stale ``cached_at`` must re-fetch.
 
         Regression for #344: monotonic-based TTL reset on every plugin
-        restart, making a disk-restored cache appear fresh forever.
+        restart, making a restored cache appear fresh forever.
         """
-        import decky
-
-        cached_items = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
         clock = _make_clock()
-        # Pin disk-cache epoch two hours before the clock's current wall time —
+        # Pin the cache epoch two hours before the clock's current wall time —
         # well past _FIRMWARE_CACHE_TTL (1 h).
         stale_epoch = clock.time() - 7200
-        persister = FakeFirmwareCachePersister(canned_load={"items": cached_items, "cached_at": stale_epoch})
+        uow = FakeUnitOfWork()
+        _seed_firmware_cache(
+            uow,
+            [
+                FirmwareCacheEntry.cached(
+                    id=1, name="bios.bin", platform_slug="dc", file_size_bytes=2048, cached_at=stale_epoch
+                )
+            ],
+        )
 
         api = MagicMock()
         api.list_firmware.return_value = [{"id": 2, "file_name": "fresh.bin"}]
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=api,
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                clock=clock,
-                state_persister=MagicMock(),
-                firmware_cache_persister=persister,
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
-        )
-        assert fw._firmware_cache == cached_items
+        fw = _make_firmware_service(romm_api=api, uow_factory=FakeUnitOfWorkFactory(uow), clock=clock)
+
+        # The restored in-memory cache is reconstructed from the thin aggregate:
+        # synthetic file_path round-trips through parse_firmware_slug, md5 dropped.
+        assert fw._firmware_cache == [
+            {
+                "id": 1,
+                "file_name": "bios.bin",
+                "file_path": "bios/dc/bios.bin",
+                "file_size_bytes": 2048,
+                "md5_hash": "",
+            }
+        ]
         assert fw._firmware_cache_epoch == stale_epoch
 
         result = fw._get_firmware_list()
@@ -1764,28 +1833,15 @@ class TestCheckPlatformBiosCached:
         firmware_cache=None,
         firmware_cache_epoch: float = 0,
         bios_registry=None,
-        state=None,
     ) -> tuple[FirmwareService, FakeCoreInfoProvider]:
         import logging
 
         core_info = FakeCoreInfoProvider()
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=MagicMock(),
-                state=state or _minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=logging.getLogger("test"),
-                plugin_dir="/fake",
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=core_info,
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
+        fw = _make_firmware_service(
+            plugin_dir="/fake",
+            logger=logging.getLogger("test"),
+            core_info=core_info,
         )
-        fw.load_bios_registry()
         fw._firmware_cache = firmware_cache
         fw._firmware_cache_epoch = firmware_cache_epoch
         if bios_registry:
@@ -1846,25 +1902,15 @@ class TestCheckPlatformBiosCached:
 
     def test_does_not_call_http(self):
         """Cache-only method must not invoke any HTTP calls."""
-        api = MagicMock()
         import logging
 
+        api = MagicMock()
         core_info = FakeCoreInfoProvider()
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=api,
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=logging.getLogger("test"),
-                plugin_dir="/fake",
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=FakeFirmwareCachePersister(),
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=core_info,
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
+        fw = _make_firmware_service(
+            romm_api=api,
+            plugin_dir="/fake",
+            logger=logging.getLogger("test"),
+            core_info=core_info,
         )
         fw._firmware_cache = []
         fw._firmware_cache_epoch = 1.0
@@ -1877,116 +1923,85 @@ class TestCheckPlatformBiosCached:
 
 
 class TestFirmwareCachePersistence:
-    """Tests for firmware cache disk persistence."""
+    """Tests for the SQLite firmware-cache round-trip via the Unit of Work."""
 
-    def test_cache_loaded_from_disk_on_init(self):
-        """Firmware cache restored from disk when data is present."""
-        import decky
-
-        cached_items = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
-        persister = FakeFirmwareCachePersister(canned_load={"items": cached_items, "cached_at": 1000.0})
-        clock = _make_clock()
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=MagicMock(),
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                clock=clock,
-                state_persister=MagicMock(),
-                firmware_cache_persister=persister,
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
+    def test_cache_loaded_from_db_on_init(self):
+        """Firmware cache restored from the DB when entries are present."""
+        uow = FakeUnitOfWork()
+        _seed_firmware_cache(
+            uow,
+            [
+                FirmwareCacheEntry.cached(
+                    id=1, name="bios.bin", platform_slug="dc", file_size_bytes=512, cached_at=1000.0
+                )
+            ],
         )
-        assert fw._firmware_cache == cached_items
+
+        fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(uow))
+
+        # Reconstructed thin dict: synthetic file_path, md5 dropped.
+        assert fw._firmware_cache == [
+            {
+                "id": 1,
+                "file_name": "bios.bin",
+                "file_path": "bios/dc/bios.bin",
+                "file_size_bytes": 512,
+                "md5_hash": "",
+            }
+        ]
         assert fw._firmware_cache_epoch == 1000.0
-        assert persister.load_count == 1
 
-    def test_empty_disk_cache_leaves_memory_none(self):
-        """Empty disk cache doesn't populate in-memory cache."""
-        import decky
-
-        persister = FakeFirmwareCachePersister(canned_load={})
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=MagicMock(),
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=persister,
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
-        )
+    def test_empty_db_cache_leaves_memory_none(self):
+        """Empty DB cache doesn't populate the in-memory cache."""
+        fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(FakeUnitOfWork()))
         assert fw._firmware_cache is None
 
-    def test_missing_file_handled_gracefully(self):
-        """FileNotFoundError from load doesn't crash init."""
-        import decky
-
-        persister = FakeFirmwareCachePersister(load_side_effect=FileNotFoundError("no file"))
-        fw = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=MagicMock(),
-                state=_minimal_state(),
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=persister,
-                firmware_file_store=FirmwareFileAdapter(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
-        )
+    def test_db_read_failure_handled_gracefully(self):
+        """A repo error during restore doesn't crash init."""
+        uow = FakeUnitOfWork()
+        with patch.object(uow.firmware_cache, "iter_all", side_effect=OSError("db locked")):
+            fw = _make_firmware_service(uow_factory=FakeUnitOfWorkFactory(uow))
         assert fw._firmware_cache is None
 
-    def test_cache_persisted_after_http_fetch(self, fw):
-        """Firmware cache written to disk after successful HTTP fetch."""
-        firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
+    def test_cache_persisted_after_http_fetch(self, plugin, fw):
+        """Firmware cache written to the DB after a successful HTTP fetch."""
+        firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 512}]
         fw._romm_api.list_firmware.return_value = firmware_list
         fw._firmware_cache = None  # Force refetch
 
         result = fw._get_firmware_list()
 
         assert result == firmware_list
-        persister = fw._firmware_cache_persister
-        assert persister.save_count == 1
-        assert persister.last_saved is not None
-        assert persister.last_saved["items"] == firmware_list
-        assert "cached_at" in persister.last_saved
+        assert plugin._uow.firmware_cache.replace_count == 1
+        # The thin aggregate carries the parsed slug ("dc") and name.
+        stored = plugin._uow.firmware_cache.get("dc", "bios.bin")
+        assert stored is not None
+        assert stored.id == 1
+        assert stored.file_size_bytes == 512
+        assert stored.cached_at == fw._firmware_cache_epoch
 
-    def test_invalidate_clears_persisted_cache(self, fw):
-        """invalidate_firmware_cache writes empty dict to disk."""
+    def test_invalidate_clears_persisted_cache(self, plugin, fw):
+        """invalidate_firmware_cache drops every DB cache row."""
+        _seed_firmware_cache(
+            plugin._uow,
+            [FirmwareCacheEntry.cached(id=1, name="x.bin", platform_slug="dc", file_size_bytes=10, cached_at=1.0)],
+        )
         fw._firmware_cache = [{"id": 1}]
         fw._firmware_cache_epoch = 1.0
 
         fw.invalidate_firmware_cache()
 
         assert fw._firmware_cache is None
-        persister = fw._firmware_cache_persister
-        assert persister.save_count == 1
-        assert persister.last_saved == {}
+        assert list(plugin._uow.firmware_cache.iter_all()) == []
 
-    def test_persist_failure_does_not_crash_fetch(self, fw):
-        """Disk write failure during fetch doesn't break the return value."""
-        firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin"}]
+    def test_persist_failure_does_not_crash_fetch(self, plugin, fw):
+        """A DB write failure during fetch doesn't break the return value."""
+        firmware_list = [{"id": 1, "file_name": "bios.bin", "file_path": "bios/dc/bios.bin", "file_size_bytes": 512}]
         fw._romm_api.list_firmware.return_value = firmware_list
-        fw._firmware_cache_persister.save_side_effect = OSError("disk full")
         fw._firmware_cache = None
 
-        result = fw._get_firmware_list()
+        with patch.object(plugin._uow.firmware_cache, "replace_all", side_effect=OSError("disk full")):
+            result = fw._get_firmware_list()
 
         assert result == firmware_list
         assert fw._firmware_cache == firmware_list
@@ -2073,8 +2088,16 @@ class TestDeletePlatformBiosIOLogsWarnings:
             }
 
         fw.check_platform_bios = mock_check
-        plugin._state["downloaded_bios"]["scph5501.bin"] = {"file_path": "/fake/bios/scph5501.bin"}
-        plugin._state["downloaded_bios"]["scph5502.bin"] = {"file_path": "/fake/bios/scph5502.bin"}
+        for name in ("scph5501.bin", "scph5502.bin"):
+            plugin._uow.bios_files.save(
+                BiosFile.mark_downloaded(
+                    platform_slug="psx",
+                    file_name=name,
+                    file_path=f"/fake/bios/{name}",
+                    downloaded_at="2026-01-01T00:00:00+00:00",
+                    firmware_id=None,
+                )
+            )
 
         with caplog.at_level(logging.WARNING):
             result = await fw.delete_platform_bios("psx")
@@ -2083,10 +2106,10 @@ class TestDeletePlatformBiosIOLogsWarnings:
         assert result["success"] is False
         assert result["deleted_count"] == 1
         assert any("scph5501.bin" in record.getMessage() for record in caplog.records)
-        # The failing file's state entry must remain (it wasn't actually removed).
-        assert "scph5501.bin" in plugin._state["downloaded_bios"]
-        # The successful file's state entry is cleared.
-        assert "scph5502.bin" not in plugin._state["downloaded_bios"]
+        # The failing file's BIOS record must remain (it wasn't actually removed).
+        assert plugin._uow.bios_files.get("psx", "scph5501.bin") is not None
+        # The successful file's BIOS record is cleared.
+        assert plugin._uow.bios_files.get("psx", "scph5502.bin") is None
 
 
 class TestBadPathFirmwareCallables:
@@ -2097,50 +2120,35 @@ class TestBadPathFirmwareCallables:
     failure injection runs through the real Protocol surface.
     """
 
-    def _build_service(self, fake_romm_api, *, firmware_cache_persister=None):
+    def _build_service(self, fake_romm_api, *, uow=None):
         """Build a fresh ``FirmwareService`` wired against the supplied fake API."""
-        import decky
-
-        if firmware_cache_persister is None:
-            firmware_cache_persister = FakeFirmwareCachePersister()
-        state = _minimal_state()
-        svc = FirmwareService(
-            config=FirmwareServiceConfig(
-                romm_api=fake_romm_api,
-                state=state,
-                loop=asyncio.get_event_loop(),
-                logger=decky.logger,
-                plugin_dir=decky.DECKY_PLUGIN_DIR,
-                clock=_make_clock(),
-                state_persister=MagicMock(),
-                firmware_cache_persister=firmware_cache_persister,
-                firmware_file_store=FakeFirmwareFileStore(),
-                retrodeck_paths=FakeRetroDeckPaths(),
-                core_info=FakeCoreInfoProvider(),
-                uow_factory=FakeUnitOfWorkFactory(),
-            ),
+        if uow is None:
+            uow = FakeUnitOfWork()
+        return _make_firmware_service(
+            romm_api=fake_romm_api,
+            uow_factory=FakeUnitOfWorkFactory(uow),
+            firmware_file_store=FakeFirmwareFileStore(),
         )
-        svc.load_bios_registry()
-        return svc
 
-    def test_invalidate_cache_logs_warning_when_persist_fails(self, fake_romm_api, caplog):
-        """Persister raising ``OSError`` is swallowed with a warning log."""
+    def test_invalidate_cache_logs_warning_when_db_clear_fails(self, fake_romm_api, caplog):
+        """A DB clear raising ``OSError`` is swallowed with a warning log."""
         import logging
 
-        persister = FakeFirmwareCachePersister()
-        persister.save_side_effect = OSError("disk full")
-        fw = self._build_service(fake_romm_api, firmware_cache_persister=persister)
+        uow = FakeUnitOfWork()
+        fw = self._build_service(fake_romm_api, uow=uow)
         fw._firmware_cache = [{"id": 1, "file_name": "bios.bin"}]
         fw._firmware_cache_epoch = 1.0
 
-        with caplog.at_level(logging.WARNING):
+        with (
+            patch.object(uow.firmware_cache, "clear", side_effect=OSError("disk full")),
+            caplog.at_level(logging.WARNING),
+        ):
             fw.invalidate_firmware_cache()  # must not raise
 
-        # In-memory cache cleared regardless of persister failure.
+        # In-memory cache cleared regardless of DB failure.
         assert fw._firmware_cache is None
         assert fw._firmware_cache_epoch == 0
-        # The persister was attempted and produced a warning.
-        assert persister.save_count == 1
+        # The failure surfaced as a warning.
         assert any("disk full" in record.getMessage() for record in caplog.records)
 
     @pytest.mark.asyncio
