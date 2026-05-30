@@ -70,6 +70,28 @@ class TestGetByAppId:
         assert found.rom_id == 2
 
 
+class TestUnboundShortcut:
+    def test_null_app_id_round_trips(self, uow: SqliteUnitOfWork):
+        rom = _rom(1, app_id=5000)
+        rom.unbind_shortcut()
+        uow.roms.save(rom)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.shortcut_app_id is None
+
+    def test_get_by_app_id_skips_unbound_rows(self, uow: SqliteUnitOfWork):
+        bound = _rom(1, app_id=5000)
+        unbound = _rom(2, app_id=6000)
+        unbound.unbind_shortcut()
+        uow.roms.save(bound)
+        uow.roms.save(unbound)
+
+        assert uow.roms.get_by_app_id(5000) is not None
+        # The reverse lookup must never resolve a NULL (unbound) row.
+        assert uow.roms.get_by_app_id(6000) is None
+
+
 class TestDelete:
     def test_delete_removes_row(self, uow: SqliteUnitOfWork):
         uow.roms.save(_rom(1))

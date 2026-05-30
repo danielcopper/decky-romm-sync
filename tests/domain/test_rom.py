@@ -81,6 +81,29 @@ class TestUpdateCoverPath:
         assert rom.cover_path == "/covers/1.png"
 
 
+class TestUnbindShortcut:
+    def test_clears_app_id_and_keeps_row(self):
+        rom = Rom.synced(
+            rom_id=1,
+            platform_slug="snes",
+            name="Super Metroid",
+            fs_name="Super Metroid.sfc",
+            shortcut_app_id=123456789,
+            synced_at="2026-05-28T10:00:00",
+        )
+        rom.update_cover_path("/covers/1.png")
+        rom.assign_sgdb_id(7)
+
+        rom.unbind_shortcut()
+
+        assert rom.shortcut_app_id is None
+        assert rom.rom_id == 1
+        assert rom.platform_slug == "snes"
+        assert rom.name == "Super Metroid"
+        assert rom.cover_path == "/covers/1.png"
+        assert rom.sgdb_id == 7
+
+
 class TestAssignSgdbId:
     def test_sets_sgdb_id(self):
         rom = _make_rom()

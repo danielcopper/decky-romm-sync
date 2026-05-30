@@ -20,7 +20,7 @@ class Rom:
     platform_slug: str
     name: str
     fs_name: str
-    shortcut_app_id: int
+    shortcut_app_id: int | None
     last_synced_at: str
     cover_path: str | None = None
     igdb_id: int | None = None
@@ -57,6 +57,15 @@ class Rom:
     def update_cover_path(self, path: str) -> None:
         """Record the local cover-art path once artwork has been written."""
         self.cover_path = path
+
+    def unbind_shortcut(self) -> None:
+        """Drop the Steam-shortcut binding, keeping the ROM row otherwise intact.
+
+        Auto-stale removal unbinds rather than deletes (ADR-0007): the row and
+        its per-ROM children (playtime, saves, metadata) survive; only the
+        ``shortcut_app_id`` link is cleared.
+        """
+        self.shortcut_app_id = None
 
     def assign_sgdb_id(self, sgdb_id: int) -> None:
         """Stamp the resolved SteamGridDB id."""

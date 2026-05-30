@@ -102,7 +102,7 @@ CREATE TABLE roms (
     platform_slug   TEXT    NOT NULL,               -- denormalized RomM platform slug (no platforms table — see header)
     name            TEXT    NOT NULL,
     fs_name         TEXT    NOT NULL,
-    shortcut_app_id INTEGER NOT NULL,               -- Steam non-Steam shortcut app id
+    shortcut_app_id INTEGER,                        -- Steam non-Steam shortcut app id; NULL once unbound (auto-stale, ADR-0007)
     last_synced_at  TEXT    NOT NULL,               -- ISO-8601
     cover_path      TEXT,                           -- NULL until artwork is written
     igdb_id         INTEGER,                        -- NULL until resolved
