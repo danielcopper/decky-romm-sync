@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.registry_patches import RegistryCoverPathPatch
 from models.state import PluginState, ShortcutRegistryEntry
 
 from domain.artwork_paths import final_filename, staging_filename
@@ -64,6 +63,7 @@ class ArtworkService:
         self._get_pending_sync = config.get_pending_sync
         self._registry_store = config.registry_store
         self._state_persister = config.state_persister
+        self._uow_factory = config.uow_factory
 
     # ── Existing cover path check ──────────────────────────────────────────
 
@@ -72,9 +72,10 @@ class ArtworkService:
         staging = os.path.join(grid, staging_filename(rom_id))
 
         # If already synced and final artwork exists, reuse it
-        reg = self._state["shortcut_registry"].get(str(rom_id))
-        if reg and reg.get("app_id"):
-            final = os.path.join(grid, final_filename(reg["app_id"]))
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+        if rom is not None and rom.shortcut_app_id is not None:
+            final = os.path.join(grid, final_filename(rom.shortcut_app_id))
             if self._cover_art_file_store.exists(final):
                 return final
 
@@ -198,10 +199,11 @@ class ArtworkService:
         pending = pending_sync.get(rom_id, {})
         cover_path = pending.get("cover_path", "")
 
-        # Fall back to registry
+        # Fall back to the persisted cover path on the ROM row
         if not cover_path:
-            reg = self._state["shortcut_registry"].get(str(rom_id), {})
-            cover_path = reg.get("cover_path", "")
+            with self._uow_factory() as uow:
+                rom = uow.roms.get(rom_id)
+            cover_path = (rom.cover_path or "") if rom is not None else ""
 
         # Try staging filename as last resort
         if not cover_path:
@@ -228,24 +230,24 @@ class ArtworkService:
     # ── Cover refresh (single-ROM repair) ──────────────────────────────────
 
     async def refresh_cover(self, rom_id: int) -> dict:
-        """Re-download a ROM's RomM cover and update its registry row.
+        """Re-download a ROM's RomM cover and update its ``roms`` row.
 
-        Looks up the ROM's current registry entry to get its ``app_id``,
+        Looks up the ROM's current ``shortcut_app_id`` from ``uow.roms``,
         fetches the fresh cover URL from RomM, downloads to staging,
-        renames to ``{app_id}p.png``, and applies a
-        :class:`RegistryCoverPathPatch` so the registry's ``cover_path``
-        catches up. Returns the canonical ``{success, reason, message}``
-        failure shape on every failure branch — see
-        ``lib/list_result.py``.
+        renames to ``{app_id}p.png``, and records the final path via
+        ``Rom.update_cover_path`` so the ROM row's ``cover_path`` catches
+        up. ADR-0006: the read and write each own a short UoW with the
+        RomM/file I/O in between, outside any transaction. Returns the
+        canonical ``{success, reason, message}`` failure shape on every
+        failure branch — see ``lib/list_result.py``.
         """
-        reg = self._state["shortcut_registry"].get(str(rom_id))
-        if not reg or not reg.get("app_id"):
+        app_id = await self._loop.run_in_executor(None, self._read_bound_app_id, rom_id)
+        if app_id is None:
             return {
                 "success": False,
                 "reason": "not_synced",
                 "message": "ROM is not synced to Steam",
             }
-        app_id = reg["app_id"]
 
         grid = self._steam_config.grid_dir()
         if not grid:
@@ -292,10 +294,7 @@ class ArtworkService:
 
         final = self.finalize_cover_path(grid, staging, app_id, str(rom_id))
 
-        self._registry_store.apply_cover_path(
-            RegistryCoverPathPatch(rom_id_str=str(rom_id), cover_path=final),
-        )
-        await self._loop.run_in_executor(None, self._state_persister.save_state)
+        await self._loop.run_in_executor(None, self._persist_cover_path, rom_id, final)
 
         return {
             "success": True,
@@ -303,13 +302,34 @@ class ArtworkService:
             "cover_path": final,
         }
 
+    def _read_bound_app_id(self, rom_id: int) -> int | None:
+        """Return the ROM's ``shortcut_app_id``, or ``None`` when unsynced/unbound."""
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+        return rom.shortcut_app_id if rom is not None else None
+
+    def _persist_cover_path(self, rom_id: int, cover_path: str) -> None:
+        """Record *cover_path* on the ROM row in a short write UoW."""
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+            if rom is None:
+                return
+            rom.update_cover_path(cover_path)
+            uow.roms.save(rom)
+
     # ── Staging file housekeeping ──────────────────────────────────────────
 
     def is_staging_file_orphaned(self, grid: str, registry: dict, rom_id: str) -> bool:
-        """Check if a staging artwork file is orphaned (not in registry or has final artwork)."""
+        """Check if a staging artwork file is orphaned (not bound or has final artwork).
+
+        *registry* is a ``{str(rom_id): shortcut_app_id}`` map of the
+        currently-bound ROMs (built from ``uow.roms``). A rom_id absent
+        from it is unbound/stale → orphaned. A bound rom_id whose final
+        ``{app_id}p.png`` already exists no longer needs the staging file.
+        """
         if rom_id not in registry:
             return True
-        app_id = registry[rom_id].get("app_id")
+        app_id = registry[rom_id]
         if app_id:
             final = os.path.join(grid, final_filename(app_id))
             return self._cover_art_file_store.exists(final)
@@ -320,7 +340,10 @@ class ArtworkService:
         grid = self._steam_config.grid_dir()
         if not grid or not self._cover_art_file_store.is_dir(grid):
             return
-        registry = self._state.get("shortcut_registry", {})
+        with self._uow_factory() as uow:
+            registry = {
+                str(rom.rom_id): rom.shortcut_app_id for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None
+            }
         pruned = []
         for filename in self._cover_art_file_store.listdir(grid):
             if not filename.startswith("romm_") or not filename.endswith("_cover.png"):

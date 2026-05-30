@@ -113,6 +113,7 @@ class LibraryService:
                 plugin_dir=config.plugin_dir,
                 settings_persister=config.settings_persister,
                 log_debug=config.log_debug,
+                uow_factory=config.uow_factory,
                 sync_state_box=self._box,
                 emit_progress=self._emit_progress_proxy,
             )
@@ -136,6 +137,7 @@ class LibraryService:
                 uuid_gen=config.uuid_gen,
                 sleeper=config.sleeper,
                 state_persister=config.state_persister,
+                uow_factory=config.uow_factory,
                 sync_state_box=self._box,
                 fetcher=self._fetcher,
                 reporter=reporter_binding,
@@ -155,6 +157,7 @@ class LibraryService:
                 clock=config.clock,
                 state_persister=config.state_persister,
                 registry_store=config.registry_store,
+                uow_factory=config.uow_factory,
                 sync_state_box=self._box,
                 emit_progress=self._emit_progress_proxy,
                 artwork=config.artwork,

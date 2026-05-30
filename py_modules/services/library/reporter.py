@@ -2,27 +2,28 @@
 
 Owns the post-apply path: the frontend-callable ``report_unit_results``
 ack (event signal only) and the orchestrator-driven
-``commit_unit_results`` that finalises artwork file names, appends
-per-ROM registry entries, and persists state. The terminal
+``commit_unit_results`` that finalises artwork file names and upserts
+each acked ROM into the ``roms`` aggregate. The terminal
 ``finalize_per_unit_run`` step builds the cross-unit collection
-mappings, persists last-sync metadata, and emits the ``sync_complete``
-event. Also owns the registry-derived query methods
-(``get_registry_platforms``, ``get_sync_stats``,
+mappings, refreshes the ``platform_slug → display_name`` cache, and
+emits the ``sync_complete`` event. Also owns the registry-derived
+query methods (``get_registry_platforms``, ``get_sync_stats``,
 ``get_rom_by_steam_app_id``) and the ``clear_sync_cache`` reset.
-Anything that mutates the registry as a side-effect of a finished
-sync run belongs here; anything that decides "what should this sync
-do?" belongs in the orchestrator.
+Anything that mutates the ``roms`` registry as a side-effect of a
+finished sync run belongs here; anything that decides "what should
+this sync do?" belongs in the orchestrator.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.registry_patches import RegistrySyncApplyPatch
 from models.state import PluginState
 
+from domain.rom import Rom
 from domain.sync_diff import should_include_in_platform_collection
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
@@ -39,9 +40,17 @@ if TYPE_CHECKING:
         ShortcutRegistryStore,
         StatePersister,
         SteamConfigStore,
+        UnitOfWorkFactory,
     )
 
     EmitProgressFn = Callable[..., Awaitable[None]]
+
+
+# kv_config key for the offline ``platform_slug → display_name`` cache,
+# refreshed on every sync from the live work-queue. Read by the offline
+# registry queries (DangerZone label, game-detail platform name) so a
+# RomM-down panel shows "Nintendo 64" rather than the bare "n64" slug.
+_PLATFORM_NAMES_KEY = "platform_names"
 
 
 @dataclass(frozen=True)
@@ -51,12 +60,13 @@ class SyncReporterConfig:
     Holds the Protocol-typed Steam-config adapter (used for grid-dir
     lookup and Steam-Input mode application), the live state/settings
     dicts, runtime infrastructure (loop, logger), event emitter, clock,
-    state-persistence callback, the shared ``LibrarySyncStateBox`` (the
-    reporter reads the pending-sync dicts populated by the orchestrator
-    and clears the active sync id when reporting completes), an
-    orchestrator-supplied ``emit_progress`` callback for the terminal
-    "done" event, and the ``ArtworkManager`` peer used for cover-path
-    finalisation.
+    the SQLite Unit-of-Work factory (the transactional seam over the
+    ``roms`` / ``sync_runs`` / ``kv_config`` repositories), the shared
+    ``LibrarySyncStateBox`` (the reporter reads the pending-sync dicts
+    populated by the orchestrator and clears the active sync id when
+    reporting completes), an orchestrator-supplied ``emit_progress``
+    callback for the terminal "done" event, and the ``ArtworkManager``
+    peer used for cover-path finalisation.
     """
 
     steam_config: SteamConfigStore
@@ -68,6 +78,7 @@ class SyncReporterConfig:
     clock: Clock
     state_persister: StatePersister
     registry_store: ShortcutRegistryStore
+    uow_factory: UnitOfWorkFactory
     sync_state_box: LibrarySyncStateBox
     emit_progress: EmitProgressFn
     artwork: ArtworkManager
@@ -86,6 +97,7 @@ class SyncReporter:
         self._clock = config.clock
         self._state_persister = config.state_persister
         self._registry_store = config.registry_store
+        self._uow_factory = config.uow_factory
         self._sync_state = config.sync_state_box
         self._emit_progress = config.emit_progress
         self._artwork = config.artwork
@@ -98,25 +110,39 @@ class SyncReporter:
 
     def _build_collection_app_ids(
         self,
-        registry: dict,
+        uow,
         pending_platform_rom_ids: set[int] | None,
         pending_collection_memberships: dict[str, list[int]],
+        platform_names: dict[str, str],
     ) -> tuple[dict, dict[str, list]]:
-        """Build platform_app_ids and romm_collection_app_ids from the shortcut registry."""
+        """Build platform_app_ids and romm_collection_app_ids from ``uow.roms``.
+
+        Platform collections are grouped from the full ``roms`` table
+        (every bound ROM, including ones an incremental sync skipped —
+        they remain rows), keyed by the platform's live display name
+        resolved from *platform_names* (the work-queue), falling back to
+        the slug when absent. RomM collections keep the per-run
+        membership accumulator and resolve each ``rom_id`` to its bound
+        ``shortcut_app_id`` via ``uow.roms``. Both loops EXCLUDE rows
+        whose ``shortcut_app_id`` is ``None`` (unbound / stale).
+        """
+        create_groups = self._settings.get("collection_create_platform_groups", False)
         platform_app_ids: dict = {}
-        for rid_str, entry in registry.items():
-            if not should_include_in_platform_collection(
-                int(rid_str),
-                pending_platform_rom_ids,
-                self._settings.get("collection_create_platform_groups", False),
-            ):
+        for rom in uow.roms.iter_all():
+            if rom.shortcut_app_id is None:
                 continue
-            pname = entry.get("platform_name", "Unknown")
-            platform_app_ids.setdefault(pname, []).append(entry.get("app_id"))
+            if not should_include_in_platform_collection(rom.rom_id, pending_platform_rom_ids, create_groups):
+                continue
+            display = platform_names.get(rom.platform_slug, rom.platform_slug)
+            platform_app_ids.setdefault(display, []).append(rom.shortcut_app_id)
 
         romm_collection_app_ids: dict[str, list] = {}
         for coll_name, rom_ids in pending_collection_memberships.items():
-            app_ids = [entry["app_id"] for rid in rom_ids if (entry := registry.get(str(rid))) and "app_id" in entry]
+            app_ids = [
+                rom.shortcut_app_id
+                for rid in rom_ids
+                if (rom := uow.roms.get(rid)) is not None and rom.shortcut_app_id is not None
+            ]
             if app_ids:
                 romm_collection_app_ids[coll_name] = app_ids
 
@@ -128,44 +154,47 @@ class SyncReporter:
         self,
         pending_collection_memberships: dict[str, list[int]],
         pending_platform_rom_ids: set[int] | None,
+        platform_names: dict[str, str],
         stale_rom_ids: list[int] | None = None,
     ) -> tuple[dict, dict[str, list]]:
-        """Build collection app-id maps and persist last_sync metadata.
+        """Unbind stale ROMs, refresh the name cache, and build collection maps.
 
-        By the time this runs, every per-unit ``report_unit_results``
-        has already updated the registry, so we only need to build the
-        cross-unit collection mappings and write the final
-        ``last_sync`` / ``last_synced_*`` fields.
+        By the time this runs, every per-unit ``commit_unit_results``
+        has already upserted its ROMs into ``uow.roms``, so we only need
+        to: (1) unbind the stale ROMs (clear ``shortcut_app_id``, keeping
+        the row per ADR-0007 — never delete), (2) refresh the offline
+        ``platform_slug → display_name`` cache from the live work-queue,
+        and (3) build the cross-unit collection mappings. The last-sync
+        timestamp and the synced platform/collection lists now live on
+        the ``SyncRun`` record the orchestrator writes — they are not
+        persisted here.
 
-        ``stale_rom_ids`` are the rom_ids the sync determined are no
-        longer present (disabled platform, removed from server). They are
-        pruned from the registry first so collections are built from — and
-        the persisted registry reflects — only the still-synced ROMs.
-        Registry keys are JSON strings; ``stale_rom_ids`` are ints, so we
-        pop by ``str(rid)``.
+        Everything happens inside one write UoW so the unbind + cache
+        refresh + reads commit atomically.
         """
-        registry = self._state["shortcut_registry"]
-        for rid in stale_rom_ids or []:
-            registry.pop(str(rid), None)
+        with self._uow_factory() as uow:
+            for rid in stale_rom_ids or []:
+                rom = uow.roms.get(rid)
+                if rom is None or rom.shortcut_app_id is None:
+                    continue
+                rom.unbind_shortcut()
+                uow.roms.save(rom)
 
-        platform_app_ids, romm_collection_app_ids = self._build_collection_app_ids(
-            self._state["shortcut_registry"],
-            pending_platform_rom_ids,
-            pending_collection_memberships,
-        )
+            uow.kv_config.set(_PLATFORM_NAMES_KEY, json.dumps(platform_names))
 
-        self._state["last_sync"] = self._clock.now().isoformat()
-        self._state["last_synced_collections"] = list(pending_collection_memberships.keys())
-        self._state["last_synced_platforms"] = list(platform_app_ids.keys())
-        self._state_persister.save_state()
-
-        return platform_app_ids, romm_collection_app_ids
+            return self._build_collection_app_ids(
+                uow,
+                pending_platform_rom_ids,
+                pending_collection_memberships,
+                platform_names,
+            )
 
     async def finalize_per_unit_run(
         self,
         pending_collection_memberships: dict[str, list[int]],
         pending_platform_rom_ids: set[int] | None,
         total_games: int,
+        platform_names: dict[str, str] | None = None,
         cancelled: bool = False,
         stale_rom_ids: list[int] | None = None,
     ):
@@ -174,15 +203,19 @@ class SyncReporter:
         Stale-removal is emitted separately by the orchestrator via
         ``sync_stale`` so the frontend can apply removals before
         collections are recomputed. ``stale_rom_ids`` (default ``None`` =
-        prune nothing) are pruned from the backend ``shortcut_registry``
-        before collections are built and state is persisted, keeping the
-        backend registry in sync with the frontend removals.
+        unbind nothing) have their Steam-shortcut binding cleared in the
+        ``roms`` table (the row survives) before collections are built,
+        keeping the backend registry in sync with the frontend removals.
+        ``platform_names`` is the live ``platform_slug → display_name``
+        map from the work-queue, cached for offline registry queries.
         """
+        names = platform_names or {}
         platform_app_ids, romm_collection_app_ids = await self._loop.run_in_executor(
             None,
             self._finalize_per_unit_run_io,
             pending_collection_memberships,
             pending_platform_rom_ids,
+            names,
             stale_rom_ids,
         )
 
@@ -203,7 +236,7 @@ class SyncReporter:
             complete_payload["cancelled"] = True
         await self._emit("sync_complete", complete_payload)
 
-        total = len(self._state["shortcut_registry"])
+        total = await self._loop.run_in_executor(None, self._count_bound_roms)
         if cancelled:
             await self._emit_progress(
                 SyncStage.CANCELLED,
@@ -225,30 +258,72 @@ class SyncReporter:
         self._sync_state.current_sync_id = None
         return platform_app_ids, romm_collection_app_ids
 
+    def _count_bound_roms(self) -> int:
+        """Count ROMs that still carry a Steam-shortcut binding."""
+        with self._uow_factory() as uow:
+            return sum(1 for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None)
+
     # ── Report unit results (per-unit pipeline) ──────────────────
 
     def _commit_unit_results_io(self, rom_id_to_app_id):
-        """Sync helper: finalise artwork + registry for one unit, persist state."""
+        """Sync helper: finalise artwork file names, then upsert ``roms`` for one unit.
+
+        ADR-0006 two-pass: cover-file RENAME is filesystem I/O so it runs
+        FIRST (outside any UoW); the final paths are collected, then one
+        short write UoW upserts every acked ROM via ``Rom.synced`` (+ the
+        ``update_cover_path`` / ``assign_sgdb_id`` / ``assign_ra_id``
+        verbs). ``Rom.synced`` validates untrusted RomM fields; a
+        ``ValueError`` is caught per-rom so one bad row is skipped while
+        the rest of the unit still commits.
+
+        Read-merge for the plugin-resolved ids (mirrors #746's
+        ``_merge_optional_id`` contract): the live RomM fetch does not
+        carry a ``sgdb_id`` resolved out-of-band via the IGDB cross-ref
+        cascade (steamgrid) or a re-pick, so ``sgdb_id`` / ``ra_id`` /
+        ``cover_path`` follow "non-None new value wins, else preserve the
+        existing row's value, else None" — a blind upsert would NULL them
+        on the next full re-sync and revert the SGDB art to "needs pick".
+        ``igdb_id`` is RomM-native, so the fetch value always wins.
+        """
         grid = self._steam_config.grid_dir()
         box = self._sync_state
 
+        # Pass 1: rename staged covers to their final ``{app_id}p.png``
+        # path (file I/O — no UoW open).
+        finalized: dict[str, str] = {}
         for rom_id_str, app_id in rom_id_to_app_id.items():
             pending = box.pending_sync.get(int(rom_id_str), {})
-            cover_path = self._finalize_cover_path(grid, pending.get("cover_path", ""), app_id, rom_id_str)
-            self._registry_store.apply_sync(
-                RegistrySyncApplyPatch(
-                    rom_id_str=rom_id_str,
-                    app_id=app_id,
-                    name=pending.get("name", ""),
-                    fs_name=pending.get("fs_name", ""),
-                    platform_name=pending.get("platform_name", ""),
-                    platform_slug=pending.get("platform_slug", ""),
-                    cover_path=cover_path,
-                    igdb_id=pending.get("igdb_id"),
-                    sgdb_id=pending.get("sgdb_id"),
-                    ra_id=pending.get("ra_id"),
-                )
-            )
+            finalized[rom_id_str] = self._finalize_cover_path(grid, pending.get("cover_path", ""), app_id, rom_id_str)
+
+        # Pass 2: one write UoW for the whole unit's ROM upserts.
+        with self._uow_factory() as uow:
+            for rom_id_str, app_id in rom_id_to_app_id.items():
+                pending = box.pending_sync.get(int(rom_id_str), {})
+                rom_id = int(rom_id_str)
+                existing = uow.roms.get(rom_id)
+                try:
+                    rom = Rom.synced(
+                        rom_id=rom_id,
+                        platform_slug=pending.get("platform_slug", ""),
+                        name=pending.get("name", ""),
+                        fs_name=pending.get("fs_name", ""),
+                        shortcut_app_id=int(app_id),
+                        synced_at=self._clock.now().isoformat(),
+                        igdb_id=pending.get("igdb_id"),
+                    )
+                except ValueError as e:
+                    self._logger.warning(f"Skipping invalid ROM {rom_id_str} during commit: {e}")
+                    continue
+                cover_path = finalized.get(rom_id_str) or (existing.cover_path if existing is not None else None)
+                if cover_path:
+                    rom.update_cover_path(cover_path)
+                sgdb_id = self._merge_optional_id(pending.get("sgdb_id"), existing.sgdb_id if existing else None)
+                if sgdb_id is not None:
+                    rom.assign_sgdb_id(sgdb_id)
+                ra_id = self._merge_optional_id(pending.get("ra_id"), existing.ra_id if existing else None)
+                if ra_id is not None:
+                    rom.assign_ra_id(ra_id)
+                uow.roms.save(rom)
 
         steam_input_mode = self._settings.get("steam_input_mode", "default")
         if steam_input_mode != "default" and rom_id_to_app_id:
@@ -259,18 +334,23 @@ class SyncReporter:
             except Exception as e:
                 self._logger.error(f"Failed to set Steam Input config: {e}")
 
-        # Crash-safe checkpoint: persist after every unit so a kill between
-        # units preserves every prior unit's work in the registry.
-        self._state_persister.save_state()
+    @staticmethod
+    def _merge_optional_id(new_value, existing_value) -> int | None:
+        """Resolve a plugin-resolved id: non-None new wins, else preserve existing, else None."""
+        if new_value is not None:
+            return int(new_value)
+        if existing_value is not None:
+            return int(existing_value)
+        return None
 
     async def report_unit_results(self, rom_id_to_app_id):
         """Frontend-Callable: ack that this unit's shortcuts have been applied.
 
         Records the rom_id→app_id mapping into the state box and signals
         the orchestrator's per-unit wait event. The orchestrator drives
-        the actual per-unit commit (metadata-cache stamp + registry
-        update + state persist) after this returns, so the write order
-        is metadata-first then state.
+        the actual per-unit commit (metadata-cache stamp + ``roms``
+        upsert) after this returns, so the write order is metadata-first
+        then the ``roms`` table.
         """
         box = self._sync_state
         box.last_unit_results = dict(rom_id_to_app_id)
@@ -281,24 +361,49 @@ class SyncReporter:
         return {"success": True, "count": len(rom_id_to_app_id)}
 
     async def commit_unit_results(self, rom_id_to_app_id):
-        """Per-unit commit: cover-path finalize, registry update, state save.
+        """Per-unit commit: cover-path finalize then ``roms`` upsert.
 
         Called by the orchestrator after metadata-cache stamping for the
         unit completes. This is the second half of the per-unit write
-        transaction (metadata first, state second — crash-safe order).
+        transaction (metadata first, ``roms`` table second — crash-safe
+        order).
         """
         await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id)
 
     # ── Registry queries ─────────────────────────────────────────
 
+    def _read_platform_name_cache(self, uow) -> dict[str, str]:
+        """Decode the ``platform_slug → display_name`` cache, ``{}`` when absent/corrupt."""
+        raw = uow.kv_config.get(_PLATFORM_NAMES_KEY)
+        if not raw:
+            return {}
+        try:
+            decoded = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+
     def get_registry_platforms(self):
-        """Return platforms from the shortcut registry (works offline, no RomM API call)."""
-        platforms = {}
-        for entry in self._state["shortcut_registry"].values():
-            pname = entry.get("platform_name", "Unknown")
-            slug = entry.get("platform_slug", "")
-            platforms.setdefault(pname, {"count": 0, "slug": slug})
-            platforms[pname]["count"] += 1
+        """Return synced platforms from ``uow.roms`` (works offline, no RomM API call).
+
+        Counts bound ROMs per ``platform_slug`` and resolves display
+        names from the ``platform_names`` cache refreshed each sync,
+        degrading to the slug when a name is absent (RomM never seen for
+        that slug). Unbound (stale) rows are excluded.
+        """
+        return self._read_registry_platforms_io()
+
+    def _read_registry_platforms_io(self):
+        with self._uow_factory() as uow:
+            names = self._read_platform_name_cache(uow)
+            platforms: dict[str, dict] = {}
+            for rom in uow.roms.iter_all():
+                if rom.shortcut_app_id is None:
+                    continue
+                slug = rom.platform_slug
+                display = names.get(slug, slug)
+                platforms.setdefault(display, {"count": 0, "slug": slug})
+                platforms[display]["count"] += 1
         return {
             "platforms": [{"name": k, "slug": v["slug"], "count": v["count"]} for k, v in sorted(platforms.items())],
         }
@@ -306,14 +411,20 @@ class SyncReporter:
     # ── Cache / stats ────────────────────────────────────────────
 
     def clear_sync_cache(self):
-        """Clear last_sync timestamp to force a full re-fetch on next sync."""
-        self._state["last_sync"] = None
-        self._state_persister.save_state()
+        """Force a full re-fetch on the next sync by clearing the completed-run history.
+
+        The incremental-skip gate (fetcher) and ``get_sync_stats`` both derive
+        ``last_sync`` from the newest completed ``SyncRun``; deleting the
+        completed runs in a short write UoW resets that read to ``None`` so every
+        platform full-fetches next time (and the "Force Full Sync" button hides
+        until a fresh run completes).
+        """
+        with self._uow_factory() as uow:
+            uow.sync_runs.delete_completed()
         self._logger.info("Sync cache cleared — next sync will do a full fetch")
         return {"success": True, "message": "Next sync will do a full fetch"}
 
     def get_sync_stats(self):
-        registry = self._state.get("shortcut_registry", {})
         enabled_platforms = self._settings.get("enabled_platforms", {})
         enabled_platform_count = sum(1 for v in enabled_platforms.values() if v)
         enabled_collections = self._settings.get("enabled_collections", {})
@@ -323,24 +434,41 @@ class SyncReporter:
             )
         else:
             enabled_collection_count = 0
+        last_sync, rom_count = self._read_sync_stats_io()
         return {
-            "last_sync": self._state.get("last_sync"),
+            "last_sync": last_sync,
             "platforms": enabled_platform_count,
             "collections": enabled_collection_count,
-            "roms": len(registry),
-            "total_shortcuts": len(registry),
+            "roms": rom_count,
+            "total_shortcuts": rom_count,
         }
 
+    def _read_sync_stats_io(self) -> tuple[str | None, int]:
+        """Read ``(last_sync_iso, bound_rom_count)`` from SQLite.
+
+        ``last_sync`` is the ``finished_at`` of the latest completed
+        ``SyncRun``; the ROM count is the bound-shortcut count in ``roms``.
+        """
+        with self._uow_factory() as uow:
+            latest = uow.sync_runs.get_latest_completed()
+            last_sync = latest.finished_at if latest is not None else None
+            rom_count = sum(1 for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None)
+        return last_sync, rom_count
+
     def get_rom_by_steam_app_id(self, app_id):
-        app_id = int(app_id)
-        for rom_id, entry in self._state["shortcut_registry"].items():
-            if entry.get("app_id") == app_id:
-                installed = self._state["installed_roms"].get(rom_id)
-                return {
-                    "rom_id": int(rom_id),
-                    "name": entry.get("name", ""),
-                    "platform_name": entry.get("platform_name", ""),
-                    "platform_slug": entry.get("platform_slug", ""),
-                    "installed": installed,
-                }
-        return None
+        return self._read_rom_by_app_id_io(int(app_id))
+
+    def _read_rom_by_app_id_io(self, app_id: int):
+        with self._uow_factory() as uow:
+            rom = uow.roms.get_by_app_id(app_id)
+            if rom is None:
+                return None
+            display = self._read_platform_name_cache(uow).get(rom.platform_slug, rom.platform_slug)
+        installed = self._state["installed_roms"].get(str(rom.rom_id))
+        return {
+            "rom_id": rom.rom_id,
+            "name": rom.name,
+            "platform_name": display,
+            "platform_slug": rom.platform_slug,
+            "installed": installed,
+        }

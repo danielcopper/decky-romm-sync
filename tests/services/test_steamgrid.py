@@ -6,7 +6,7 @@ import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_state_persister import FakeStatePersister
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -15,6 +15,7 @@ from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.metadata_cache_store import MetadataCacheStoreAdapter
 from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.rom import Rom
 from lib.errors import SgdbApiError, SteamGridDirMissingError
 
 # conftest.py patches decky before this import
@@ -30,7 +31,28 @@ def sgdb_artwork_cache():
 
 
 @pytest.fixture
-def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
+def uow() -> FakeUnitOfWork:
+    """Shared in-memory UoW the tests seed (``uow.roms``) and assert against."""
+    return FakeUnitOfWork()
+
+
+def _seed_rom(uow, rom_id, *, app_id=1, sgdb_id=None, platform_slug="n64", name="Game"):
+    """Insert a bound (or unbound when app_id is None) ROM into the fake UoW."""
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug=platform_slug,
+        name=name,
+        fs_name=f"{name}.z64",
+        shortcut_app_id=app_id,
+        last_synced_at="2025-01-01T00:00:00",
+        sgdb_id=sgdb_id,
+    )
+    with uow:
+        uow.roms.save(rom)
+
+
+@pytest.fixture
+def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._romm_api = fake_romm_api
@@ -67,7 +89,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
             log_debug=p._log_debug,
             metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
 
@@ -90,9 +112,10 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api):
             registry_store=p._registry_store,
             get_pending_sync=lambda: p._sync_service._pending_sync,
             log_debug=p._log_debug,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
+    p._uow = uow
     return p
 
 
@@ -346,18 +369,12 @@ class TestGetSgdbArtworkBase64:
         assert base64.b64decode(result["base64"]) == b"logo data"
 
     @pytest.mark.asyncio
-    async def test_sgdb_id_cached_in_registry(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+    async def test_sgdb_id_cached_in_registry(self, plugin, uow, sgdb_artwork_cache, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        # ROM with both igdb_id and sgdb_id already cached
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-            "igdb_id": 1234,
-            "sgdb_id": 9999,
-        }
+        # ROM with sgdb_id already cached on its row.
+        _seed_rom(uow, 42, app_id=100001, sgdb_id=9999, name="Zelda")
 
         # Grid artwork available for the cached SGDB id; IGDB lookup
         # would resolve to a different id if (incorrectly) consulted.
@@ -389,11 +406,11 @@ class TestGetSgdbResolution:
         assert result == {"decision": "no_api_key"}
 
     @pytest.mark.asyncio
-    async def test_use_state_when_romm_silent(self, plugin, fake_romm_api):
+    async def test_use_state_when_romm_silent(self, plugin, uow, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 9999}
+        _seed_rom(uow, 42, app_id=1, sgdb_id=9999)
         # RomM has no sgdb_id → state wins, nothing persisted.
         fake_romm_api.roms[42] = {"id": 42}
 
@@ -402,65 +419,56 @@ class TestGetSgdbResolution:
         assert result == {"decision": "resolved", "sgdb_id": 9999}
 
     @pytest.mark.asyncio
-    async def test_use_romm_persists_when_state_empty(self, plugin, fake_romm_api):
+    async def test_use_romm_persists_when_state_empty(self, plugin, uow, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        persister = FakeStatePersister()
-        plugin._sgdb_service._state_persister = persister
 
-        # State has no sgdb_id; RomM supplies one.
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        # ROM row has no sgdb_id; RomM supplies one → persisted on the row.
+        _seed_rom(uow, 42, app_id=1)
         fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 7777}
 
         result = await plugin.get_sgdb_resolution(42)
 
         assert result == {"decision": "resolved", "sgdb_id": 7777}
-        entry = plugin._state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 7777
-        assert persister.save_count == 1
+        with uow:
+            assert uow.roms.get(42).sgdb_id == 7777
 
     @pytest.mark.asyncio
-    async def test_romm_wins_over_differing_state_and_persists(self, plugin, fake_romm_api):
+    async def test_romm_wins_over_differing_state_and_persists(self, plugin, uow, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        persister = FakeStatePersister()
-        plugin._sgdb_service._state_persister = persister
 
-        # State holds an old id; RomM disagrees → RomM overwrites it.
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 9999}
+        # Row holds an old id; RomM disagrees → RomM overwrites it.
+        _seed_rom(uow, 42, app_id=1, sgdb_id=9999)
         fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 7777}
 
         result = await plugin.get_sgdb_resolution(42)
 
         assert result == {"decision": "resolved", "sgdb_id": 7777}
-        entry = plugin._state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 7777
-        assert persister.save_count == 1
+        with uow:
+            assert uow.roms.get(42).sgdb_id == 7777
 
     @pytest.mark.asyncio
-    async def test_romm_matches_state_no_persist(self, plugin, fake_romm_api):
+    async def test_romm_matches_state_no_persist(self, plugin, uow, fake_romm_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        persister = FakeStatePersister()
-        plugin._sgdb_service._state_persister = persister
 
-        # RomM agrees with state → resolved, no redundant persist.
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1, "sgdb_id": 7777}
+        # RomM agrees with the row → resolved, no redundant write.
+        _seed_rom(uow, 42, app_id=1, sgdb_id=7777)
         fake_romm_api.roms[42] = {"id": 42, "sgdb_id": 7777}
+        save_count_before = uow.roms.save_count
 
         result = await plugin.get_sgdb_resolution(42)
 
         assert result == {"decision": "resolved", "sgdb_id": 7777}
-        assert persister.save_count == 0
+        assert uow.roms.save_count == save_count_before
 
     @pytest.mark.asyncio
-    async def test_unresolved_igdb_resolves_and_persists(self, plugin, fake_romm_api, fake_steamgrid_db_api):
+    async def test_unresolved_igdb_resolves_and_persists(self, plugin, uow, fake_romm_api, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        persister = FakeStatePersister()
-        plugin._sgdb_service._state_persister = persister
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        _seed_rom(uow, 42, app_id=1, name="Zelda")
         # No sgdb_id anywhere, but RomM has an igdb_id that cross-refs.
         fake_romm_api.roms[42] = {"id": 42, "igdb_id": 1234, "name": "Zelda"}
         fake_steamgrid_db_api.seed_igdb_lookup(igdb_id=1234, sgdb_id=5555)
@@ -468,16 +476,15 @@ class TestGetSgdbResolution:
         result = await plugin.get_sgdb_resolution(42)
 
         assert result == {"decision": "resolved", "sgdb_id": 5555}
-        entry = plugin._state["shortcut_registry"]["42"]
-        assert entry["sgdb_id"] == 5555
-        assert persister.save_count == 1
+        with uow:
+            assert uow.roms.get(42).sgdb_id == 5555
 
     @pytest.mark.asyncio
-    async def test_unresolved_needs_pick_with_candidates(self, plugin, fake_romm_api, fake_steamgrid_db_api):
+    async def test_unresolved_needs_pick_with_candidates(self, plugin, uow, fake_romm_api, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        _seed_rom(uow, 42, app_id=1)
         # No sgdb_id, no igdb_id → name search.
         fake_romm_api.roms[42] = {"id": 42, "name": "Zelda"}
 
@@ -621,22 +628,21 @@ class TestApplySgdbGameId:
             assert sgdb_artwork_cache.files[path] == f"{asset_type} bytes".encode()
 
     @pytest.mark.asyncio
-    async def test_persists_nothing(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
-        """A manual pick never writes the registry or flushes state."""
+    async def test_persists_nothing(self, plugin, uow, sgdb_artwork_cache, fake_steamgrid_db_api):
+        """A manual pick never writes the ROM row's sgdb_id."""
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        persister = FakeStatePersister()
-        plugin._sgdb_service._state_persister = persister
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        _seed_rom(uow, 42, app_id=1)
+        save_count_before = uow.roms.save_count
         _seed_all_artwork(fake_steamgrid_db_api, 8888)
 
         await plugin.apply_sgdb_game_id(42, 8888)
 
-        # No sgdb_id stored on the registry row.
-        assert "sgdb_id" not in plugin._state["shortcut_registry"]["42"]
-        # No state flush for the manual path.
-        assert persister.save_count == 0
+        # No sgdb_id stored on the ROM row, no extra write.
+        with uow:
+            assert uow.roms.get(42).sgdb_id is None
+        assert uow.roms.save_count == save_count_before
 
     @pytest.mark.asyncio
     async def test_coerces_string_args(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
@@ -656,12 +662,13 @@ class TestApplySgdbGameId:
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         _seed_all_artwork(fake_steamgrid_db_api, 8888)
 
-        # No registry row for rom_id 42.
+        # No roms row for rom_id 42.
         result = await plugin.apply_sgdb_game_id(42, 8888)
 
         assert result == {"success": True}
         # Row absent → still painted artwork, still nothing persisted.
-        assert "42" not in plugin._state["shortcut_registry"]
+        with plugin._uow:
+            assert plugin._uow.roms.get(42) is None
         assert sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, "hero")] == b"hero bytes"
 
     @pytest.mark.asyncio
@@ -689,7 +696,7 @@ class TestApplySgdbGameId:
 
     @pytest.mark.asyncio
     async def test_pick_does_not_persist_so_next_resolution_reopens_picker(
-        self, plugin, sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api
+        self, plugin, uow, sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api
     ):
         """Regression for #755: a manual pick leaves a later refresh on ``needs_pick``.
 
@@ -703,7 +710,7 @@ class TestApplySgdbGameId:
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
+        _seed_rom(uow, 42, app_id=1)
         _seed_all_artwork(fake_steamgrid_db_api, 8888)
 
         await plugin.apply_sgdb_game_id(42, 8888)
@@ -742,20 +749,14 @@ class TestIconSupport:
         assert base64.b64decode(result["base64"]) == b"icon png data"
 
     @pytest.mark.asyncio
-    async def test_icon_download_from_sgdb(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
+    async def test_icon_download_from_sgdb(self, plugin, uow, sgdb_artwork_cache, fake_steamgrid_db_api):
         """Icon should be downloadable from SGDB icons endpoint."""
         import base64
 
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-            "igdb_id": 1234,
-            "sgdb_id": 9999,
-        }
+        _seed_rom(uow, 42, app_id=100001, sgdb_id=9999, name="Zelda")
 
         fake_steamgrid_db_api.seed_artwork(9999, "icon", "https://example.com/icon.png")
         fake_steamgrid_db_api.seed_image_bytes("https://example.com/icon.png", b"icon data")
@@ -782,36 +783,36 @@ class TestIconSupport:
 
 
 class TestPruneOrphanedArtworkCache:
-    def test_removes_orphan_artwork(self, plugin, sgdb_artwork_cache):
-        """Artwork for rom_id not in registry should be deleted."""
+    def test_removes_orphan_artwork(self, plugin, uow, sgdb_artwork_cache):
+        """Artwork for rom_id not bound in roms should be deleted."""
         orphan = _cached_path(sgdb_artwork_cache, 42, "hero")
         sgdb_artwork_cache.files[orphan] = b"orphaned data"
 
-        # Registry has no rom_id "42"
-        plugin._state["shortcut_registry"] = {"99": {"app_id": 1}}
+        # roms has rom 99, not 42.
+        _seed_rom(uow, 99, app_id=1)
 
         plugin._sgdb_service.prune_orphaned_artwork_cache()
 
         assert orphan not in sgdb_artwork_cache.files
 
-    def test_keeps_artwork_in_registry(self, plugin, sgdb_artwork_cache):
-        """Artwork for rom_id in registry should survive."""
+    def test_keeps_artwork_in_registry(self, plugin, uow, sgdb_artwork_cache):
+        """Artwork for a bound rom_id should survive."""
         kept = _cached_path(sgdb_artwork_cache, 42, "hero")
         sgdb_artwork_cache.files[kept] = b"keep me"
 
-        plugin._state["shortcut_registry"] = {"42": {"app_id": 1}}
+        _seed_rom(uow, 42, app_id=1)
 
         plugin._sgdb_service.prune_orphaned_artwork_cache()
 
         assert sgdb_artwork_cache.files[kept] == b"keep me"
 
-    def test_removes_leftover_tmp(self, plugin, sgdb_artwork_cache):
+    def test_removes_leftover_tmp(self, plugin, uow, sgdb_artwork_cache):
         """Leftover .tmp files should always be removed regardless of rom_id."""
         tmp_path = _cached_path(sgdb_artwork_cache, 42, "hero") + ".tmp"
         sgdb_artwork_cache.files[tmp_path] = b"tmp data"
 
-        # rom_id "42" IS in registry, but .tmp should still be removed
-        plugin._state["shortcut_registry"] = {"42": {"app_id": 1}}
+        # rom_id 42 IS bound, but .tmp should still be removed.
+        _seed_rom(uow, 42, app_id=1)
 
         plugin._sgdb_service.prune_orphaned_artwork_cache()
 

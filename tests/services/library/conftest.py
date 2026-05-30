@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
@@ -65,6 +65,14 @@ def plugin(tmp_path):
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
+    # ONE shared FakeUnitOfWork across every sub-service + peer service so a
+    # write by one (reporter upserting ``roms``) is visible to a read by
+    # another (artwork resolving a cover, metadata building the app_id map).
+    # Each service gets its own factory wrapping the same unit; ``p._uow``
+    # is the handle tests seed/assert against.
+    uow = FakeUnitOfWork()
+    p._uow = uow
+
     metadata_service = MetadataService(
         config=MetadataServiceConfig(
             state=p._state,
@@ -75,7 +83,7 @@ def plugin(tmp_path):
             metadata_cache_persister=p._metadata_cache_persister,
             metadata_store=p._metadata_store,
             log_debug=p._log_debug,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
     p._metadata_service = metadata_service
@@ -91,7 +99,7 @@ def plugin(tmp_path):
             get_pending_sync=dict,
             registry_store=p._registry_store,
             state_persister=MagicMock(),
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
     p._artwork_service = artwork_service
@@ -116,7 +124,7 @@ def plugin(tmp_path):
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=artwork_service,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
 
@@ -131,7 +139,7 @@ def plugin(tmp_path):
             state_persister=p._state_persister,
             registry_store=p._registry_store,
             artwork_remover=artwork_service,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
     # Default migration service mock — no migration pending. Tests that need

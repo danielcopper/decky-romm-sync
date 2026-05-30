@@ -10,11 +10,28 @@ from unittest.mock import MagicMock
 import decky
 import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from models.state import make_default_plugin_state
 
 from adapters.registry_store import RegistryStoreAdapter
+from domain.rom import Rom
 from services.artwork import ArtworkService, ArtworkServiceConfig
+
+
+def _seed_rom(uow, rom_id, *, app_id, cover_path=None, platform_slug="n64", name="Game", sgdb_id=None):
+    """Insert a bound (or unbound when app_id is None) ROM into the fake UoW."""
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug=platform_slug,
+        name=name,
+        fs_name=f"{name}.z64",
+        shortcut_app_id=app_id,
+        last_synced_at="2025-01-01T00:00:00",
+        cover_path=cover_path,
+        sgdb_id=sgdb_id,
+    )
+    with uow:
+        uow.roms.save(rom)
 
 
 @pytest.fixture
@@ -60,7 +77,13 @@ def state_persister() -> MagicMock:
 
 
 @pytest.fixture
-def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data, registry_store, state_persister):
+def uow() -> FakeUnitOfWork:
+    """Shared in-memory UoW the tests seed (``uow.roms``) and assert against."""
+    return FakeUnitOfWork()
+
+
+@pytest.fixture
+def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data, registry_store, state_persister, uow):
     # _loop is replaced by the autouse fixture below for async tests; for
     # sync tests it is never touched, so a MagicMock is fine here.
     return ArtworkService(
@@ -74,7 +97,7 @@ def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data
             get_pending_sync=lambda: pending_sync_data,
             registry_store=registry_store,
             state_persister=state_persister,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
 
@@ -101,10 +124,10 @@ def _not_cancelling():
 class TestExistingCoverPath:
     """Tests for existing_cover_path()."""
 
-    def test_returns_final_when_exists(self, artwork_service, state, file_store, tmp_path):
+    def test_returns_final_when_exists(self, artwork_service, uow, file_store, tmp_path):
         final = os.path.join(str(tmp_path), "99999p.png")
         file_store.files[final] = b"final"
-        state["shortcut_registry"]["42"] = {"app_id": 99999}
+        _seed_rom(uow, 42, app_id=99999)
 
         result = artwork_service.existing_cover_path(42, str(tmp_path))
         assert result == final
@@ -120,8 +143,8 @@ class TestExistingCoverPath:
         result = artwork_service.existing_cover_path(42, str(tmp_path))
         assert result is None
 
-    def test_returns_none_when_registry_no_app_id(self, artwork_service, state, tmp_path):
-        state["shortcut_registry"]["42"] = {"name": "Game"}
+    def test_returns_none_when_rom_unbound(self, artwork_service, uow, tmp_path):
+        _seed_rom(uow, 42, app_id=None)
         result = artwork_service.existing_cover_path(42, str(tmp_path))
         assert result is None
 
@@ -152,7 +175,7 @@ class TestDownloadArtwork:
 
     @pytest.mark.asyncio
     async def test_skips_download_if_final_exists(
-        self, artwork_service, state, steam_config, file_store, romm_api, tmp_path
+        self, artwork_service, uow, steam_config, file_store, romm_api, tmp_path
     ):
         """If {app_id}p.png exists from a prior sync, skip re-download."""
         grid_dir = str(tmp_path / "grid")
@@ -160,7 +183,7 @@ class TestDownloadArtwork:
 
         final = os.path.join(grid_dir, "99999p.png")
         file_store.files[final] = b"fake"
-        state["shortcut_registry"]["42"] = {"app_id": 99999, "name": "Test"}
+        _seed_rom(uow, 42, app_id=99999, name="Test")
 
         roms = [{"id": 42, "name": "Test Game", "path_cover_large": "/cover.png"}]
         result = await artwork_service.download_artwork(
@@ -352,12 +375,12 @@ class TestGetArtworkBase64:
         assert base64.b64decode(result["base64"]) == b"fake png data"
 
     @pytest.mark.asyncio
-    async def test_returns_base64_from_registry(self, artwork_service, state, steam_config, file_store, tmp_path):
+    async def test_returns_base64_from_rom_cover_path(self, artwork_service, uow, steam_config, file_store, tmp_path):
         steam_config.grid_dir.return_value = str(tmp_path)
 
         cover = os.path.join(str(tmp_path), "100001p.png")
         file_store.files[cover] = b"registry png"
-        state["shortcut_registry"]["42"] = {"cover_path": cover}
+        _seed_rom(uow, 42, app_id=100001, cover_path=cover)
 
         result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is not None
@@ -386,49 +409,47 @@ class TestGetArtworkBase64:
 
     @pytest.mark.asyncio
     async def test_registry_app_id_fallback_when_cover_path_empty(
-        self, artwork_service, state, steam_config, file_store, tmp_path
+        self, artwork_service, uow, steam_config, file_store, tmp_path
     ):
         """Defensive fallback: cover_path empty but {app_id}p.png exists on disk."""
         steam_config.grid_dir.return_value = str(tmp_path)
 
         final = os.path.join(str(tmp_path), "999p.png")
         file_store.files[final] = b"PNGDATA"
-        state["shortcut_registry"]["42"] = {"app_id": 999, "cover_path": ""}
+        _seed_rom(uow, 42, app_id=999, cover_path="")
 
         result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] == base64.b64encode(b"PNGDATA").decode("ascii")
 
     @pytest.mark.asyncio
-    async def test_registry_app_id_fallback_when_file_missing(self, artwork_service, state, steam_config, tmp_path):
-        """Registry app_id present but {app_id}p.png not on disk → no fallback possible."""
+    async def test_registry_app_id_fallback_when_file_missing(self, artwork_service, uow, steam_config, tmp_path):
+        """ROM app_id present but {app_id}p.png not on disk → no fallback possible."""
         steam_config.grid_dir.return_value = str(tmp_path)
 
-        state["shortcut_registry"]["42"] = {"app_id": 999, "cover_path": ""}
+        _seed_rom(uow, 42, app_id=999, cover_path="")
 
         result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is None
 
     @pytest.mark.asyncio
-    async def test_no_fallback_when_registry_lacks_app_id(self, artwork_service, state, steam_config, tmp_path):
-        """Registry entry exists but lacks app_id — fallback must not crash or false-positive."""
+    async def test_no_fallback_when_rom_unbound(self, artwork_service, uow, steam_config, tmp_path):
+        """Unbound ROM (no app_id) — fallback must not crash or false-positive."""
         steam_config.grid_dir.return_value = str(tmp_path)
 
-        state["shortcut_registry"]["42"] = {"name": "Game", "cover_path": ""}
+        _seed_rom(uow, 42, app_id=None, cover_path="")
 
         result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] is None
 
     @pytest.mark.asyncio
-    async def test_primary_registry_cover_path_still_works(
-        self, artwork_service, state, steam_config, file_store, tmp_path
-    ):
-        """Sanity check: primary registry cover_path lookup is not short-circuited by fallback."""
+    async def test_primary_rom_cover_path_still_works(self, artwork_service, uow, steam_config, file_store, tmp_path):
+        """Sanity check: primary ROM cover_path lookup is not short-circuited by fallback."""
         steam_config.grid_dir.return_value = str(tmp_path)
 
         cover = os.path.join(str(tmp_path), "100001p.png")
         file_store.files[cover] = b"primary png"
         # cover_path is set — must be used directly, fallback path should not run.
-        state["shortcut_registry"]["42"] = {"app_id": 100001, "cover_path": cover}
+        _seed_rom(uow, 42, app_id=100001, cover_path=cover)
 
         result = await artwork_service.get_artwork_base64(42)
         assert result["base64"] == base64.b64encode(b"primary png").decode("ascii")
@@ -461,23 +482,15 @@ class TestRefreshCover:
     async def test_happy_path(
         self,
         artwork_service,
-        state,
+        uow,
         steam_config,
         file_store,
         romm_api,
-        state_persister,
         tmp_path,
     ):
         grid = str(tmp_path)
         steam_config.grid_dir.return_value = grid
-        state["shortcut_registry"]["42"] = {
-            "app_id": 999,
-            "name": "Game",
-            "fs_name": "Game",
-            "platform_name": "Plat",
-            "platform_slug": "plat",
-            "cover_path": "",
-        }
+        _seed_rom(uow, 42, app_id=999, platform_slug="plat", name="Game", cover_path="")
         romm_api.get_rom.return_value = {"id": 42, "path_cover_large": "/c.png"}
 
         # download_cover writes the staging file; finalize then renames it.
@@ -490,19 +503,18 @@ class TestRefreshCover:
 
         expected_final = os.path.join(grid, "999p.png")
         assert result == {"success": True, "message": "Cover refreshed", "cover_path": expected_final}
-        # Registry was patched with the final path
-        assert state["shortcut_registry"]["42"]["cover_path"] == expected_final
-        # save_state was driven once after the patch
-        state_persister.save_state.assert_called_once()
+        # ROM row was updated with the final path
+        with uow:
+            assert uow.roms.get(42).cover_path == expected_final
+        assert uow.committed is True
         # File was renamed from staging to final
         assert expected_final in file_store.files
         assert file_store.files[expected_final] == b"new cover bytes"
 
     @pytest.mark.asyncio
-    async def test_not_synced_when_registry_missing(
+    async def test_not_synced_when_rom_missing(
         self,
         artwork_service,
-        state_persister,
         romm_api,
     ):
         result = await artwork_service.refresh_cover(42)
@@ -511,34 +523,30 @@ class TestRefreshCover:
             "reason": "not_synced",
             "message": "ROM is not synced to Steam",
         }
-        state_persister.save_state.assert_not_called()
         romm_api.get_rom.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_not_synced_when_registry_lacks_app_id(
+    async def test_not_synced_when_rom_unbound(
         self,
         artwork_service,
-        state,
-        state_persister,
+        uow,
         romm_api,
     ):
-        state["shortcut_registry"]["42"] = {"name": "No app_id yet"}
+        _seed_rom(uow, 42, app_id=None)
         result = await artwork_service.refresh_cover(42)
         assert result["success"] is False
         assert result["reason"] == "not_synced"
-        state_persister.save_state.assert_not_called()
         romm_api.get_rom.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_grid_dir(
         self,
         artwork_service,
-        state,
+        uow,
         steam_config,
-        state_persister,
         romm_api,
     ):
-        state["shortcut_registry"]["42"] = {"app_id": 999}
+        _seed_rom(uow, 42, app_id=999)
         steam_config.grid_dir.return_value = None
 
         result = await artwork_service.refresh_cover(42)
@@ -547,20 +555,18 @@ class TestRefreshCover:
             "reason": "no_grid_dir",
             "message": "Steam grid directory not found",
         }
-        state_persister.save_state.assert_not_called()
         romm_api.get_rom.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_server_unreachable_when_get_rom_raises(
         self,
         artwork_service,
-        state,
+        uow,
         steam_config,
         romm_api,
-        state_persister,
         tmp_path,
     ):
-        state["shortcut_registry"]["42"] = {"app_id": 999}
+        _seed_rom(uow, 42, app_id=999)
         steam_config.grid_dir.return_value = str(tmp_path)
         romm_api.get_rom.side_effect = Exception("network down")
 
@@ -568,39 +574,35 @@ class TestRefreshCover:
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
         assert result["message"] == "Could not fetch ROM from server"
-        state_persister.save_state.assert_not_called()
         romm_api.download_cover.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_server_unreachable_when_get_rom_returns_none(
         self,
         artwork_service,
-        state,
+        uow,
         steam_config,
         romm_api,
-        state_persister,
         tmp_path,
     ):
-        state["shortcut_registry"]["42"] = {"app_id": 999}
+        _seed_rom(uow, 42, app_id=999)
         steam_config.grid_dir.return_value = str(tmp_path)
         romm_api.get_rom.return_value = None
 
         result = await artwork_service.refresh_cover(42)
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
-        state_persister.save_state.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_cover_url_in_rom_payload(
         self,
         artwork_service,
-        state,
+        uow,
         steam_config,
         romm_api,
-        state_persister,
         tmp_path,
     ):
-        state["shortcut_registry"]["42"] = {"app_id": 999}
+        _seed_rom(uow, 42, app_id=999)
         steam_config.grid_dir.return_value = str(tmp_path)
         romm_api.get_rom.return_value = {"id": 42, "name": "No Cover"}
 
@@ -610,24 +612,22 @@ class TestRefreshCover:
             "reason": "no_cover",
             "message": "ROM has no cover artwork",
         }
-        state_persister.save_state.assert_not_called()
         romm_api.download_cover.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_falls_back_to_small_cover_url(
         self,
         artwork_service,
-        state,
+        uow,
         steam_config,
         file_store,
         romm_api,
-        state_persister,
         tmp_path,
     ):
         """``path_cover_small`` is used when ``path_cover_large`` is absent."""
         grid = str(tmp_path)
         steam_config.grid_dir.return_value = grid
-        state["shortcut_registry"]["42"] = {"app_id": 999, "cover_path": ""}
+        _seed_rom(uow, 42, app_id=999, cover_path="")
         romm_api.get_rom.return_value = {"id": 42, "path_cover_small": "/small.png"}
 
         def fake_download(_url: str, dest: str) -> None:
@@ -640,22 +640,22 @@ class TestRefreshCover:
         # download_cover was called with the small URL
         romm_api.download_cover.assert_called_once()
         assert romm_api.download_cover.call_args[0][0] == "/small.png"
-        state_persister.save_state.assert_called_once()
+        with uow:
+            assert uow.roms.get(42).cover_path == os.path.join(grid, "999p.png")
 
     @pytest.mark.asyncio
-    async def test_download_failure_does_not_mutate_registry(
+    async def test_download_failure_does_not_mutate_rom(
         self,
         artwork_service,
-        state,
+        uow,
         steam_config,
         romm_api,
-        state_persister,
         tmp_path,
     ):
-        """When ``download_cover`` raises, registry and persister must remain untouched."""
+        """When ``download_cover`` raises, the ROM row's cover_path must remain untouched."""
         grid = str(tmp_path)
         steam_config.grid_dir.return_value = grid
-        state["shortcut_registry"]["42"] = {"app_id": 999, "cover_path": "old/path.png"}
+        _seed_rom(uow, 42, app_id=999, cover_path="old/path.png")
         romm_api.get_rom.return_value = {"id": 42, "path_cover_large": "/c.png"}
         romm_api.download_cover.side_effect = Exception("disk full")
 
@@ -663,10 +663,9 @@ class TestRefreshCover:
         assert result["success"] is False
         assert result["reason"] == "download_failed"
         assert "disk full" in result["message"]
-        # Registry cover_path unchanged
-        assert state["shortcut_registry"]["42"]["cover_path"] == "old/path.png"
-        # No persistence on failure
-        state_persister.save_state.assert_not_called()
+        # ROM cover_path unchanged
+        with uow:
+            assert uow.roms.get(42).cover_path == "old/path.png"
 
 
 # ── TestIsStagingFileOrphaned ─────────────────────────────────────────────────
@@ -682,17 +681,17 @@ class TestIsStagingFileOrphaned:
     def test_orphaned_when_final_exists(self, artwork_service, file_store, tmp_path):
         final = os.path.join(str(tmp_path), "1001p.png")
         file_store.files[final] = b"final"
-        registry = {"42": {"app_id": 1001}}
+        registry = {"42": 1001}
         result = artwork_service.is_staging_file_orphaned(str(tmp_path), registry, "42")
         assert result is True
 
     def test_not_orphaned_when_no_final(self, artwork_service, tmp_path):
-        registry = {"42": {"app_id": 1001}}
+        registry = {"42": 1001}
         result = artwork_service.is_staging_file_orphaned(str(tmp_path), registry, "42")
         assert result is False
 
     def test_not_orphaned_when_no_app_id(self, artwork_service, tmp_path):
-        registry = {"42": {"name": "Game"}}
+        registry = {"42": None}
         result = artwork_service.is_staging_file_orphaned(str(tmp_path), registry, "42")
         assert result is False
 
@@ -714,7 +713,7 @@ class TestPruneOrphanedStagingArtwork:
         artwork_service.prune_orphaned_staging_artwork()
         assert staging not in file_store.files
 
-    def test_removes_redundant_staging_with_final(self, artwork_service, state, steam_config, file_store, tmp_path):
+    def test_removes_redundant_staging_with_final(self, artwork_service, uow, steam_config, file_store, tmp_path):
         grid_dir = str(tmp_path / "grid")
         staging = os.path.join(grid_dir, "romm_42_cover.png")
         final = os.path.join(grid_dir, "1001p.png")
@@ -722,19 +721,19 @@ class TestPruneOrphanedStagingArtwork:
         file_store.files[final] = b"fake final"
 
         steam_config.grid_dir.return_value = grid_dir
-        state["shortcut_registry"] = {"42": {"app_id": 1001, "name": "Game A"}}
+        _seed_rom(uow, 42, app_id=1001, name="Game A")
 
         artwork_service.prune_orphaned_staging_artwork()
         assert staging not in file_store.files
         assert final in file_store.files
 
-    def test_keeps_staging_when_no_final(self, artwork_service, state, steam_config, file_store, tmp_path):
+    def test_keeps_staging_when_no_final(self, artwork_service, uow, steam_config, file_store, tmp_path):
         grid_dir = str(tmp_path / "grid")
         staging = os.path.join(grid_dir, "romm_42_cover.png")
         file_store.files[staging] = b"fake staging"
 
         steam_config.grid_dir.return_value = grid_dir
-        state["shortcut_registry"] = {"42": {"app_id": 1001, "name": "Game A"}}
+        _seed_rom(uow, 42, app_id=1001, name="Game A")
 
         artwork_service.prune_orphaned_staging_artwork()
         assert staging in file_store.files

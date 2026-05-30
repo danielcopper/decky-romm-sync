@@ -63,6 +63,7 @@ class MetadataService:
         self._metadata_cache_persister = config.metadata_cache_persister
         self._metadata_store = config.metadata_store
         self._log_debug = config.log_debug
+        self._uow_factory = config.uow_factory
 
         self._metadata_dirty_count = 0
         self._METADATA_FLUSH_INTERVAL = 50
@@ -165,10 +166,13 @@ class MetadataService:
         return self._metadata_cache
 
     def get_app_id_rom_id_map(self):
-        """Return {app_id: rom_id} mapping from shortcut_registry for frontend lookup."""
-        result = {}
-        for rom_id, entry in self._state["shortcut_registry"].items():
-            app_id = entry.get("app_id")
-            if app_id is not None:
-                result[str(app_id)] = int(rom_id)
-        return result
+        """Return ``{str(app_id): rom_id}`` from the ``roms`` registry for frontend lookup.
+
+        Rows with a NULL ``shortcut_app_id`` (unbound / stale) are
+        excluded — they carry no Steam shortcut to map. Callable-only, so
+        its own short read UoW is safe (no in-transaction caller).
+        """
+        with self._uow_factory() as uow:
+            return {
+                str(rom.shortcut_app_id): rom.rom_id for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None
+            }

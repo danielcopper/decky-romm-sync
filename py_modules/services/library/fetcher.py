@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 
 from models.state import MetadataCache, PluginState
 
-from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
@@ -32,6 +31,7 @@ if TYPE_CHECKING:
         DebugLogger,
         RommLibraryApi,
         SettingsPersister,
+        UnitOfWorkFactory,
     )
 
     # Orchestrator-supplied progress emitter. Matches the kw-only signature
@@ -85,6 +85,7 @@ class LibraryFetcherConfig:
     plugin_dir: str
     settings_persister: SettingsPersister
     log_debug: DebugLogger
+    uow_factory: UnitOfWorkFactory
     sync_state_box: LibrarySyncStateBox
     emit_progress: EmitProgressFn
 
@@ -102,6 +103,7 @@ class LibraryFetcher:
         self._plugin_dir = config.plugin_dir
         self._settings_persister = config.settings_persister
         self._log_debug = config.log_debug
+        self._uow_factory = config.uow_factory
         self._sync_state = config.sync_state_box
         self._emit_progress = config.emit_progress
 
@@ -342,112 +344,6 @@ class LibraryFetcher:
         self._logger.info(f"Syncing {len(platforms)} platforms: {[p['name'] for p in platforms]}")
         return platforms
 
-    def _reconstruct_platform_from_registry(self, registry, platform_name, platform_slug):
-        """Reconstruct ROM list from registry for an unchanged platform."""
-        return [
-            {
-                "id": int(rid),
-                "name": entry["name"],
-                "fs_name": entry.get("fs_name", ""),
-                "platform_name": platform_name,
-                "platform_slug": platform_slug,
-                "platform_display_name": platform_name,
-                "igdb_id": entry.get("igdb_id"),
-                "sgdb_id": entry.get("sgdb_id"),
-                "ra_id": entry.get("ra_id"),
-            }
-            for rid, entry in registry.items()
-            if entry.get("platform_name") == platform_name
-        ]
-
-    async def _try_incremental_skip(
-        self, platform, registry, last_sync, platform_name, platform_slug, all_roms, pi, total_platforms
-    ):
-        """Try incremental fetch; return True if platform was skipped (unchanged)."""
-        registry_count = sum(1 for e in registry.values() if e.get("platform_name") == platform_name)
-        if not last_sync or registry_count == 0:
-            return False
-
-        try:
-            delta_resp = await self._loop.run_in_executor(
-                None,
-                self._romm_api.list_roms_updated_after,
-                platform["id"],
-                last_sync,
-                1,
-                0,
-            )
-            server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
-            platform_total = platform.get("rom_count", 0)
-
-            if server_total == 0 and platform_total == registry_count:
-                self._logger.info(f"Skipping {platform_name}: {registry_count} ROMs unchanged")
-                all_roms.extend(self._reconstruct_platform_from_registry(registry, platform_name, platform_slug))
-                await self._emit_progress(
-                    SyncStage.FETCHING,
-                    current=len(all_roms),
-                    message=f"{platform_name} unchanged ({pi}/{total_platforms})",
-                    step=pi,
-                    total_steps=total_platforms,
-                )
-                return True
-
-            self._logger.info(
-                f"{platform_name}: {server_total} updated, "
-                f"server={platform_total} vs registry={registry_count} — full fetch"
-            )
-        except Exception as e:
-            self._logger.warning(f"Incremental check failed for {platform_name}, falling back to full fetch: {e}")
-        return False
-
-    async def _full_fetch_platform_roms(self, platform_id, platform_name, platform_slug, all_roms, pi, total_platforms):
-        """Full paginated fetch of ROMs for a single platform."""
-        offset = 0
-        limit = 50
-        await self._emit_progress(
-            SyncStage.FETCHING,
-            current=len(all_roms),
-            message=f"Fetching {platform_name}... {len(all_roms)} found ({pi}/{total_platforms})",
-            step=pi,
-            total_steps=total_platforms,
-        )
-
-        while True:
-            self._check_cancelling()
-            try:
-                roms = await self._loop.run_in_executor(
-                    None,
-                    self._romm_api.list_roms,
-                    platform_id,
-                    limit,
-                    offset,
-                )
-            except Exception:
-                # Re-raise so the orchestrator aborts before the stale-cleanup
-                # pass runs against a partial list. Swallowing here would
-                # cause every ROM not yet paginated to be classified as
-                # "stale" and removed from Steam.
-                self._logger.exception(f"Failed to fetch ROMs for platform {platform_name}")
-                raise
-
-            rom_list = roms.get("items", []) if isinstance(roms, dict) else roms
-            for rom in rom_list:
-                rom.pop("files", None)
-                rom["platform_name"] = platform_name
-                rom["platform_slug"] = platform_slug
-
-            all_roms.extend(rom_list)
-            await self._emit_progress(
-                SyncStage.FETCHING,
-                current=len(all_roms),
-                message=f"Fetching {platform_name}... {len(all_roms)} found ({pi}/{total_platforms})",
-                step=pi,
-                total_steps=total_platforms,
-            )
-            if len(rom_list) < limit:
-                break
-            offset += limit
-
     def _check_cancelling(self):
         """Raise CancelledError if sync is being cancelled."""
         if self._sync_state.sync_state == SyncState.CANCELLING:
@@ -524,23 +420,60 @@ class LibraryFetcher:
             collections = []
         return _collection_units(collections, enabled_ids, "franchise")
 
+    def _read_incremental_baseline(self, platform_slug: str) -> tuple[str | None, list[dict]]:
+        """Read ``(last_sync_iso, reconstructed_roms)`` for *platform_slug* from SQLite.
+
+        ``last_sync`` is the ``finished_at`` of the newest completed
+        ``SyncRun``; the reconstructed list is the platform's bound ``roms``
+        rows shaped like a RomM list response (thin — no ``metadatum``, so
+        the orchestrator's skip-guard keeps them out of the metadata
+        stamp). Only one short read UoW is opened.
+        """
+        with self._uow_factory() as uow:
+            latest = uow.sync_runs.get_latest_completed()
+            last_sync = latest.finished_at if latest is not None else None
+            roms = [
+                {
+                    "id": rom.rom_id,
+                    "name": rom.name,
+                    "fs_name": rom.fs_name,
+                    "platform_slug": rom.platform_slug,
+                    "igdb_id": rom.igdb_id,
+                    "sgdb_id": rom.sgdb_id,
+                    "ra_id": rom.ra_id,
+                }
+                for rom in uow.roms.iter_by_platform(platform_slug)
+                if rom.shortcut_app_id is not None
+            ]
+        return last_sync, roms
+
+    @staticmethod
+    def _decorate_reconstructed(roms: list[dict], platform_name: str, platform_slug: str) -> list[dict]:
+        """Stamp the live platform display name/slug onto reconstructed ROM dicts."""
+        for rom in roms:
+            rom["platform_name"] = platform_name
+            rom["platform_slug"] = platform_slug
+            rom["platform_display_name"] = platform_name
+        return roms
+
     async def _try_unit_incremental_skip(self, unit: WorkUnit) -> list[dict] | None:
         """Per-unit incremental-skip pre-check for a platform unit.
 
-        Returns the registry-reconstructed ROM list when the platform is
+        Returns the roms-reconstructed ROM list when the platform is
         unchanged (server reports zero rows updated after ``last_sync``
-        and the unit's ``rom_count`` matches the registry count for this
+        and the unit's ``rom_count`` matches the bound-ROM count for this
         platform). Returns ``None`` to signal "fall through to a full
-        paginated fetch" — either the registry has no entries for this
-        platform, no prior sync timestamp exists, the delta check
-        raised, or the server reports changes.
+        paginated fetch" — either no bound ROMs exist for this platform,
+        no prior completed sync exists, the delta check raised, or the
+        server reports changes.
         """
         platform_name = unit.name
         platform_slug = unit.slug
 
-        registry = self._state.get("shortcut_registry", {})
-        last_sync = self._state.get("last_sync")
-        registry_count = sum(1 for e in registry.values() if e.get("platform_name") == platform_name)
+        last_sync, reconstructed = await self._loop.run_in_executor(
+            None, self._read_incremental_baseline, platform_slug
+        )
+        registry_count = len(reconstructed)
 
         if not last_sync or registry_count == 0:
             return None
@@ -563,7 +496,7 @@ class LibraryFetcher:
         server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
         if server_total == 0 and unit.rom_count == registry_count:
             self._logger.info(f"Per-unit skip: {platform_name} unchanged ({registry_count} ROMs in registry)")
-            return self._reconstruct_platform_from_registry(registry, platform_name, platform_slug)
+            return self._decorate_reconstructed(reconstructed, platform_name, platform_slug)
 
         self._logger.info(
             f"Per-unit fetch {platform_name}: {server_total} updated, "

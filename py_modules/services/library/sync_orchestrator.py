@@ -30,6 +30,7 @@ from domain.sync_diff import (
     compute_collection_diff,
     compute_platform_collection_diff,
 )
+from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
         MetadataExtractor,
         Sleeper,
         StatePersister,
+        UnitOfWorkFactory,
         UuidGen,
     )
 
@@ -96,6 +98,7 @@ class SyncOrchestratorConfig:
     uuid_gen: UuidGen
     sleeper: Sleeper
     state_persister: StatePersister
+    uow_factory: UnitOfWorkFactory
     sync_state_box: LibrarySyncStateBox
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
@@ -117,6 +120,7 @@ class SyncOrchestrator:
         self._uuid_gen = config.uuid_gen
         self._sleeper = config.sleeper
         self._state_persister = config.state_persister
+        self._uow_factory = config.uow_factory
         self._sync_state = config.sync_state_box
         self._fetcher = config.fetcher
         self._metadata_service = config.metadata_service
@@ -203,11 +207,15 @@ class SyncOrchestrator:
                     all_roms.extend(unit_roms)
 
             shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir)
-            platform_names = {u.name for u in work_queue if u.type == "platform"}
+            platform_name_set = {u.name for u in work_queue if u.type == "platform"}
+            slug_to_name = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
+            registry, last_synced_platforms, last_synced_collections = await self._loop.run_in_executor(
+                None, self._read_preview_baseline, slug_to_name
+            )
             new, changed, unchanged_ids, stale, disabled_count = classify_roms(
                 shortcuts_data,
-                self._state["shortcut_registry"],
-                platform_names,
+                registry,
+                platform_name_set,
             )
 
             preview_id = self._uuid_gen.uuid4()
@@ -231,12 +239,12 @@ class SyncOrchestrator:
                     "disabled_platform_remove_count": disabled_count,
                     "collection_diff": compute_collection_diff(
                         collection_memberships,
-                        self._state.get("last_synced_collections", []),
+                        last_synced_collections,
                     ),
                     "platform_collection_diff": compute_platform_collection_diff(
                         shortcuts_data,
                         platform_rom_ids,
-                        self._state.get("last_synced_platforms", []),
+                        last_synced_platforms,
                         self._settings.get("collection_create_platform_groups", False),
                     ),
                 },
@@ -271,20 +279,10 @@ class SyncOrchestrator:
                 "message": "Preview is older than 30 minutes, please re-run sync",
                 "error_code": "stale_preview",
             }
-        delta = box.pending_delta
         box.pending_delta = None
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
-
-        # Update sync_stats up-front so ``get_sync_stats`` and any
-        # subsequent shortcut-removal pass see the apply's intended
-        # counts even if the per-unit dispatch later stalls.
-        self._state["sync_stats"] = {
-            "platforms": delta.platforms_count,
-            "roms": delta.total_roms,
-        }
-        self._state_persister.save_state()
 
         self._loop.create_task(self._do_sync_per_unit())
 
@@ -350,14 +348,16 @@ class SyncOrchestrator:
     async def _do_sync_per_unit(self):
         """Per-unit sync pipeline (Phase 0 + per-unit dispatch + finalize).
 
-        Builds a work queue, processes each platform/collection unit to
-        completion (fetch -> shortcuts -> artwork -> apply -> per-unit
-        metadata stamp + registry update) before moving on, then emits
-        stale-removal + Steam-collection mappings + ``sync_complete``
-        at the end. Each completed unit is a crash-safe checkpoint:
-        metadata cache is written first, state second, both atomically
-        — an orphaned metadata stamp after a crash is harmless; the
-        reverse order would re-introduce the #738 cache wipe.
+        Builds a work queue, opens a ``SyncRun`` for the planned counts,
+        processes each platform/collection unit to completion (fetch ->
+        shortcuts -> artwork -> apply -> per-unit metadata stamp + ``roms``
+        upsert) before moving on, then emits stale-removal + Steam-
+        collection mappings + ``sync_complete`` at the end and writes the
+        ``SyncRun``'s terminal status. Each completed unit is a crash-safe
+        checkpoint: metadata cache is written first, the ``roms`` table
+        second, both atomically — an orphaned metadata stamp after a crash
+        is harmless; the reverse order would re-introduce the #738 cache
+        wipe.
         """
         box = self._sync_state
         # Cross-unit accumulators — built up unit-by-unit, consumed by the
@@ -386,6 +386,11 @@ class SyncOrchestrator:
 
             total_units = len(work_queue)
             total_roms_planned = sum(u.rom_count for u in work_queue)
+            platforms_planned = sum(1 for u in work_queue if u.type == "platform")
+            # Live ``platform_slug → display_name`` map from the work-queue;
+            # threaded into finalize so collections key on display names and
+            # the offline name cache stays current as of this sync.
+            platform_names = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
             self._logger.info(f"Per-unit pipeline: {total_units} units planned, {total_roms_planned} ROMs total")
             await self._emit(
                 "sync_plan",
@@ -396,12 +401,19 @@ class SyncOrchestrator:
                 },
             )
 
+            # SyncRun.start — short write UoW for the planned counts.
+            await self._loop.run_in_executor(
+                None, self._open_sync_run, box.current_sync_id, platforms_planned, total_roms_planned
+            )
+
             if total_units == 0:
                 await self.emit_progress(SyncStage.DONE, message="Nothing to sync", running=False)
+                await self._loop.run_in_executor(None, self._complete_sync_run, box.current_sync_id, [], [])
                 box.sync_state = SyncState.IDLE
                 box.current_sync_id = None
                 return
 
+            run_id = box.current_sync_id
             for unit_index, unit in enumerate(work_queue):
                 if box.sync_state == SyncState.CANCELLING:
                     cancelled = True
@@ -433,13 +445,28 @@ class SyncOrchestrator:
                     step=total_units,
                     total_steps=total_units,
                 )
-            await self._finalize_per_unit(
+            platform_app_ids, romm_collection_app_ids = await self._finalize_per_unit(
                 total_games_applied=total_games_applied,
                 synced_rom_ids=synced_rom_ids,
                 collection_memberships=collection_memberships,
                 platform_rom_ids=platform_rom_ids,
+                platform_names=platform_names,
                 cancelled=cancelled,
             )
+
+            # SyncRun terminal status — short write UoW. Cancelled runs
+            # mark cancelled; clean runs complete with the synced platform
+            # and collection names derived from the built maps.
+            if cancelled:
+                await self._loop.run_in_executor(None, self._mark_sync_run_cancelled, run_id, _SYNC_CANCELLED)
+            else:
+                await self._loop.run_in_executor(
+                    None,
+                    self._complete_sync_run,
+                    run_id,
+                    list(platform_app_ids.keys()),
+                    list(romm_collection_app_ids.keys()),
+                )
         except Exception as e:
             import traceback
 
@@ -455,9 +482,83 @@ class SyncOrchestrator:
                 "totalSteps": 0,
             }
             self._loop.create_task(self._emit("sync_progress", box.sync_progress))
+            await self._loop.run_in_executor(None, self._mark_sync_run_errored, box.current_sync_id, _msg)
             box.sync_state = SyncState.IDLE
         finally:
             self._metadata_service.flush_metadata_if_dirty()
+
+    # ── SyncRun lifecycle (short write UoWs) ─────────────────────
+
+    def _open_sync_run(self, run_id: str | None, platforms_planned: int, roms_planned: int) -> None:
+        """Persist a fresh ``running`` SyncRun for the planned counts."""
+        if not run_id:
+            return
+        run = SyncRun.start(
+            id=run_id,
+            at=self._clock.now().isoformat(),
+            platforms_planned=platforms_planned,
+            roms_planned=roms_planned,
+        )
+        with self._uow_factory() as uow:
+            uow.sync_runs.save(run)
+
+    def _complete_sync_run(self, run_id: str | None, platforms: list[str], collections: list[str]) -> None:
+        """Transition the SyncRun to ``completed`` with its synced platform/collection names."""
+        self._terminate_sync_run(
+            run_id, lambda run: run.complete(self._clock.now().isoformat(), platforms, collections)
+        )
+
+    def _mark_sync_run_cancelled(self, run_id: str | None, reason: str) -> None:
+        """Transition the SyncRun to ``cancelled``."""
+        self._terminate_sync_run(run_id, lambda run: run.mark_cancelled(self._clock.now().isoformat(), reason))
+
+    def _mark_sync_run_errored(self, run_id: str | None, error: str) -> None:
+        """Transition the SyncRun to ``errored``."""
+        self._terminate_sync_run(run_id, lambda run: run.mark_errored(self._clock.now().isoformat(), error))
+
+    def _terminate_sync_run(self, run_id: str | None, transition) -> None:
+        """Load the SyncRun, apply *transition*, and save it in one write UoW.
+
+        No-op when the run is absent (never opened) or already terminal —
+        the per-run lifecycle is single-shot, so a double-terminal call
+        (e.g. an exception after a cancel) is silently dropped.
+        """
+        if not run_id:
+            return
+        with self._uow_factory() as uow:
+            run = uow.sync_runs.get(run_id)
+            if run is None or run.status != "running":
+                return
+            transition(run)
+            uow.sync_runs.save(run)
+
+    def _read_preview_baseline(self, slug_to_name: dict[str, str]) -> tuple[dict, list[str], list[str]]:
+        """Read the classify baseline from SQLite in one short read UoW.
+
+        Returns ``(registry, last_synced_platforms, last_synced_collections)``
+        where ``registry`` is the ``classify_roms``-shaped dict (keyed by
+        ``str(rom_id)``) reconstructed from the bound ``roms`` rows, with
+        the platform display name resolved from *slug_to_name* (the live
+        work-queue) and falling back to the slug. The last-synced
+        platform/collection lists come from the newest completed
+        ``SyncRun``.
+        """
+        with self._uow_factory() as uow:
+            registry: dict = {}
+            for rom in uow.roms.iter_all():
+                if rom.shortcut_app_id is None:
+                    continue
+                registry[str(rom.rom_id)] = {
+                    "app_id": rom.shortcut_app_id,
+                    "name": rom.name,
+                    "fs_name": rom.fs_name,
+                    "platform_name": slug_to_name.get(rom.platform_slug, rom.platform_slug),
+                    "platform_slug": rom.platform_slug,
+                }
+            latest = uow.sync_runs.get_latest_completed()
+            last_platforms = list(latest.platforms_completed or []) if latest is not None else []
+            last_collections = list(latest.collections_completed or []) if latest is not None else []
+        return registry, last_platforms, last_collections
 
     async def _sync_one_unit(
         self,
@@ -659,27 +760,44 @@ class SyncOrchestrator:
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
         platform_rom_ids: set[int],
+        platform_names: dict[str, str],
         cancelled: bool,
     ):
-        """Emit stale-removal, collection mappings, and the terminal sync_complete."""
-        # Stale rom_ids: anything in the registry whose rom_id wasn't seen
-        # by any processed unit. Only meaningful on a non-cancelled run —
-        # a partial run can't tell "stale" from "didn't get to it yet".
+        """Emit stale-removal, collection mappings, and the terminal sync_complete.
+
+        Returns ``(platform_app_ids, romm_collection_app_ids)`` so the
+        caller can derive the SyncRun's completed platform/collection names.
+        """
+        # Stale rom_ids: any bound ROM in the registry whose rom_id wasn't
+        # seen by any processed unit. Only meaningful on a non-cancelled run
+        # — a partial run can't tell "stale" from "didn't get to it yet".
         if not cancelled:
-            stale_rom_ids = [
-                int(rid) for rid in self._state.get("shortcut_registry", {}) if int(rid) not in synced_rom_ids
-            ]
+            stale_rom_ids = await self._loop.run_in_executor(None, self._scan_stale_rom_ids, synced_rom_ids)
         else:
             stale_rom_ids = []
         await self._emit("sync_stale", {"remove_rom_ids": stale_rom_ids})
 
-        await self._reporter.get().finalize_per_unit_run(
+        return await self._reporter.get().finalize_per_unit_run(
             pending_collection_memberships=collection_memberships,
             pending_platform_rom_ids=platform_rom_ids,
             total_games=total_games_applied,
+            platform_names=platform_names,
             cancelled=cancelled,
             stale_rom_ids=stale_rom_ids,
         )
+
+    def _scan_stale_rom_ids(self, synced_rom_ids: set[int]) -> list[int]:
+        """Return bound ROMs in ``uow.roms`` whose rom_id wasn't synced this run.
+
+        Unbound (stale) rows are skipped — they were already cleared on a
+        prior run and must not re-emit a removal.
+        """
+        with self._uow_factory() as uow:
+            return [
+                rom.rom_id
+                for rom in uow.roms.iter_all()
+                if rom.shortcut_app_id is not None and rom.rom_id not in synced_rom_ids
+            ]
 
     # ── Artwork delegation ───────────────────────────────────────
 

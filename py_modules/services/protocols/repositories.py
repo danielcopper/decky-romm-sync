@@ -240,6 +240,15 @@ class SyncRunRepository(Protocol):
         """Return any run with status ``running``, or ``None`` (is-a-sync-running check)."""
         ...
 
+    def delete_completed(self) -> None:
+        """Delete every ``completed`` run so ``get_latest_completed`` returns ``None``.
+
+        Backs the "Force Full Sync" reset: clearing the completed-run history
+        resets the ``last_sync`` read the incremental-skip gate keys off, forcing
+        the next sync to full-fetch every platform. (library/reporter.py)
+        """
+        ...
+
 
 class KvConfigRepository(Protocol):
     """Persistence seam for the ``kv_config`` key-value table.

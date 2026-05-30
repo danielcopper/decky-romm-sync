@@ -16,7 +16,6 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.registry_patches import RegistrySgdbIdPatch
 from models.state import PluginState
 
 from domain.sgdb_artwork import (
@@ -92,6 +91,7 @@ class SteamGridService:
         self._registry_store = config.registry_store
         self._get_pending_sync = config.get_pending_sync
         self._log_debug = config.log_debug
+        self._uow_factory = config.uow_factory
 
     # -- SGDB lookup -------------------------------------------------------
 
@@ -144,15 +144,16 @@ class SteamGridService:
     def _resolve_sgdb_id_state_only(self, rom_id):
         """Resolve a SGDB game ID from local state only — no network.
 
-        Checks the persisted registry row first, then the in-memory
+        Checks the persisted ROM row first, then the in-memory
         pending-sync map. Returns ``None`` when neither carries a
         ``sgdb_id``. RomM re-reads and IGDB cross-refs are gated behind
         the explicit ``get_sgdb_resolution`` user action, not this
         passive lookup.
         """
-        rom_id_str = str(rom_id)
-        reg = self._state["shortcut_registry"].get(rom_id_str, {})
-        sgdb_id = reg.get("sgdb_id")
+        rom_id = int(rom_id)
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+        sgdb_id = rom.sgdb_id if rom is not None else None
         if not sgdb_id:
             pending = self._get_pending_sync().get(rom_id, {})
             sgdb_id = pending.get("sgdb_id")
@@ -180,9 +181,20 @@ class SteamGridService:
         return sgdb_id, igdb_id, rom_data
 
     def _persist_sgdb_id(self, rom_id_str, sgdb_id):
-        """Write a resolved ``sgdb_id`` and flush state."""
-        self._registry_store.apply_sgdb_id(RegistrySgdbIdPatch(rom_id_str=rom_id_str, sgdb_id=int(sgdb_id)))
-        self._state_persister.save_state()
+        """Stamp a resolved ``sgdb_id`` on the ROM row in a short write UoW.
+
+        No-op when the ROM is absent from ``roms`` — a resolved id only
+        matters for a synced ROM, and the schema has no standalone row to
+        stamp otherwise.
+        """
+        rom_id = int(rom_id_str)
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+            if rom is None:
+                self._logger.warning(f"Cannot persist sgdb_id for unsynced rom_id={rom_id}")
+                return
+            rom.assign_sgdb_id(int(sgdb_id))
+            uow.roms.save(rom)
 
     def _first_grid_thumb(self, sgdb_id):
         """Return a thumbnail URL for *sgdb_id*'s first grid, or ``None``.
@@ -383,11 +395,12 @@ class SteamGridService:
     # -- cache pruning -----------------------------------------------------
 
     def prune_orphaned_artwork_cache(self):
-        """Remove SGDB artwork cache files for rom_ids not in the shortcut registry."""
+        """Remove SGDB artwork cache files for rom_ids not bound in ``uow.roms``."""
         art_dir = self._sgdb_artwork_cache.cache_dir()
         if not self._sgdb_artwork_cache.is_dir(art_dir):
             return
-        registry = self._state.get("shortcut_registry", {})
+        with self._uow_factory() as uow:
+            registry = {str(rom.rom_id) for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None}
         pruned = 0
         for filename in self._sgdb_artwork_cache.listdir(art_dir):
             # Always remove leftover .tmp files

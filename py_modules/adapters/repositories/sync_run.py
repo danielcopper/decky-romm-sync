@@ -68,3 +68,6 @@ class SqliteSyncRunRepository(BaseRepository):
             f"SELECT {_COLUMNS} FROM sync_runs WHERE status = 'running' LIMIT 1",
         ).fetchone()
         return self._row_to_run(row) if row is not None else None
+
+    def delete_completed(self) -> None:
+        self._conn.execute("DELETE FROM sync_runs WHERE status = 'completed'")

@@ -104,3 +104,35 @@ class TestUpsert:
         assert loaded is not None
         assert loaded.status == "completed"
         assert loaded.platforms_completed == ["snes"]
+
+
+class TestDeleteCompleted:
+    def test_removes_completed_runs(self, uow: SqliteUnitOfWork):
+        run = _running("done")
+        run.complete(at="2026-01-01T02:00:00Z", platforms=["snes"], collections=[])
+        uow.sync_runs.save(run)
+
+        uow.sync_runs.delete_completed()
+
+        assert uow.sync_runs.get("done") is None
+        assert uow.sync_runs.get_latest_completed() is None
+
+    def test_keeps_running_and_errored_runs(self, uow: SqliteUnitOfWork):
+        completed = _running("done")
+        completed.complete(at="2026-01-01T02:00:00Z", platforms=[], collections=[])
+        errored = _running("boom")
+        errored.mark_errored(at="2026-01-01T02:00:00Z", error="x")
+        uow.sync_runs.save(completed)
+        uow.sync_runs.save(_running("active"))
+        uow.sync_runs.save(errored)
+
+        uow.sync_runs.delete_completed()
+
+        assert uow.sync_runs.get("done") is None
+        assert uow.sync_runs.get("active") is not None
+        assert uow.sync_runs.get("boom") is not None
+
+    def test_idempotent_when_no_completed_runs(self, uow: SqliteUnitOfWork):
+        uow.sync_runs.save(_running("active"))
+        uow.sync_runs.delete_completed()
+        assert uow.sync_runs.get("active") is not None

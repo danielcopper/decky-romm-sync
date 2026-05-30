@@ -8,7 +8,7 @@ import pytest
 from fakes.fake_metadata_cache_persister import FakeMetadataCachePersister
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_state_persister import FakeStatePersister
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
@@ -20,19 +20,41 @@ from adapters.registry_store import RegistryStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
+from domain.rom import Rom
 from main import Plugin
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 
 
+def _seed_rom(uow, rom_id, *, app_id, name="Game", platform_slug="n64"):
+    """Insert a bound (or unbound when app_id is None) ROM into the fake UoW."""
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug=platform_slug,
+        name=name,
+        fs_name=f"{name}.z64",
+        shortcut_app_id=app_id,
+        last_synced_at="2025-01-01T00:00:00",
+    )
+    with uow:
+        uow.roms.save(rom)
+
+
 @pytest.fixture
-def plugin():
+def uow() -> FakeUnitOfWork:
+    """Shared in-memory UoW the tests seed (``uow.roms``) and assert against."""
+    return FakeUnitOfWork()
+
+
+@pytest.fixture
+def plugin(uow):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
     p._metadata_cache = {}
+    p._uow = uow
 
     import decky
 
@@ -56,7 +78,7 @@ def plugin():
             metadata_cache_persister=p._metadata_cache_persister,
             metadata_store=p._metadata_store,
             log_debug=p._log_debug,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
     p._metadata_service = metadata_service
@@ -81,7 +103,7 @@ def plugin():
             log_debug=p._log_debug,
             metadata_service=metadata_service,
             artwork=FakeArtworkManager(),
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
     return p
@@ -698,16 +720,16 @@ class TestRecordUnitMetadata:
 class TestGetAppIdRomIdMap:
     """Tests for get_app_id_rom_id_map() — covers lines 121-126."""
 
-    def test_builds_mapping(self, plugin):
-        plugin._state["shortcut_registry"] = {
-            "10": {"app_id": 1001, "name": "Game A"},
-            "20": {"app_id": 1002, "name": "Game B"},
-            "30": {"name": "Game C"},  # no app_id
-        }
+    def test_builds_mapping(self, plugin, uow):
+        _seed_rom(uow, 10, app_id=1001, name="Game A")
+        _seed_rom(uow, 20, app_id=1002, name="Game B")
+        _seed_rom(uow, 30, app_id=None, name="Game C")  # unbound — excluded
         result = plugin._metadata_service.get_app_id_rom_id_map()
         assert result["1001"] == 10
         assert result["1002"] == 20
-        assert "30" not in result
+        # The unbound ROM (NULL shortcut_app_id) contributes no mapping.
+        assert "None" not in result
+        assert len(result) == 2
 
     def test_empty_registry(self, plugin):
         result = plugin._metadata_service.get_app_id_rom_id_map()

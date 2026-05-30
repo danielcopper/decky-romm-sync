@@ -8,6 +8,7 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 from adapters.persistence import (
     PersistenceAdapter,
 )
+from domain.rom import Rom
 from domain.sync_diff import classify_roms
 
 # conftest.py patches decky before this import
@@ -17,6 +18,20 @@ from tests.services.library._helpers import (
     _make_registry_entry,
     rebind_loop,
 )
+
+
+def _seed_rom(uow, rom_id, *, app_id, platform_slug, name="Game"):
+    """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW."""
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug=platform_slug,
+        name=name,
+        fs_name=f"{name}.zip",
+        shortcut_app_id=app_id,
+        last_synced_at="2025-01-01T00:00:00",
+    )
+    with uow:
+        uow.roms.save(rom)
 
 
 class TestGetPlatforms:
@@ -1161,22 +1176,24 @@ class TestCollectionSyncEdgeCases:
     def test_sc5c_build_collection_app_ids_excludes_collection_only_roms(self, plugin):
         """_build_collection_app_ids respects the toggle.
 
-        Platform collection mapping is built from the full registry by
-        the per-unit finalisation path. Collection-only ROMs must be
+        Platform collection mapping is built from the full ``roms`` table
+        by the per-unit finalisation path. Collection-only ROMs must be
         excluded when the toggle is OFF.
         """
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = False
         svc._settings["enabled_collections"] = {"user": {"3": True}, "smart": {}, "franchise": {}}
 
-        # Registry: ROM 1 from platform, ROM 2 from collection only
-        registry = {
-            "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001, platform_slug="gba"),
-            "2": _make_registry_entry("ROM B", "PlayStation", app_id=1002, platform_slug="psx"),
-        }
+        # roms: ROM 1 from platform, ROM 2 from collection only
+        _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
+        _seed_rom(plugin._uow, 2, app_id=1002, platform_slug="psx", name="ROM B")
+        names = {"gba": "Game Boy Advance", "psx": "PlayStation"}
         platform_rom_ids = {1}  # Only ROM 1 from platform
 
-        platform_app_ids, _ = svc._reporter._build_collection_app_ids(registry, platform_rom_ids, {"Favorites": [1, 2]})
+        with plugin._uow as uow:
+            platform_app_ids, _ = svc._reporter._build_collection_app_ids(
+                uow, platform_rom_ids, {"Favorites": [1, 2]}, names
+            )
 
         assert "Game Boy Advance" in platform_app_ids
         assert 1001 in platform_app_ids["Game Boy Advance"]
@@ -1187,13 +1204,13 @@ class TestCollectionSyncEdgeCases:
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = True
 
-        registry = {
-            "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001, platform_slug="gba"),
-            "2": _make_registry_entry("ROM B", "PlayStation", app_id=1002, platform_slug="psx"),
-        }
+        _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
+        _seed_rom(plugin._uow, 2, app_id=1002, platform_slug="psx", name="ROM B")
+        names = {"gba": "Game Boy Advance", "psx": "PlayStation"}
         platform_rom_ids = {1}
 
-        platform_app_ids, _ = svc._reporter._build_collection_app_ids(registry, platform_rom_ids, {})
+        with plugin._uow as uow:
+            platform_app_ids, _ = svc._reporter._build_collection_app_ids(uow, platform_rom_ids, {}, names)
 
         assert "Game Boy Advance" in platform_app_ids
         assert "PlayStation" in platform_app_ids, "PSX should be included (toggle ON)"
@@ -1209,15 +1226,15 @@ class TestCollectionSyncEdgeCases:
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = False
 
-        registry = {
-            "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001, platform_slug="gba"),
-        }
+        _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
+        names = {"gba": "Game Boy Advance"}
         platform_rom_ids = {1}
         collection_memberships = {"Favorites": [1]}
 
-        platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
-            registry, platform_rom_ids, collection_memberships
-        )
+        with plugin._uow as uow:
+            platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
+                uow, platform_rom_ids, collection_memberships, names
+            )
 
         # Platform group for GBA exists (ROM A is a platform ROM)
         assert "Game Boy Advance" in platform_app_ids
@@ -1260,30 +1277,30 @@ class TestCollectionSyncEdgeCases:
         """romm_collection_app_ids is empty when no collection memberships are set."""
         svc = plugin._sync_service
 
-        registry = {
-            "1": _make_registry_entry("ROM A", "GBA", app_id=1001),
-        }
+        _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
 
-        _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(registry, {1}, {})
+        with plugin._uow as uow:
+            _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
+                uow, {1}, {}, {"gba": "GBA"}
+            )
 
         assert romm_collection_app_ids == {}
 
     def test_build_collection_app_ids_excludes_missing_registry_entries(self, plugin):
-        """romm_collection_app_ids skips rom_ids that have no registry entry."""
+        """romm_collection_app_ids skips rom_ids that have no roms row."""
         svc = plugin._sync_service
 
-        # Only ROM id=1 is in the registry; ROM id=99 is referenced in memberships but missing
-        registry = {
-            "1": _make_registry_entry("ROM A", "GBA", app_id=1001),
-        }
+        # Only ROM id=1 is in roms; ROM id=99 is referenced in memberships but missing.
+        _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
 
-        _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
-            registry, {1}, {"Favorites": [1, 99]}
-        )
+        with plugin._uow as uow:
+            _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
+                uow, {1}, {"Favorites": [1, 99]}, {"gba": "GBA"}
+            )
 
         assert "Favorites" in romm_collection_app_ids
         assert 1001 in romm_collection_app_ids["Favorites"]
-        # ROM 99 has no registry entry, so its app_id is not included
+        # ROM 99 has no roms row, so its app_id is not included
         assert len(romm_collection_app_ids["Favorites"]) == 1
 
     def test_classify_roms_new_when_not_in_registry(self, plugin):

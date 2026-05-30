@@ -110,6 +110,32 @@ def _seed_collection(
             rom.setdefault("collection_ids", []).append(collection_id)
 
 
+def _seed_rom_row(plugin, rom_id, *, app_id, platform_slug, name="Game", fs_name=None):
+    """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW."""
+    from domain.rom import Rom
+
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug=platform_slug,
+        name=name,
+        fs_name=fs_name if fs_name is not None else f"{name}.z64",
+        shortcut_app_id=app_id,
+        last_synced_at="2025-01-01T00:00:00",
+    )
+    with plugin._uow:
+        plugin._uow.roms.save(rom)
+
+
+def _seed_completed_run(plugin, *, at, platforms=None, collections=None, run_id="run-prev"):
+    """Insert a completed ``SyncRun`` so ``last_sync`` / ``last_synced_*`` reads resolve."""
+    from domain.sync_run import SyncRun
+
+    run = SyncRun.start(id=run_id, at=at, platforms_planned=1, roms_planned=1)
+    run.complete(at, platforms or [], collections or [])
+    with plugin._uow:
+        plugin._uow.sync_runs.save(run)
+
+
 async def _fake_wait_set_event(_unit, event):
     """Default ``_wait_for_unit_complete`` stand-in: set the event and
     return an empty rom_id_to_app_id map.
@@ -191,11 +217,10 @@ class TestSyncPreview:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        # Set up registry: rom 1 unchanged, rom 2 changed name
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
-            "2": {"app_id": 1002, "name": "Old B", "platform_name": "N64", "platform_slug": "n64", "fs_name": "b.z64"},
-        }
+        # Baseline in roms: rom 1 unchanged, rom 2 changed name. The
+        # display name resolves from the live work-queue (slug n64 → "N64").
+        _seed_rom_row(plugin, 1, app_id=1001, platform_slug="n64", name="Game A", fs_name="a.z64")
+        _seed_rom_row(plugin, 2, app_id=1002, platform_slug="n64", name="Old B", fs_name="b.z64")
 
         result = await plugin.sync_preview()
         assert result["success"] is True
@@ -410,24 +435,27 @@ class TestSyncApplyDelta:
         assert do_sync.call_args.kwargs == {}
 
     @pytest.mark.asyncio
-    async def test_apply_persists_sync_stats(self, plugin, tmp_path):
-        """Apply writes the preview's platform/rom counts into ``sync_stats`` so
-        ``get_sync_stats`` and the shortcut-removal pass see the apply's counts."""
+    async def test_apply_dispatches_per_unit_task(self, plugin, tmp_path):
+        """Apply transitions to RUNNING and dispatches the per-unit pipeline.
+
+        The planned platform/rom counts are no longer written to a JSON
+        ``sync_stats`` scalar — they land on the ``SyncRun`` record opened
+        inside ``_do_sync_per_unit`` (covered in TestDoSyncPerUnit)."""
         import decky
 
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
-        }
         self._setup_pending_delta(plugin)
         plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
 
-        await plugin.sync_apply_delta("test-preview-123")
+        result = await plugin.sync_apply_delta("test-preview-123")
 
-        assert plugin._state["sync_stats"]["platforms"] == 1
-        assert plugin._state["sync_stats"]["roms"] == 3
+        assert result["success"] is True
+        assert plugin._sync_service._sync_state == SyncState.RUNNING
+        # The JSON sync_stats scalar is no longer written by apply — it stays
+        # at its default (the planned counts now live on the SyncRun).
+        assert plugin._state["sync_stats"] == {"platforms": 0, "roms": 0}
 
     @pytest.mark.asyncio
     async def test_clears_pending_delta(self, plugin, tmp_path):
@@ -690,11 +718,9 @@ class TestFetchPlatformUnit:
         # No ROMs seeded on the fake; the platform's listing reports zero
         # updates after last_sync so the incremental-skip path fires.
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
-            "11": {"name": "B", "fs_name": "b.z64", "platform_name": "N64", "platform_slug": "n64"},
-        }
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
+        _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="B", fs_name="b.z64")
 
         roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
         assert skipped is True
@@ -703,7 +729,7 @@ class TestFetchPlatformUnit:
     @pytest.mark.asyncio
     async def test_full_fetch_when_count_mismatch(self, plugin, fake_romm_api):
         _use_fake_romm(plugin, fake_romm_api)
-        # Registry says 1 ROM but the unit reports 3 → incremental-skip
+        # roms says 1 ROM but the unit reports 3 → incremental-skip
         # check still says zero updated (no updated_at > last_sync), but
         # count mismatch forces a full fetch.
         _seed_platform(
@@ -714,10 +740,8 @@ class TestFetchPlatformUnit:
             roms=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}, {"id": 12, "name": "C"}],
         )
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "platform_name": "N64"},
-        }
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A")
 
         roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
         assert skipped is False
@@ -875,11 +899,9 @@ class TestDoSyncPerUnit:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
-        # Registry matches platform count + zero updates → incremental skip.
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
-        }
+        # roms matches platform count + zero updates → incremental skip.
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         plugin.settings["enabled_platforms"] = {"1": True}
 
@@ -924,12 +946,10 @@ class TestDoSyncPerUnit:
         _use_fake_romm(plugin, fake_romm_api)
 
         # rom_id 10 is the live N64 ROM (synced this run). rom_id 99 is a leftover
-        # from a now-disabled platform — present in the registry but in no enabled unit.
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64", "app_id": 1000},
-            "99": {"name": "Z", "fs_name": "z.gba", "platform_name": "GBA", "platform_slug": "gba", "app_id": 9900},
-        }
+        # from a now-disabled platform — present in roms but in no enabled unit.
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_rom_row(plugin, 10, app_id=1000, platform_slug="n64", name="A", fs_name="a.z64")
+        _seed_rom_row(plugin, 99, app_id=9900, platform_slug="gba", name="Z", fs_name="z.gba")
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         plugin.settings["enabled_platforms"] = {"1": True}
 
@@ -944,10 +964,14 @@ class TestDoSyncPerUnit:
         stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
         assert stale_events == [{"remove_rom_ids": [99]}]
 
-        # Backend registry was pruned to match — only the synced ROM remains.
-        assert set(plugin._state["shortcut_registry"].keys()) == {"10"}
+        # rom 99 was unbound (NULL app_id) but its row survives; only the
+        # synced ROM is still bound.
+        with plugin._uow as uow:
+            assert uow.roms.get(99).shortcut_app_id is None
+            assert uow.roms.get(10).shortcut_app_id == 1000
+            assert {r.rom_id for r in uow.roms.iter_all()} == {10, 99}
 
-        # get_sync_stats reflects the pruned count, not the pre-sync inflated count.
+        # get_sync_stats reflects the bound count, not the pre-sync inflated count.
         stats = await plugin.get_sync_stats()
         assert stats["roms"] == 1
         assert stats["total_shortcuts"] == 1
@@ -1125,6 +1149,130 @@ class TestDoSyncPerUnit:
         assert finalizing == []
 
 
+class TestSyncRunLifecycle:
+    """The SyncRun record persisted by ``_do_sync_per_unit`` across its outcomes.
+
+    The lifecycle methods (start/complete/cancel/error) are short write
+    UoWs keyed off ``box.current_sync_id``; these tests seed that id and
+    assert the persisted ``uow.sync_runs`` row, not just method coverage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_clean_run_persists_completed_with_platforms(self, plugin, fake_romm_api):
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"10": 9001}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-clean"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-clean")
+        assert run is not None
+        assert run.status == "completed"
+        assert run.platforms_planned == 1
+        assert run.roms_planned == 1
+        assert run.finished_at is not None
+        assert run.platforms_completed == ["N64"]
+
+    @pytest.mark.asyncio
+    async def test_empty_queue_persists_completed_run(self, plugin, fake_romm_api):
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {}
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-empty"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-empty")
+        assert run is not None
+        assert run.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cancelled_run_persists_cancelled(self, plugin, fake_romm_api):
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
+        _seed_platform(fake_romm_api, platform_id=2, name="GBA", slug="gba", roms=[{"id": 20, "name": "B"}])
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            plugin._sync_service._sync_state = SyncState.CANCELLING
+            return {}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-cancel"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-cancel")
+        assert run is not None
+        assert run.status == "cancelled"
+        assert run.finished_at is not None
+        assert run.error == "Sync cancelled"
+
+    @pytest.mark.asyncio
+    async def test_exception_in_unit_loop_persists_errored(self, plugin, fake_romm_api):
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # build_work_queue succeeds, then list_roms raises during the unit fetch.
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        fake_romm_api.list_roms_side_effect = RuntimeError("boom")
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-error"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-error")
+        assert run is not None
+        assert run.status == "errored"
+        assert run.finished_at is not None
+        assert run.error  # carries a human-readable detail
+
+    @pytest.mark.asyncio
+    async def test_double_terminal_guard_is_noop(self, plugin, fake_romm_api):
+        """Terminating an already-terminal run is a silent no-op — no raise, no clobber."""
+        from domain.sync_run import SyncRun
+
+        with plugin._uow as uow:
+            run = SyncRun.start(id="run-done", at="2025-01-01T00:00:00", platforms_planned=1, roms_planned=1)
+            run.complete("2025-01-01T01:00:00", ["N64"], [])
+            uow.sync_runs.save(run)
+
+        # A second complete-transition on the already-completed run must not
+        # raise or overwrite the recorded outcome.
+        plugin._sync_service._orchestrator._complete_sync_run("run-done", ["SNES"], ["Faves"])
+
+        with plugin._uow as uow:
+            after = uow.sync_runs.get("run-done")
+        assert after.status == "completed"
+        assert after.platforms_completed == ["N64"]
+        assert after.collections_completed == []
+
+
 class TestWaitForUnitComplete:
     """Heartbeat-based per-unit timeout."""
 
@@ -1231,30 +1379,22 @@ class TestCommitUnitResults:
 
         await plugin._sync_service._reporter.commit_unit_results({"10": 9001, "11": 9002})
 
-        registry = plugin._state["shortcut_registry"]
-        assert "10" in registry
-        assert registry["10"]["app_id"] == 9001
-        assert "11" in registry
-        assert registry["11"]["app_id"] == 9002
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id == 9001
+            assert uow.roms.get(11).shortcut_app_id == 9002
 
     @pytest.mark.asyncio
-    async def test_persists_state_after_unit(self, plugin):
-        save_count = [0]
-        orig_save_state = plugin._state_persister.save_state
-
-        def counting_save():
-            save_count[0] += 1
-            orig_save_state()
-
-        plugin._state_persister.save_state = counting_save
-        plugin._sync_service._reporter._state_persister.save_state = counting_save
+    async def test_commits_roms_for_unit(self, plugin):
+        """commit_unit_results lands the unit's ROM upserts in one committed UoW."""
         plugin._sync_service._pending_sync = {
             10: {"rom_id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
         }
 
         await plugin._sync_service._reporter.commit_unit_results({"10": 9001})
 
-        assert save_count[0] == 1, "commit_unit_results must checkpoint state to disk"
+        assert plugin._uow.committed is True
+        with plugin._uow as uow:
+            assert uow.roms.get(10) is not None
 
 
 class TestShutdown:
@@ -1687,11 +1827,9 @@ class TestPerUnitMetadataStamping:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
-        # Registry matches platform rom_count + zero updates → incremental skip.
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
-        }
+        # roms matches platform rom_count + zero updates → incremental skip.
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
 
         record_mock = MagicMock()
         plugin._metadata_service.record_unit_metadata = record_mock  # type: ignore[method-assign]
