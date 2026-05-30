@@ -271,7 +271,7 @@ async function loadData(
     // Phase 2: Background fetch for data not available in cache
     await startBackgroundRefreshes(cached, romId, cancelled, setter);
   } catch (e) {
-    debugLog(`RomMGameInfoPanel: loadData error: ${e}`);
+    void debugLog(`RomMGameInfoPanel: loadData error: ${e}`);
     if (!cancelled()) setter((prev) => ({ ...prev, loading: false, error: true }));
   }
 }
@@ -327,7 +327,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   useEffect(() => {
     let cancelled = false;
 
-    loadData(appId, () => cancelled, romIdRef, setState);
+    void loadData(appId, () => cancelled, romIdRef, setState);
 
     // Listen for uninstall events to update state (uses ref to avoid stale closure)
     const onUninstall = (e: Event) => {
@@ -427,7 +427,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
             case "cover_refreshed": await handleCoverRefreshed(detail); break;
           }
         } catch (err) {
-          debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`);
+          void debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`);
         }
       })();
     };
@@ -473,7 +473,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
           achievementsLoading: false,
         }));
       } catch (e) {
-        debugLog(`Failed to load achievements: ${e}`);
+        void debugLog(`Failed to load achievements: ${e}`);
         if (!cancelled) {
           achievementsLoadedRef.current = false;
           setState((prev) => ({ ...prev, achievementsLoading: false }));
@@ -481,7 +481,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       }
     }
 
-    loadAchievements();
+    void loadAchievements();
     return () => { cancelled = true; };
   }, [state.activeTab, state.raId, state.romId]);
 
@@ -501,7 +501,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         if (cancelled) return;
         applyLoadSlotsResult<PanelState>(result, setState, slotsLoadedRef, (msg) => { void debugLog(msg); });
       } catch (e) {
-        debugLog(`Failed to load save slots: ${e}`);
+        void debugLog(`Failed to load save slots: ${e}`);
         if (!cancelled) {
           slotsLoadedRef.current = false;
           setState((prev) => ({ ...prev, slotsLoading: false }));
@@ -509,7 +509,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       }
     }
 
-    loadSlots();
+    void loadSlots();
     return () => { cancelled = true; };
   }, [state.activeTab, state.saveSyncEnabled, state.romId]);
 

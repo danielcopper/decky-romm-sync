@@ -43,6 +43,7 @@ export default tseslint.config(
       // the no-unsafe-* noise family — the JS twin of pyright's rejected reportUnknown*).
       "@typescript-eslint/await-thenable": "error",
       "@typescript-eslint/no-misused-promises": "error",
+      "@typescript-eslint/no-floating-promises": "error",
     },
   },
   {

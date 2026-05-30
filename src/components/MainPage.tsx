@@ -172,16 +172,16 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         setSaveSortMigrationStatus(save_sort);
       })
       .catch((e) => logError(`Failed to refresh migration state: ${e}`));
-    getSyncStats().then(setStats);
+    getSyncStats().then(setStats).catch((e) => logError(`Failed to load sync stats: ${e}`));
     testConnection().then((r) => {
       setConnected(r.success);
       setVersionError(r.error_code === "version_error" ? r.message : null);
-    });
+    }).catch((e) => logError(`Failed to test connection: ${e}`));
     getSettings().then((s) => {
       if (s.retroarch_input_check) {
         setRetroarchWarning(s.retroarch_input_check);
       }
-    });
+    }).catch((e) => logError(`Failed to load settings: ${e}`));
 
     // Backend is authoritative for in-flight sync state. Seed the module
     // store from get_sync_status() so a QAM close/reopen recovers the live
@@ -208,7 +208,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         setSyncing(false);
         setLoading(false);
         showTransientStatus(progress.message || "Sync finished");
-        getSyncStats().then(setStats);
+        getSyncStats().then(setStats).catch((e) => logError(`Failed to refresh sync stats: ${e}`));
       }
     });
 

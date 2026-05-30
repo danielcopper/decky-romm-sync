@@ -127,7 +127,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     try {
       const res = await searchSgdbGames(term).catch(
         (e): { success: boolean; games: SgdbCandidate[] } => {
-          debugLog(`SgdbGamePickerModal: searchSgdbGames rejected: ${e}`);
+          void debugLog(`SgdbGamePickerModal: searchSgdbGames rejected: ${e}`);
           return { success: false, games: [] };
         },
       );
@@ -151,7 +151,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     try {
       const result = await applySgdbGameId(romId, selectedId).catch(
         (e): { success: boolean } => {
-          debugLog(`SgdbGamePickerModal: applySgdbGameId rejected: ${e}`);
+          void debugLog(`SgdbGamePickerModal: applySgdbGameId rejected: ${e}`);
           return { success: false };
         },
       );
@@ -160,7 +160,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
         return;
       }
       const applied = await applyArtwork(romId, appId).catch((e): number => {
-        debugLog(`SgdbGamePickerModal: applyArtwork rejected: ${e}`);
+        void debugLog(`SgdbGamePickerModal: applyArtwork rejected: ${e}`);
         return 0;
       });
       if (applied === -1) {

@@ -99,7 +99,7 @@ export function unregisterMetadataPatches() {
 export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updateLastPlayed = true): boolean {
   const overview = appStore.GetAppOverviewByAppID(appId);
   if (!overview) {
-    debugLog(`updatePlaytimeDisplay: appId=${appId} overview=null, skipping`);
+    void debugLog(`updatePlaytimeDisplay: appId=${appId} overview=null, skipping`);
     return false;
   }
 
@@ -114,7 +114,7 @@ export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updat
       overview.rt_last_time_played = Math.floor(Date.now() / 1000);
     }
   });
-  debugLog(`updatePlaytimeDisplay: appId=${appId} wrote ${totalMinutes}min (was ${prevMinutes}), rt_last_time_played was ${prevLastPlayed}`);
+  void debugLog(`updatePlaytimeDisplay: appId=${appId} wrote ${totalMinutes}min (was ${prevMinutes}), rt_last_time_played was ${prevLastPlayed}`);
   return true;
 }
 
@@ -159,7 +159,7 @@ export async function applyAllPlaytime(
     }
   }
 
-  debugLog(`applyAllPlaytime: ${Object.keys(playtimeMap).length} entries in playtimeMap, ${pending.length} with appId and >0 seconds`);
+  void debugLog(`applyAllPlaytime: ${Object.keys(playtimeMap).length} entries in playtimeMap, ${pending.length} with appId and >0 seconds`);
 
   if (pending.length === 0) return;
 
@@ -173,12 +173,12 @@ export async function applyAllPlaytime(
     pending = tryWritePlaytime(pending);
 
     if (pending.length > 0 && attempt < delays.length - 1) {
-      debugLog(`applyAllPlaytime: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`);
+      void debugLog(`applyAllPlaytime: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`);
     }
   }
 
   if (pending.length > 0) {
-    debugLog(`applyAllPlaytime: ${pending.length} apps still unavailable in appStore after all retries`);
+    void debugLog(`applyAllPlaytime: ${pending.length} apps still unavailable in appStore after all retries`);
   }
 }
 

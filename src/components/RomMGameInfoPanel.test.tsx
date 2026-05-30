@@ -917,7 +917,7 @@ describe("RomMGameInfoPanel", () => {
         // Already rendered via mountWithRomId — get container via re-render?
         // Use a fresh render that uses the new mock.
         const view = render(<RomMGameInfoPanel appId={testAppId} />);
-        flushAsync().then(() => resolve({ container: view.container }));
+        void flushAsync().then(() => resolve({ container: view.container }));
       });
       await act(async () => {
         globalThis.dispatchEvent(

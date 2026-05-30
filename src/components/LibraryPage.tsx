@@ -206,7 +206,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   useEffect(() => {
     if (activeTab === "bios" && !biosLoaded.current) {
       biosLoaded.current = true;
-      refreshBios();
+      void refreshBios();
     }
   }, [activeTab]);
 
@@ -512,16 +512,16 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                 void (async () => {
                   const defaultCore = platform.available_cores?.find((c) => c.is_default);
                   const label = option.data === defaultCore?.label ? "" : option.data;
-                  debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`);
+                  void debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`);
                   try {
                     const result = await setSystemCore(platform.platform_slug, label);
-                    debugLog(`setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`);
+                    void debugLog(`setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`);
                     if (result.success) {
                       await refreshBios();
                       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platform.platform_slug } }));
                     }
                   } catch (e) {
-                    debugLog(`setSystemCore: error: ${e}`);
+                    void debugLog(`setSystemCore: error: ${e}`);
                   }
                 })();
               }}

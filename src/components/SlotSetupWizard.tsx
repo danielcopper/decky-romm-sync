@@ -111,7 +111,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       }
     };
 
-    fetchInfo();
+    void fetchInfo();
     return () => { cancelled = true; };
   }, [romId]);
 
@@ -293,7 +293,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             createElement(CustomSlotModal, {
               onSubmit: (trimmed: string) => {
                 if (trimmed) {
-                  handleConfirm(trimmed);
+                  void handleConfirm(trimmed);
                 } else {
                   // Legacy mode
                   showModal(

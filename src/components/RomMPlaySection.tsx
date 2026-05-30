@@ -174,7 +174,7 @@ async function loadCached(
       refreshBiosInBackground(romId, cancelled, setter);
     }
   } catch (e) {
-    debugLog(`RomMPlaySection: loadCached error: ${e}`);
+    void debugLog(`RomMPlaySection: loadCached error: ${e}`);
   }
 }
 
@@ -218,7 +218,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   useEffect(() => {
     let cancelled = false;
 
-    loadCached(appId, () => cancelled, romIdRef, setInfo);
+    void loadCached(appId, () => cancelled, romIdRef, setInfo);
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
@@ -279,7 +279,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             case "save_sync": await handleSaveSyncChange(detail); break;
           }
         } catch (err) {
-          debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
+          void debugLog(`RomMPlaySection: onDataChanged error: ${err}`);
         }
       })();
     };
@@ -309,7 +309,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
         setInfo((prev) => ({ ...prev, saveSyncStatus: ss, saveSyncLabel: sl, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
       } catch (e) {
-        debugLog(`RomMPlaySection: background save check error: ${e}`);
+        void debugLog(`RomMPlaySection: background save check error: ${e}`);
       }
     }
 
@@ -345,7 +345,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         }
       }
     };
-    check();
+    void check();
     return () => { cancelled = true; };
   }, [info.saveSyncEnabled]);
 
@@ -376,7 +376,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // render the refreshed image.
       const coverResult = await refreshCoverArtwork(romId).catch(
         (e): { success: boolean; reason?: string; message: string; cover_path?: string } => {
-          debugLog(`refreshCoverArtwork rejected: ${e}`);
+          void debugLog(`refreshCoverArtwork rejected: ${e}`);
           return { success: false, reason: "exception", message: String(e) };
         },
       );
@@ -386,14 +386,14 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           detail: { type: "cover_refreshed", rom_id: romId },
         }));
       } else {
-        debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
+        void debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`);
       }
 
       // Step 2: resolve which SGDB game id to use. The backend either picks
       // one automatically (RomM/IGDB) or hands back manual candidates.
       const resolution = await getSgdbResolution(romId).catch(
         (e): null => {
-          debugLog(`getSgdbResolution rejected: ${e}`);
+          void debugLog(`getSgdbResolution rejected: ${e}`);
           return null;
         },
       );
@@ -568,16 +568,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const handleChangeGameCore = async (coreLabel: string) => {
     if (!info.platformSlug || !info.romFile) return;
     const romPath = `./${info.romFile}`;
-    debugLog(`handleChangeGameCore: slug=${info.platformSlug} romPath=${romPath} coreLabel=${coreLabel}`);
+    void debugLog(`handleChangeGameCore: slug=${info.platformSlug} romPath=${romPath} coreLabel=${coreLabel}`);
     try {
       const result = await setGameCore(info.platformSlug, romPath, coreLabel);
-      debugLog(`handleChangeGameCore: result=${JSON.stringify(result)}`);
+      void debugLog(`handleChangeGameCore: result=${JSON.stringify(result)}`);
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `Core set to ${coreLabel}` });
         // Use bios_status from the set_game_core response directly (avoids cache staleness).
         // For pre-computed level/label, re-fetch via getBiosStatus which ships them.
         const bios = result.bios_status;
-        debugLog(`handleChangeGameCore: bios active_core_label=${bios?.active_core_label}`);
+        void debugLog(`handleChangeGameCore: bios active_core_label=${bios?.active_core_label}`);
         if (bios && info.romId) {
           const newLabel = bios.active_core_label ?? null;
           const cores = bios.available_cores ?? info.availableCores;

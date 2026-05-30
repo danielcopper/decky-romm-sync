@@ -128,9 +128,9 @@ export const setGameCore = callable<[string, string, string], { success: boolean
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 export const debugLog = callable<[string], void>("debug_log");
 const frontendLog = callable<[string, string], void>("frontend_log");
-export const logInfo = (msg: string) => { frontendLog("info", msg); };
-export const logWarn = (msg: string) => { frontendLog("warn", msg); };
-export const logError = (msg: string) => { frontendLog("error", msg); };
+export const logInfo = (msg: string) => { void frontendLog("info", msg); };
+export const logWarn = (msg: string) => { void frontendLog("warn", msg); };
+export const logError = (msg: string) => { void frontendLog("error", msg); };
 export const fixRetroarchInputDriver = callable<[], { success: boolean; message: string }>("fix_retroarch_input_driver");
 export const getRomMetadata = callable<[number], RomMetadata>("get_rom_metadata");
 export const getAllMetadataCache = callable<[], Record<string, RomMetadata>>("get_all_metadata_cache");

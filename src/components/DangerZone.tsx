@@ -450,7 +450,7 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
     setConfirmRemoveAll(false);
     setConfirmRetrodeck(false);
     loadNonSteamApps();
-    refreshPlatforms();
+    refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
   };
 
   const removeButtonLabel = () => {
@@ -577,19 +577,19 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial async data loads on mount are the standard React pattern; the rule is overzealous here
-    refreshPlatforms();
+    refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
     loadNonSteamApps();
     getWhitelistSettings().then((s) => {
       setDisabledDefaults(s.disabled_defaults);
       setCustomNames(s.custom_names);
       setSettingsLoaded(true);
-    });
+    }).catch((e) => logError(`Failed to load whitelist settings: ${e}`));
   }, []);
 
   const persistWhitelist = (newDisabled: string[], newCustom: string[]) => {
     setDisabledDefaults(newDisabled);
     setCustomNames(newCustom);
-    updateWhitelistSettings(newDisabled, newCustom);
+    updateWhitelistSettings(newDisabled, newCustom).catch((e) => logError(`Failed to update whitelist settings: ${e}`));
   };
 
   return (

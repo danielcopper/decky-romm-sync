@@ -243,7 +243,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   };
 
   const handleDisableSaveSync = () => {
-    handleSaveSyncSettingChange({ save_sync_enabled: false });
+    void handleSaveSyncSettingChange({ save_sync_enabled: false });
   };
 
   const handleToggleSaveSync = (value: boolean) => {
@@ -262,7 +262,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         strCancelButtonText="Cancel"
         onOK={() => {
           setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: null } : prev);
-          handleSaveSyncSettingChange({ default_slot: null });
+          void handleSaveSyncSettingChange({ default_slot: null });
         }}
       />,
     );
@@ -271,15 +271,15 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // --- Connection handlers wired into ConnectionSection ---
   const handleUrlSubmit = (value: string) => {
     setUrl(value);
-    autoSaveSettings("url", value);
+    void autoSaveSettings("url", value);
   };
   const handleUsernameSubmit = (value: string) => {
     setUsername(value);
-    autoSaveSettings("username", value);
+    void autoSaveSettings("username", value);
   };
   const handlePasswordSubmit = (value: string) => {
     setPassword(value);
-    autoSaveSettings("password", value);
+    void autoSaveSettings("password", value);
   };
   const handleAllowInsecureSslChange = (val: boolean) => {
     setAllowInsecureSsl(val);
@@ -317,20 +317,20 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     const trimmed = value.trim();
     if (trimmed) {
       setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: trimmed } : prev);
-      handleSaveSyncSettingChange({ default_slot: trimmed });
+      void handleSaveSyncSettingChange({ default_slot: trimmed });
     } else {
       confirmClearDefaultSlot();
     }
   };
   const handleResetDefaultSlot = () => {
     setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: "default" } : prev);
-    handleSaveSyncSettingChange({ default_slot: "default" });
+    void handleSaveSyncSettingChange({ default_slot: "default" });
   };
 
   // --- Controller handlers ---
   const handleSteamInputModeChange = (mode: string) => {
     setSteamInputMode(mode);
-    saveSteamInputSetting(mode);
+    void saveSteamInputSetting(mode);
     setSteamInputStatus("");
   };
   const handleApplySteamInput = async () => {
@@ -358,7 +358,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // --- Advanced handlers ---
   const handleLogLevelChange = (level: string) => {
     setLogLevel(level);
-    saveLogLevel(level);
+    void saveLogLevel(level);
   };
 
   // --- Save sort migration handlers ---

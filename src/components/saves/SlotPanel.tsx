@@ -97,7 +97,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         const result = await getSlotSaves(romId, slotName);
         setSlotFiles(result.success ? result.saves : []);
       } catch (e) {
-        debugLog(`SavesTab: failed to load slot saves for ${slotName}: ${e}`);
+        void debugLog(`SavesTab: failed to load slot saves for ${slotName}: ${e}`);
         setSlotFiles([]);
       } finally {
         setLoadingSlot(false);
@@ -124,7 +124,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         switchErrorTimerRef.current = setTimeout(() => setSwitchError(null), 5000);
       }
     } catch (e) {
-      debugLog(`SavesTab: switchSlot error: ${e}`);
+      void debugLog(`SavesTab: switchSlot error: ${e}`);
       setSwitchError("An error occurred while switching slots");
       if (switchErrorTimerRef.current) clearTimeout(switchErrorTimerRef.current);
       switchErrorTimerRef.current = setTimeout(() => setSwitchError(null), 5000);
@@ -172,14 +172,14 @@ export const SlotPanel: FC<SlotPanelProps> = ({
                 toaster.toast({ title: "RomM Sync", body: result.message ?? "Failed to delete slot" });
               }
             } catch (e) {
-              debugLog(`SavesTab: deleteSlot error: ${e}`);
+              void debugLog(`SavesTab: deleteSlot error: ${e}`);
               toaster.toast({ title: "RomM Sync", body: "An error occurred while deleting the slot" });
             }
           })();
         },
       }));
     } catch (e) {
-      debugLog(`SavesTab: getSlotDeleteInfo error: ${e}`);
+      void debugLog(`SavesTab: getSlotDeleteInfo error: ${e}`);
       toaster.toast({ title: "RomM Sync", body: "Failed to load slot info" });
     } finally {
       setDeleting(false);

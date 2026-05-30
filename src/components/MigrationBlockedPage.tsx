@@ -49,7 +49,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
         showModal(
           <MigrationConflictModal
             conflictCount={result.conflict_count ?? 0}
-            onChoice={(s) => { runMigration(s); }}
+            onChoice={(s) => { void runMigration(s); }}
           />,
         );
         return;
@@ -68,7 +68,7 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
     setMigrating(false);
   };
 
-  const handleMigrate = () => { runMigration(null); };
+  const handleMigrate = () => { void runMigration(null); };
 
   const handleDismiss = () => {
     showModal(

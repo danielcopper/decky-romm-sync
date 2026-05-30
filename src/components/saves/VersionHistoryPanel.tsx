@@ -43,12 +43,12 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
       if (result.status === "ok") {
         setVersions(result.versions);
       } else if (result.status === "server_unreachable") {
-        debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`);
+        void debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`);
         setVersions(null);
         setLoadError("Couldn't reach RomM. Tap retry.");
       }
     } catch (e) {
-      debugLog(`VersionHistoryPanel: failed to load versions for ${filename}: ${e}`);
+      void debugLog(`VersionHistoryPanel: failed to load versions for ${filename}: ${e}`);
       setVersions(null);
       setLoadError("Couldn't reach RomM. Tap retry.");
     } finally {
@@ -111,7 +111,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         toaster.toast({ title: "RomM Sync", body: "Version history requires RomM 4.7+" });
       }
     } catch (e) {
-      debugLog(`VersionHistoryPanel: restore error for save ${version.id}: ${e}`);
+      void debugLog(`VersionHistoryPanel: restore error for save ${version.id}: ${e}`);
     } finally {
       setRestoring(null);
     }
@@ -184,7 +184,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         noFocusRing: false,
         onFocus: scrollFocusedToCenter,
         disabled: isThisRestoring || restoring !== null || isOffline,
-        onClick: () => { handleRestore(v); },
+        onClick: () => { void handleRestore(v); },
       }, isThisRestoring ? "Restoring..." : "Restore"),
     );
   };
