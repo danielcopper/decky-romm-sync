@@ -370,7 +370,10 @@ def bootstrap(
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
-    save_sync_state = SaveService.make_default_state()
+    # Legacy JSON aggregate — survives only for the not-yet-migrated
+    # PlaytimeService / RomRemovalService playtime reads/writes. The per-ROM
+    # save state lives in SQLite (the rom_save_states repository).
+    save_sync_state = SaveSyncState()
 
     adapters = AdapterBundle(
         http_adapter=http_adapter,

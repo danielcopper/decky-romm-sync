@@ -847,7 +847,6 @@ class TestMainStartupOrdering:
         save_sync_service = MagicMock()
         save_sync_service.init_state = MagicMock()
         save_sync_service.load_state = MagicMock()
-        save_sync_service.prune_orphaned_state = MagicMock()
 
         sgdb_service = MagicMock()
         sgdb_service.prune_orphaned_artwork_cache = MagicMock()

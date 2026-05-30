@@ -2,14 +2,17 @@
 
 import pytest
 
-from domain.save_state import RomSaveState
+from domain.rom_save_state import RomSaveState
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
     _file_md5,
     _install_rom,
+    _seed_save_state,
+    _seed_save_state_dict,
     _server_save,
     _server_save_with_syncs,
+    _set_device_id,
     make_service,
 )
 
@@ -53,8 +56,7 @@ class TestSaveStatus:
         svc, fake = make_service(tmp_path)
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
-        svc._save_sync_state.server_device_id = "server-dev-1"
-        svc._save_sync_state.device_id = "server-dev-1"
+        _set_device_id(svc, "server-dev-1")
 
         ss = _server_save()
         ss["device_syncs"] = [
@@ -90,7 +92,7 @@ class TestSaveStatus:
         # Server save in slot "default", but active_slot is "other"
         ss = _server_save(slot="default")
         fake.saves[100] = ss
-        svc._save_sync_state.saves["42"] = RomSaveState(active_slot="other")
+        _seed_save_state(svc, 42, RomSaveState(active_slot="other"))
 
         result = await svc.get_save_status(42)
         # Local file exists → should show as upload (local-only), not synced against wrong slot
@@ -113,7 +115,9 @@ class TestGetSaveStatusComputeAction:
         )
         fake.saves[100] = ss
 
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "files": {
                     "pokemon.srm": {
@@ -122,7 +126,7 @@ class TestGetSaveStatusComputeAction:
                         "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
                     }
                 }
-            }
+            },
         )
 
         result = svc._status._get_save_status_io(42, [ss])
@@ -148,7 +152,9 @@ class TestGetSaveStatusComputeAction:
         ss_skip = _server_save_with_syncs(
             device_syncs=[{"device_id": "device-1", "is_current": True}],
         )
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "files": {
                     "pokemon.srm": {
@@ -157,14 +163,14 @@ class TestGetSaveStatusComputeAction:
                         "last_sync_server_updated_at": ss_skip["updated_at"],
                     }
                 }
-            }
+            },
         )
         result_skip = svc._status._get_save_status_io(42, [ss_skip])
         assert result_skip["files"][0]["status"] == "synced"
 
         # ---------- Upload ----------
         # Reset state for next case: no server saves
-        svc._save_sync_state.saves["42"] = RomSaveState()
+        _seed_save_state(svc, 42, RomSaveState())
         result_upload = svc._status._get_save_status_io(42, [])
         assert result_upload["files"][0]["status"] == "upload"
 
@@ -174,7 +180,9 @@ class TestGetSaveStatusComputeAction:
             device_syncs=[{"device_id": "device-1", "is_current": False}],
         )
         fake.saves[100] = ss_dl
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "files": {
                     "pokemon.srm": {
@@ -183,13 +191,15 @@ class TestGetSaveStatusComputeAction:
                         "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
                     }
                 }
-            }
+            },
         )
         result_dl = svc._status._get_save_status_io(42, [ss_dl])
         assert result_dl["files"][0]["status"] == "download"
 
         # ---------- Conflict ----------
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "files": {
                     "pokemon.srm": {
@@ -198,7 +208,7 @@ class TestGetSaveStatusComputeAction:
                         "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
                     }
                 }
-            }
+            },
         )
         result_conflict = svc._status._get_save_status_io(42, [ss_dl])
         assert result_conflict["files"][0]["status"] == "conflict"
@@ -225,7 +235,7 @@ class TestGetSaveStatusComputeAction:
         fake.saves[200] = ss_old
         fake.saves[201] = ss_new
 
-        svc._save_sync_state.saves["42"] = RomSaveState()
+        _seed_save_state(svc, 42, RomSaveState())
 
         result = svc._status._get_save_status_io(42, [ss_old, ss_new])
 
@@ -241,7 +251,7 @@ class TestGetSaveStatusComputeAction:
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
 
-        svc._save_sync_state.saves["42"] = RomSaveState()
+        _seed_save_state(svc, 42, RomSaveState())
 
         result = svc._status._get_save_status_io(42, [])
 
@@ -256,7 +266,7 @@ class TestSaveSyncDisplayEnrichment:
         svc, _ = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
-        svc._save_sync_state.saves["42"] = RomSaveState()
+        _seed_save_state(svc, 42, RomSaveState())
 
         result = svc._status._get_save_status_io(42, [])
 
@@ -278,7 +288,9 @@ class TestSaveSyncDisplayEnrichment:
             device_syncs=[{"device_id": "device-1", "is_current": True}],
         )
         fake.saves[100] = ss
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "files": {
                     "pokemon.srm": {
@@ -288,7 +300,7 @@ class TestSaveSyncDisplayEnrichment:
                     }
                 },
                 "last_sync_check_at": "2026-04-01T08:00:00+00:00",
-            }
+            },
         )
 
         result = svc._status._get_save_status_io(42, [ss])
@@ -306,7 +318,9 @@ class TestSaveSyncDisplayEnrichment:
         _create_save(tmp_path, content=b"diverged local")
         ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
         fake.saves[100] = ss
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "files": {
                     "pokemon.srm": {
@@ -315,7 +329,7 @@ class TestSaveSyncDisplayEnrichment:
                         "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
                     }
                 }
-            }
+            },
         )
 
         result = svc._status._get_save_status_io(42, [ss])

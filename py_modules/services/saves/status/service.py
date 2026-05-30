@@ -4,10 +4,9 @@ import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain.emulator_tag import detect_core_change
 from domain.iso_time import parse_iso_to_epoch
+from domain.rom_save_state import RomSaveState
 from domain.save_attribution import compute_uploaded_by_us
 from domain.save_status import compute_save_sync_display
 from domain.save_status_builders import (
@@ -16,6 +15,7 @@ from domain.save_status_builders import (
     status_from_action,
 )
 from domain.sync_action import Conflict, Skip
+from services.saves._settings import save_sync_enabled
 
 if TYPE_CHECKING:
     import asyncio
@@ -27,9 +27,9 @@ if TYPE_CHECKING:
         EventEmitter,
         RetryStrategy,
         RommSaveApi,
+        UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
-    from services.saves.state import StateService
     from services.saves.sync_engine import MatrixOutcome, SyncEngine
 
 
@@ -37,16 +37,17 @@ if TYPE_CHECKING:
 class StatusServiceConfig:
     """Frozen wiring bundle handed to ``StatusService.__init__``.
 
-    Holds the main plugin state dict, the peer save sub-services
-    (state, sync_engine, rom_info), the Protocol-typed RomM adapter
-    and retry strategy, the plugin event loop, the standard-library
-    logger, the ``DebugLogger`` seam, the ES-DE core resolver, and
-    the event emitter used to push background status updates to the
-    frontend.
+    Holds the live ``settings.json`` dict (save-sync enabled toggle), the
+    Unit-of-Work factory (the transactional seam over the SQLite
+    repositories), the peer save sub-services (sync_engine, rom_info),
+    the Protocol-typed RomM adapter and retry strategy, the plugin event
+    loop, the standard-library logger, the ``DebugLogger`` seam, the
+    ES-DE core resolver, and the event emitter used to push background
+    status updates to the frontend.
     """
 
-    state: PluginState
-    state_svc: StateService
+    settings: dict
+    uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
     rom_info: RomInfoService
     romm_api: RommSaveApi
@@ -63,8 +64,8 @@ class StatusService:
 
     def __init__(self, *, config: StatusServiceConfig) -> None:
         self._config = config
-        self._state = config.state
-        self._state_svc = config.state_svc
+        self._settings = config.settings
+        self._uow_factory = config.uow_factory
         self._sync_engine = config.sync_engine
         self._rom_info = config.rom_info
         self._romm_api = config.romm_api
@@ -117,30 +118,35 @@ class StatusService:
     def _partition_outcomes(
         self,
         rom_id: int,
-        rom_id_str: str,
+        save_state: RomSaveState,
+        device_id: str | None,
         server_in_slot: list[dict],
         info: dict,
-    ) -> tuple[MatrixOutcome | None, list[MatrixOutcome]]:
+    ) -> tuple[MatrixOutcome | None, list[MatrixOutcome], bool]:
         """Iterate matrix outcomes for the active slot, splitting them into local/server-only buckets.
 
         Side effect: when an outcome is ``Skip(adopt_baseline=True)`` with
-        a local hash, records that hash as the new sync baseline via the
-        sync engine.
+        a local hash, records that hash as the new sync baseline on
+        *save_state* (in memory) and flags that a write is needed.
 
-        Returns ``(first_local_outcome, server_only_outcomes)``. The local
-        bucket is the first outcome with a local file present — matching
-        the active-slot single-entry view this status flow surfaces.
+        Returns ``(first_local_outcome, server_only_outcomes, baseline_adopted)``.
+        The local bucket is the first outcome with a local file present —
+        matching the active-slot single-entry view this status flow surfaces.
         """
         local_outcome: MatrixOutcome | None = None
         server_only_outcomes: list[MatrixOutcome] = []
-        for outcome in self._sync_engine.iter_matrix_outcomes(rom_id, server_in_slot, info=info):
+        baseline_adopted = False
+        for outcome in self._sync_engine.iter_matrix_outcomes(
+            rom_id, server_in_slot, save_state=save_state, device_id=device_id, info=info
+        ):
             if isinstance(outcome.action, Skip) and outcome.action.adopt_baseline and outcome.local_hash:
-                self._sync_engine.adopt_baseline_hash(rom_id_str, outcome.filename, outcome.local_hash)
+                self._sync_engine.adopt_baseline_hash(save_state, outcome.filename, outcome.local_hash)
+                baseline_adopted = True
             if outcome.local_path is None:
                 server_only_outcomes.append(outcome)
             elif local_outcome is None:
                 local_outcome = outcome
-        return local_outcome, server_only_outcomes
+        return local_outcome, server_only_outcomes, baseline_adopted
 
     def _get_save_status_io(
         self,
@@ -170,7 +176,7 @@ class StatusService:
 
         The one allowed mutation is recording an adopted baseline hash when
         the action requests it (``Skip(adopt_baseline=True)``) — pure state
-        hygiene, no network traffic.
+        hygiene, persisted via a short write UoW only when it actually fires.
 
         When *server_query_failed* is True the caller's ``list_saves`` call
         raised before *server_saves* was populated. Matrix evaluation runs
@@ -181,11 +187,13 @@ class StatusService:
         misleading "ready to upload" indicator on what is in fact a
         connectivity blip.
         """
-        rom_id_str = str(rom_id)
         info = self._rom_info.get_rom_save_info(rom_id)
-        server_device_id = self._state_svc.get_server_device_id()
 
-        save_state = self._state_svc.state.saves.get(rom_id_str)
+        with self._uow_factory() as uow:
+            save_state = uow.rom_save_states.get(rom_id)
+            playtime = uow.playtime.get(rom_id)
+            device_id = uow.kv_config.get("device_id")
+
         active_slot = save_state.active_slot if save_state else None
         server_in_slot = self._sync_engine.filter_server_saves_to_slot(server_saves, active_slot)
 
@@ -195,7 +203,17 @@ class StatusService:
         conflicts: list[dict] = []
 
         if info is not None:
-            local_outcome, server_only_outcomes = self._partition_outcomes(rom_id, rom_id_str, server_in_slot, info)
+            # The baseline-adopt path mutates a working copy; an absent aggregate
+            # starts from a fresh default so the matrix can evaluate against it.
+            working_state = save_state if save_state is not None else RomSaveState()
+            local_outcome, server_only_outcomes, baseline_adopted = self._partition_outcomes(
+                rom_id, working_state, device_id, server_in_slot, info
+            )
+            if baseline_adopted:
+                with self._uow_factory() as uow:
+                    uow.rom_save_states.save(rom_id, working_state)
+                save_state = working_state
+                own_upload_ids = working_state.own_upload_ids
 
             chosen = local_outcome
             if chosen is None and server_only_outcomes:
@@ -205,7 +223,7 @@ class StatusService:
                 status_entry, conflict_entry = self._status_entry_from_outcome(
                     chosen,
                     rom_id=rom_id,
-                    server_device_id=server_device_id,
+                    server_device_id=device_id,
                     own_upload_ids=own_upload_ids,
                 )
                 if server_query_failed:
@@ -215,16 +233,14 @@ class StatusService:
                 if conflict_entry is not None:
                     conflicts.append(conflict_entry)
 
-        playtime_entry = self._state_svc.state.playtime.get(rom_id_str)
-        playtime = playtime_entry.to_dict() if playtime_entry is not None else {}
-        save_entry = self._state_svc.state.saves.get(rom_id_str)
-        last_sync_check_at = save_entry.last_sync_check_at if save_entry else None
+        playtime_dict = _playtime_to_dict(playtime)
+        last_sync_check_at = save_state.last_sync_check_at if save_state else None
 
         return {
             "rom_id": rom_id,
             "files": file_statuses,
-            "playtime": playtime,
-            "device_id": self._state_svc.state.device_id or "",
+            "playtime": playtime_dict,
+            "device_id": device_id or "",
             "last_sync_check_at": last_sync_check_at,
             "conflicts": conflicts,
             "save_sort_changed": self._rom_info.is_save_sort_changed(),
@@ -256,7 +272,7 @@ class StatusService:
         server_saves: list[dict] = []
         server_query_failed = False
         try:
-            device_id = self._state_svc.get_server_device_id()
+            device_id = await self._loop.run_in_executor(None, self._read_device_id)
             server_saves = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id)),
@@ -274,6 +290,10 @@ class StatusService:
             ),
         )
 
+    def _read_device_id(self) -> str | None:
+        with self._uow_factory() as uow:
+            return uow.kv_config.get("device_id")
+
     async def check_save_status_background(self, rom_id: int) -> None:
         """Run full save status check in background and emit result to frontend."""
         try:
@@ -284,11 +304,12 @@ class StatusService:
 
     def check_core_change(self, rom_id: int) -> dict:
         """Check if emulator core changed since last sync for a ROM."""
-        if not self._state_svc.is_save_sync_enabled():
+        if not save_sync_enabled(self._settings):
             return {"changed": False}
 
-        rom_id_str = str(rom_id)
-        save_entry = self._state_svc.state.saves.get(rom_id_str)
+        with self._uow_factory() as uow:
+            save_entry = uow.rom_save_states.get(rom_id)
+            installed = uow.rom_installs.get(rom_id)
         if not save_entry:
             return {"changed": False}  # Never synced
 
@@ -299,11 +320,8 @@ class StatusService:
 
         # Resolve ROM filename for per-game core detection
         rom_filename = None
-        installed = self._state.get("installed_roms", {}).get(rom_id_str)
-        if installed:
-            file_path = installed.get("file_path", "")
-            if file_path:
-                rom_filename = os.path.basename(file_path)
+        if installed and installed.file_path:
+            rom_filename = os.path.basename(installed.file_path)
 
         # Core labels come from ES-DE config which may differ from RetroArch's
         # corename (e.g. "Snes9x - Current" vs "Snes9x"). Aligning with RetroArch
@@ -337,6 +355,19 @@ def _outcome_server_sort_key(outcome: MatrixOutcome) -> float:
         return 0.0
     newest = max(candidates, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
     return parse_iso_to_epoch(newest.get("updated_at")) or 0.0
+
+
+def _playtime_to_dict(playtime) -> dict:
+    """Project the ``Playtime`` aggregate onto the frontend dict, or ``{}`` when absent."""
+    if playtime is None:
+        return {}
+    return {
+        "total_seconds": playtime.total_seconds,
+        "session_count": playtime.session_count,
+        "last_session_start": playtime.last_session_start,
+        "last_session_duration_sec": playtime.last_session_duration_sec,
+        "note_id": playtime.note_id,
+    }
 
 
 def _redact_server_fields(entry: dict) -> dict:

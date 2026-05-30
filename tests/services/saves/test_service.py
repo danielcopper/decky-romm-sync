@@ -10,11 +10,16 @@ import pytest
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_save_api import FakeSaveApi
 
-from domain.save_state import FileSyncState, RomSaveState
+from domain.rom_save_state import FileSyncState, RomSaveState
+from services.saves._settings import sanitize_setting
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
+    _get_device_id,
+    _get_save_state,
     _install_rom,
+    _seed_save_state,
+    _set_device_id,
     make_service,
 )
 
@@ -30,20 +35,19 @@ class TestDeviceRegistration:
         assert result["device_id"]
         assert result["device_name"]
         # Persisted
-        assert svc._save_sync_state.device_id == result["device_id"]
+        assert _get_device_id(svc) == result["device_id"]
 
     @pytest.mark.asyncio
     async def test_returns_existing_device(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "existing"
+        _set_device_id(svc, "existing")
         svc._config.settings["device_name"] = "deck"
-        svc._save_sync_state.server_device_id = "server-existing"
 
         result = await svc.ensure_device_registered()
         assert result["device_id"] == "existing"
         assert result["device_name"] == "deck"
-        assert result["server_device_id"] == "server-existing"
+        assert result["server_device_id"] == "existing"
 
     @pytest.mark.asyncio
     async def test_disabled_returns_failure(self, tmp_path):
@@ -64,7 +68,7 @@ class TestDeviceRegistrationServer:
         result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result.get("server_device_id") is not None
-        assert svc._save_sync_state.server_device_id == result["server_device_id"]
+        assert _get_device_id(svc) == result["server_device_id"]
         # Verify register_device was called
         reg_calls = [c for c in fake.call_log if c[0] == "register_device"]
         assert len(reg_calls) == 1
@@ -83,35 +87,32 @@ class TestDeviceRegistrationServer:
         result = await svc.ensure_device_registered()
         assert result["success"] is False
         assert result.get("error") == "registration_failed"
-        assert svc._save_sync_state.server_device_id is None
+        assert _get_device_id(svc) is None
 
     @pytest.mark.asyncio
     async def test_returns_existing_with_server_device_id(self, tmp_path):
         """If already registered, returns existing IDs including server_device_id."""
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "existing-id"
+        _set_device_id(svc, "server-id-123")
         svc._config.settings["device_name"] = "deck"
-        svc._save_sync_state.server_device_id = "server-id-123"
 
         result = await svc.ensure_device_registered()
-        assert result["device_id"] == "existing-id"
+        assert result["device_id"] == "server-id-123"
         assert result.get("server_device_id") == "server-id-123"
 
     @pytest.mark.asyncio
     async def test_upgrades_local_uuid_to_server(self, tmp_path):
-        """Local-only UUID gets upgraded to server registration."""
+        """A missing device id triggers a fresh server registration."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        # Simulate existing local-only UUID (from failed registration)
-        svc._save_sync_state.device_id = "local-only-uuid"
+        # No persisted device id yet (e.g. from a failed registration)
         svc._config.settings["device_name"] = "deck"
-        svc._save_sync_state.server_device_id = None
 
         result = await svc.ensure_device_registered()
         assert result["success"] is True
         assert result.get("server_device_id") is not None
-        assert svc._save_sync_state.server_device_id is not None
+        assert _get_device_id(svc) is not None
         # register_device was called
         reg_calls = [c for c in fake.call_log if c[0] == "register_device"]
         assert len(reg_calls) == 1
@@ -121,9 +122,8 @@ class TestDeviceRegistrationServer:
         """Already-registered path calls update_device with current plugin_version."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "existing-id"
+        _set_device_id(svc, "server-abc")
         svc._config.settings["device_name"] = "deck"
-        svc._save_sync_state.server_device_id = "server-abc"
 
         result = await svc.ensure_device_registered()
 
@@ -139,16 +139,15 @@ class TestDeviceRegistrationServer:
         fake = FakeSaveApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "existing-id"
+        _set_device_id(svc, "server-abc")
         svc._config.settings["device_name"] = "deck"
-        svc._save_sync_state.server_device_id = "server-abc"
 
         # Make update_device fail silently
         fake.fail_on_next(Exception("network error"))
         result = await svc.ensure_device_registered()
 
         assert result["success"] is True
-        assert result["device_id"] == "existing-id"
+        assert result["device_id"] == "server-abc"
 
     @pytest.mark.asyncio
     async def test_probes_version_when_unset(self, tmp_path):
@@ -237,7 +236,7 @@ class TestListDevices:
         """own device_id present in state — is_current_device is True on matching entry."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.server_device_id = "device-1"
+        _set_device_id(svc, "device-1")
 
         # Register two devices in fake
         fake._registered_devices = [
@@ -281,7 +280,7 @@ class TestListDevices:
         """No server_device_id in state — all is_current_device are False."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.server_device_id = None
+        # No device id persisted (kv_config empty by default)
 
         fake._registered_devices = [{"id": "device-1", "name": "steamdeck"}]
         result = await svc.list_devices()
@@ -294,7 +293,7 @@ class TestListDevices:
         """Device with id=None must not match own_id=None (avoid 'None'=='None' trap)."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.server_device_id = None
+        # No device id persisted (kv_config empty by default)
 
         fake._registered_devices = [{"id": None, "name": "unknown"}]
         result = await svc.list_devices()
@@ -310,7 +309,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
     async def test_pre_launch_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
         svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
         result = await svc.pre_launch_sync(42)
@@ -323,7 +322,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
     async def test_post_exit_sync_skips_when_retrodeck_migration_pending(self, tmp_path):
         svc, _ = make_service(tmp_path, is_retrodeck_migration_pending=lambda: True)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
 
@@ -344,7 +343,7 @@ class TestRetroDeckMigrationBlocksSaveSync:
 
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
         plugin = Plugin()
@@ -370,7 +369,7 @@ class TestPostExitSyncConnectivity:
         fake.heartbeat_raises = ConnectionError("unreachable")
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
 
         result = await svc.post_exit_sync(42)
 
@@ -383,7 +382,7 @@ class TestPostExitSyncConnectivity:
         """post_exit_sync proceeds normally when server is reachable."""
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
@@ -405,7 +404,7 @@ class TestPostExitSyncConnectivity:
 
         assert result.get("offline") is True
         # Device should not have been registered
-        assert not svc._save_sync_state.device_id
+        assert not _get_device_id(svc)
 
 
 class TestSettings:
@@ -446,15 +445,18 @@ class TestDeleteSaves:
         save_path = _create_save(tmp_path)
         assert save_path.exists()
 
-        svc._save_sync_state.saves["42"] = RomSaveState(files={"pokemon.srm": FileSyncState()})
+        _seed_save_state(
+            svc, 42, RomSaveState(files={"pokemon.srm": FileSyncState(tracked_save_id=1, last_sync_hash="abc")})
+        )
 
         result = svc.delete_local_saves(42)
         assert result["success"] is True
         assert result["deleted_count"] == 1
         assert not save_path.exists()
         # Entry survives — only files are cleared.
-        assert "42" in svc._save_sync_state.saves
-        assert svc._save_sync_state.saves["42"].files == {}
+        entry = _get_save_state(svc, 42)
+        assert entry is not None
+        assert entry.files == {}
 
     @pytest.mark.asyncio
     async def test_delete_local_saves_preserves_slot_config(self, tmp_path):
@@ -464,17 +466,19 @@ class TestDeleteSaves:
         save_path = _create_save(tmp_path)
         assert save_path.exists()
 
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
-            {
-                "files": {"pokemon.srm": {"last_sync_hash": "abc"}},
-                "active_slot": "desktop",
-                "slot_confirmed": True,
-                "emulator": "retroarch-mgba",
-                "last_synced_core": "mgba_libretro",
-                "own_upload_ids": ["save-1", "save-2"],
-                "slots": {"default": {}, "desktop": {}},
-                "system": "gba",
-            }
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(
+                files={"pokemon.srm": FileSyncState(last_sync_hash="abc")},
+                active_slot="desktop",
+                slot_confirmed=True,
+                emulator="retroarch-mgba",
+                last_synced_core="mgba_libretro",
+                own_upload_ids=[1, 2],
+                slots={"default": {}, "desktop": {}},
+                system="gba",
+            ),
         )
 
         result = svc.delete_local_saves(42)
@@ -482,13 +486,14 @@ class TestDeleteSaves:
         assert result["deleted_count"] == 1
         assert not save_path.exists()
 
-        entry = svc._save_sync_state.saves["42"]
+        entry = _get_save_state(svc, 42)
+        assert entry is not None
         assert entry.files == {}
         assert entry.active_slot == "desktop"
         assert entry.slot_confirmed is True
         assert entry.emulator == "retroarch-mgba"
         assert entry.last_synced_core == "mgba_libretro"
-        assert entry.own_upload_ids == ["save-1", "save-2"]
+        assert entry.own_upload_ids == [1, 2]
         assert entry.slots == {"default": {}, "desktop": {}}
         assert entry.system == "gba"
 
@@ -499,15 +504,17 @@ class TestDeleteSaves:
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
 
-        # No svc._save_sync_state.saves["42"] set up.
-        assert "42" not in svc._save_sync_state.saves
+        # No save state entry for rom 42 yet.
+        assert _get_save_state(svc, 42) is None
 
         result = svc.delete_local_saves(42)
         assert result["success"] is True
         assert result["deleted_count"] == 1
         assert not save_path.exists()
-        # clear_files_state creates an empty entry with files={}.
-        assert svc._save_sync_state.saves["42"].files == {}
+        # The delete creates a stable empty entry with files={}.
+        entry = _get_save_state(svc, 42)
+        assert entry is not None
+        assert entry.files == {}
 
     @pytest.mark.asyncio
     async def test_delete_no_saves(self, tmp_path):
@@ -530,7 +537,15 @@ class TestEmulatorTag:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
-        svc._sync_engine.do_upload_save(42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba")
+        svc._sync_engine.do_upload_save(
+            42,
+            str(tmp_path / "saves" / "gba" / "pokemon.srm"),
+            "pokemon.srm",
+            RomSaveState(),
+            None,
+            "gba",
+            "mgba_libretro",
+        )
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -538,13 +553,21 @@ class TestEmulatorTag:
         assert args[2] == "retroarch-mgba"  # emulator argument
 
     def test_upload_uses_fallback_when_no_core(self, tmp_path):
-        """When core resolver returns None, upload falls back to 'retroarch'."""
+        """When the resolved core is None, upload falls back to 'retroarch'."""
         svc, fake = make_service(tmp_path)  # default: get_active_core returns (None, None)
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
 
-        svc._sync_engine.do_upload_save(42, str(tmp_path / "saves" / "gba" / "pokemon.srm"), "pokemon.srm", "42", "gba")
+        svc._sync_engine.do_upload_save(
+            42,
+            str(tmp_path / "saves" / "gba" / "pokemon.srm"),
+            "pokemon.srm",
+            RomSaveState(),
+            None,
+            "gba",
+            None,
+        )
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -572,40 +595,46 @@ class TestEmulatorTag:
         _create_save(tmp_path, system="gba", rom_name="game1")
         _create_save(tmp_path, system="gba", rom_name="game2")
 
-        svc._save_sync_state.saves["1"] = RomSaveState.from_dict(
-            {
-                "files": {"game1.srm": {}},
-                "active_slot": "desktop",
-                "slot_confirmed": True,
-                "emulator": "retroarch-mgba",
-                "system": "gba",
-            }
+        _seed_save_state(
+            svc,
+            1,
+            RomSaveState(
+                files={"game1.srm": FileSyncState()},
+                active_slot="desktop",
+                slot_confirmed=True,
+                emulator="retroarch-mgba",
+                system="gba",
+            ),
         )
-        svc._save_sync_state.saves["2"] = RomSaveState.from_dict(
-            {
-                "files": {"game2.srm": {}},
-                "active_slot": "default",
-                "slot_confirmed": True,
-                "own_upload_ids": ["save-x"],
-                "system": "gba",
-            }
+        _seed_save_state(
+            svc,
+            2,
+            RomSaveState(
+                files={"game2.srm": FileSyncState()},
+                active_slot="default",
+                slot_confirmed=True,
+                own_upload_ids=[99],
+                system="gba",
+            ),
         )
 
         result = svc.delete_platform_saves("gba")
         assert result["success"] is True
         assert result["deleted_count"] == 2
 
-        entry1 = svc._save_sync_state.saves["1"]
+        entry1 = _get_save_state(svc, 1)
+        assert entry1 is not None
         assert entry1.files == {}
         assert entry1.active_slot == "desktop"
         assert entry1.slot_confirmed is True
         assert entry1.emulator == "retroarch-mgba"
 
-        entry2 = svc._save_sync_state.saves["2"]
+        entry2 = _get_save_state(svc, 2)
+        assert entry2 is not None
         assert entry2.files == {}
         assert entry2.active_slot == "default"
         assert entry2.slot_confirmed is True
-        assert entry2.own_upload_ids == ["save-x"]
+        assert entry2.own_upload_ids == [99]
 
     @pytest.mark.asyncio
     async def test_delete_platform_saves_other_platform_untouched(self, tmp_path):
@@ -615,19 +644,23 @@ class TestEmulatorTag:
         _create_save(tmp_path, system="gba", rom_name="game1")
         snes_save = _create_save(tmp_path, system="snes", rom_name="game2")
 
-        svc._save_sync_state.saves["2"] = RomSaveState.from_dict(
-            {
-                "files": {"game2.srm": {}},
-                "active_slot": "default",
-                "slot_confirmed": True,
-                "system": "snes",
-            }
+        _seed_save_state(
+            svc,
+            2,
+            RomSaveState(
+                files={"game2.srm": FileSyncState()},
+                active_slot="default",
+                slot_confirmed=True,
+                system="snes",
+            ),
+            platform_slug="snes",
         )
 
         svc.delete_platform_saves("gba")
         assert snes_save.exists()
         # Other-platform entry must be entirely untouched.
-        snes_entry = svc._save_sync_state.saves["2"]
+        snes_entry = _get_save_state(svc, 2)
+        assert snes_entry is not None
         assert "game2.srm" in snes_entry.files
         assert snes_entry.active_slot == "default"
         assert snes_entry.slot_confirmed is True
@@ -651,26 +684,22 @@ class TestSaveSyncSettingsSlotAndCleanup:
         assert result["settings"]["default_slot"] is None
 
     def test_empty_string_becomes_none(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        val, skip = svc._state_svc._sanitize_setting("default_slot", "")
+        val, skip = sanitize_setting("default_slot", "")
         assert val is None
         assert skip is False
 
     def test_none_value_passes_through(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        val, skip = svc._state_svc._sanitize_setting("default_slot", None)
+        val, skip = sanitize_setting("default_slot", None)
         assert val is None
         assert skip is False
 
     def test_whitespace_only_becomes_none(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        val, skip = svc._state_svc._sanitize_setting("default_slot", "   ")
+        val, skip = sanitize_setting("default_slot", "   ")
         assert val is None
         assert skip is False
 
     def test_nonempty_string_trimmed(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        val, skip = svc._state_svc._sanitize_setting("default_slot", "  desktop  ")
+        val, skip = sanitize_setting("default_slot", "  desktop  ")
         assert val == "desktop"
         assert skip is False
 
@@ -724,9 +753,13 @@ class TestCheckCoreChange:
             get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
         )
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.saves["42"] = self._make_save_entry(
-            system="snes",
-            last_synced_core="snes9x_libretro",
+        _seed_save_state(
+            svc,
+            42,
+            self._make_save_entry(
+                system="snes",
+                last_synced_core="snes9x_libretro",
+            ),
         )
 
         result = svc.check_core_change(42)
@@ -744,9 +777,13 @@ class TestCheckCoreChange:
             get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
         )
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.saves["42"] = self._make_save_entry(
-            system="snes",
-            last_synced_core="snes9x_libretro",
+        _seed_save_state(
+            svc,
+            42,
+            self._make_save_entry(
+                system="snes",
+                last_synced_core="snes9x_libretro",
+            ),
         )
 
         result = svc.check_core_change(42)
@@ -770,9 +807,13 @@ class TestCheckCoreChange:
             get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
         )
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.saves["42"] = self._make_save_entry(
-            system="snes",
-            last_synced_core=None,
+        _seed_save_state(
+            svc,
+            42,
+            self._make_save_entry(
+                system="snes",
+                last_synced_core=None,
+            ),
         )
 
         result = svc.check_core_change(42)
@@ -786,9 +827,13 @@ class TestCheckCoreChange:
             # default: get_active_core returns (None, None)
         )
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.saves["42"] = self._make_save_entry(
-            system="snes",
-            last_synced_core="snes9x_libretro",
+        _seed_save_state(
+            svc,
+            42,
+            self._make_save_entry(
+                system="snes",
+                last_synced_core="snes9x_libretro",
+            ),
         )
 
         result = svc.check_core_change(42)
@@ -802,9 +847,13 @@ class TestCheckCoreChange:
             get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
         )
         # save_sync_enabled defaults to False
-        svc._save_sync_state.saves["42"] = self._make_save_entry(
-            system="snes",
-            last_synced_core="snes9x_libretro",
+        _seed_save_state(
+            svc,
+            42,
+            self._make_save_entry(
+                system="snes",
+                last_synced_core="snes9x_libretro",
+            ),
         )
 
         result = svc.check_core_change(42)
@@ -821,8 +870,8 @@ class TestCheckCoreChange:
 
         svc, _ = make_service(tmp_path, get_active_core=capture_core)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.saves["42"] = self._make_save_entry(system="snes")
         _install_rom(svc, tmp_path, rom_id=42, system="snes", file_name="mario.sfc")
+        _seed_save_state(svc, 42, self._make_save_entry(system="snes"), platform_slug="snes")
 
         svc.check_core_change(42)
 
@@ -934,12 +983,12 @@ class TestPerRomLockSerialization:
         events: list[tuple[str, float]] = []
         original = svc._sync_engine.do_sync_rom_saves
 
-        def wrapped(rom_id: int):
+        def wrapped(rom_id: int, *args):
             events.append(("enter", time.time()))
             # Sleep to ensure overlap is *possible* if the lock is broken.
             time.sleep(0.05)
             try:
-                return original(rom_id)
+                return original(rom_id, *args)
             finally:
                 events.append(("exit", time.time()))
 
@@ -964,11 +1013,11 @@ class TestPerRomLockSerialization:
         events: list[tuple[int, str, float]] = []
         original = svc._sync_engine.do_sync_rom_saves
 
-        def wrapped(rom_id: int):
+        def wrapped(rom_id: int, *args):
             events.append((rom_id, "enter", time.time()))
             time.sleep(0.05)
             try:
-                return original(rom_id)
+                return original(rom_id, *args)
             finally:
                 events.append((rom_id, "exit", time.time()))
 
@@ -994,31 +1043,29 @@ class TestHasTrackedSave:
     def test_returns_false_for_empty_entry(self, tmp_path):
         """ROM with an empty RomSaveState (no files, no slots) → False."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.saves["42"] = RomSaveState()
+        _seed_save_state(svc, 42, RomSaveState())
         assert svc.has_tracked_save(42) is False
 
     def test_returns_true_when_files_tracked(self, tmp_path):
         """ROM with at least one tracked file → True."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.saves["42"] = RomSaveState(
-            files={"pokemon.srm": FileSyncState(tracked_save_id=7, last_sync_hash="abc")},
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(files={"pokemon.srm": FileSyncState(tracked_save_id=7, last_sync_hash="abc")}),
         )
         assert svc.has_tracked_save(42) is True
 
     def test_returns_true_when_slots_configured(self, tmp_path):
         """ROM with at least one slot configured (no files yet) → True."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.saves["42"] = RomSaveState(
-            slots={"default": {"label": "Default"}},
-        )
+        _seed_save_state(svc, 42, RomSaveState(slots={"default": {"label": "Default"}}))
         assert svc.has_tracked_save(42) is True
 
     def test_accepts_int_rom_id_casting_to_str_key(self, tmp_path):
-        """``rom_id`` is int on the wire; state keys are str — service stringifies."""
+        """``rom_id`` is int on the wire; the aggregate is keyed by int rom_id."""
         svc, _ = make_service(tmp_path)
-        svc._save_sync_state.saves["99"] = RomSaveState(
-            files={"a.srm": FileSyncState(tracked_save_id=1)},
-        )
+        _seed_save_state(svc, 99, RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1)}))
         assert svc.has_tracked_save(99) is True
         # Wrong rom_id misses cleanly.
         assert svc.has_tracked_save(100) is False

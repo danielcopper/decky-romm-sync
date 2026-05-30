@@ -2,14 +2,16 @@
 
 import pytest
 
-from domain.save_state import RomSaveState
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
     _file_md5,
+    _get_save_state,
     _install_rom,
+    _seed_save_state_dict,
     _server_save,
     _server_save_with_syncs,
+    _set_device_id,
     make_service,
 )
 
@@ -19,14 +21,16 @@ class TestListFileVersions:
 
     def _setup_state(self, svc, tracked_id: int | None) -> None:
         """Populate save state with a tracked save id for rom 42, pokemon.srm."""
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "system": "gba",
                 "active_slot": "default",
                 "files": {
                     "pokemon.srm": {"tracked_save_id": tracked_id},
                 },
-            }
+            },
         )
 
     @pytest.mark.asyncio
@@ -210,7 +214,9 @@ class TestListFileVersions:
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-05T10:00:00Z")
         fake.saves[30] = _server_save(save_id=30, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
 
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "system": "gba",
                 "active_slot": "default",
@@ -218,7 +224,7 @@ class TestListFileVersions:
                 "files": {
                     "pokemon.srm": {"tracked_save_id": 100},
                 },
-            }
+            },
         )
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
@@ -238,7 +244,9 @@ class TestListFileVersions:
         fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-05T10:00:00Z")
 
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "system": "gba",
                 "active_slot": "default",
@@ -246,7 +254,7 @@ class TestListFileVersions:
                 "files": {
                     "pokemon.srm": {"tracked_save_id": 100},
                 },
-            }
+            },
         )
 
         result = await svc.list_file_versions(42, "default", "pokemon.srm")
@@ -263,7 +271,9 @@ class TestRollbackToVersion:
     def _setup_state(self, svc, tmp_path, tracked_id: int, last_sync_hash: str | None = None) -> None:
         _install_rom(svc, tmp_path)
         _enable_sync_with_device(svc)
-        svc._save_sync_state.saves["42"] = RomSaveState.from_dict(
+        _seed_save_state_dict(
+            svc,
+            42,
             {
                 "system": "gba",
                 "active_slot": "default",
@@ -273,7 +283,7 @@ class TestRollbackToVersion:
                         "last_sync_hash": last_sync_hash,
                     },
                 },
-            }
+            },
         )
 
     @staticmethod
@@ -438,7 +448,7 @@ class TestRollbackToVersion:
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)
         # State updated: tracked_save_id should now point to the rolled-back save
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
@@ -566,7 +576,7 @@ class TestRollbackToVersion:
         """Rollback marks our device as current on the target save via confirm_download."""
         svc, fake = make_service(tmp_path)
         # device_id must be set for confirm_download to fire
-        svc._save_sync_state.server_device_id = "device-1"
+        _set_device_id(svc, "device-1")
 
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
@@ -596,7 +606,7 @@ class TestRollbackToVersion:
         result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
         # Hash should match the (re-uploaded) local file content
         local_path = tmp_path / "saves" / "gba" / "pokemon.srm"
@@ -643,7 +653,7 @@ class TestRollbackToVersion:
         assert any(c[1][0] == 50 for c in download_calls)
         # Local state still updated to point at target — save_state was called
         # so disk file and state file remain consistent.
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
@@ -658,7 +668,7 @@ class TestRollbackToVersion:
         detect tracked_save_id==server.id and Skip.
         """
         svc, fake = make_service(tmp_path)
-        svc._save_sync_state.server_device_id = "device-1"
+        _set_device_id(svc, "device-1")
 
         _create_save(tmp_path)
         local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
@@ -683,7 +693,7 @@ class TestRollbackToVersion:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert any(c[2].get("save_id") == 50 for c in upload_calls)
         # State updated
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
@@ -704,5 +714,5 @@ class TestRollbackToVersion:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert any(c[2].get("save_id") == 50 for c in upload_calls)
         # tracked_save_id still 50
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50

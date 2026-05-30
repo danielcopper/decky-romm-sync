@@ -434,9 +434,11 @@ class TestWireServices:
         result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
         migration_service = result["migration_service"]
-        assert save_sync_service._state is deps["state"]
+        # SaveService shares the live state dict with MigrationService through
+        # its RomInfoService (the save-sort reads live there post-cutover).
+        assert save_sync_service._rom_info._state is deps["state"]
         assert migration_service._state is deps["state"]
-        assert save_sync_service._state is migration_service._state
+        assert save_sync_service._rom_info._state is migration_service._state
         deps["loop"].close()
 
     def test_save_service_receives_is_retrodeck_migration_pending(self, tmp_path):

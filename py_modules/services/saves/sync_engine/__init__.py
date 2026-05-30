@@ -4,7 +4,8 @@ sync transfers.
 Anything that decides "which side wins for this file" or actually
 moves bytes between local saves_dir and the RomM server lives here.
 Read-only matrix consumption (status reporting) belongs in
-StatusService; persistence belongs in StateService.
+StatusService; persistence is owned by the public callable's narrow
+Unit of Work (ADR-0006).
 """
 
 from services.saves.sync_engine.engine import MatrixOutcome, SyncEngine, SyncEngineConfig

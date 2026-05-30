@@ -8,16 +8,14 @@ The implementations live in the sibling sub-modules
 :mod:`services.saves.slots.setup`,
 :mod:`services.saves.slots.deletion`); ``SlotsService`` wires them
 from the config and delegates. The newest-wins matrix executor lives in
-SyncEngine, status reporting in StatusService, on-disk state
-persistence in StateService.
+SyncEngine, status reporting in StatusService; on-disk state
+persistence is each operation's own narrow Unit of Work (ADR-0006).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-
-from models.state import PluginState
 
 from services.saves.slots.deletion import SlotDeleter
 from services.saves.slots.listing import SlotListing
@@ -27,6 +25,7 @@ from services.saves.slots.switching import SlotSwitcher
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
     from services.protocols import (
         Clock,
@@ -35,9 +34,9 @@ if TYPE_CHECKING:
         RetryStrategy,
         RommSaveApi,
         SaveFileStore,
+        UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
-    from services.saves.state import StateService
     from services.saves.status import StatusService
     from services.saves.sync_engine import SyncEngine
 
@@ -49,19 +48,23 @@ __all__ = ["NO_MIGRATION", "SlotsService", "SlotsServiceConfig"]
 class SlotsServiceConfig:
     """Frozen wiring bundle handed to ``SlotsService.__init__``.
 
-    Holds the main plugin state dict, the peer save sub-services
-    (state, sync_engine, status, rom_info), the Protocol-typed RomM
-    adapter and retry strategy, runtime infrastructure (loop, logger,
-    clock), the Protocol-typed filesystem adapter, the ``DebugLogger``
-    seam, and the ES-DE core resolver used during slot migration to
-    build the emulator tag for re-upload.
+    Holds the live ``settings.json`` dict (save-sync toggles + default
+    slot), the Unit-of-Work factory (the transactional seam over the
+    SQLite repositories), the peer save sub-services (sync_engine,
+    status, rom_info), the core resolver used to stamp the upload
+    emulator tag, the Protocol-typed RomM adapter and retry strategy,
+    runtime infrastructure (loop, logger, clock), the Protocol-typed
+    filesystem adapter, the ``DebugLogger`` seam, and the ES-DE core
+    resolver used during slot migration to build the emulator tag for
+    re-upload.
     """
 
-    state: PluginState
-    state_svc: StateService
+    settings: dict
+    uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
     status_service: StatusService
     rom_info: RomInfoService
+    resolve_core: Callable[[int], str | None]
     romm_api: RommSaveApi
     retry: RetryStrategy
     loop: asyncio.AbstractEventLoop
@@ -79,14 +82,16 @@ class SlotsService:
         self._config = config
 
         self._listing = SlotListing(
-            state_svc=config.state_svc,
+            settings=config.settings,
+            uow_factory=config.uow_factory,
             romm_api=config.romm_api,
             retry=config.retry,
             loop=config.loop,
             log_debug=config.log_debug,
         )
         self._switcher = SlotSwitcher(
-            state_svc=config.state_svc,
+            settings=config.settings,
+            uow_factory=config.uow_factory,
             sync_engine=config.sync_engine,
             status_service=config.status_service,
             rom_info=config.rom_info,
@@ -98,9 +103,10 @@ class SlotsService:
             log_debug=config.log_debug,
         )
         self._setup = SetupWizard(
-            state=config.state,
-            state_svc=config.state_svc,
+            settings=config.settings,
+            uow_factory=config.uow_factory,
             rom_info=config.rom_info,
+            resolve_core=config.resolve_core,
             romm_api=config.romm_api,
             retry=config.retry,
             loop=config.loop,
@@ -110,7 +116,8 @@ class SlotsService:
             get_active_core=config.get_active_core,
         )
         self._deleter = SlotDeleter(
-            state_svc=config.state_svc,
+            settings=config.settings,
+            uow_factory=config.uow_factory,
             rom_info=config.rom_info,
             romm_api=config.romm_api,
             retry=config.retry,

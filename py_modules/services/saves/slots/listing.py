@@ -1,17 +1,19 @@
 """Slot listing reads against the live server + persisted state.
 
 Anything that reads slot inventory for the QAM (merging persisted local
-slots with the server view and projecting the result back to disk) lives
-here. Mutating writes for the active slot, the setup wizard, and slot
-deletion belong in their own sub-modules.
+slots with the server view and projecting the result back to SQLite)
+lives here. Mutating writes for the active slot, the setup wizard, and
+slot deletion belong in their own sub-modules.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from domain.rom_save_state import RomSaveState
 from lib.list_result import ErrorCode
 from services.saves._messages import SAVE_SYNC_DISABLED
+from services.saves._settings import resolve_default_slot, save_sync_enabled
 
 if TYPE_CHECKING:
     import asyncio
@@ -20,8 +22,8 @@ if TYPE_CHECKING:
         DebugLogger,
         RetryStrategy,
         RommSaveApi,
+        UnitOfWorkFactory,
     )
-    from services.saves.state import StateService
 
 
 class SlotListing:
@@ -30,17 +32,25 @@ class SlotListing:
     def __init__(
         self,
         *,
-        state_svc: StateService,
+        settings: dict,
+        uow_factory: UnitOfWorkFactory,
         romm_api: RommSaveApi,
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
         log_debug: DebugLogger,
     ) -> None:
-        self._state_svc = state_svc
+        self._settings = settings
+        self._uow_factory = uow_factory
         self._romm_api = romm_api
         self._retry = retry
         self._loop = loop
         self._log_debug = log_debug
+
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState | None, str | None]:
+        with self._uow_factory() as uow:
+            state = uow.rom_save_states.get(rom_id)
+            device_id = uow.kv_config.get("device_id")
+        return state, device_id
 
     async def get_save_slots(self, rom_id: int) -> dict:
         """List available save slots for a ROM.
@@ -51,7 +61,7 @@ class SlotListing:
         exist on the server (unless they are the active_slot).
         """
         rom_id = int(rom_id)
-        if not self._state_svc.is_save_sync_enabled():
+        if not save_sync_enabled(self._settings):
             return {
                 "success": False,
                 "reason": "sync_disabled",
@@ -60,10 +70,8 @@ class SlotListing:
                 "active_slot": "default",
             }
 
-        rom_id_str = str(rom_id)
-        device_id = self._state_svc.get_server_device_id()
-        rom_state = self._state_svc.state.saves.get(rom_id_str)
-        default_slot = self._state_svc.get_settings().default_slot or "default"
+        rom_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
+        default_slot = resolve_default_slot(self._settings) or "default"
         # ROM not tracked → fall back to the global default slot. ROM
         # tracked with ``active_slot=None`` → preserve legacy mode (None
         # means "no slots"; the persisted slots dict will contain ``""``).
@@ -109,10 +117,15 @@ class SlotListing:
 
         self._merge_persisted_slots(persisted_slots, merged, active_slot)
 
-        # Persist merged slots in state
-        game_entry = self._state_svc.ensure_rom_state(rom_id_str)
-        game_entry.slots = merged
-        self._state_svc.save_state()
+        # Persist merged slots in state. The aggregate may not exist yet (ROM
+        # never synced) — start a fresh default and seed its active slot.
+        if rom_state is None:
+            game_entry = RomSaveState()
+            game_entry.switch_active_slot(active_slot)
+        else:
+            game_entry = rom_state
+        game_entry.refresh_slot_listing(merged)
+        await self._loop.run_in_executor(None, self._write_save_state, rom_id, game_entry)
 
         # Build response list
         result_slots = [
@@ -126,6 +139,10 @@ class SlotListing:
         ]
 
         return {"success": True, "slots": result_slots, "active_slot": active_slot}
+
+    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+        with self._uow_factory() as uow:
+            uow.rom_save_states.save(rom_id, save_state)
 
     @staticmethod
     def _merge_persisted_slots(
@@ -157,7 +174,7 @@ class SlotListing:
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
 
-        if not self._state_svc.is_save_sync_enabled():
+        if not save_sync_enabled(self._settings):
             return {
                 "success": False,
                 "reason": "sync_disabled",
@@ -166,7 +183,7 @@ class SlotListing:
                 "saves": [],
             }
 
-        device_id = self._state_svc.get_server_device_id()
+        device_id = await self._loop.run_in_executor(None, self._read_device_id)
 
         try:
             server_saves: list[dict] = await self._loop.run_in_executor(
@@ -194,3 +211,7 @@ class SlotListing:
                 "slot": slot,
                 "saves": [],
             }
+
+    def _read_device_id(self) -> str | None:
+        with self._uow_factory() as uow:
+            return uow.kv_config.get("device_id")

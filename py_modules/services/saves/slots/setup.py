@@ -4,21 +4,22 @@ Anything that drives the user-facing wizard for the very first time a
 ROM is opened — surfacing the scenario the frontend renders, recording
 the user's slot choice, and migrating server-side saves between slots
 when requested — lives here. Slot listing, active-slot switching, and
-slot deletion belong in their own sub-modules.
+slot deletion belong in their own sub-modules. Persistence is each
+operation's own narrow Unit of Work (ADR-0006).
 """
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain.emulator_tag import build_emulator_tag
+from domain.rom_save_state import RomSaveState
+from services.saves._settings import resolve_default_slot
 
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
     from services.protocols import (
         CoreResolverFn,
@@ -26,9 +27,9 @@ if TYPE_CHECKING:
         RetryStrategy,
         RommSaveApi,
         SaveFileStore,
+        UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
-    from services.saves.state import StateService
 
 
 NO_MIGRATION = object()  # sentinel: no slot migration requested
@@ -40,9 +41,10 @@ class SetupWizard:
     def __init__(
         self,
         *,
-        state: PluginState,
-        state_svc: StateService,
+        settings: dict,
+        uow_factory: UnitOfWorkFactory,
         rom_info: RomInfoService,
+        resolve_core: Callable[[int], str | None],
         romm_api: RommSaveApi,
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
@@ -51,9 +53,10 @@ class SetupWizard:
         log_debug: DebugLogger,
         get_active_core: CoreResolverFn,
     ) -> None:
-        self._state = state
-        self._state_svc = state_svc
+        self._settings = settings
+        self._uow_factory = uow_factory
         self._rom_info = rom_info
+        self._resolve_core = resolve_core
         self._romm_api = romm_api
         self._retry = retry
         self._loop = loop
@@ -62,14 +65,26 @@ class SetupWizard:
         self._log_debug = log_debug
         self._get_active_core = get_active_core
 
+    def _read_save_state(self, rom_id: int) -> RomSaveState | None:
+        with self._uow_factory() as uow:
+            return uow.rom_save_states.get(rom_id)
+
+    def _read_device_id(self) -> str | None:
+        with self._uow_factory() as uow:
+            return uow.kv_config.get("device_id")
+
+    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+        with self._uow_factory() as uow:
+            uow.rom_save_states.save(rom_id, save_state)
+
     def is_save_tracking_configured(self, rom_id: int) -> dict:
         """Check if save slot tracking is configured for a game.
 
         Fast, synchronous check — reads only from local state.
         Returns {"configured": bool, "active_slot": str|None}
         """
-        rom_id_str = str(int(rom_id))
-        game_state = self._state_svc.state.saves.get(rom_id_str)
+        rom_id = int(rom_id)
+        game_state = self._read_save_state(rom_id)
         configured = bool(game_state.slot_confirmed) if game_state else False
         active_slot = game_state.active_slot if (game_state and configured) else None
         return {"configured": configured, "active_slot": active_slot}
@@ -81,7 +96,6 @@ class SetupWizard:
         scenario (A-E) applies so the frontend can display the right UI.
         """
         rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
 
         # Local saves
         local_files = self._rom_info.find_save_files(rom_id)
@@ -96,7 +110,8 @@ class SetupWizard:
         # and the first post-confirmation sync could clobber real server
         # saves the user already had. Surface a distinct recommendation so
         # the frontend can hold the wizard and offer a retry instead.
-        device_id = self._state_svc.get_server_device_id()
+        game_state, device_id = await self._loop.run_in_executor(None, self._read_setup_inputs, rom_id)
+        default_slot = resolve_default_slot(self._settings) or "default"
         try:
             server_saves: list[dict] = await self._loop.run_in_executor(
                 None,
@@ -108,8 +123,6 @@ class SetupWizard:
             self._logger.warning(
                 f"get_save_setup_info({rom_id}): failed to list server saves: {e}",
             )
-            game_state = self._state_svc.state.saves.get(rom_id_str)
-            default_slot = self._state_svc.get_settings().default_slot or "default"
             slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
             active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
             return {
@@ -151,8 +164,6 @@ class SetupWizard:
             )
 
         # State info
-        game_state = self._state_svc.state.saves.get(rom_id_str)
-        default_slot = self._state_svc.get_settings().default_slot or "default"
         slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
         active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
 
@@ -176,6 +187,12 @@ class SetupWizard:
             "server_query_failed": False,
         }
 
+    def _read_setup_inputs(self, rom_id: int) -> tuple[RomSaveState | None, str | None]:
+        with self._uow_factory() as uow:
+            state = uow.rom_save_states.get(rom_id)
+            device_id = uow.kv_config.get("device_id")
+        return state, device_id
+
     async def confirm_slot_choice(
         self,
         rom_id: int,
@@ -191,38 +208,35 @@ class SetupWizard:
         Pass NO_MIGRATION sentinel (the default) to skip migration.
         """
         rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
         chosen_slot = str(chosen_slot).strip()
         if not chosen_slot:
             return {"success": False, "needs_conflict_resolution": False, "message": "Slot name cannot be empty"}
 
-        # Update state
-        rom_state = self._state_svc.ensure_rom_state(rom_id_str)
-        rom_state.active_slot = chosen_slot
-        rom_state.slot_confirmed = True
+        # Load → confirm in memory; migration I/O runs outside the txn.
+        save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveState()
+        save_state.confirm_slot(chosen_slot)
 
         # Migration: re-upload local files to new slot, delete old server saves
         if migrate_from_slot is not NO_MIGRATION:
             # migrate_from_slot can be None (legacy no-slot) or a string slot name
             from_slot: str | None = migrate_from_slot if isinstance(migrate_from_slot, str) else None
             try:
-                await self._migrate_slot_saves(rom_id, rom_id_str, chosen_slot, from_slot)
+                await self._migrate_slot_saves(rom_id, chosen_slot, from_slot)
             except Exception as e:
                 self._logger.warning(f"confirm_slot_choice({rom_id}): migration failed: {e}")
-                self._state_svc.save_state()
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
                 return {
                     "success": True,
                     "needs_conflict_resolution": False,
                     "message": f"Slot confirmed but migration failed: {e}",
                 }
 
-        self._state_svc.save_state()
+        await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
         return {"success": True, "needs_conflict_resolution": False, "message": "Slot confirmed"}
 
     async def _migrate_slot_saves(
         self,
         rom_id: int,
-        rom_id_str: str,
         chosen_slot: str,
         migrate_from_slot: str | None,
     ) -> None:
@@ -231,7 +245,7 @@ class SetupWizard:
         For each local file: upload with new slot, then delete old server save.
         Safe order: POST first, DELETE after.
         """
-        device_id = self._state_svc.get_server_device_id()
+        device_id = await self._loop.run_in_executor(None, self._read_device_id)
 
         # Find server saves in the old slot
         all_saves = await self._loop.run_in_executor(
@@ -249,11 +263,7 @@ class SetupWizard:
         local_by_name = {lf["filename"]: lf for lf in local_files}
 
         # Resolve emulator tag
-        info = self._rom_info.get_rom_save_info(rom_id)
-        system = info["system"] if info else ""
-        installed = self._state["installed_roms"].get(rom_id_str, {})
-        rom_filename = os.path.basename(installed.get("file_path", "")) or None
-        core_so, _label = self._get_active_core(system, rom_filename)
+        core_so = await self._loop.run_in_executor(None, self._resolve_core, rom_id)
         emulator = build_emulator_tag(core_so)
 
         ids_to_delete: list[int] = []

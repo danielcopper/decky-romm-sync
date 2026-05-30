@@ -1,37 +1,56 @@
 """Save-sync aggregate root and facade for the Decky callable surface.
 
-Composes the save-sync sub-services (state, sync_engine, status, versions,
-slots, rom_info) over the shared :class:`SaveSyncState` aggregate and
-exposes the public methods the frontend reaches through callables. Most
-methods are thin delegations; orchestration that genuinely spans multiple
-sub-services lives here, single-sub-service logic does not.
+Composes the save-sync sub-services (sync_engine, status, versions,
+slots, rom_info) over the SQLite ``rom_save_states`` aggregate (reached
+through the injected Unit-of-Work factory) and exposes the public
+methods the frontend reaches through callables. The five save-sync
+feature toggles and the device label live in ``settings.json`` and are
+read/written here directly. Most methods are thin delegations;
+orchestration that genuinely spans multiple sub-services lives here,
+single-sub-service logic does not.
+
+The legacy JSON :class:`SaveSyncState` aggregate and its persister
+survive only behind :meth:`load_state` / :meth:`save_state` so the
+not-yet-migrated PlaytimeService and RomRemovalService keep their
+``playtime`` reads/writes working; the saves vertical itself no longer
+touches them.
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from domain.rom_save_state import RomSaveState
 from domain.save_state import SaveSyncState
 from services.saves._config import SaveServiceConfig
+from services.saves._settings import (
+    ALLOWED_SETTINGS_KEYS,
+    sanitize_setting,
+    save_sync_enabled,
+    save_sync_settings_view,
+)
 from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
 from services.saves.slots import SlotsService, SlotsServiceConfig
 from services.saves.slots.service import NO_MIGRATION
-from services.saves.state import StateService, StateServiceConfig
 from services.saves.status import StatusService, StatusServiceConfig
 from services.saves.sync_engine import SyncEngine, SyncEngineConfig
 from services.saves.versions import VersionsService, VersionsServiceConfig
+
+if TYPE_CHECKING:
+    from services.protocols import SaveSyncStatePersister, UnitOfWorkFactory
 
 
 class SaveService:
     """Aggregate root for bidirectional save file sync between RetroDECK and RomM.
 
-    Owns the live :class:`SaveSyncState` aggregate (via :class:`StateService`)
-    and composes the save-sync sub-services (sync_engine, status, versions,
-    slots, rom_info). Exposes the callable surface consumed by the Decky
-    entrypoints — every public method delegates to a sub-service. Bulk
-    local-save deletion is the only flow whose orchestration lives directly
-    on the aggregate root because it spans :class:`RomInfoService` (file
-    discovery), the on-disk save files (via the injected ``SaveFileStore``),
-    and :class:`StateService` (file-tracking state hygiene) without belonging
-    to any single sub-service.
+    Composes the save-sync sub-services (sync_engine, status, versions, slots,
+    rom_info) over the SQLite ``rom_save_states`` aggregate. Exposes the callable
+    surface consumed by the Decky entrypoints — every public method delegates to
+    a sub-service or reads ``settings.json``. Bulk local-save deletion is the
+    only flow whose orchestration lives directly on the aggregate root because it
+    spans :class:`RomInfoService` (file discovery), the on-disk save files (via
+    the injected ``SaveFileStore``), and the ``rom_save_states`` repository
+    (file-tracking state hygiene) without belonging to any single sub-service.
 
     Parameters
     ----------
@@ -42,28 +61,22 @@ class SaveService:
 
     def __init__(self, *, config: SaveServiceConfig) -> None:
         self._config = config
-        self._state = config.state
+        self._settings = config.settings
         self._save_file_store = config.save_file_store
+        self._uow_factory: UnitOfWorkFactory = config.uow_factory
+        self._settings_persister = config.settings_persister
+        # The legacy JSON aggregate + persister survive only for the
+        # not-yet-migrated playtime / rom-removal consumers (see save_state).
+        self._save_sync_state: SaveSyncState = config.save_sync_state
+        self._legacy_persister: SaveSyncStatePersister = config.save_sync_state_persister
         # Resolve plugin version once at construction; SyncEngine and any
         # other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
 
-        self._state_svc = StateService(
-            config=StateServiceConfig(
-                save_sync_state=config.save_sync_state,
-                state=config.state,
-                settings=config.settings,
-                persister=config.save_sync_state_persister,
-                settings_persister=config.settings_persister,
-                logger=config.logger,
-            ),
-        )
-        # Convenience alias — both names reference the same aggregate.
-        self._save_sync_state = self._state_svc.state
-
         self._rom_info = RomInfoService(
             config=RomInfoServiceConfig(
                 state=config.state,
+                uow_factory=config.uow_factory,
                 save_file_store=config.save_file_store,
                 retrodeck_paths=config.retrodeck_paths,
                 get_active_core=config.get_active_core,
@@ -74,8 +87,8 @@ class SaveService:
 
         self._sync_engine = SyncEngine(
             config=SyncEngineConfig(
-                state=config.state,
-                state_svc=self._state_svc,
+                settings=config.settings,
+                uow_factory=config.uow_factory,
                 rom_info=self._rom_info,
                 romm_api=config.romm_api,
                 retry=config.retry,
@@ -86,6 +99,7 @@ class SaveService:
                 log_debug=config.log_debug,
                 get_active_core=config.get_active_core,
                 hostname_provider=config.hostname_provider,
+                settings_persister=config.settings_persister,
                 plugin_version=plugin_version,
                 detect_sort_change=config.detect_sort_change,
                 is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,
@@ -94,8 +108,8 @@ class SaveService:
 
         self._status = StatusService(
             config=StatusServiceConfig(
-                state=config.state,
-                state_svc=self._state_svc,
+                settings=config.settings,
+                uow_factory=config.uow_factory,
                 sync_engine=self._sync_engine,
                 rom_info=self._rom_info,
                 romm_api=config.romm_api,
@@ -110,9 +124,11 @@ class SaveService:
 
         self._versions = VersionsService(
             config=VersionsServiceConfig(
-                state_svc=self._state_svc,
+                settings=config.settings,
+                uow_factory=config.uow_factory,
                 sync_engine=self._sync_engine,
                 rom_info=self._rom_info,
+                resolve_core=self._sync_engine.resolve_core,
                 romm_api=config.romm_api,
                 retry=config.retry,
                 loop=config.loop,
@@ -123,11 +139,12 @@ class SaveService:
 
         self._slots = SlotsService(
             config=SlotsServiceConfig(
-                state=config.state,
-                state_svc=self._state_svc,
+                settings=config.settings,
+                uow_factory=config.uow_factory,
                 sync_engine=self._sync_engine,
                 status_service=self._status,
                 rom_info=self._rom_info,
+                resolve_core=self._sync_engine.resolve_core,
                 romm_api=config.romm_api,
                 retry=config.retry,
                 loop=config.loop,
@@ -140,29 +157,32 @@ class SaveService:
         )
 
     # ------------------------------------------------------------------
-    # State Management
+    # Legacy JSON state — survives only for PlaytimeService / RomRemovalService
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def make_default_state() -> SaveSyncState:
-        """Return a fresh default save-sync state aggregate."""
-        return StateService.make_default_state()
-
     def init_state(self) -> None:
-        """No-op for the typed aggregate (defaults ship at construction)."""
-        self._state_svc.init_state()
+        """No-op for the legacy aggregate (defaults ship at construction)."""
 
     def load_state(self) -> None:
-        """Load save sync state from disk, merging with defaults."""
-        self._state_svc.load_state()
+        """Load the legacy JSON save-sync state (playtime) from disk.
+
+        The per-ROM save state lives in SQLite now; this loads only the
+        residual ``playtime`` aggregate still consumed by PlaytimeService.
+        """
+        saved = self._legacy_persister.load()
+        if saved is None:
+            return
+        loaded = SaveSyncState.from_dict(saved)
+        self._save_sync_state.replace_with(loaded)
 
     def save_state(self) -> None:
-        """Persist save sync state to disk (atomic write)."""
-        self._state_svc.save_state()
+        """Persist the legacy JSON save-sync state (playtime) to disk.
 
-    def prune_orphaned_state(self) -> None:
-        """Remove save sync state entries for rom_ids no longer in shortcut registry."""
-        self._state_svc.prune_orphaned_state()
+        Implements the ``StatePersister`` Protocol consumed by PlaytimeService
+        and RomRemovalService. The saves vertical itself persists through the
+        SQLite ``rom_save_states`` repository, not this method.
+        """
+        self._legacy_persister.save(self._save_sync_state.to_dict())
 
     # ------------------------------------------------------------------
     # Device registration (delegated to SyncEngine)
@@ -195,13 +215,15 @@ class SaveService:
     def has_tracked_save(self, rom_id: int) -> bool:
         """Return True when this ROM has at least one tracked save (slot or file).
 
-        Reads in-memory aggregate state only — no I/O, no network. Used by
-        the launch gate to decide whether a ``get_save_status`` failure
-        should surface as a soft ``warn`` verdict (tracked saves exist —
-        silent allow would risk data loss on an unseen conflict) or stay
-        a silent ``allow`` (no tracked saves — nothing to corrupt).
+        Reads the ``rom_save_states`` aggregate through its own narrow read
+        UoW — no network. Used by the launch gate to decide whether a
+        ``get_save_status`` failure should surface as a soft ``warn`` verdict
+        (tracked saves exist — silent allow would risk data loss on an unseen
+        conflict) or stay a silent ``allow`` (no tracked saves — nothing to
+        corrupt).
         """
-        save_entry = self._save_sync_state.saves.get(str(rom_id))
+        with self._uow_factory() as uow:
+            save_entry = uow.rom_save_states.get(int(rom_id))
         if save_entry is None:
             return False
         return bool(save_entry.files) or bool(save_entry.slots)
@@ -297,16 +319,38 @@ class SaveService:
         return await self._versions.rollback_to_version(rom_id, slot, save_id)
 
     # ------------------------------------------------------------------
-    # Settings (delegated to StateService)
+    # Settings (settings.json — read/written directly)
     # ------------------------------------------------------------------
 
+    def is_save_sync_enabled(self) -> bool:
+        """Whether the save-sync feature toggle is on."""
+        return save_sync_enabled(self._settings)
+
     def get_save_sync_settings(self) -> dict:
-        """Return current save sync settings as the on-disk dict shape."""
-        return self._state_svc.get_save_sync_settings()
+        """Return current save sync settings as the frontend dict shape."""
+        return save_sync_settings_view(self._settings)
 
     def update_save_sync_settings(self, settings: dict) -> dict:
-        """Update save sync settings (sync toggles, slot, etc.)."""
-        return self._state_svc.update_save_sync_settings(settings)
+        """Update save sync settings (sync toggles, slot, etc.) in settings.json."""
+        for key, value in settings.items():
+            if key not in ALLOWED_SETTINGS_KEYS:
+                continue
+            coerced, skip = sanitize_setting(key, value)
+            if skip:
+                continue
+            self._settings[key] = coerced
+
+        self._settings_persister.save_settings()
+        return {"success": True, "settings": save_sync_settings_view(self._settings)}
+
+    def get_device_name(self) -> str | None:
+        """Return the user-set device label from settings.json (``None`` if unset)."""
+        return self._settings.get("device_name")
+
+    def set_device_name(self, name: str) -> None:
+        """Persist the device label to settings.json."""
+        self._settings["device_name"] = name
+        self._settings_persister.save_settings()
 
     # ------------------------------------------------------------------
     # Bulk local-save deletion
@@ -317,18 +361,17 @@ class SaveService:
 
         For each ROM ID, enumerates files via ``RomInfoService.find_save_files``,
         removes them on disk (counting successes and collecting per-file error
-        strings), and clears the ROM's per-file tracking dict via
-        ``StateService.clear_files_state``. Slot config (``active_slot``,
-        ``slot_confirmed``, ``emulator``, ``last_synced_core``,
-        ``own_upload_ids``, ``slots``, ``system``) is preserved. Persists state
-        once at the end via ``save_state()``.
+        strings), and clears the ROM's per-file tracking dict via the aggregate's
+        ``clear_baselines`` verb. Slot config (``active_slot``, ``slot_confirmed``,
+        ``emulator``, ``last_synced_core``, ``own_upload_ids``, ``slots``,
+        ``system``) is preserved. Each ROM's state is persisted in its own short
+        write UoW.
 
         Returns a ``(total_deleted, errors)`` tuple.
         """
         total_deleted = 0
         errors: list[str] = []
         for rom_id in rom_ids:
-            rom_id_str = str(rom_id)
             files = self._rom_info.find_save_files(rom_id)
             for f in files:
                 try:
@@ -336,9 +379,18 @@ class SaveService:
                     total_deleted += 1
                 except Exception as e:
                     errors.append(f"{f['filename']}: {e}")
-            self._state_svc.clear_files_state(rom_id_str)
+            with self._uow_factory() as uow:
+                save_state = uow.rom_save_states.get(rom_id)
+                # Nothing to clear when the ROM has neither tracked save state
+                # nor any local save files (e.g. a non-installed ROM with no
+                # roms row — persisting an empty aggregate would violate the FK).
+                if save_state is None and not files:
+                    continue
+                if save_state is None:
+                    save_state = RomSaveState()
+                save_state.clear_baselines()
+                uow.rom_save_states.save(rom_id, save_state)
 
-        self.save_state()
         return total_deleted, errors
 
     def delete_local_saves(self, rom_id: int) -> dict:
@@ -362,13 +414,14 @@ class SaveService:
             "message": f"Deleted {deleted} save file(s)",
         }
 
+    def _installed_rom_ids_on_platform(self, platform_slug: str) -> list[int]:
+        """Read installed-ROM ids on *platform_slug* from the rom_installs aggregate (WS3)."""
+        with self._uow_factory() as uow:
+            return [install.rom_id for install in uow.rom_installs.iter_all() if install.platform_slug == platform_slug]
+
     def delete_platform_saves(self, platform_slug: str) -> dict:
         """Delete local save files for all installed ROMs on a platform."""
-        rom_ids: list[int] = []
-        for rom_id_str, entry in self._state["installed_roms"].items():
-            if entry.get("platform_slug") != platform_slug:
-                continue
-            rom_ids.append(int(rom_id_str))
+        rom_ids = self._installed_rom_ids_on_platform(platform_slug)
 
         rom_count = len(rom_ids)
         total_deleted, total_errors = self._delete_saves_for_roms(rom_ids)
@@ -384,3 +437,6 @@ class SaveService:
             "deleted_count": total_deleted,
             "message": f"Deleted {total_deleted} save file(s) from {rom_count} ROM(s)",
         }
+
+
+__all__ = ["SaveService", "SaveServiceConfig"]

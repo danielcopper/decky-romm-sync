@@ -3,8 +3,10 @@
 Owns the calls that establish (and refresh) this device's identity on
 the RomM server so save-sync can attribute uploads and filter
 server-side per-slot views. Anything that creates, updates, or lists
-RomM ``DeviceSaveSync`` rows lives here. Per-rom sync orchestration
-and the file-level transfer logic live elsewhere in the package
+RomM ``DeviceSaveSync`` rows lives here. The single server device id is
+the truly-singleton scalar persisted in ``kv_config["device_id"]``; the
+device label lives in ``settings.json``. Per-rom sync orchestration and
+the file-level transfer logic live elsewhere in the package
 (:mod:`services.saves.sync_engine.engine` and
 :mod:`services.saves.sync_engine.matrix`).
 """
@@ -13,6 +15,8 @@ from __future__ import annotations
 
 import contextlib
 from typing import TYPE_CHECKING
+
+from services.saves._settings import save_sync_enabled
 
 if TYPE_CHECKING:
     import asyncio
@@ -23,8 +27,9 @@ if TYPE_CHECKING:
         HostnameReader,
         RetryStrategy,
         RommSyncApi,
+        SettingsPersister,
+        UnitOfWorkFactory,
     )
-    from services.saves.state import StateService
 
 
 class DeviceRegistry:
@@ -36,28 +41,49 @@ class DeviceRegistry:
     fallback is reached from inside those callables and pushing it out
     to a peer service would require an extra constructor callback.
 
-    The async entry points take ``loop`` and ``hostname_provider`` per
-    call so :class:`SyncEngine` can pass its live (test-rebindable)
-    attributes without having to thread reassignments through this
-    sub-module.
+    The server device id is read from and written to
+    ``kv_config["device_id"]`` through the injected Unit-of-Work factory;
+    the device label flows through ``settings.json``. The async entry
+    points take ``loop`` and ``hostname_provider`` per call so
+    :class:`SyncEngine` can pass its live (test-rebindable) attributes
+    without having to thread reassignments through this sub-module.
     """
 
     def __init__(
         self,
         *,
-        state_svc: StateService,
+        uow_factory: UnitOfWorkFactory,
+        settings: dict,
         romm_api: RommSyncApi,
         retry: RetryStrategy,
         logger: logging.Logger,
         log_debug: DebugLogger,
+        settings_persister: SettingsPersister,
         plugin_version: str,
     ) -> None:
-        self._state_svc = state_svc
+        self._uow_factory = uow_factory
+        self._settings = settings
         self._romm_api = romm_api
         self._retry = retry
         self._logger = logger
         self._log_debug = log_debug
+        self._settings_persister = settings_persister
         self._plugin_version = plugin_version
+
+    def _get_device_id(self) -> str | None:
+        with self._uow_factory() as uow:
+            return uow.kv_config.get("device_id")
+
+    def _set_device_id(self, device_id: str) -> None:
+        with self._uow_factory() as uow:
+            uow.kv_config.set("device_id", device_id)
+
+    def _get_device_name(self) -> str | None:
+        return self._settings.get("device_name")
+
+    def _set_device_name(self, name: str) -> None:
+        self._settings["device_name"] = name
+        self._settings_persister.save_settings()
 
     async def ensure_device_registered(
         self,
@@ -66,7 +92,7 @@ class DeviceRegistry:
         hostname_provider: HostnameReader,
     ) -> dict:
         """Ensure this device is registered with the RomM server for save sync tracking."""
-        if not self._state_svc.is_save_sync_enabled():
+        if not save_sync_enabled(self._settings):
             return {"success": False, "device_id": "", "device_name": "", "disabled": True}
 
         # Probe the RomM version when it has not been observed yet. Device
@@ -86,11 +112,9 @@ class DeviceRegistry:
             except Exception as e:
                 self._logger.debug(f"ensure_device_registered: version probe failed (non-fatal): {e}")
 
-        sync_state = self._state_svc.state
-        has_device_id = sync_state.device_id
-        has_server_id = sync_state.server_device_id
-        if has_device_id and has_server_id:
-            server_id_str = str(has_server_id)
+        device_id = await loop.run_in_executor(None, self._get_device_id)
+        if device_id:
+            server_id_str = str(device_id)
             with contextlib.suppress(Exception):
                 await loop.run_in_executor(
                     None,
@@ -98,9 +122,9 @@ class DeviceRegistry:
                 )
             return {
                 "success": True,
-                "device_id": sync_state.device_id,
-                "device_name": self._state_svc.get_device_name() or "",
-                "server_device_id": has_server_id,
+                "device_id": device_id,
+                "device_name": self._get_device_name() or "",
+                "server_device_id": device_id,
             }
 
         hostname = hostname_provider.get()
@@ -117,16 +141,15 @@ class DeviceRegistry:
             )
             server_device_id = result.get("id") or result.get("device_id")
             if server_device_id:
-                sync_state.device_id = str(server_device_id)
-                sync_state.server_device_id = str(server_device_id)
-                self._state_svc.set_device_name(hostname)
-                self._state_svc.save_state()
+                new_id = str(server_device_id)
+                await loop.run_in_executor(None, self._set_device_id, new_id)
+                self._set_device_name(hostname)
                 self._logger.info(f"Device registered with server: {server_device_id} ({hostname})")
                 return {
                     "success": True,
-                    "device_id": str(server_device_id),
+                    "device_id": new_id,
                     "device_name": hostname,
-                    "server_device_id": str(server_device_id),
+                    "server_device_id": new_id,
                 }
         except Exception as e:
             self._logger.warning(f"Server device registration failed: {e}")
@@ -135,10 +158,10 @@ class DeviceRegistry:
 
     async def list_devices(self, *, loop: asyncio.AbstractEventLoop) -> dict:
         """List all devices registered with the RomM server for this user."""
-        if not self._state_svc.is_save_sync_enabled():
+        if not save_sync_enabled(self._settings):
             return {"success": False, "devices": [], "disabled": True}
         try:
-            own_id = self._state_svc.get_server_device_id()
+            own_id = await loop.run_in_executor(None, self._get_device_id)
             devices = await loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(lambda: self._romm_api.list_devices()),

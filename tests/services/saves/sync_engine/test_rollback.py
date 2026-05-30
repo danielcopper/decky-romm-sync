@@ -10,13 +10,15 @@ import os
 
 import pytest
 
-from domain.save_state import FileSyncState, RomSaveState
+from domain.rom_save_state import FileSyncState, RomSaveState
 from lib.errors import RommApiError
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
     _file_md5,
+    _get_save_state,
     _install_rom,
+    _seed_save_state,
     _server_save_with_syncs,
     make_service,
 )
@@ -51,7 +53,7 @@ class TestResolveSyncConflict:
         assert result["action"] == "keep_local"
         assert not any(c[0] == "upload_save" for c in fake.call_log)
 
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 100
         assert file_state.last_sync_hash == local_hash
 
@@ -86,7 +88,7 @@ class TestResolveSyncConflict:
         # PUT — save_id was passed
         assert upload_calls[0][2]["save_id"] == 100
 
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
@@ -147,7 +149,7 @@ class TestResolveSyncConflict:
         assert len(download_calls) == 1
 
         # State carries the local hash from the successful PUT.
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
@@ -177,7 +179,7 @@ class TestResolveSyncConflict:
         assert result["success"] is True
         # Local file overwritten with server content
         assert save_path.read_bytes() == b"server-truth"
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 100
         assert file_state.last_sync_hash == _file_md5(str(save_path))
 
@@ -224,7 +226,7 @@ class TestResolveSyncConflict:
         original_state = RomSaveState(
             files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash="abc")},
         )
-        svc._save_sync_state.saves["42"] = original_state
+        _seed_save_state(svc, 42, original_state)
 
         fake.fail_on_next(RommApiError("network"))
 
@@ -238,7 +240,7 @@ class TestResolveSyncConflict:
         assert result["success"] is False
         assert "Failed to fetch saves" in result["message"]
         # State left as-is — no mutation
-        assert svc._save_sync_state.saves["42"] == original_state
+        assert _get_save_state(svc, 42) == original_state
 
     @pytest.mark.asyncio
     async def test_resolve_no_server_saves_in_slot(self, tmp_path):
@@ -309,7 +311,7 @@ class TestResolveSyncConflict:
         upload_path = upload_calls[0][1][1]
         assert os.path.basename(upload_path) == "pokemon.srm"
         # State keyed by canonical filename — never by the frontend label.
-        files_state = svc._save_sync_state.saves["42"].files
+        files_state = _get_save_state(svc, 42).files
         assert "pokemon.srm" in files_state
         assert "pokemon.sav" not in files_state
         assert files_state["pokemon.srm"].last_sync_hash == canonical_hash
@@ -348,7 +350,7 @@ class TestResolveSyncConflict:
         canonical_path = tmp_path / "saves" / "gba" / "pokemon.srm"
         assert canonical_path.read_bytes() == b"server-truth"
         assert not (tmp_path / "saves" / "gba" / "pokemon.sav").exists()
-        files_state = svc._save_sync_state.saves["42"].files
+        files_state = _get_save_state(svc, 42).files
         assert "pokemon.srm" in files_state
         assert "pokemon.sav" not in files_state
         assert files_state["pokemon.srm"].tracked_save_id == 100
@@ -417,7 +419,7 @@ class TestResolveSyncConflictStaleConflict:
         fake.saves[200] = newer_server
 
         # Snapshot state so the no-mutation assertion is exact.
-        state_before = svc._save_sync_state.to_dict()
+        state_before = _get_save_state(svc, 42)
 
         result = await svc.resolve_sync_conflict(
             rom_id=42,
@@ -432,7 +434,7 @@ class TestResolveSyncConflictStaleConflict:
         # No PUT/POST fired against the head save — the whole point of the guard.
         assert not any(c[0] == "upload_save" for c in fake.call_log)
         # State unchanged.
-        assert svc._save_sync_state.to_dict() == state_before
+        assert _get_save_state(svc, 42) == state_before
 
     @pytest.mark.asyncio
     async def test_resolve_use_server_rejects_when_server_head_advanced(self, tmp_path):
@@ -457,7 +459,7 @@ class TestResolveSyncConflictStaleConflict:
         fake.uploaded_files[200] = str(server_bytes)
 
         # Snapshot state so the no-mutation assertion is exact.
-        state_before = svc._save_sync_state.to_dict()
+        state_before = _get_save_state(svc, 42)
 
         result = await svc.resolve_sync_conflict(
             rom_id=42,
@@ -471,7 +473,7 @@ class TestResolveSyncConflictStaleConflict:
         # Local file untouched — no silent download of the wrong server save.
         assert save_path.read_bytes() == b"local-stale"
         # State unchanged.
-        assert svc._save_sync_state.to_dict() == state_before
+        assert _get_save_state(svc, 42) == state_before
 
     @pytest.mark.asyncio
     async def test_resolve_succeeds_when_server_head_matches(self, tmp_path):
@@ -504,5 +506,5 @@ class TestResolveSyncConflictStaleConflict:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
         assert upload_calls[0][2]["save_id"] == 100
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
+        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash

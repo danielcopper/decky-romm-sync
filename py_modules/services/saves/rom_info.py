@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         CoreResolverFn,
         RetroDeckPaths,
         SaveFileStore,
+        UnitOfWorkFactory,
     )
 
 
@@ -36,13 +37,16 @@ if TYPE_CHECKING:
 class RomInfoServiceConfig:
     """Frozen wiring bundle handed to ``RomInfoService.__init__``.
 
-    Holds the main plugin state dict (for ``installed_roms`` reads and
-    save-sort state), the Protocol-typed filesystem adapter, the
-    RetroDECK runtime-path accessor, the ES-DE core resolver, the
-    RetroArch core-name provider, and the standard-library logger.
+    Holds the main plugin state dict (for save-sort state only), the
+    Unit-of-Work factory (the ``rom_installs`` aggregate is the source of
+    truth for installed-ROM file records — WS3), the Protocol-typed
+    filesystem adapter, the RetroDECK runtime-path accessor, the ES-DE
+    core resolver, the RetroArch core-name provider, and the
+    standard-library logger.
     """
 
     state: PluginState
+    uow_factory: UnitOfWorkFactory
     save_file_store: SaveFileStore
     retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
@@ -56,6 +60,7 @@ class RomInfoService:
     def __init__(self, *, config: RomInfoServiceConfig) -> None:
         self._config = config
         self._state = config.state
+        self._uow_factory = config.uow_factory
         self._save_file_store = config.save_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._get_active_core = config.get_active_core
@@ -68,13 +73,13 @@ class RomInfoService:
         Returns dict with keys: system, rom_name, saves_dir, platform_slug, file_path
         or None if not installed.
         """
-        rom_id_str = str(int(rom_id))
-        installed = self._state["installed_roms"].get(rom_id_str)
+        with self._uow_factory() as uow:
+            installed = uow.rom_installs.get(int(rom_id))
         if not installed:
             return None
-        system = installed.get("system", "")
-        file_path = installed.get("file_path", "")
-        platform_slug = installed.get("platform_slug", "")
+        system = installed.system
+        file_path = installed.file_path
+        platform_slug = installed.platform_slug
         if not system or not file_path:
             return None
         rom_name = os.path.splitext(os.path.basename(file_path))[0]

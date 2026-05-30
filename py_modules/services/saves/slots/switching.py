@@ -4,15 +4,18 @@ Anything that flips the active slot on a ROM lives here — the simple
 state-only ``set_active_slot`` flip and the full ``switch_slot`` flow
 that synchronises the local saves directory to the new slot's contents.
 Slot listing, the setup wizard, and slot deletion belong in their own
-sub-modules.
+sub-modules. Persistence is each operation's own narrow Unit of Work
+(ADR-0006).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from domain.rom_save_state import RomSaveState
 from lib.list_result import ErrorCode
 from services.saves._helpers import local_save_target
+from services.saves._settings import resolve_default_slot, save_sync_enabled
 
 if TYPE_CHECKING:
     import asyncio
@@ -23,9 +26,9 @@ if TYPE_CHECKING:
         RetryStrategy,
         RommSaveApi,
         SaveFileStore,
+        UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
-    from services.saves.state import StateService
     from services.saves.status import StatusService
     from services.saves.sync_engine import SyncEngine
 
@@ -42,7 +45,8 @@ class SlotSwitcher:
     def __init__(
         self,
         *,
-        state_svc: StateService,
+        settings: dict,
+        uow_factory: UnitOfWorkFactory,
         sync_engine: SyncEngine,
         status_service: StatusService,
         rom_info: RomInfoService,
@@ -53,7 +57,8 @@ class SlotSwitcher:
         save_file_store: SaveFileStore,
         log_debug: DebugLogger,
     ) -> None:
-        self._state_svc = state_svc
+        self._settings = settings
+        self._uow_factory = uow_factory
         self._sync_engine = sync_engine
         self._status_service = status_service
         self._rom_info = rom_info
@@ -64,32 +69,37 @@ class SlotSwitcher:
         self._save_file_store = save_file_store
         self._log_debug = log_debug
 
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
+        with self._uow_factory() as uow:
+            state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            device_id = uow.kv_config.get("device_id")
+        return state, device_id
+
+    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+        with self._uow_factory() as uow:
+            uow.rom_save_states.save(rom_id, save_state)
+
     def set_active_slot(self, rom_id: int, slot: str) -> dict:
         """Set the active save slot for a specific game.
 
         If the slot doesn't exist yet (not on server), it is persisted
         as a local slot. It will be promoted to server once a save is
-        uploaded to it.
+        uploaded to it. Owns its own read→mutate→write Unit of Work.
         """
         rom_id = int(rom_id)
         slot_str = str(slot).strip() if slot else ""
         # Empty string = legacy mode (None slot)
         resolved_slot: str | None = slot_str if slot_str else None
 
-        rom_id_str = str(rom_id)
-        rom_state = self._state_svc.ensure_rom_state(rom_id_str)
-        rom_state.active_slot = resolved_slot
+        with self._uow_factory() as uow:
+            rom_state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            rom_state.switch_active_slot(resolved_slot)
+            uow.rom_save_states.save(rom_id, rom_state)
 
-        # Ensure slot is in the persisted slots dict (use "" as key for legacy/None)
-        slot_key = resolved_slot if resolved_slot is not None else ""
-        if slot_key not in rom_state.slots:
-            rom_state.slots[slot_key] = {"source": "local", "count": 0, "latest_updated_at": None}
-
-        self._state_svc.save_state()
         self._loop.create_task(self._status_service.check_save_status_background(rom_id))
         return {"success": True, "active_slot": resolved_slot}
 
-    def _check_slot_switch_readiness(self, rom_id: int) -> dict:
+    def _check_slot_switch_readiness(self, rom_id: int, save_state: RomSaveState) -> dict:
         """Check whether it is safe to switch slots for this ROM.
 
         A switch is unsafe if local files have changed since the last sync
@@ -99,9 +109,7 @@ class SlotSwitcher:
         Returns ``{"ready": True}`` or
         ``{"ready": False, "reason": str, "files": list[str]}``.
         """
-        rom_id_str = str(rom_id)
-        save_state = self._state_svc.state.saves.get(rom_id_str)
-        files_state = save_state.files if save_state else {}
+        files_state = save_state.files
 
         pending: list[str] = []
         local_files = self._rom_info.find_save_files(rom_id)
@@ -134,10 +142,9 @@ class SlotSwitcher:
         - Never uploads — saves are not carried between slots.
         """
         rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
 
         # 1. Save sync must be enabled
-        if not self._state_svc.is_save_sync_enabled():
+        if not save_sync_enabled(self._settings):
             return {"success": False, "reason": "sync_disabled"}
 
         # 2. Slot normalisation (empty → None for legacy mode)
@@ -152,11 +159,14 @@ class SlotSwitcher:
         saves_dir = info["saves_dir"]
         system = info["system"]
 
+        save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
+
         # 4. Check for pending local changes (hashing — run in executor)
         readiness = await self._loop.run_in_executor(
             None,
             self._check_slot_switch_readiness,
             rom_id,
+            save_state,
         )
         if not readiness.get("ready"):
             return {
@@ -166,7 +176,6 @@ class SlotSwitcher:
             }
 
         # 5. Fetch server saves for the new slot (also proves server is reachable)
-        device_id = self._state_svc.get_server_device_id()
         try:
             all_server_saves: list[dict] = await self._loop.run_in_executor(
                 None,
@@ -185,10 +194,11 @@ class SlotSwitcher:
         # Normalize "" and None both to None before comparing (legacy saves may use either)
         slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
 
-        # 6. Update active slot in state
-        self.set_active_slot(rom_id, new_slot)
+        # 6. Update active slot in state (in memory; persisted once at the end)
+        save_state.switch_active_slot(resolved_slot)
 
         # 7. Sync local state to match the new slot
+        default_slot = resolve_default_slot(self._settings)
         if slot_saves:
             # New slot has server saves — download them, replacing local files.
             # rom_name is guaranteed by the earlier ``info`` check.
@@ -197,9 +207,11 @@ class SlotSwitcher:
                 self._do_switch_downloads,
                 slot_saves,
                 saves_dir,
-                rom_id_str,
+                save_state,
+                device_id,
                 system,
                 info["rom_name"],
+                default_slot,
             )
         else:
             # New slot is empty — delete local save files for a fresh start
@@ -207,13 +219,12 @@ class SlotSwitcher:
                 None,
                 self._delete_local_saves_for_switch,
                 rom_id,
-                rom_id_str,
+                save_state,
             )
 
-        # 8. Update last_sync_check_at
-        save_entry = self._state_svc.ensure_rom_state(rom_id_str)
-        save_entry.last_sync_check_at = self._clock.now().isoformat()
-        self._state_svc.save_state()
+        # 8. Update last_sync_check_at and persist the accumulated mutations once.
+        save_state.mark_sync_evaluated(self._clock.now().isoformat())
+        await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
 
         # 9. Return fresh status
         save_status = await self._status_service.get_save_status(rom_id)
@@ -223,25 +234,31 @@ class SlotSwitcher:
         self,
         slot_saves: list[dict],
         saves_dir: str,
-        rom_id_str: str,
+        save_state: RomSaveState,
+        device_id: str | None,
         system: str,
         rom_name: str,
+        default_slot: str | None,
     ) -> None:
         """Download all saves from *slot_saves* into *saves_dir*.
 
         Each save lands at ``<saves_dir>/<rom_name>.<server.file_extension>`` —
-        the canonical RetroArch path. Runs synchronously; call via
+        the canonical RetroArch path. Mutates *save_state* in memory; the caller
+        owns the write Unit of Work. Runs synchronously; call via
         ``run_in_executor``.
         """
         for server_save in slot_saves:
             target = local_save_target(server_save, rom_name)
-            self._sync_engine.do_download_save(server_save, saves_dir, target, rom_id_str, system)
+            self._sync_engine.do_download_save(
+                server_save, saves_dir, target, save_state, device_id, system, default_slot
+            )
 
-    def _delete_local_saves_for_switch(self, rom_id: int, rom_id_str: str) -> None:
+    def _delete_local_saves_for_switch(self, rom_id: int, save_state: RomSaveState) -> None:
         """Delete local save files and clear file tracking state for a slot switch.
 
         Unlike delete_local_saves (the callable), this preserves slot config
         (active_slot, slot_confirmed, slots dict) and only clears files + tracking.
+        Mutates *save_state* in memory; the caller owns the write Unit of Work.
         Runs synchronously — call via run_in_executor.
         """
         local_files = self._rom_info.find_save_files(rom_id)
@@ -253,4 +270,4 @@ class SlotSwitcher:
                 self._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")
 
         # Clear file tracking state (but keep slot config)
-        self._state_svc.clear_files_state(rom_id_str)
+        save_state.clear_baselines()

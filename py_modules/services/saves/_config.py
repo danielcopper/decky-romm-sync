@@ -54,20 +54,23 @@ class SaveServiceConfig:
         Live reference to the main plugin state dict (``installed_roms``,
         ``shortcut_registry``).
     save_sync_state:
-        Live reference to the typed :class:`SaveSyncState` aggregate.
-        Caller should pre-populate via :meth:`SaveService.load_state`
-        after construction; the aggregate ships with defaults out of
-        the box.
+        Live reference to the legacy JSON :class:`SaveSyncState`
+        aggregate. The per-ROM save state has migrated to SQLite (the
+        ``rom_save_states`` repository, reached via ``uow_factory``);
+        this aggregate survives only as the home of the ``playtime`` dict
+        still read/written by the not-yet-migrated PlaytimeService and
+        RomRemovalService through :meth:`SaveService.save_state`. Drop
+        this field once those consumers move to SQLite.
     save_sync_state_persister:
-        Protocol-typed I/O wrapper for ``save_sync_state.json``. The
-        ``StateService`` uses ``.save(data)`` / ``.load() -> dict | None``
-        — file path, locking, and atomic-write are adapter-internal.
+        Protocol-typed I/O wrapper for ``save_sync_state.json`` backing
+        the legacy aggregate above (``.save(data)`` /
+        ``.load() -> dict | None``). Kept for the same cross-service
+        reason; the saves vertical no longer reads or writes it.
     settings_persister:
-        Protocol-typed zero-arg flush for ``settings.json``. The
-        ``StateService`` calls ``.save_settings()`` after mutating the
-        save-sync feature toggles or the device label in the live
-        ``settings`` dict — those values live in settings.json, not the
-        save-sync aggregate.
+        Protocol-typed zero-arg flush for ``settings.json``. SaveService
+        calls ``.save_settings()`` after mutating the save-sync feature
+        toggles or the device label in the live ``settings`` dict — those
+        values live in settings.json, not the save-sync aggregate.
     save_file_store:
         Protocol-typed filesystem adapter for local save files. Owns the
         raw POSIX, ``open()``, ``tempfile``, and ``hashlib``-on-file
@@ -133,9 +136,10 @@ class SaveServiceConfig:
         needs it; not reached through the ``_save_service`` back-ref.
     uow_factory:
         ``UnitOfWorkFactory`` Protocol seam — opens a fresh transactional
-        Unit of Work over the nine SQLite repositories. Wired in but not
-        yet consumed; the per-method repository cutover (#784) wires the
-        save-state reads/writes through it.
+        Unit of Work over the nine SQLite repositories. The saves vertical
+        reads/writes the ``rom_save_states`` aggregate + ``kv_config``
+        device id through it; each public callable owns a narrow
+        read→I/O→write bracket (ADR-0006).
     """
 
     romm_api: RommSyncApi

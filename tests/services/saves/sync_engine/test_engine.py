@@ -13,8 +13,11 @@ import pytest
 from lib.errors import RommApiError
 from tests.services.saves._helpers import (
     _create_save,
+    _do_sync,
+    _get_device_id,
     _install_rom,
     _server_save,
+    _set_device_id,
     make_service,
 )
 
@@ -26,7 +29,7 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
-        synced, errors, conflicts = svc._sync_engine.do_sync_rom_saves(42)
+        synced, errors, conflicts = _do_sync(svc, 42)
         assert synced == 1
         assert errors == []
         assert conflicts == []
@@ -40,7 +43,7 @@ class TestSyncRomSaves:
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, _ = svc._sync_engine.do_sync_rom_saves(42)
+        synced, errors, _ = _do_sync(svc, 42)
         assert synced == 1
         assert errors == []
         # Verify the file was downloaded
@@ -49,7 +52,7 @@ class TestSyncRomSaves:
 
     def test_rom_not_installed(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        synced, errors, _ = svc._sync_engine.do_sync_rom_saves(999)
+        synced, errors, _ = _do_sync(svc, 999)
         assert synced == 0
         assert errors == []
 
@@ -58,7 +61,7 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         fake.fail_on_next(RommApiError("Server error"))
 
-        synced, errors, _ = svc._sync_engine.do_sync_rom_saves(42)
+        synced, errors, _ = _do_sync(svc, 42)
         assert synced == 0
         assert len(errors) == 1
         assert "Failed to fetch saves" in errors[0]
@@ -76,13 +79,13 @@ class TestSyncRomSaves:
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         # Mark migration pending — detect has fired, user hasn't resolved yet.
-        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
-        svc._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
+        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
+        svc._rom_info._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
         # Server has a save, no local file anywhere.
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, conflicts = svc._sync_engine.do_sync_rom_saves(42)
+        synced, errors, conflicts = _do_sync(svc, 42)
 
         assert synced == 0
         assert errors == []
@@ -98,12 +101,12 @@ class TestSyncRomSaves:
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
-        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
-        svc._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
+        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
+        svc._rom_info._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
         # Local save at the (previous == current, same layout) location.
         _create_save(tmp_path, content=b"user progress")
 
-        synced, errors, conflicts = svc._sync_engine.do_sync_rom_saves(42)
+        synced, errors, conflicts = _do_sync(svc, 42)
 
         assert synced == 1
         assert errors == []
@@ -128,15 +131,15 @@ class TestSyncRomSaves:
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
         orig_sync = svc._sync_engine.do_sync_rom_saves
 
-        def wrapped_sync(rom_id):
+        def wrapped_sync(rom_id, *args):
             call_order.append("sync")
-            return orig_sync(rom_id)
+            return orig_sync(rom_id, *args)
 
         svc._sync_engine.do_sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
@@ -157,11 +160,11 @@ class TestSyncRomSaves:
         """
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
         # Stub do_sync_rom_saves to return 1 conflict, 0 synced, 0 errors
-        def stub_sync(rom_id):
+        def stub_sync(rom_id, *args):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
@@ -179,7 +182,7 @@ class TestSyncAllSaves:
     async def test_syncs_multiple_roms(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
@@ -202,7 +205,7 @@ class TestSyncAllSaves:
     async def test_partial_failure(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
@@ -241,15 +244,15 @@ class TestSyncAllSaves:
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
         orig_sync = svc._sync_engine.do_sync_rom_saves
 
-        def wrapped_sync(rom_id):
+        def wrapped_sync(rom_id, *args):
             call_order.append("sync")
-            return orig_sync(rom_id)
+            return orig_sync(rom_id, *args)
 
         svc._sync_engine.do_sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
@@ -270,11 +273,11 @@ class TestSyncAllSaves:
         """
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
 
         # Stub internal sync to produce conflicts but no errors
-        def stub_sync(rom_id):
+        def stub_sync(rom_id, *args):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
@@ -291,7 +294,7 @@ class TestPreLaunchSync:
     async def test_downloads_server_saves(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
         ss = _server_save()
@@ -313,7 +316,7 @@ class TestPreLaunchSync:
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         svc._config.settings["sync_before_launch"] = False
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
 
         result = await svc.pre_launch_sync(42)
         assert result["synced"] == 0
@@ -329,7 +332,7 @@ class TestPreLaunchSync:
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
 
         # Track when is_save_sort_changed is consulted.
         orig_gate = svc._rom_info.is_save_sort_changed
@@ -352,7 +355,7 @@ class TestPostExitSync:
     async def test_uploads_changed_saves(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"new save data")
 
@@ -372,7 +375,7 @@ class TestPostExitSync:
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         svc._config.settings["sync_after_exit"] = False
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
 
         result = await svc.post_exit_sync(42)
         assert result["synced"] == 0
@@ -387,7 +390,7 @@ class TestPostExitSync:
 
         result = await svc.post_exit_sync(42)
         assert result["success"] is True
-        assert svc._save_sync_state.device_id is not None
+        assert _get_device_id(svc) is not None
 
     # ------------------------------------------------------------------
     # Regression tests for issue #238 — detect-first invariant.
@@ -408,16 +411,16 @@ class TestPostExitSync:
 
         svc, _ = make_service(tmp_path, detect_sort_change=fake_detect)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
         # Patch do_sync_rom_saves to record call ordering.
         orig_sync = svc._sync_engine.do_sync_rom_saves
 
-        def wrapped_sync(rom_id):
+        def wrapped_sync(rom_id, *args):
             call_order.append("sync")
-            return orig_sync(rom_id)
+            return orig_sync(rom_id, *args)
 
         svc._sync_engine.do_sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
 
@@ -437,7 +440,7 @@ class TestPostExitSync:
 
         svc, _ = make_service(tmp_path, detect_sort_change=boom)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"progress")
 
@@ -459,10 +462,10 @@ class TestPostExitSync:
         """
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
-        def stub_sync(rom_id):
+        def stub_sync(rom_id, *args):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
@@ -521,7 +524,7 @@ class TestMigrationPendingGuards:
             is_retrodeck_migration_pending=lambda: True,
         )
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"unsyncable")
 
@@ -541,7 +544,7 @@ class TestMigrationPendingGuards:
             is_retrodeck_migration_pending=lambda: True,
         )
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"unsyncable")
 
@@ -561,7 +564,7 @@ class TestPostExitServerOfflineGuard:
     async def test_post_exit_sync_returns_offline_when_heartbeat_raises(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
         fake.heartbeat_raises = RommApiError("Connection refused")
@@ -601,10 +604,10 @@ class TestSyncCallableErrorMessages:
     async def test_pre_launch_sync_message_includes_error_count(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
-        def stub_sync(rom_id):
+        def stub_sync(rom_id, *args):
             return (0, ["pokemon.srm: bad gateway"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
@@ -619,10 +622,10 @@ class TestSyncCallableErrorMessages:
     async def test_post_exit_sync_message_includes_error_count(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
-        def stub_sync(rom_id):
+        def stub_sync(rom_id, *args):
             return (0, ["pokemon.srm: timeout"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
@@ -637,10 +640,10 @@ class TestSyncCallableErrorMessages:
     async def test_sync_rom_saves_message_includes_error_count(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
 
-        def stub_sync(rom_id):
+        def stub_sync(rom_id, *args):
             return (0, ["pokemon.srm: 502 bad gateway"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
@@ -656,13 +659,15 @@ class TestSyncEngineDelegates:
     or DeviceRegistry (engine.py lines 204 / 220 / 239)."""
 
     def test_adopt_baseline_hash_delegates_to_matrix(self, tmp_path):
-        """SyncEngine.adopt_baseline_hash writes through to the matrix's state."""
+        """SyncEngine.adopt_baseline_hash records the hash on the passed aggregate."""
+        from domain.rom_save_state import RomSaveState
+
         svc, _ = make_service(tmp_path)
 
-        svc._sync_engine.adopt_baseline_hash("42", "pokemon.srm", "deadbeef" * 4)
+        state = RomSaveState()
+        svc._sync_engine.adopt_baseline_hash(state, "pokemon.srm", "deadbeef" * 4)
 
-        file_state = svc._save_sync_state.saves["42"].files["pokemon.srm"]
-        assert file_state.last_sync_hash == "deadbeef" * 4
+        assert state.files["pokemon.srm"].last_sync_hash == "deadbeef" * 4
 
     def test_build_sync_conflict_entry_delegates_to_matrix(self, tmp_path):
         """SyncEngine.build_sync_conflict_entry builds the same dict shape as the matrix."""
@@ -689,7 +694,7 @@ class TestSyncEngineDelegates:
         """SyncEngine.list_devices forwards to DeviceRegistry.list_devices."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.server_device_id = "device-1"
+        _set_device_id(svc, "device-1")
         # Seed a registered device on the fake so list_devices returns non-empty.
         fake._registered_devices.append({"id": "device-1", "name": "test-host"})
 
@@ -708,11 +713,11 @@ class TestPreLaunchSaveSortGate:
     async def test_pre_launch_sync_returns_save_sort_changed(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._save_sync_state.device_id = "test-device"
+        _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         # Flag save-sort changed via the rom_info state path used by RomInfoService.
-        svc._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
-        svc._state["save_sort_settings_previous"] = {"sort_by_content": False, "sort_by_core": False}
+        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
+        svc._rom_info._state["save_sort_settings_previous"] = {"sort_by_content": False, "sort_by_core": False}
 
         result = await svc.pre_launch_sync(42)
 

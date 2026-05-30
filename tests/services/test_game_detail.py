@@ -22,7 +22,7 @@ from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapt
 from adapters.registry_store import RegistryStoreAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
-from domain.save_state import FileSyncState, RomSaveState
+from domain.save_state import FileSyncState, RomSaveState, SaveSyncState
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
@@ -76,7 +76,7 @@ def plugin(tmp_path):
 
     # Wire services with FakeSaveApi
     fake_api = FakeSaveApi()
-    p._save_sync_state = SaveService.make_default_state()
+    p._save_sync_state = SaveSyncState()
     saves_path = str(tmp_path / "retrodeck" / "saves")
 
     p._save_sync_service = SaveService(

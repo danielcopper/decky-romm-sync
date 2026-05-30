@@ -6,6 +6,7 @@ go through SyncEngine / LocalSavesAdapter. Anything that lists,
 fetches, or rolls back to an older save version lives here. Mutations
 of the active save record outside the rollback flow (conflict
 resolution, status reporting) belong in SyncEngine or StatusService.
+Persistence is the operation's own narrow Unit of Work (ADR-0006).
 """
 
 from __future__ import annotations
@@ -14,16 +15,17 @@ import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
+from domain.rom_save_state import RomSaveState
 from services.saves._helpers import local_save_target
+from services.saves._settings import resolve_default_slot
 
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
-    from domain.save_state import FileSyncState
-    from services.protocols import DebugLogger, RetryStrategy, RommSaveApi
+    from services.protocols import DebugLogger, RetryStrategy, RommSaveApi, UnitOfWorkFactory
     from services.saves.rom_info import RomInfoService
-    from services.saves.state import StateService
     from services.saves.sync_engine import SyncEngine
 
 
@@ -31,15 +33,20 @@ if TYPE_CHECKING:
 class VersionsServiceConfig:
     """Frozen wiring bundle handed to ``VersionsService.__init__``.
 
-    Holds the peer save sub-services consumed during rollback
-    orchestration (state, sync_engine, rom_info), the Protocol-typed
-    RomM adapter and retry strategy, the plugin event loop, the
-    standard-library logger, and the ``DebugLogger`` seam.
+    Holds the live ``settings.json`` dict (default-slot seeding), the
+    Unit-of-Work factory (the transactional seam over the SQLite
+    repositories), the peer save sub-services consumed during rollback
+    orchestration (sync_engine, rom_info), the core resolver used to
+    stamp the upload emulator tag, the Protocol-typed RomM adapter and
+    retry strategy, the plugin event loop, the standard-library logger,
+    and the ``DebugLogger`` seam.
     """
 
-    state_svc: StateService
+    settings: dict
+    uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
     rom_info: RomInfoService
+    resolve_core: Callable[[int], str | None]
     romm_api: RommSaveApi
     retry: RetryStrategy
     loop: asyncio.AbstractEventLoop
@@ -50,16 +57,18 @@ class VersionsServiceConfig:
 class VersionsService:
     """Aggregate root for the module's contract.
 
-    Per-ROM lock acquisition and atomic save-state persistence are
-    delegated to the injected ``SyncEngine`` / ``StateService``; this
+    Per-ROM lock acquisition is delegated to the injected ``SyncEngine``;
+    save-state persistence is the operation's own narrow Unit of Work. This
     class owns the rollback orchestration on top of them.
     """
 
     def __init__(self, *, config: VersionsServiceConfig) -> None:
         self._config = config
-        self._state_svc = config.state_svc
+        self._settings = config.settings
+        self._uow_factory = config.uow_factory
         self._sync_engine = config.sync_engine
         self._rom_info = config.rom_info
+        self._resolve_core = config.resolve_core
         self._romm_api = config.romm_api
         self._retry = config.retry
         self._loop = config.loop
@@ -67,18 +76,22 @@ class VersionsService:
         self._log_debug = config.log_debug
 
     # ------------------------------------------------------------------
-    # Version History API
+    # Narrow-UoW read/write helpers (ADR-0006)
     # ------------------------------------------------------------------
 
-    def _find_file_state(self, rom_id_str: str, filename: str) -> FileSyncState | None:
-        """Look up the per-file sync state for *filename* (canonical local name).
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
+        with self._uow_factory() as uow:
+            state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            device_id = uow.kv_config.get("device_id")
+        return state, device_id
 
-        State keys are always ``<rom_name>.<ext>`` — the same canonical
-        local filename produced by ``local_save_target`` and consumed by
-        RetroArch — so a single dict lookup is enough. The previous
-        ``file_name_no_tags``-anchored slow path is gone.
-        """
-        return self._state_svc.get_file_state(rom_id_str, filename)
+    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+        with self._uow_factory() as uow:
+            uow.rom_save_states.save(rom_id, save_state)
+
+    # ------------------------------------------------------------------
+    # Version History API
+    # ------------------------------------------------------------------
 
     async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> dict:
         """List server-side saves in the active slot, excluding the currently-tracked one.
@@ -104,8 +117,7 @@ class VersionsService:
           retry affordance instead of "no versions available".
         """
         rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
-        device_id = self._state_svc.get_server_device_id()
+        save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
 
         try:
             server_saves = await self._loop.run_in_executor(
@@ -118,11 +130,9 @@ class VersionsService:
             self._log_debug(f"list_file_versions: failed to list saves: {e}")
             return {"status": "server_unreachable", "message": str(e)}
 
-        file_state = self._find_file_state(rom_id_str, filename)
+        file_state = save_state.files.get(filename)
         tracked_id = file_state.tracked_save_id if file_state else None
-
-        rom_state = self._state_svc.state.saves.get(rom_id_str)
-        own_upload_ids: list[int] | None = rom_state.own_upload_ids if rom_state else None
+        own_upload_ids: list[int] | None = save_state.own_upload_ids
 
         versions = [
             {
@@ -143,7 +153,10 @@ class VersionsService:
 
     def _rollback_to_version_io(
         self,
-        rom_id_str: str,
+        rom_id: int,
+        save_state: RomSaveState,
+        device_id: str | None,
+        core_so: str | None,
         save_id: int,
         info: dict,
         server_saves: list[dict],
@@ -173,7 +186,8 @@ class VersionsService:
         (now newest), our ``is_current=true``, hash matches →
         ``Skip(synced)``. Other devices on their next sync see id=save_id
         as newest with their ``is_current=false`` → ``Download`` → adopt
-        our switch. Cross-device propagation works.
+        our switch. Cross-device propagation works. Mutates *save_state* in
+        memory; the caller owns the write UoW.
         """
         target_save = next(
             (s for s in server_saves if s.get("id") == save_id),
@@ -185,19 +199,25 @@ class VersionsService:
         saves_dir = info["saves_dir"]
         system = info["system"]
         rom_name = info["rom_name"]
+        default_slot = resolve_default_slot(self._settings)
         target_filename = local_save_target(target_save, rom_name)
         local_path = os.path.join(saves_dir, target_filename)
 
-        self._sync_engine.do_download_save(target_save, saves_dir, target_filename, rom_id_str, system)
+        self._sync_engine.do_download_save(
+            target_save, saves_dir, target_filename, save_state, device_id, system, default_slot
+        )
 
         try:
             self._sync_engine.do_upload_save(
-                rom_id=int(rom_id_str),
-                file_path=local_path,
-                filename=target_filename,
-                rom_id_str=rom_id_str,
-                system=system,
-                server_save=target_save,
+                rom_id,
+                local_path,
+                target_filename,
+                save_state,
+                device_id,
+                system,
+                core_so,
+                target_save,
+                default_slot,
             )
         except Exception as e:
             # Download already mutated local state to reflect ``save_id``, so
@@ -206,7 +226,7 @@ class VersionsService:
             # the caller can prompt the user to retry.
             self._logger.error(
                 "_rollback_to_version_io: PUT to bump updated_at failed for rom=%s save=%s: %s",
-                rom_id_str,
+                rom_id,
                 save_id,
                 e,
             )
@@ -265,7 +285,6 @@ class VersionsService:
           the switch will not propagate cross-device.
         """
         rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
         save_id = int(save_id)
 
         async with self._sync_engine.rom_lock(rom_id):
@@ -273,24 +292,27 @@ class VersionsService:
             if not info:
                 return {"status": "rom_not_installed"}
 
+            save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
+            core_so = await self._loop.run_in_executor(None, self._resolve_core, rom_id)
+            default_slot = resolve_default_slot(self._settings)
+
             # Matrix pre-flight: get the tracked save in sync first, or surface
             # a conflict that the user must resolve before any switch can run.
             _synced, errors, conflicts = await self._loop.run_in_executor(
-                None, self._sync_engine.do_sync_rom_saves, rom_id
+                None, self._sync_engine.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot
             )
             if conflicts:
-                self._state_svc.save_state()
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
                 return {
                     "status": "conflict_blocked",
                     "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
                 }
             if errors:
-                self._state_svc.save_state()
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
                 return {"status": "preflight_failed", "errors": errors}
 
             # Re-fetch server saves after the pre-flight: it may have created
             # or modified saves the switch needs to see.
-            device_id = self._state_svc.get_server_device_id()
             try:
                 server_saves: list[dict] = await self._loop.run_in_executor(
                     None,
@@ -300,18 +322,22 @@ class VersionsService:
                 )
             except Exception as e:
                 self._log_debug(f"rollback_to_version: failed to list saves: {e}")
+                # Persist whatever the pre-flight mutated before bailing.
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
                 return {"status": "server_unreachable", "message": str(e)}
 
             result = await self._loop.run_in_executor(
                 None,
                 self._rollback_to_version_io,
-                rom_id_str,
+                rom_id,
+                save_state,
+                device_id,
+                core_so,
                 save_id,
                 info,
                 server_saves,
             )
 
-            if result.get("status") in ("ok", "put_failed"):
-                self._state_svc.save_state()
+            await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
 
             return result

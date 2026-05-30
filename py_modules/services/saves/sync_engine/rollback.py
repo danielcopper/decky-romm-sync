@@ -8,8 +8,11 @@ content, and synchronises file-tracking state with the choice. Public-
 callable async orchestration (lock acquisition, server-head fetch,
 freshness check) is also driven from here; the rom-level lock itself
 lives on :class:`services.saves.sync_engine.engine.SyncEngine` so that
-every save-sync entry point shares one queue. The multi-version
-timeline rollback flow (older save versions) lives in
+every save-sync entry point shares one queue. Persistence is the
+operation's own narrow Unit of Work (ADR-0006) — this orchestrator reads
+the aggregate at the start, performs the transfer outside any
+transaction, and writes once at the end. The multi-version timeline
+rollback flow (older save versions) lives in
 :class:`services.saves.versions.VersionsService`.
 """
 
@@ -19,14 +22,15 @@ import os
 from typing import TYPE_CHECKING
 
 from domain.iso_time import parse_iso_to_epoch
+from domain.rom_save_state import RomSaveState
 from domain.save_path import sanitize_save_filename
-from domain.save_state import FileSyncState
 from lib.errors import classify_error
 from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from collections.abc import Callable
 
     from services.protocols import (
         Clock,
@@ -34,9 +38,9 @@ if TYPE_CHECKING:
         RetryStrategy,
         RommSyncApi,
         SaveFileStore,
+        UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
-    from services.saves.state import StateService
     from services.saves.sync_engine.matrix import MatrixExecutor
 
 
@@ -55,7 +59,7 @@ class RollbackOrchestrator:
     def __init__(
         self,
         *,
-        state_svc: StateService,
+        uow_factory: UnitOfWorkFactory,
         rom_info: RomInfoService,
         romm_api: RommSyncApi,
         matrix: MatrixExecutor,
@@ -64,8 +68,9 @@ class RollbackOrchestrator:
         save_file_store: SaveFileStore,
         logger: logging.Logger,
         log_debug: DebugLogger,
+        resolve_core: Callable[[int], str | None],
     ) -> None:
-        self._state_svc = state_svc
+        self._uow_factory = uow_factory
         self._rom_info = rom_info
         self._romm_api = romm_api
         self._matrix = matrix
@@ -74,6 +79,19 @@ class RollbackOrchestrator:
         self._save_file_store = save_file_store
         self._logger = logger
         self._log_debug = log_debug
+        self._resolve_core = resolve_core
+
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
+        """Short read UoW: load the ROM's save state + device id."""
+        with self._uow_factory() as uow:
+            state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            device_id = uow.kv_config.get("device_id")
+        return state, device_id
+
+    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+        """Short write UoW: persist the mutated save state for *rom_id*."""
+        with self._uow_factory() as uow:
+            uow.rom_save_states.save(rom_id, save_state)
 
     async def resolve(
         self,
@@ -93,7 +111,6 @@ class RollbackOrchestrator:
         through ``SyncEngine.rom_lock(rom_id)``.
         """
         rom_id = int(rom_id)
-        rom_id_str = str(rom_id)
 
         if action not in ("keep_local", "use_server"):
             return {"success": False, "message": f"Invalid action: {action}"}
@@ -108,8 +125,9 @@ class RollbackOrchestrator:
         system = info["system"]
         saves_dir = info["saves_dir"]
 
+        save_state, device_id = await loop.run_in_executor(None, self._read_inputs, rom_id)
+
         try:
-            device_id = self._state_svc.get_server_device_id()
             server_saves = await loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
@@ -120,8 +138,7 @@ class RollbackOrchestrator:
             _code, _msg = classify_error(e)
             return {"success": False, "message": f"Failed to fetch saves: {_msg}"}
 
-        rom_state = self._state_svc.state.saves.get(rom_id_str)
-        active_slot = rom_state.active_slot if rom_state else None
+        active_slot = save_state.active_slot
         server_in_slot = self._matrix.filter_server_saves_to_slot(server_saves, active_slot)
         if not server_in_slot:
             return {"success": False, "message": "No server save in active slot"}
@@ -142,47 +159,46 @@ class RollbackOrchestrator:
                 "message": "Server save changed since conflict was shown; please retry sync.",
             }
 
+        core_so = await loop.run_in_executor(None, self._resolve_core, rom_id)
+
         try:
             if action == "use_server":
                 await loop.run_in_executor(
                     None,
                     self._resolve_conflict_use_server,
-                    rom_id_str,
+                    save_state,
+                    device_id,
                     server,
                     saves_dir,
                     system,
                     info["rom_name"],
                 )
-                self._logger.info(
-                    "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
+            else:
+                # keep_local — resolve on-disk name via the same canonical
+                # ``<rom_name>.<server.file_extension>`` rule use_server uses.
+                # The frontend-supplied ``filename`` is kept for logging only;
+                # using it as the on-disk path would let an extension drift
+                # between the two resolution paths produce divergent states.
+                await loop.run_in_executor(
+                    None,
+                    self._resolve_conflict_keep_local,
                     rom_id,
-                    filename,
-                    action,
+                    save_state,
+                    device_id,
+                    core_so,
+                    server,
+                    saves_dir,
+                    system,
+                    info["rom_name"],
                 )
-                return {"success": True, "action": "use_server"}
-
-            # keep_local — resolve on-disk name via the same canonical
-            # ``<rom_name>.<server.file_extension>`` rule use_server uses.
-            # The frontend-supplied ``filename`` is kept for logging only;
-            # using it as the on-disk path would let an extension drift
-            # between the two resolution paths produce divergent states.
-            await loop.run_in_executor(
-                None,
-                self._resolve_conflict_keep_local,
-                rom_id,
-                rom_id_str,
-                server,
-                saves_dir,
-                system,
-                info["rom_name"],
-            )
+            await loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
             self._logger.info(
                 "resolve_sync_conflict(rom_id=%d, filename=%s, action=%s) -> success",
                 rom_id,
                 filename,
                 action,
             )
-            return {"success": True, "action": "keep_local"}
+            return {"success": True, "action": action}
         except Exception as e:
             self._logger.error(f"resolve_sync_conflict({rom_id}, {filename}, {action}) failed: {e}")
             return {"success": False, "message": str(e)}
@@ -216,27 +232,29 @@ class RollbackOrchestrator:
 
     def _resolve_conflict_use_server(
         self,
-        rom_id_str: str,
+        save_state: RomSaveState,
+        device_id: str | None,
         server: dict,
         saves_dir: str,
         system: str,
         rom_name: str,
     ) -> None:
-        """Download *server* into the canonical local save file and update state.
+        """Download *server* into the canonical local save file and update *save_state*.
 
         The write path is always ``<rom_name>.<server.file_extension>`` — the
         path RetroArch reads. Drives state-key consistency too:
         ``update_file_sync_state`` receives the same target name the file
-        lands at.
+        lands at. Mutates *save_state* in memory; ``resolve`` owns the write UoW.
         """
         target = local_save_target(server, rom_name)
-        self._matrix.do_download_save(server, saves_dir, target, rom_id_str, system)
-        self._state_svc.save_state()
+        self._matrix.do_download_save(server, saves_dir, target, save_state, device_id, system)
 
     def _resolve_conflict_keep_local(
         self,
         rom_id: int,
-        rom_id_str: str,
+        save_state: RomSaveState,
+        device_id: str | None,
+        core_so: str | None,
         server: dict,
         saves_dir: str,
         system: str,
@@ -254,7 +272,7 @@ class RollbackOrchestrator:
         local file is not at the canonical path (e.g. ``Mario.sav`` locally
         but the server save has ``file_extension=srm``),
         :class:`FileNotFoundError` is raised — we never silently rename across
-        extensions.
+        extensions. Mutates *save_state* in memory; ``resolve`` owns the write UoW.
         """
         target = local_save_target(server, rom_name)
         local_path = os.path.join(saves_dir, target)
@@ -266,22 +284,24 @@ class RollbackOrchestrator:
         except Exception:
             server_hash = None
 
-        if server_hash and local_hash == server_hash:
+        server_id = server.get("id")
+        if server_hash and local_hash == server_hash and server_id is not None:
             # Hashes match — adopt server's id without re-uploading.
             self._log_debug(
                 f"keep_local: hash matches server, adopting without upload (rom={rom_id} filename={target})"
             )
-            rom_state = self._state_svc.ensure_rom_state(rom_id_str)
-            file_state = rom_state.files.setdefault(target, FileSyncState())
-            file_state.tracked_save_id = server.get("id")
-            file_state.last_sync_hash = local_hash
-            file_state.last_sync_at = self._clock.now().isoformat()
-            file_state.last_sync_server_updated_at = server.get("updated_at", "") or ""
-            file_state.last_sync_server_size = server.get("file_size_bytes")
-            file_state.last_sync_local_mtime = self._save_file_store.get_mtime(local_path)
-            file_state.last_sync_local_size = self._save_file_store.get_size(local_path)
-            self._state_svc.save_state()
+            save_state.adopt_baseline(
+                target,
+                tracked_save_id=int(server_id),
+                last_sync_hash=local_hash,
+                last_sync_at=self._clock.now().isoformat(),
+                last_sync_server_updated_at=server.get("updated_at", "") or "",
+                last_sync_server_save_id=server_id,
+                last_sync_server_size=server.get("file_size_bytes"),
+                last_sync_local_mtime=self._save_file_store.get_mtime(local_path),
+                last_sync_local_size=self._save_file_store.get_size(local_path),
+            )
             return
 
         # Upload local content as a PUT against the existing server save.
-        self._matrix.do_upload_save(rom_id, local_path, target, rom_id_str, system, server)
+        self._matrix.do_upload_save(rom_id, local_path, target, save_state, device_id, system, core_so, server)

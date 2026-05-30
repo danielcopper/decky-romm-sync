@@ -177,6 +177,16 @@ class RomSaveState:
         """Record that the sync matrix was last evaluated at ISO timestamp ``at``."""
         self.last_sync_check_at = at
 
+    def adopt_system(self, system: str) -> None:
+        """Record the emulator system this ROM runs under.
+
+        Stamped on the first sync that observes the ROM's system (the
+        aggregate ships with an empty ``system``). A no-op when ``system`` is
+        empty so a missing system never clobbers a previously-known one.
+        """
+        if system:
+            self.system = system
+
     def record_synced_core(self, core: str | None, emulator: str) -> None:
         """Stamp the emulator and (optionally) the core the last sync ran under.
 

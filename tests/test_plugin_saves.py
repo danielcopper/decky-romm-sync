@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -23,7 +22,10 @@ from adapters.registry_store import RegistryStoreAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
-from domain.save_state import FileSyncState, PlaytimeEntry, RomSaveState
+from domain.rom import Rom
+from domain.rom_install import RomInstall
+from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.save_state import PlaytimeEntry, SaveSyncState
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
@@ -81,7 +83,9 @@ def plugin(tmp_path):
     # bytes land on the same filesystem view the service inspects.
     save_file_adapter = SaveFileAdapter()
     fake_api = FakeSaveApi(save_file_store=save_file_adapter)
-    p._save_sync_state = SaveService.make_default_state()
+    p._save_sync_state = SaveSyncState()
+    # One shared Unit of Work so test seeds and the saves vertical agree on state.
+    p._uow_factory = FakeUnitOfWorkFactory()
     saves_path = str(tmp_path / "retrodeck" / "saves")
     # Shared settings.json view: the save-sync toggles + device label live
     # here (#822), read by both SaveService's StateService and PlaytimeService.
@@ -119,7 +123,7 @@ def plugin(tmp_path):
             get_core_name=lambda core_so: None,
             detect_sort_change=lambda: None,
             is_retrodeck_migration_pending=lambda: False,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=p._uow_factory,
         ),
     )
     p._save_sync_service.init_state()
@@ -135,7 +139,7 @@ def plugin(tmp_path):
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
             state_persister=p._save_sync_service,
             log_debug=p._log_debug,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=p._uow_factory,
         ),
     )
 
@@ -168,16 +172,68 @@ async def _set_event_loop(plugin):
     plugin._playtime_service._loop = loop
 
 
+def _uow(plugin):
+    """Return the shared in-memory unit of work backing the plugin's saves vertical."""
+    return plugin._uow_factory.uow
+
+
+def _seed_rom(plugin, rom_id, *, platform_slug="gba"):
+    """Seed a ``Rom`` registry row so per-rom child writes pass the commit-time FK."""
+    with _uow(plugin) as uow:
+        uow.roms.save(
+            Rom.synced(
+                rom_id=rom_id,
+                platform_slug=platform_slug,
+                name=f"rom-{rom_id}",
+                fs_name=f"rom-{rom_id}",
+                shortcut_app_id=rom_id,
+                synced_at="2026-01-01T00:00:00",
+            )
+        )
+
+
+def _seed_save_state(plugin, rom_id, state, *, platform_slug="gba"):
+    """Seed a ``RomSaveState`` for *rom_id* (seeding its ``Rom`` FK first)."""
+    _seed_rom(plugin, rom_id, platform_slug=platform_slug)
+    with _uow(plugin) as uow:
+        uow.rom_save_states.save(rom_id, state)
+
+
+def _get_save_state(plugin, rom_id):
+    """Read back the persisted ``RomSaveState`` for *rom_id*, or ``None``."""
+    with _uow(plugin) as uow:
+        return uow.rom_save_states.get(rom_id)
+
+
+def _set_device_id(plugin, device_id):
+    """Set or clear the server device id in ``kv_config``."""
+    with _uow(plugin) as uow:
+        if device_id is None:
+            uow.kv_config.delete("device_id")
+        else:
+            uow.kv_config.set("device_id", device_id)
+
+
+def _get_device_id(plugin):
+    """Read the persisted server device id from ``kv_config``."""
+    with _uow(plugin) as uow:
+        return uow.kv_config.get("device_id")
+
+
 def _install_rom(plugin, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba"):
-    """Helper: register a ROM in installed_roms state."""
-    plugin._state["installed_roms"][str(rom_id)] = {
-        "rom_id": rom_id,
-        "file_name": file_name,
-        "file_path": str(tmp_path / "retrodeck" / "roms" / system / file_name),
-        "system": system,
-        "platform_slug": system,
-        "installed_at": "2026-01-01T00:00:00",
-    }
+    """Helper: register a ROM install in the rom_installs aggregate (seeds Rom FK)."""
+    _seed_rom(plugin, rom_id, platform_slug=system)
+    with _uow(plugin) as uow:
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=rom_id,
+                file_path=str(tmp_path / "retrodeck" / "roms" / system / file_name),
+                install_path=str(tmp_path / "retrodeck" / "roms" / system),
+                platform_slug=system,
+                system=system,
+                installed_at="2026-01-01T00:00:00",
+            )
+        )
 
 
 def _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"\x00" * 1024, ext=".srm"):
@@ -220,25 +276,19 @@ class TestDeviceRegistration:
         assert result["success"] is True
         assert result["device_id"]
         assert result.get("server_device_id") is not None
-        assert plugin._save_sync_state.device_id == result["device_id"]
-
-        # Persisted to disk
-        path = tmp_path / "save_sync_state.json"
-        assert path.exists()
-        data = json.loads(path.read_text())
-        assert data["device_id"] == result["device_id"]
+        # Persisted to kv_config (SQLite), not save_sync_state.json.
+        assert _get_device_id(plugin) == result["device_id"]
 
     @pytest.mark.asyncio
     async def test_already_registered_returns_cached(self, plugin):
-        """If device_id and server_device_id already set, returns immediately."""
-        plugin._save_sync_state.device_id = "existing-uuid"
+        """If a device id is already persisted, returns immediately."""
+        _set_device_id(plugin, "server-uuid")
         plugin._save_settings["device_name"] = "myhost"
-        plugin._save_sync_state.server_device_id = "server-uuid"
 
         result = await plugin.ensure_device_registered()
 
         assert result["success"] is True
-        assert result["device_id"] == "existing-uuid"
+        assert result["device_id"] == "server-uuid"
         assert result["device_name"] == "myhost"
         assert result["server_device_id"] == "server-uuid"
 
@@ -259,8 +309,7 @@ class TestDeviceRegistration:
         id1 = result1["device_id"]
 
         # Reset state to force new registration
-        plugin._save_sync_state.device_id = None
-        plugin._save_sync_state.server_device_id = None
+        _set_device_id(plugin, None)
         result2 = await plugin.ensure_device_registered()
         id2 = result2["device_id"]
 
@@ -281,7 +330,7 @@ class TestListDevices:
         plugin._fake_api._registered_devices = [
             {"id": "device-1", "name": "steamdeck"},
         ]
-        plugin._save_sync_state.server_device_id = "device-1"
+        _set_device_id(plugin, "device-1")
 
         result = await plugin.list_devices()
 
@@ -485,7 +534,7 @@ class TestPostExitSync:
         )
         # Sanity: same state object — mutations through migration will be
         # visible to SaveService on the next state read.
-        assert real_migration._state is plugin._save_sync_service._state
+        assert real_migration._state is plugin._save_sync_service._rom_info._state
 
         plugin._save_sync_service._sync_engine._detect_sort_change = real_migration.detect_save_sort_change
 
@@ -739,7 +788,7 @@ class TestSyncAllSaves:
     @pytest.mark.asyncio
     async def test_no_installed_roms(self, plugin):
         """Empty installed_roms completes gracefully."""
-        plugin._save_sync_state.device_id = "dev-1"
+        _set_device_id(plugin, "dev-1")
 
         result = await plugin.sync_all_saves()
 
@@ -759,7 +808,7 @@ class TestSyncRomSaves:
     @pytest.mark.asyncio
     async def test_rom_not_installed(self, plugin):
         """Non-installed ROM returns 0 synced."""
-        plugin._save_sync_state.device_id = "dev-1"
+        _set_device_id(plugin, "dev-1")
 
         result = await plugin.sync_rom_saves(999)
 
@@ -796,7 +845,7 @@ class TestSaveSyncFeatureFlag:
         """save_sync_enabled defaults to False when absent from settings.json."""
         # Reset to defaults — the toggle lives in settings.json now (#822).
         plugin._save_settings.pop("save_sync_enabled", None)
-        assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is False
+        assert plugin._save_sync_service.is_save_sync_enabled() is False
 
     @pytest.mark.asyncio
     async def test_ensure_device_disabled(self, plugin):
@@ -805,7 +854,7 @@ class TestSaveSyncFeatureFlag:
         result = await plugin.ensure_device_registered()
         assert result["success"] is False
         assert result.get("disabled") is True
-        assert plugin._save_sync_state.device_id is None
+        assert _get_device_id(plugin) is None
 
     @pytest.mark.asyncio
     async def test_pre_launch_sync_disabled(self, plugin):
@@ -864,11 +913,11 @@ class TestSaveSyncFeatureFlag:
 
     @pytest.mark.asyncio
     async def test_is_save_sync_enabled_helper(self, plugin):
-        """is_save_sync_enabled (on StateService) reflects the settings value."""
+        """is_save_sync_enabled reflects the settings value."""
         plugin._save_settings["save_sync_enabled"] = True
-        assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is True
+        assert plugin._save_sync_service.is_save_sync_enabled() is True
         plugin._save_settings["save_sync_enabled"] = False
-        assert plugin._save_sync_service._state_svc.is_save_sync_enabled() is False
+        assert plugin._save_sync_service.is_save_sync_enabled() is False
 
 
 # ============================================================================
@@ -884,13 +933,7 @@ async def test_delete_local_saves_happy_path(plugin, tmp_path):
     rom_name = "TestGame"
 
     # Register as installed (file_path needed for _get_rom_save_info)
-    plugin._state["installed_roms"]["100"] = {
-        "rom_id": 100,
-        "file_name": f"{rom_name}.sfc",
-        "file_path": str(tmp_path / "retrodeck" / "roms" / system / f"{rom_name}.sfc"),
-        "system": system,
-        "platform_slug": "snes",
-    }
+    _install_rom(plugin, tmp_path, rom_id=100, system=system, file_name=f"{rom_name}.sfc")
 
     # Create fake save files in the fallback saves path
     saves_dir = tmp_path / "retrodeck" / "saves" / system
@@ -901,14 +944,17 @@ async def test_delete_local_saves_happy_path(plugin, tmp_path):
     rtc.write_bytes(b"\x00" * 16)
 
     # Set up sync state
-    plugin._save_sync_state.saves["100"] = RomSaveState.from_dict(
-        {
-            "files": {
-                f"{rom_name}.srm": {"last_sync_hash": "abc123"},
-                f"{rom_name}.rtc": {"last_sync_hash": "def456"},
+    _seed_save_state(
+        plugin,
+        100,
+        RomSaveState(
+            files={
+                f"{rom_name}.srm": FileSyncState(last_sync_hash="abc123"),
+                f"{rom_name}.rtc": FileSyncState(last_sync_hash="def456"),
             },
-            "system": system,
-        }
+            system=system,
+        ),
+        platform_slug="snes",
     )
 
     result = await plugin.delete_local_saves(rom_id)
@@ -917,9 +963,10 @@ async def test_delete_local_saves_happy_path(plugin, tmp_path):
     assert not srm.exists()
     assert not rtc.exists()
     # Entry survives — only files are cleared (#279).
-    assert "100" in plugin._save_sync_state.saves
-    assert plugin._save_sync_state.saves["100"].files == {}
-    assert plugin._save_sync_state.saves["100"].system == system
+    entry = _get_save_state(plugin, 100)
+    assert entry is not None
+    assert entry.files == {}
+    assert entry.system == system
 
 
 @pytest.mark.asyncio
@@ -929,30 +976,27 @@ async def test_delete_local_saves_preserves_slot_config(plugin, tmp_path):
     system = "snes"
     rom_name = "SlotGame"
 
-    plugin._state["installed_roms"]["101"] = {
-        "rom_id": 101,
-        "file_name": f"{rom_name}.sfc",
-        "file_path": str(tmp_path / "retrodeck" / "roms" / system / f"{rom_name}.sfc"),
-        "system": system,
-        "platform_slug": "snes",
-    }
+    _install_rom(plugin, tmp_path, rom_id=101, system=system, file_name=f"{rom_name}.sfc")
 
     saves_dir = tmp_path / "retrodeck" / "saves" / system
     saves_dir.mkdir(parents=True)
     srm = saves_dir / f"{rom_name}.srm"
     srm.write_bytes(b"\x00" * 32)
 
-    plugin._save_sync_state.saves["101"] = RomSaveState.from_dict(
-        {
-            "files": {f"{rom_name}.srm": {"last_sync_hash": "hash"}},
-            "active_slot": "desktop",
-            "slot_confirmed": True,
-            "emulator": "retroarch-snes9x",
-            "last_synced_core": "snes9x_libretro",
-            "own_upload_ids": ["save-9"],
-            "slots": {"default": {}, "desktop": {}},
-            "system": system,
-        }
+    _seed_save_state(
+        plugin,
+        101,
+        RomSaveState(
+            files={f"{rom_name}.srm": FileSyncState(last_sync_hash="hash")},
+            active_slot="desktop",
+            slot_confirmed=True,
+            emulator="retroarch-snes9x",
+            last_synced_core="snes9x_libretro",
+            own_upload_ids=[9],
+            slots={"default": {}, "desktop": {}},
+            system=system,
+        ),
+        platform_slug="snes",
     )
 
     result = await plugin.delete_local_saves(rom_id)
@@ -960,13 +1004,14 @@ async def test_delete_local_saves_preserves_slot_config(plugin, tmp_path):
     assert result["deleted_count"] == 1
     assert not srm.exists()
 
-    entry = plugin._save_sync_state.saves["101"]
+    entry = _get_save_state(plugin, 101)
+    assert entry is not None
     assert entry.files == {}
     assert entry.active_slot == "desktop"
     assert entry.slot_confirmed is True
     assert entry.emulator == "retroarch-snes9x"
     assert entry.last_synced_core == "snes9x_libretro"
-    assert entry.own_upload_ids == ["save-9"]
+    assert entry.own_upload_ids == [9]
     assert entry.slots == {"default": {}, "desktop": {}}
     assert entry.system == system
 
@@ -974,13 +1019,7 @@ async def test_delete_local_saves_preserves_slot_config(plugin, tmp_path):
 @pytest.mark.asyncio
 async def test_delete_local_saves_no_files(plugin, tmp_path):
     """Deleting saves when none exist returns success with 0."""
-    plugin._state["installed_roms"]["200"] = {
-        "rom_id": 200,
-        "file_name": "NoSaves.sfc",
-        "file_path": str(tmp_path / "retrodeck" / "roms" / "snes" / "NoSaves.sfc"),
-        "system": "snes",
-        "platform_slug": "snes",
-    }
+    _install_rom(plugin, tmp_path, rom_id=200, system="snes", file_name="NoSaves.sfc")
 
     result = await plugin.delete_local_saves(200)
     assert result["success"] is True
@@ -1011,30 +1050,16 @@ async def test_delete_platform_saves(plugin, tmp_path):
     srm1.write_bytes(b"\x00" * 32)
     srm2.write_bytes(b"\x00" * 32)
 
-    plugin._state["installed_roms"]["10"] = {
-        "rom_id": 10,
-        "file_name": "Game1.sfc",
-        "file_path": str(tmp_path / "retrodeck" / "roms" / "snes" / "Game1.sfc"),
-        "system": "snes",
-        "platform_slug": "snes",
-    }
-    plugin._state["installed_roms"]["20"] = {
-        "rom_id": 20,
-        "file_name": "Game2.sfc",
-        "file_path": str(tmp_path / "retrodeck" / "roms" / "snes" / "Game2.sfc"),
-        "system": "snes",
-        "platform_slug": "snes",
-    }
-    plugin._state["installed_roms"]["30"] = {
-        "rom_id": 30,
-        "file_name": "GBAGame.gba",
-        "file_path": str(tmp_path / "retrodeck" / "roms" / "gba" / "GBAGame.gba"),
-        "system": "gba",
-        "platform_slug": "gba",
-    }
+    _install_rom(plugin, tmp_path, rom_id=10, system="snes", file_name="Game1.sfc")
+    _install_rom(plugin, tmp_path, rom_id=20, system="snes", file_name="Game2.sfc")
+    _install_rom(plugin, tmp_path, rom_id=30, system="gba", file_name="GBAGame.gba")
 
-    plugin._save_sync_state.saves["10"] = RomSaveState(files={"Game1.srm": FileSyncState()}, system="snes")
-    plugin._save_sync_state.saves["20"] = RomSaveState(files={"Game2.srm": FileSyncState()}, system="snes")
+    _seed_save_state(
+        plugin, 10, RomSaveState(files={"Game1.srm": FileSyncState()}, system="snes"), platform_slug="snes"
+    )
+    _seed_save_state(
+        plugin, 20, RomSaveState(files={"Game2.srm": FileSyncState()}, system="snes"), platform_slug="snes"
+    )
 
     result = await plugin.delete_platform_saves("snes")
     assert result["success"] is True
@@ -1042,12 +1067,14 @@ async def test_delete_platform_saves(plugin, tmp_path):
     assert not srm1.exists()
     assert not srm2.exists()
     # Entries survive — only files are cleared (#279).
-    assert "10" in plugin._save_sync_state.saves
-    assert plugin._save_sync_state.saves["10"].files == {}
-    assert plugin._save_sync_state.saves["10"].system == "snes"
-    assert "20" in plugin._save_sync_state.saves
-    assert plugin._save_sync_state.saves["20"].files == {}
-    assert plugin._save_sync_state.saves["20"].system == "snes"
+    entry10 = _get_save_state(plugin, 10)
+    assert entry10 is not None
+    assert entry10.files == {}
+    assert entry10.system == "snes"
+    entry20 = _get_save_state(plugin, 20)
+    assert entry20 is not None
+    assert entry20.files == {}
+    assert entry20.system == "snes"
 
 
 # ============================================================================
@@ -1061,12 +1088,14 @@ class TestSavesVersionHistoryCallables:
     @pytest.mark.asyncio
     async def test_saves_list_file_versions_happy_path(self, plugin, tmp_path):
         """saves_list_file_versions returns filtered older versions."""
-        plugin._save_sync_state.saves["42"] = RomSaveState.from_dict(
-            {
-                "system": "gba",
-                "active_slot": "default",
-                "files": {"pokemon.srm": {"tracked_save_id": 100}},
-            }
+        _seed_save_state(
+            plugin,
+            42,
+            RomSaveState(
+                system="gba",
+                active_slot="default",
+                files={"pokemon.srm": FileSyncState(tracked_save_id=100)},
+            ),
         )
         plugin._fake_api.saves[100] = {
             "id": 100,
@@ -1108,12 +1137,14 @@ class TestSavesVersionHistoryCallables:
 
         local_hash = hashlib.md5(b"\x00" * 1024).hexdigest()
 
-        plugin._save_sync_state.saves["42"] = RomSaveState.from_dict(
-            {
-                "system": "gba",
-                "active_slot": "default",
-                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": local_hash}},
-            }
+        _seed_save_state(
+            plugin,
+            42,
+            RomSaveState(
+                system="gba",
+                active_slot="default",
+                files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash=local_hash)},
+            ),
         )
         plugin._fake_api.saves[100] = {
             "id": 100,
