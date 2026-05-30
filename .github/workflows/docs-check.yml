@@ -50,7 +50,7 @@ jobs:
           # Inverse approach: everything triggers docs requirement UNLESS it matches this list.
           # New file paths default to "needs docs" — additions to the skip list are explicit.
           skip_re='^(tests|scripts|\.github|\.claude|\.worktrees)/'
-          skip_files_re='^(coverage\.json|mise\.toml|pyproject\.toml|pnpm-lock\.yaml|package-lock\.json|package\.json|plugin\.json|\.gitignore|\.editorconfig|\.gitattributes|\.release-please-manifest\.json|CHANGELOG\.md|LICENSE|CLAUDE\.md|MEMORY\.md|README\.md)$'
+          skip_files_re='^(coverage\.json|mise\.toml|pyproject\.toml|requirements-dev\.txt|requirements-docs\.txt|pnpm-lock\.yaml|package-lock\.json|package\.json|plugin\.json|\.gitignore|\.editorconfig|\.gitattributes|\.release-please-manifest\.json|CHANGELOG\.md|LICENSE|CLAUDE\.md|MEMORY\.md|README\.md)$'
 
           requires_docs=()
           docs_touched=false
