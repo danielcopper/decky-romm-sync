@@ -74,3 +74,20 @@ class TestLinkNote:
         playtime = Playtime()
         playtime.link_note(42)
         assert playtime.note_id == 42
+
+
+class TestReconcileTotal:
+    def test_raises_total_to_larger_value(self):
+        playtime = Playtime(total_seconds=100)
+        playtime.reconcile_total(300)
+        assert playtime.total_seconds == 300
+
+    def test_ignores_smaller_value(self):
+        playtime = Playtime(total_seconds=500)
+        playtime.reconcile_total(200)
+        assert playtime.total_seconds == 500
+
+    def test_equal_value_is_a_noop(self):
+        playtime = Playtime(total_seconds=250)
+        playtime.reconcile_total(250)
+        assert playtime.total_seconds == 250

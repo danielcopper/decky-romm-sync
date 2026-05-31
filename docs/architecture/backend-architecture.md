@@ -105,7 +105,7 @@ Two services are large enough to be decomposed into sub-service packages (`servi
 | `steamgrid.py` | SteamGridService — SteamGridDB fetch, cache, icons |
 | `artwork.py` | ArtworkService — cover art download, staging, cleanup |
 | `game_detail.py` | GameDetailService — game detail page data aggregation |
-| `playtime.py` | PlaytimeService — session recording, RomM notes |
+| `playtime.py` | PlaytimeService — session recording into `rom_playtime`, RomM-note reconciliation |
 | `achievements.py` | AchievementsService — progress, caching, RA username |
 | `settings.py` | SettingsService — settings reads/writes, Steam Input config |
 | `rom_removal.py` | RomRemovalService — ROM file deletion + state cleanup |
@@ -335,6 +335,7 @@ Every service receives its dependencies through a single `*ServiceConfig` datacl
 | **SteamGridService** | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `UnitOfWorkFactory` (sgdb_id on `roms`), `PendingSyncReader` |
 | **MigrationService** | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback |
 | **GameDetailService** | `BiosChecker`, `AchievementsReader` (cross-service), `Clock`, `UnitOfWorkFactory` (reads `rom_metadata`) |
+| **PlaytimeService** | `RommPlaytimeApi`, `RetryStrategy`, `Clock`, `UnitOfWorkFactory` (reads/writes `rom_playtime`) |
 | **RomRemovalService** | `RomFileStore`, `RetroDeckPaths`, `StatePersister`, `SaveSyncStatePersister`-writer peer, `DownloadQueueCleanup` peer |
 | **ShortcutRemovalService** | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`) |
 | **SessionLifecycleService** | `Session*` cross-service seams (playtime / post-exit sync / achievement sync / migration reader) |

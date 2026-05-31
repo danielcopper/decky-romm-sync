@@ -21,10 +21,11 @@ from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapt
 from adapters.romm.http import RommHttpAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_state import FileSyncState, RomSaveState
-from domain.save_state import PlaytimeEntry, SaveSyncState
+from domain.save_state import SaveSyncState
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
@@ -128,12 +129,10 @@ def plugin(tmp_path):
         config=PlaytimeServiceConfig(
             romm_api=fake_api,
             retry=_make_retry(),
-            save_sync_state=p._save_sync_state,
             settings=p._save_settings,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            state_persister=p._save_sync_service,
             log_debug=p._log_debug,
             uow_factory=p._uow_factory,
         ),
@@ -193,6 +192,19 @@ def _seed_save_state(plugin, rom_id, state, *, platform_slug="gba"):
     _seed_rom(plugin, rom_id, platform_slug=platform_slug)
     with _uow(plugin) as uow:
         uow.rom_save_states.save(rom_id, state)
+
+
+def _seed_playtime(plugin, rom_id, playtime, *, platform_slug="gba"):
+    """Seed a ``Playtime`` for *rom_id* (seeding its ``Rom`` FK first)."""
+    _seed_rom(plugin, rom_id, platform_slug=platform_slug)
+    with _uow(plugin) as uow:
+        uow.playtime.save(rom_id, playtime)
+
+
+def _get_playtime(plugin, rom_id):
+    """Read back the persisted ``Playtime`` for *rom_id*, or ``None``."""
+    with _uow(plugin) as uow:
+        return uow.playtime.get(rom_id)
 
 
 def _get_save_state(plugin, rom_id):
@@ -577,15 +589,18 @@ class TestPostExitSync:
 
 
 class TestPlaytimeTracking:
-    """Tests for session playtime recording."""
+    """Tests for session playtime recording through the SQLite ``rom_playtime`` row."""
 
     @pytest.mark.asyncio
     async def test_session_start_records_timestamp(self, plugin):
-        """record_session_start saves start time in playtime dict."""
+        """record_session_start opens the session marker on the aggregate."""
+        _seed_rom(plugin, 42)
+
         result = await plugin.record_session_start(42)
 
         assert result["success"] is True
-        entry = plugin._save_sync_state.playtime["42"]
+        entry = _get_playtime(plugin, 42)
+        assert entry is not None
         assert entry.last_session_start is not None
         # Should be a valid ISO datetime
         datetime.fromisoformat(entry.last_session_start)
@@ -594,39 +609,35 @@ class TestPlaytimeTracking:
     async def test_session_end_calculates_delta(self, plugin):
         """record_session_end computes correct duration."""
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=600)
-        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
-            last_session_start=start_time.isoformat(),
-        )
+        _seed_playtime(plugin, 42, Playtime(last_session_start=start_time.isoformat()))
 
         result = await plugin._playtime_service.record_session_end(42)
 
         assert result["success"] is True
-        assert result["duration_sec"] >= 590  # ~600s minus execution time
-        assert result["total_seconds"] >= 590
+        assert result["duration_sec"] == 600
+        assert result["total_seconds"] == 600
 
     @pytest.mark.asyncio
     async def test_delta_accumulated(self, plugin):
         """Playtime delta added to existing total."""
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=300)
-        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
-            total_seconds=1000,
-            session_count=5,
-            last_session_start=start_time.isoformat(),
+        _seed_playtime(
+            plugin,
+            42,
+            Playtime(total_seconds=1000, session_count=5, last_session_start=start_time.isoformat()),
         )
 
         await plugin._playtime_service.record_session_end(42)
 
-        total = plugin._save_sync_state.playtime["42"].total_seconds
-        assert total >= 1290  # 1000 + ~300
+        entry = _get_playtime(plugin, 42)
+        assert entry is not None
+        assert entry.total_seconds == 1300  # 1000 + 300
 
     @pytest.mark.asyncio
     async def test_session_count_incremented(self, plugin):
         """Session count goes up on end."""
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=10)
-        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
-            session_count=5,
-            last_session_start=start_time.isoformat(),
-        )
+        _seed_playtime(plugin, 42, Playtime(session_count=5, last_session_start=start_time.isoformat()))
 
         result = await plugin._playtime_service.record_session_end(42)
 
@@ -643,36 +654,23 @@ class TestPlaytimeTracking:
     async def test_session_start_clears_on_end(self, plugin):
         """last_session_start is cleared after session end."""
         start_time = plugin._playtime_service._clock.now() - timedelta(seconds=10)
-        plugin._save_sync_state.playtime["42"] = PlaytimeEntry(
-            last_session_start=start_time.isoformat(),
-        )
+        _seed_playtime(plugin, 42, Playtime(last_session_start=start_time.isoformat()))
 
         await plugin._playtime_service.record_session_end(42)
 
-        assert plugin._save_sync_state.playtime["42"].last_session_start is None
+        entry = _get_playtime(plugin, 42)
+        assert entry is not None
+        assert entry.last_session_start is None
 
     @pytest.mark.asyncio
     async def test_duration_clamped_to_24h(self, plugin):
         """Duration clamped to max 24 hours."""
         start_time = plugin._playtime_service._clock.now() - timedelta(hours=48)
-        plugin._save_sync_state.playtime = {
-            rid: PlaytimeEntry.from_dict(entry)
-            for rid, entry in (
-                {
-                    "42": {
-                        "total_seconds": 0,
-                        "session_count": 0,
-                        "last_session_start": start_time.isoformat(),
-                        "last_session_duration_sec": None,
-                        "offline_deltas": [],
-                    }
-                }
-            ).items()
-        }
+        _seed_playtime(plugin, 42, Playtime(last_session_start=start_time.isoformat()))
 
         result = await plugin._playtime_service.record_session_end(42)
 
-        assert result["duration_sec"] <= 86400  # 24h max
+        assert result["duration_sec"] == 86400  # 24h max
 
 
 # ============================================================================
@@ -685,24 +683,19 @@ class TestGetAllPlaytime:
 
     @pytest.mark.asyncio
     async def test_returns_all_playtime_entries(self, plugin):
-        """Returns all playtime entries from state."""
-        plugin._save_sync_state.playtime = {
-            rid: PlaytimeEntry.from_dict(entry)
-            for rid, entry in (
-                {
-                    "42": {"total_seconds": 3000, "session_count": 5},
-                    "99": {"total_seconds": 600, "session_count": 1},
-                }
-            ).items()
-        }
+        """Returns all playtime entries from the ``rom_playtime`` table."""
+        _seed_playtime(plugin, 42, Playtime(total_seconds=3000, session_count=5))
+        _seed_playtime(plugin, 99, Playtime(total_seconds=600, session_count=1))
+
         result = await plugin.get_all_playtime()
+
         assert result["playtime"]["42"]["total_seconds"] == 3000
+        assert result["playtime"]["42"]["session_count"] == 5
         assert result["playtime"]["99"]["total_seconds"] == 600
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_playtime(self, plugin):
         """Returns empty dict when no playtime data exists."""
-        plugin._save_sync_state.playtime = {}
         result = await plugin.get_all_playtime()
         assert result["playtime"] == {}
 

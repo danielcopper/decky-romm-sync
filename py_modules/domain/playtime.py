@@ -56,3 +56,13 @@ class Playtime:
     def link_note(self, note_id: int) -> None:
         """Associate the RomM playtime note id used for server sync."""
         self.note_id = note_id
+
+    def reconcile_total(self, seconds: int) -> None:
+        """Raise the cumulative total to ``seconds`` if it is higher.
+
+        The merged total from a RomM round-trip (server baseline plus the
+        local session) is reconciled into the aggregate here. The clamp
+        never regresses the local total — a smaller ``seconds`` (a server
+        record that lags behind local play) is ignored.
+        """
+        self.total_seconds = max(self.total_seconds, seconds)

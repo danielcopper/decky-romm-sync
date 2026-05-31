@@ -121,12 +121,10 @@ def plugin(tmp_path):
         config=PlaytimeServiceConfig(
             romm_api=fake_api,
             retry=_make_retry(),
-            save_sync_state=p._save_sync_state,
             settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            state_persister=p._save_sync_service,
             log_debug=p._log_debug,
             uow_factory=FakeUnitOfWorkFactory(),
         ),

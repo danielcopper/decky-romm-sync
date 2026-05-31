@@ -498,12 +498,10 @@ def wire_services(cfg: WiringConfig) -> dict:
         config=PlaytimeServiceConfig(
             romm_api=cfg.adapters.romm_api,
             retry=cfg.adapters.http_adapter,
-            save_sync_state=cfg.stores.save_sync_state,
             settings=cfg.stores.settings,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
-            state_persister=save_sync_service,
             log_debug=cfg.callbacks.log_debug,
             uow_factory=cfg.callbacks.uow_factory,
         ),
