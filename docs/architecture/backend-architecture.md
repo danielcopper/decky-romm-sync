@@ -108,12 +108,12 @@ Two services are large enough to be decomposed into sub-service packages (`servi
 | `playtime.py` | PlaytimeService — session recording into `rom_playtime`, RomM-note reconciliation |
 | `achievements.py` | AchievementsService — progress, caching, RA username |
 | `settings.py` | SettingsService — settings reads/writes, Steam Input config |
-| `rom_removal.py` | RomRemovalService — ROM file deletion + state cleanup |
+| `rom_removal.py` | RomRemovalService — ROM file deletion + `rom_installs` cleanup via the UoW; keeps the `roms` row, playtime, and saves per ADR-0007 |
 | `cores.py` | CoreService — active-core lookup, core switching, gamelist edits |
 | `shortcut_removal.py` | ShortcutRemovalService — shortcut removal; unbinds the ROM in `roms` (keeps the row per ADR-0007) |
 | `metadata.py` | MetadataService — ROM metadata reads from `rom_metadata` (7-day TTL), app_id mapping |
 | `launch_gate.py` | LaunchGateService — pre-launch gate (rom lookup, install check, save status) |
-| `startup_healing.py` | StartupHealingService — disk reconciliation on load + reconciles orphaned `running` SyncRuns (a hard crash leaves a `running` row → marked errored) |
+| `startup_healing.py` | StartupHealingService — prunes stale `rom_installs` rows against disk on load (via the UoW) + reconciles orphaned `running` SyncRuns (a hard crash leaves a `running` row → marked errored) |
 | `connection.py` | ConnectionService — connection test + RomM minimum-version gate |
 | `protocols/` | Protocol interfaces grouped by concern (see [Protocol Interfaces](#protocol-interfaces)) |
 
@@ -336,7 +336,7 @@ Every service receives its dependencies through a single `*ServiceConfig` datacl
 | **MigrationService** | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback |
 | **GameDetailService** | `BiosChecker`, `AchievementsReader` (cross-service), `Clock`, `UnitOfWorkFactory` (reads `rom_metadata`) |
 | **PlaytimeService** | `RommPlaytimeApi`, `RetryStrategy`, `Clock`, `UnitOfWorkFactory` (reads/writes `rom_playtime`) |
-| **RomRemovalService** | `RomFileStore`, `RetroDeckPaths`, `StatePersister`, `SaveSyncStatePersister`-writer peer, `DownloadQueueCleanup` peer |
+| **RomRemovalService** | `RomFileStore`, `RetroDeckPaths`, `DownloadQueueCleanup` peer, `UnitOfWorkFactory` (reads/deletes `rom_installs`) |
 | **ShortcutRemovalService** | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`) |
 | **SessionLifecycleService** | `Session*` cross-service seams (playtime / post-exit sync / achievement sync / migration reader) |
 | **LaunchGateService** | `LaunchGateRomLookup`, `LaunchGateInstalledChecker`, `LaunchGateSaveStatusReader` cross-service seams |

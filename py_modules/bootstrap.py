@@ -578,12 +578,8 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     rom_removal_service = RomRemovalService(
         config=RomRemovalServiceConfig(
-            state=cfg.stores.state,
-            save_sync_state=cfg.stores.save_sync_state,
             logger=cfg.runtime.logger,
             loop=cfg.runtime.loop,
-            state_persister=cfg.callbacks.state_persister,
-            save_sync_state_writer=save_sync_service,
             rom_file_store=cfg.adapters.rom_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             download_queue_cleanup=download_service,
@@ -686,7 +682,6 @@ def wire_services(cfg: WiringConfig) -> dict:
             state=cfg.stores.state,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
-            state_persister=cfg.callbacks.state_persister,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             path_probe=cfg.adapters.path_probe,
             uow_factory=cfg.callbacks.uow_factory,

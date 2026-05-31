@@ -1,4 +1,10 @@
-"""RomRemovalService — ROM file deletion and state cleanup."""
+"""RomRemovalService — installed-ROM file deletion and ``rom_installs`` cleanup.
+
+Physically deletes a ROM's files from disk and drops its ``rom_installs``
+record. Per [ADR-0007](docs/adr/0007-rom-retention-identity-anchor.md) an
+uninstall is *not* a purge: the ``roms`` identity row, playtime, saves, and
+metadata all survive — only the on-disk files and the install record go.
+"""
 
 from __future__ import annotations
 
@@ -6,19 +12,16 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import InstalledRomEntry, PluginState
-
-from domain.save_state import SaveSyncState
 from lib.path_safety import is_safe_rom_path
 
 if TYPE_CHECKING:
     import logging
 
+    from domain.rom_install import RomInstall
     from services.protocols import (
         DownloadQueueCleanup,
         RetroDeckPaths,
         RomFileStore,
-        StatePersister,
         UnitOfWorkFactory,
     )
 
@@ -27,20 +30,16 @@ if TYPE_CHECKING:
 class RomRemovalServiceConfig:
     """Frozen wiring bundle handed to ``RomRemovalService.__init__``.
 
-    Holds the live state dicts, runtime infrastructure, persistence
-    callbacks, the Protocol-typed filesystem adapter, the RetroDECK
-    paths bundle, and the ``DownloadQueueCleanup`` eviction seam
-    (``None`` when no download cleanup is wired). Decomposes the ctor
-    so a new dependency does not push past the S107 parameter-count
-    limit.
+    Holds the runtime infrastructure, the Protocol-typed filesystem
+    adapter, the RetroDECK paths bundle, the ``DownloadQueueCleanup``
+    eviction seam (``None`` when no download cleanup is wired), and the
+    SQLite Unit-of-Work factory (the transactional seam over the
+    ``rom_installs`` repository). Decomposes the ctor so a new dependency
+    does not push past the S107 parameter-count limit.
     """
 
-    state: PluginState
-    save_sync_state: SaveSyncState
     logger: logging.Logger
     loop: asyncio.AbstractEventLoop
-    state_persister: StatePersister
-    save_sync_state_writer: StatePersister
     rom_file_store: RomFileStore
     retrodeck_paths: RetroDeckPaths
     download_queue_cleanup: DownloadQueueCleanup | None
@@ -48,34 +47,38 @@ class RomRemovalServiceConfig:
 
 
 class RomRemovalService:
-    """Handles physical deletion of installed ROM files and state cleanup."""
+    """Handles physical deletion of installed ROM files and ``rom_installs`` cleanup."""
 
     def __init__(
         self,
         *,
         config: RomRemovalServiceConfig,
     ):
-        self._state = config.state
-        self._save_sync_state = config.save_sync_state
         self._logger = config.logger
         self._loop = config.loop
-        self._state_persister = config.state_persister
-        self._save_sync_state_writer = config.save_sync_state_writer
         self._rom_file_store = config.rom_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._download_queue_cleanup = config.download_queue_cleanup
+        self._uow_factory = config.uow_factory
 
-    def _delete_rom_files(self, installed: InstalledRomEntry) -> None:
-        """Delete ROM files for an installed entry. Handles both single-file and multi-file ROMs."""
-        rom_dir = installed.get("rom_dir", "")
-        file_path = installed.get("file_path", "")
+    def _delete_rom_files(self, install: RomInstall) -> None:
+        """Delete ROM files for an install record. Handles both single-file and multi-file ROMs.
+
+        A multi-file ROM lives in its own per-ROM directory (``install_path``
+        is two-or-more segments below the roms base) and is removed whole. A
+        single-file ROM's ``install_path`` is the *shared* system directory
+        (``<roms_base>/<system>/``, only one segment below the base), so its
+        directory must **never** be removed — only the launch file itself is
+        deleted. ``is_safe_rom_path`` is the discriminator: it rejects the
+        one-segment system directory, so the ``install_path`` tree branch only
+        ever fires for a genuine per-ROM directory.
+        """
+        install_path = install.install_path
+        file_path = install.file_path
 
         roms_base = self._retrodeck_paths.roms_path()
-        if rom_dir and self._rom_file_store.is_dir(rom_dir):
-            if not is_safe_rom_path(rom_dir, roms_base):
-                self._logger.error(f"Refusing to delete path outside roms directory: {rom_dir}")
-                return
-            self._rom_file_store.remove_tree(rom_dir)
+        if install_path and is_safe_rom_path(install_path, roms_base) and self._rom_file_store.is_dir(install_path):
+            self._rom_file_store.remove_tree(install_path)
         elif file_path:
             if not is_safe_rom_path(file_path, roms_base):
                 self._logger.error(f"Refusing to delete path outside roms directory: {file_path}")
@@ -85,75 +88,73 @@ class RomRemovalService:
             elif self._rom_file_store.exists(file_path):
                 self._rom_file_store.remove_file(file_path)
 
-    def _remove_rom_io(self, rom_id_str: str, installed: InstalledRomEntry) -> None:
-        """Sync helper for remove_rom — file deletion + state update in executor."""
-        self._delete_rom_files(installed)
+    def _remove_rom_io(self, rom_id: int, install: RomInstall) -> None:
+        """Sync helper for remove_rom — file deletion (outside UoW) then row delete in a short write UoW.
 
-        del self._state["installed_roms"][rom_id_str]
-        # Clean save sync state for removed ROM
-        save_changed = False
-        if self._save_sync_state.saves.pop(rom_id_str, None) is not None:
-            save_changed = True
-        if self._save_sync_state.playtime.pop(rom_id_str, None) is not None:
-            save_changed = True
-        if save_changed:
-            self._save_sync_state_writer.save_state()
-        self._state_persister.save_state()
+        Files are deleted outside any transaction (ADR-0006); only the
+        ``rom_installs`` row delete is wrapped. Per ADR-0007 the ``roms`` row,
+        playtime, saves, and metadata are left untouched — an uninstall drops
+        only the files and the install record.
+        """
+        self._delete_rom_files(install)
+        with self._uow_factory() as uow:
+            uow.rom_installs.delete(rom_id)
 
     async def remove_rom(self, rom_id: int | str) -> dict:
-        """Remove a single installed ROM: delete files and clean state."""
-        rom_id_str = str(int(rom_id))
-        installed = self._state["installed_roms"].get(rom_id_str)
-        if not installed:
+        """Remove a single installed ROM: delete files and drop the install record."""
+        rom_id_int = int(rom_id)
+        with self._uow_factory() as uow:
+            install = uow.rom_installs.get(rom_id_int)
+        if install is None:
             return {"success": False, "message": "ROM not installed"}
 
         try:
-            await self._loop.run_in_executor(None, self._remove_rom_io, rom_id_str, installed)
+            await self._loop.run_in_executor(None, self._remove_rom_io, rom_id_int, install)
         except Exception as e:
             self._logger.error(f"Failed to delete ROM files: {e}")
             return {"success": False, "message": "Failed to delete ROM files"}
 
         if self._download_queue_cleanup is not None:
-            self._download_queue_cleanup.evict(int(rom_id))
+            self._download_queue_cleanup.evict(rom_id_int)
 
         return {"success": True, "message": "ROM removed"}
 
     def _uninstall_all_roms_io(self) -> tuple[int, list[dict]]:
-        """Sync helper for uninstall_all_roms — bulk file deletion + state update in executor."""
+        """Sync helper for uninstall_all_roms — bulk file deletion (outside UoW) then row deletes in a write UoW.
+
+        Reads every install record in a short read UoW, deletes files outside
+        any transaction (collecting per-ROM errors), then drops the install
+        rows for the ROMs whose files were deleted in one write UoW. Per
+        ADR-0007 the ``roms`` rows, playtime, saves, and metadata survive.
+        """
+        with self._uow_factory() as uow:
+            installs = list(uow.rom_installs.iter_all())
+
         count = 0
         errors: list[dict] = []
-        successfully_deleted: list[str] = []
-        for rom_id_str, installed in self._state["installed_roms"].items():
+        successfully_deleted: list[int] = []
+        for install in installs:
             try:
-                self._delete_rom_files(installed)
+                self._delete_rom_files(install)
                 count += 1
-                successfully_deleted.append(rom_id_str)
+                successfully_deleted.append(install.rom_id)
             except Exception as e:
-                errors.append({"rom_id": rom_id_str, "error": str(e)})
-                self._logger.error(f"Failed to delete ROM {rom_id_str}: {e}")
+                errors.append({"rom_id": str(install.rom_id), "error": str(e)})
+                self._logger.error(f"Failed to delete ROM {install.rom_id}: {e}")
 
-        for rom_id_str in successfully_deleted:
-            self._state["installed_roms"].pop(rom_id_str, None)
-        # Clean save sync state for all removed ROMs
-        save_changed = False
-        for rom_id_str in successfully_deleted:
-            if self._save_sync_state.saves.pop(rom_id_str, None) is not None:
-                save_changed = True
-            if self._save_sync_state.playtime.pop(rom_id_str, None) is not None:
-                save_changed = True
-        if save_changed:
-            self._save_sync_state_writer.save_state()
-        self._state_persister.save_state()
+        with self._uow_factory() as uow:
+            for rom_id in successfully_deleted:
+                uow.rom_installs.delete(rom_id)
         return count, errors
 
     async def uninstall_all_roms(self) -> dict:
-        """Remove all installed ROMs: delete files and clear state.
+        """Remove all installed ROMs: delete files and drop their install records.
 
         Returns ``success`` (True only when every per-ROM deletion
         succeeded), ``removed_count`` (number of ROMs whose files were
         deleted), and ``errors`` (one ``{"rom_id", "error"}`` entry per
-        failed deletion). State for partially-failed bulk runs is left
-        intact for the failing entries so the user can retry.
+        failed deletion). Install records for partially-failed bulk runs
+        are left intact for the failing entries so the user can retry.
         """
         count, errors = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
         if self._download_queue_cleanup is not None:

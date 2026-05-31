@@ -19,7 +19,6 @@ from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
-from domain.save_state import SaveSyncState
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
@@ -37,6 +36,29 @@ def _seed_rom(uow: FakeUnitOfWork, rom_id: int, *, platform_slug: str = "n64") -
             synced_at="2026-01-01T00:00:00+00:00",
         )
     )
+
+
+def _seed_install(
+    uow: FakeUnitOfWork,
+    rom_id: int,
+    *,
+    file_path: str,
+    install_path: str,
+    system: str = "n64",
+) -> None:
+    """Seed the FK-parent ``Rom`` THEN its ``RomInstall`` record, in one commit."""
+    with uow:
+        _seed_rom(uow, rom_id, platform_slug=system)
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=rom_id,
+                file_path=file_path,
+                install_path=install_path,
+                platform_slug=system,
+                system=system,
+                installed_at="2026-01-01T00:00:00+00:00",
+            )
+        )
 
 
 @pytest.fixture
@@ -74,7 +96,6 @@ def plugin():
             uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
-    p._save_sync_state = SaveSyncState()
     # Shared fake Unit of Work — install records flow through it, and tests
     # inspect ``uow.rom_installs`` after the service has run. Exposed as
     # ``p._uow`` for assertions.
@@ -98,18 +119,14 @@ def plugin():
     )
     p._rom_removal_service = RomRemovalService(
         config=RomRemovalServiceConfig(
-            state=p._state,
-            save_sync_state=p._save_sync_state,
             logger=decky.logger,
             loop=asyncio.get_event_loop(),
-            state_persister=MagicMock(),
-            save_sync_state_writer=MagicMock(),
             rom_file_store=RomFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
             ),
             download_queue_cleanup=p._download_service,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(p._uow),
         ),
     )
     return p
@@ -350,17 +367,18 @@ class TestRemoveRom:
         rom_file.parent.mkdir(parents=True)
         rom_file.write_text("fake rom data")
 
-        plugin._state["installed_roms"]["42"] = {
-            "rom_id": 42,
-            "file_path": str(rom_file),
-            "system": "n64",
-        }
+        _seed_install(
+            plugin._uow,
+            42,
+            file_path=str(rom_file),
+            install_path=str(rom_file.parent),
+        )
         plugin._download_service._download_queue[42] = {"status": "completed"}
 
         result = await plugin.remove_rom(42)
         assert result["success"] is True
         assert not rom_file.exists()
-        assert "42" not in plugin._state["installed_roms"]
+        assert plugin._uow.rom_installs.get(42) is None
         assert 42 not in plugin._download_service._download_queue
 
     @pytest.mark.asyncio
@@ -391,10 +409,8 @@ class TestUninstallAllRoms:
         file_a.write_text("data a")
         file_b.write_text("data b")
 
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(file_a), "system": "n64"},
-            "2": {"rom_id": 2, "file_path": str(file_b), "system": "n64"},
-        }
+        _seed_install(plugin._uow, 1, file_path=str(file_a), install_path=str(roms_dir))
+        _seed_install(plugin._uow, 2, file_path=str(file_b), install_path=str(roms_dir))
 
         result = await plugin.uninstall_all_roms()
         assert result["success"] is True
@@ -415,12 +431,15 @@ class TestUninstallAllRoms:
             roms=str(tmp_path / "retrodeck" / "roms"),
         )
 
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/nonexistent", "system": "n64"},
-        }
+        _seed_install(
+            plugin._uow,
+            1,
+            file_path=str(tmp_path / "retrodeck" / "roms" / "n64" / "nonexistent.z64"),
+            install_path=str(tmp_path / "retrodeck" / "roms" / "n64"),
+        )
 
         await plugin.uninstall_all_roms()
-        assert plugin._state["installed_roms"] == {}
+        assert list(plugin._uow.rom_installs.iter_all()) == []
 
     @pytest.mark.asyncio
     async def test_handles_missing_files(self, plugin, tmp_path):
@@ -435,14 +454,24 @@ class TestUninstallAllRoms:
             roms=str(tmp_path / "retrodeck" / "roms"),
         )
 
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": "/does/not/exist.z64", "system": "n64"},
-            "2": {"rom_id": 2, "file_path": "/also/missing.z64", "system": "snes"},
-        }
+        roms_base = tmp_path / "retrodeck" / "roms"
+        _seed_install(
+            plugin._uow,
+            1,
+            file_path=str(roms_base / "n64" / "missing.z64"),
+            install_path=str(roms_base / "n64"),
+        )
+        _seed_install(
+            plugin._uow,
+            2,
+            file_path=str(roms_base / "snes" / "also_missing.z64"),
+            install_path=str(roms_base / "snes"),
+            system="snes",
+        )
 
         result = await plugin.uninstall_all_roms()
         assert result["success"] is True
-        assert plugin._state["installed_roms"] == {}
+        assert list(plugin._uow.rom_installs.iter_all()) == []
 
 
 class TestDetectLaunchFile:
@@ -626,12 +655,13 @@ class TestMultiFileRomDeletion:
         (rom_dir / "disc1.cue").write_text("cue")
         (rom_dir / "disc1.bin").write_bytes(b"\x00" * 100)
 
-        plugin._state["installed_roms"]["42"] = {
-            "rom_id": 42,
-            "file_path": str(rom_dir / "FF7.m3u"),
-            "rom_dir": str(rom_dir),
-            "system": "psx",
-        }
+        _seed_install(
+            plugin._uow,
+            42,
+            file_path=str(rom_dir / "FF7.m3u"),
+            install_path=str(rom_dir),
+            system="psx",
+        )
 
         result = await plugin.remove_rom(42)
         assert result["success"] is True
@@ -657,14 +687,13 @@ class TestMultiFileRomDeletion:
         rom_dir.mkdir(parents=True)
         (rom_dir / "disc1.bin").write_bytes(b"\x00" * 100)
 
-        plugin._state["installed_roms"] = {
-            "1": {
-                "rom_id": 1,
-                "file_path": str(rom_dir / "FF7.m3u"),
-                "rom_dir": str(rom_dir),
-                "system": "psx",
-            },
-        }
+        _seed_install(
+            plugin._uow,
+            1,
+            file_path=str(rom_dir / "FF7.m3u"),
+            install_path=str(rom_dir),
+            system="psx",
+        )
 
         result = await plugin.uninstall_all_roms()
         assert result["success"] is True
@@ -1178,19 +1207,19 @@ class TestPathTraversalDeleteRomFiles:
         evil_file = evil_dir / "important.txt"
         evil_file.write_text("do not delete")
 
-        plugin._state["installed_roms"]["99"] = {
-            "rom_id": 99,
-            "file_path": str(evil_file),
-            "rom_dir": str(evil_dir),
-            "system": "n64",
-        }
+        _seed_install(
+            plugin._uow,
+            99,
+            file_path=str(evil_file),
+            install_path=str(evil_dir),
+        )
 
         await plugin.remove_rom(99)
         # The evil dir/file should NOT be deleted
         assert evil_dir.exists()
         assert evil_file.exists()
-        # State should still be cleaned up
-        assert "99" not in plugin._state["installed_roms"]
+        # The install record is still cleaned up (the rejection is silent)
+        assert plugin._uow.rom_installs.get(99) is None
 
     @pytest.mark.asyncio
     async def test_rejects_file_path_outside_roms_base(self, plugin, tmp_path):
@@ -1209,15 +1238,16 @@ class TestPathTraversalDeleteRomFiles:
         evil_file.parent.mkdir(parents=True)
         evil_file.write_text("root:x:0:0")
 
-        plugin._state["installed_roms"]["99"] = {
-            "rom_id": 99,
-            "file_path": str(evil_file),
-            "system": "n64",
-        }
+        _seed_install(
+            plugin._uow,
+            99,
+            file_path=str(evil_file),
+            install_path=str(evil_file.parent),
+        )
 
         await plugin.remove_rom(99)
         assert evil_file.exists()
-        assert "99" not in plugin._state["installed_roms"]
+        assert plugin._uow.rom_installs.get(99) is None
 
 
 class TestPathTraversalFsName:
@@ -1683,10 +1713,8 @@ class TestUninstallAllRomsMixedResults:
         bad_file.parent.mkdir(parents=True)
         bad_file.write_text("data")
 
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(good_file), "system": "n64"},
-            "2": {"rom_id": 2, "file_path": str(bad_file), "system": "snes"},
-        }
+        _seed_install(plugin._uow, 1, file_path=str(good_file), install_path=str(roms_dir))
+        _seed_install(plugin._uow, 2, file_path=str(bad_file), install_path=str(bad_file.parent), system="snes")
 
         result = await plugin.uninstall_all_roms()
         assert result["success"] is True
@@ -1694,9 +1722,9 @@ class TestUninstallAllRomsMixedResults:
         assert not good_file.exists()
         # bad_file should still exist (outside roms dir)
         assert bad_file.exists()
-        # removed_count reflects successful deletions
-        # The current code clears all state regardless of deletion success
-        assert result["removed_count"] in (1, 2)  # depends on whether _delete_rom_files raises or silently skips
+        # The path rejection is silent (no exception), so both records are cleared.
+        assert result["removed_count"] == 2
+        assert list(plugin._uow.rom_installs.iter_all()) == []
 
 
 class TestRemoveRomFileAlreadyGone:
@@ -1715,16 +1743,17 @@ class TestRemoveRomFileAlreadyGone:
             roms=str(tmp_path / "retrodeck" / "roms"),
         )
 
-        # Entry exists in state but file is gone
-        plugin._state["installed_roms"]["42"] = {
-            "rom_id": 42,
-            "file_path": str(tmp_path / "retrodeck" / "roms" / "n64" / "gone.z64"),
-            "system": "n64",
-        }
+        # Install record exists but the file is gone on disk.
+        _seed_install(
+            plugin._uow,
+            42,
+            file_path=str(tmp_path / "retrodeck" / "roms" / "n64" / "gone.z64"),
+            install_path=str(tmp_path / "retrodeck" / "roms" / "n64"),
+        )
 
         result = await plugin.remove_rom(42)
         assert result["success"] is True
-        assert "42" not in plugin._state["installed_roms"]
+        assert plugin._uow.rom_installs.get(42) is None
 
 
 class TestUrlEncodedFilenameRename:
@@ -1985,102 +2014,6 @@ class TestCleanupLeftoverTmpFiles:
         ), f"expected warning about {tmp_file_path}, got {[r.message for r in caplog.records]}"
         # File still present in fake — service swallowed the OSError.
         assert tmp_file_path in fake.files
-
-
-class TestRemoveRomCleansSaveSyncState:
-    @pytest.mark.asyncio
-    async def test_remove_rom_cleans_save_sync_state(self, plugin, tmp_path):
-        import decky
-
-        decky.DECKY_USER_HOME = str(tmp_path)
-        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
-            roms=str(tmp_path / "retrodeck" / "roms"),
-            bios=str(tmp_path / "retrodeck" / "bios"),
-        )
-        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
-            roms=str(tmp_path / "retrodeck" / "roms"),
-        )
-
-        rom_file = tmp_path / "retrodeck" / "roms" / "n64" / "zelda.z64"
-        rom_file.parent.mkdir(parents=True)
-        rom_file.write_text("fake rom data")
-
-        plugin._state["installed_roms"]["42"] = {
-            "rom_id": 42,
-            "file_path": str(rom_file),
-            "system": "n64",
-        }
-        save_sync_state = SaveSyncState()
-        save_sync_state.saves["42"] = {"last_sync": "2024-01-01"}  # type: ignore[assignment]
-        save_sync_state.saves["99"] = {"last_sync": "2024-02-01"}  # type: ignore[assignment]
-        save_sync_state.playtime["42"] = {"total_seconds": 3600}  # type: ignore[assignment]
-        save_sync_state.playtime["99"] = {"total_seconds": 7200}  # type: ignore[assignment]
-        plugin._rom_removal_service._save_sync_state = save_sync_state
-        save_calls = []
-
-        class _Recorder:
-            def save_state(self) -> None:
-                save_calls.append(1)
-
-        plugin._rom_removal_service._save_sync_state_writer = _Recorder()
-
-        result = await plugin.remove_rom(42)
-        assert result["success"] is True
-        # Save sync state for ROM 42 should be cleaned
-        assert "42" not in save_sync_state.saves
-        assert "42" not in save_sync_state.playtime
-        # Other ROM's state should be untouched
-        assert "99" in save_sync_state.saves
-        assert "99" in save_sync_state.playtime
-        # _save_sync_state_writer.save_state should have been called
-        assert len(save_calls) == 1
-
-    @pytest.mark.asyncio
-    async def test_uninstall_all_cleans_save_sync_state(self, plugin, tmp_path):
-        import decky
-
-        decky.DECKY_USER_HOME = str(tmp_path)
-        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
-            roms=str(tmp_path / "retrodeck" / "roms"),
-            bios=str(tmp_path / "retrodeck" / "bios"),
-        )
-        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
-            roms=str(tmp_path / "retrodeck" / "roms"),
-        )
-
-        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
-        roms_dir.mkdir(parents=True)
-        file_a = roms_dir / "game_a.z64"
-        file_b = roms_dir / "game_b.z64"
-        file_a.write_text("data a")
-        file_b.write_text("data b")
-
-        plugin._state["installed_roms"] = {
-            "1": {"rom_id": 1, "file_path": str(file_a), "system": "n64"},
-            "2": {"rom_id": 2, "file_path": str(file_b), "system": "n64"},
-        }
-        save_sync_state = SaveSyncState()
-        save_sync_state.saves["1"] = {"last_sync": "2024-01-01"}  # type: ignore[assignment]
-        save_sync_state.saves["2"] = {"last_sync": "2024-02-01"}  # type: ignore[assignment]
-        save_sync_state.playtime["1"] = {"total_seconds": 100}  # type: ignore[assignment]
-        save_sync_state.playtime["2"] = {"total_seconds": 200}  # type: ignore[assignment]
-        plugin._rom_removal_service._save_sync_state = save_sync_state
-        save_calls = []
-
-        class _Recorder:
-            def save_state(self) -> None:
-                save_calls.append(1)
-
-        plugin._rom_removal_service._save_sync_state_writer = _Recorder()
-
-        result = await plugin.uninstall_all_roms()
-        assert result["success"] is True
-        assert result["removed_count"] == 2
-        # All save sync state should be cleaned
-        assert save_sync_state.saves == {}
-        assert save_sync_state.playtime == {}
-        # _save_sync_state_writer.save_state should have been called
-        assert len(save_calls) == 1
 
 
 class TestPruneDownloadQueue:

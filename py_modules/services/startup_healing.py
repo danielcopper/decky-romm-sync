@@ -1,12 +1,12 @@
 """StartupHealingService — startup-time state reconciliation.
 
 Owns the reconciliation steps that run after state is loaded and
-adapters are wired: drops persisted ``installed_roms`` entries that no
-longer reflect what's on disk, and transitions any ``running``
-``SyncRun`` left behind by a crash mid-sync into ``errored``. The
-``installed_roms`` prune is skipped when the RetroDECK home is missing
-on disk (boot-time SD-card mount race) so legitimate entries on a card
-that hasn't finished mounting don't get wiped on the next reload.
+adapters are wired: drops ``rom_installs`` rows that no longer reflect
+what's on disk, and transitions any ``running`` ``SyncRun`` left behind
+by a crash into ``errored``. The install prune is skipped when the
+RetroDECK home is missing on disk (boot-time SD-card mount race) so
+legitimate installs on a card that hasn't finished mounting don't get
+wiped on the next reload.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ if TYPE_CHECKING:
         Clock,
         PathExistsReader,
         RetroDeckPaths,
-        StatePersister,
         UnitOfWorkFactory,
     )
 
@@ -34,44 +33,43 @@ if TYPE_CHECKING:
 class StartupHealingServiceConfig:
     """Frozen wiring bundle handed to ``StartupHealingService.__init__``.
 
-    Carries the live state dict, the runtime logger, the clock, the
-    state persister, the bundled RetroDECK paths provider, the generic
-    path-exists probe, and the SQLite Unit-of-Work factory (the
-    transactional seam over the ``sync_runs`` repository). Bundled here
-    so the ctor stays within the S107 parameter budget and the service
-    stays free of raw filesystem I/O.
+    Carries the live state dict (read only for the pending-migration
+    previous home), the runtime logger, the clock, the bundled RetroDECK
+    paths provider, the generic path-exists probe, and the SQLite
+    Unit-of-Work factory (the transactional seam over the ``rom_installs``
+    and ``sync_runs`` repositories). Bundled here so the ctor stays within
+    the S107 parameter budget and the service stays free of raw
+    filesystem I/O.
     """
 
     state: PluginState
     logger: logging.Logger
     clock: Clock
-    state_persister: StatePersister
     retrodeck_paths: RetroDeckPaths
     path_probe: PathExistsReader
     uow_factory: UnitOfWorkFactory
 
 
 class StartupHealingService:
-    """Reconciles persisted ``installed_roms`` against disk and heals orphaned ``SyncRun``s."""
+    """Reconciles persisted ``rom_installs`` against disk and heals orphaned ``SyncRun``s."""
 
     def __init__(self, *, config: StartupHealingServiceConfig) -> None:
         self._state = config.state
         self._logger = config.logger
         self._clock = config.clock
-        self._state_persister = config.state_persister
         self._retrodeck_paths = config.retrodeck_paths
         self._path_probe = config.path_probe
         self._uow_factory = config.uow_factory
 
     def prune_stale_installed_roms(self) -> None:
-        """Remove installed_roms entries whose files no longer exist on disk.
+        """Remove ``rom_installs`` rows whose files no longer exist on disk.
 
         Skipped when the RetroDECK home is not yet available on disk —
         almost always a boot-time SD-card-mount race; the next plugin
         reload, with the filesystem ready, will run the prune normally.
-        Entries living under a pending migration's previous home are
+        Installs living under a pending migration's previous home are
         also preserved because RetroDECK has moved away from that path
-        but the user hasn't migrated yet, so the entries must survive
+        but the user hasn't migrated yet, so the records must survive
         until they do.
         """
         retrodeck_home = self._retrodeck_paths.retrodeck_home()
@@ -81,22 +79,28 @@ class StartupHealingService:
             )
             return
 
+        with self._uow_factory() as uow:
+            installs = list(uow.rom_installs.iter_all())
+
         pending_home = self._state.get("retrodeck_home_path_previous", "")
-        pruned: list[str] = []
-        for rom_id, entry in self._state["installed_roms"].items():
-            file_path = entry.get("file_path", "")
-            rom_dir = entry.get("rom_dir", "")
-            if is_pending_migration_path(file_path, rom_dir, pending_home):
-                self._logger.info(f"Skipping prune of {rom_id} ({file_path}): pending migration")
+        stale: list[int] = []
+        for install in installs:
+            file_path = install.file_path
+            install_path = install.install_path
+            if is_pending_migration_path(file_path, install_path, pending_home):
+                self._logger.info(f"Skipping prune of {install.rom_id} ({file_path}): pending migration")
                 continue
-            if (file_path and self._path_probe.exists(file_path)) or (rom_dir and self._path_probe.exists(rom_dir)):
+            if (file_path and self._path_probe.exists(file_path)) or (
+                install_path and self._path_probe.exists(install_path)
+            ):
                 continue
-            self._logger.info(f"Pruned stale installed_roms entry: {rom_id} ({file_path})")
-            pruned.append(rom_id)
-        for rom_id in pruned:
-            del self._state["installed_roms"][rom_id]
-        if pruned:
-            self._state_persister.save_state()
+            self._logger.info(f"Pruned stale installed_roms entry: {install.rom_id} ({file_path})")
+            stale.append(install.rom_id)
+
+        if stale:
+            with self._uow_factory() as uow:
+                for rom_id in stale:
+                    uow.rom_installs.delete(rom_id)
 
     def reconcile_orphaned_sync_runs(self) -> None:
         """Transition a ``running`` ``SyncRun`` left by a crash into ``errored``.

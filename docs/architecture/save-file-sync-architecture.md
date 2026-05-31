@@ -560,7 +560,7 @@ If the RomM server is unreachable when a sync runs:
 
 ### Local delta-based accumulation
 
-Playtime is tracked per-ROM in the SQLite `rom_playtime` table (the `Playtime` aggregate), independent of the `saves` lifecycle. (The legacy `save_sync_state.json` `playtime.<rom_id>` section is no longer written by `PlaytimeService` — it survives only as `RomRemovalService`'s residual read until the JSON-state teardown stream lands.)
+Playtime is tracked per-ROM in the SQLite `rom_playtime` table (the `Playtime` aggregate), independent of the `saves` lifecycle. (The legacy `save_sync_state.json` `playtime.<rom_id>` section is no longer written by `PlaytimeService` and no longer read by anyone — uninstalling a ROM now deletes only its files and `rom_installs` row, leaving playtime and saves intact per [ADR-0007](adr/0007-rom-retention-identity-anchor.md). The dormant JSON section is dropped in the JSON-state teardown stream.)
 
 Session tracking:
 
@@ -646,7 +646,7 @@ The save-sync **feature toggles** (`save_sync_enabled`, `sync_before_launch`, `s
 | `saves.<id>.files.<fn>.last_sync_server_size` | integer | Server file size at last sync. |
 | `saves.<id>.files.<fn>.last_sync_local_mtime` | float | Local file mtime (epoch seconds) at last sync. |
 | `saves.<id>.files.<fn>.last_sync_local_size` | integer | Local file size (bytes) at last sync. |
-| `playtime` | object | **Legacy / dormant.** Per-ROM playtime now lives in the SQLite `rom_playtime` table (the `Playtime` aggregate); `PlaytimeService` no longer writes this JSON section. It survives only as `RomRemovalService`'s residual read until the JSON-state teardown stream lands. The same fields below (`total_seconds`, `session_count`, `last_session_start`, `last_session_duration_sec`, `note_id`) back the SQLite aggregate. |
+| `playtime` | object | **Legacy / dormant — no live reader.** Per-ROM playtime now lives in the SQLite `rom_playtime` table (the `Playtime` aggregate); `PlaytimeService` no longer writes this JSON section and `RomRemovalService` no longer reads it (uninstall keeps playtime per [ADR-0007](adr/0007-rom-retention-identity-anchor.md)). It is dropped in the JSON-state teardown stream. The same fields below (`total_seconds`, `session_count`, `last_session_start`, `last_session_duration_sec`, `note_id`) back the SQLite aggregate. |
 | `playtime.<id>.total_seconds` | integer | Accumulated playtime in seconds. |
 | `playtime.<id>.session_count` | integer | Number of completed play sessions. |
 | `playtime.<id>.last_session_start` | ISO-8601 / null | Start time of current session (null when not playing). |

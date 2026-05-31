@@ -118,7 +118,6 @@ def plugin():
             state=p._state,
             logger=decky.logger,
             clock=FakeClock(),
-            state_persister=p._state_persister,
             retrodeck_paths=p._retrodeck_paths,
             path_probe=FakePathExistsReader(),
             uow_factory=FakeUnitOfWorkFactory(),
