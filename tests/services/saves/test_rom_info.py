@@ -1,9 +1,5 @@
 """Tests for RomInfoService — per-ROM save path resolution and local save discovery."""
 
-from typing import cast
-
-from models.state import SaveSortSettings
-
 from tests.services.saves._helpers import (
     _create_save,
     _install_rom,
@@ -176,7 +172,7 @@ class TestGetRomSaveInfo:
         )
         _install_rom(svc, tmp_path)
         # Half-state input: empty previous, populated current (NEW).
-        _set_sort_settings_previous(svc, cast("SaveSortSettings", {}))
+        _set_sort_settings_previous(svc, {})
         _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
 
         # Both call sites must agree there is NO pending migration.

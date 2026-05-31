@@ -3,6 +3,9 @@ import http.client
 import os
 
 import pytest
+
+# conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
+from conftest import _make_testable_plugin
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -13,9 +16,6 @@ from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from lib.errors import SgdbApiError, SteamGridDirMissingError
-
-# conftest.py patches decky before this import
-from main import Plugin
 from services.library import LibraryService, LibraryServiceConfig
 from services.steamgrid import SteamGridService, SteamGridServiceConfig
 
@@ -49,7 +49,7 @@ def _seed_rom(uow, rom_id, *, app_id=1, sgdb_id=None, platform_slug="n64", name=
 
 @pytest.fixture
 def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
-    p = Plugin()
+    p = _make_testable_plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._romm_api = fake_romm_api
 
@@ -951,7 +951,7 @@ class TestDebugLoggerProtocolSeam:
         """Plugin fixture where ``log_debug`` is a list-capturing fake."""
         import decky
 
-        p = Plugin()
+        p = _make_testable_plugin()
         p.settings = {"log_level": "debug", "steamgriddb_api_key": ""}
         p._romm_api = fake_romm_api
 

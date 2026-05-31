@@ -8,12 +8,12 @@ import { TextInputModal, pendingEdits } from "./TextInputModal";
 // <div> drops them. Mirrors the NewSlotModal test pattern.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 interface CapturedConfirm {
-  onOK?: () => void;
-  bDisableBackgroundDismiss?: boolean;
+  onOK?: (() => void) | undefined;
+  bDisableBackgroundDismiss?: boolean | undefined;
   closeModal?: unknown;
-  strTitle?: string;
+  strTitle?: string | undefined;
 }
-const captured: CapturedConfirm & { textFieldPassword?: boolean } = {};
+const captured: CapturedConfirm & { textFieldPassword?: boolean | undefined } = {};
 
 vi.mock("@decky/ui", () => ({
   ConfirmModal: (p: AnyProps & CapturedConfirm) => {

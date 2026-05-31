@@ -8,10 +8,10 @@ import { NewSlotModal } from "./NewSlotModal";
 // silently drops them.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 const captured: {
-  onOK?: () => void;
-  bDisableBackgroundDismiss?: boolean;
+  onOK?: (() => void) | undefined;
+  bDisableBackgroundDismiss?: boolean | undefined;
   closeModal?: unknown;
-  strTitle?: string;
+  strTitle?: string | undefined;
 } = {};
 
 vi.mock("@decky/ui", () => ({

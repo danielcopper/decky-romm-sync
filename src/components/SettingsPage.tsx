@@ -91,10 +91,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         setUrl(pendingEdits.url ?? s.romm_url);
         setUsername(pendingEdits.username ?? s.romm_user);
         setPassword(pendingEdits.password ?? s.romm_pass_masked);
-        setAllowInsecureSsl(s.romm_allow_insecure_ssl ?? false);
+        setAllowInsecureSsl(s.romm_allow_insecure_ssl);
         setSgdbApiKey(s.sgdb_api_key_masked);
-        setSteamInputMode(s.steam_input_mode || "default");
-        setLogLevel(s.log_level ?? "warn");
+        setSteamInputMode(s.steam_input_mode);
+        setLogLevel(s.log_level);
         if (s.retroarch_input_check) {
           setRetroarchWarning(s.retroarch_input_check);
         }

@@ -557,7 +557,7 @@ describe("SlotSetupWizard", () => {
       // Match by partial textContent — the button is the only one containing
       // "Use slot" and "fresh".
       const buttons = Array.from(container.querySelectorAll("button"));
-      const useSlotBtn = buttons.find((b) => b.textContent?.includes("Use slot"));
+      const useSlotBtn = buttons.find((b) => b.textContent.includes("Use slot"));
       if (!useSlotBtn) throw new Error("Use slot button not rendered");
 
       await act(async () => {

@@ -141,11 +141,32 @@ export const saveCollectionPlatformGroups = callable<[boolean], { success: boole
 export const getRegistryPlatforms = callable<[], { platforms: RegistryPlatform[] }>("get_registry_platforms");
 export const removePlatformShortcuts = callable<
   [string],
-  { success: boolean; app_ids: number[]; rom_ids: (string | number)[]; platform_name: string }
+  {
+    success: boolean;
+    // The success path returns success/app_ids/rom_ids/platform_name; the
+    // @migration_blocked gate short-circuits to success/message/
+    // blocked_by_migration, omitting app_ids/rom_ids. Every field below the
+    // discriminant is therefore path-dependent (mirrors removeAllShortcuts).
+    app_ids?: number[];
+    rom_ids?: (string | number)[];
+    platform_name?: string;
+    message?: string;
+    blocked_by_migration?: boolean;
+  }
 >("remove_platform_shortcuts");
 export const removeAllShortcuts = callable<
   [],
-  { success: boolean; message: string; removed_count: number; app_ids: number[]; rom_ids: (string | number)[] }
+  {
+    success: boolean;
+    // The success path returns only success/app_ids/rom_ids; the
+    // @migration_blocked gate short-circuits to success/message/
+    // blocked_by_migration, omitting app_ids/rom_ids. Every field below the
+    // discriminant is therefore path-dependent.
+    message?: string;
+    app_ids?: number[];
+    rom_ids?: (string | number)[];
+    blocked_by_migration?: boolean;
+  }
 >("remove_all_shortcuts");
 export const getArtworkBase64 = callable<[number], { base64: string | null }>("get_artwork_base64");
 export const refreshCoverArtwork = callable<

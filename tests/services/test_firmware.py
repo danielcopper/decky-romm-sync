@@ -4,6 +4,9 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
+from conftest import _make_testable_plugin
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
@@ -18,9 +21,6 @@ from domain.bios import BiosFileEntry
 from domain.bios_file import BiosFile
 from domain.firmware_cache import FirmwareCacheEntry
 from domain.rom import Rom
-
-# conftest.py patches decky before this import
-from main import Plugin
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 
@@ -89,12 +89,11 @@ def _make_firmware_service(
 
 @pytest.fixture
 def plugin():
-    p = Plugin()
+    p = _make_testable_plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
-    p._metadata_cache = {}
 
     import decky
 

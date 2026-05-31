@@ -114,6 +114,12 @@ vi.mock("@decky/ui", async () => {
   const { createElement: ce } = await import("react");
   return {
     basicAppDetailsSectionStylerClasses: { PlaySection: "play-section-cls" },
+    // deckyUiInternals re-exports these @decky/ui internals; they must exist on
+    // the mock even when this suite doesn't assert on them.
+    appActionButtonClasses: undefined,
+    appDetailsClasses: undefined,
+    playSectionClasses: undefined,
+    findSP: vi.fn(() => undefined),
     ConfirmModal: (p: AnyProps) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
     DialogButton: ({
       children,
@@ -1348,12 +1354,13 @@ describe("RomMPlaySection", () => {
       );
     });
 
-    it("success with synced=undefined / conflicts=undefined → treats both as 0", async () => {
+    it("success with synced=0 / conflicts=undefined → treats conflicts as 0", async () => {
       const items = await setupSavesAction();
       vi.mocked(backend.syncRomSaves).mockResolvedValue({
         success: true,
         message: "",
-      } as never);
+        synced: 0,
+      });
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
         await items[2]!.props.onClick?.();

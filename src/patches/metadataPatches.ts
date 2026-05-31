@@ -172,7 +172,8 @@ export async function applyAllPlaytime(
   // Try up to 4 times with increasing delays (0ms, 1s, 3s, 5s)
   const delays = [0, 1000, 3000, 5000];
   for (let attempt = 0; attempt < delays.length && pending.length > 0; attempt++) {
-    if (delays[attempt] > 0) {
+    if (delays[attempt]! > 0) {
+      // attempt < delays.length (loop guard) ⇒ index in bounds
       await new Promise((r) => setTimeout(r, delays[attempt]));
     }
 

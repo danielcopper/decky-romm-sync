@@ -13,6 +13,9 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+
+# conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
+from conftest import _make_testable_plugin
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -21,9 +24,6 @@ from models.state import make_default_plugin_state
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
-
-# conftest.py patches decky before this import
-from main import Plugin
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
@@ -33,7 +33,7 @@ from tests.services.library._helpers import rebind_loop
 
 @pytest.fixture
 def plugin(tmp_path):
-    p = Plugin()
+    p = _make_testable_plugin()
     p.settings = {
         "romm_url": "",
         "romm_user": "",
@@ -43,7 +43,6 @@ def plugin(tmp_path):
     }
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
-    p._metadata_cache = {}
 
     import decky
 

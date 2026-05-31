@@ -10,6 +10,34 @@ from __future__ import annotations
 _DISC_EXTENSIONS = (".cue", ".chd", ".iso")
 
 
+def is_multi_file_download(rom_detail: dict) -> bool:
+    """Decide whether RomM will serve this ROM as a ZIP that must be extracted.
+
+    This is the single multi-vs-single gate for the download path. It must
+    mirror RomM's own download gate rather than RomM's ``has_multiple_files``
+    flag, because the two are computed from different file counts:
+
+    - RomM sets ``has_multiple_files = len(top_level_files) > 1`` — it counts
+      only files at the ROM root.
+    - RomM's download/content endpoint zips whenever ``len(rom.files) != 1`` —
+      it counts *all* files, including ones in subfolders.
+
+    A canonical Switch game is a folder with the base file at the root plus
+    ``update/`` and ``dlc/`` in subfolders: exactly one top-level file, so
+    ``has_multiple_files`` is ``False`` and ``has_nested_single_file`` is
+    ``True``, yet ``len(files) > 1`` so RomM streams a ZIP. Keying on the flag
+    alone takes the single-file path and writes the ZIP bytes verbatim into one
+    file the emulator cannot read.
+
+    Returning ``len(files) > 1 OR has_multiple_files`` keys on the total file
+    count (matching the zip decision) while keeping the flag as a defensive
+    fallback for payloads that omit ``files``. Genuine nested-single ROMs have
+    ``len(files) == 1`` and correctly stay on the single-file path.
+    """
+    files = rom_detail.get("files") or []
+    return len(files) > 1 or bool(rom_detail.get("has_multiple_files", False))
+
+
 def needs_m3u(disc_files: list[str]) -> bool:
     """Return True if an M3U playlist should be generated.
 

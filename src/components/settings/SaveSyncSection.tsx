@@ -131,7 +131,7 @@ export const SaveSyncSection: FC<SaveSyncSectionProps> = ({
                     { data: 20, label: "20" },
                     { data: 50, label: "50" },
                   ]}
-                  selectedOption={saveSyncSettings.autocleanup_limit ?? 10}
+                  selectedOption={saveSyncSettings.autocleanup_limit}
                   onChange={(option) => onSettingChange({ autocleanup_limit: option.data as number })}
                 />
               </PanelSectionRow>

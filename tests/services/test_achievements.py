@@ -3,15 +3,15 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
+from conftest import _make_testable_plugin
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
-
-# conftest.py patches decky before this import
-from main import Plugin
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
@@ -48,7 +48,7 @@ def clock():
 
 @pytest.fixture
 def plugin(clock):
-    p = Plugin()
+    p = _make_testable_plugin()
     p.settings = {
         "romm_url": "http://romm.local",
         "romm_user": "user",

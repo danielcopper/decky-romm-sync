@@ -2,16 +2,16 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+
+# conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
+from conftest import _make_testable_plugin
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.steam_config import SteamConfigAdapter
-
-# conftest.py patches decky before this import
 from domain.rom import Rom
 from domain.rom_metadata import RomMetadata
-from main import Plugin
 from services.metadata import MetadataService, MetadataServiceConfig
 
 
@@ -69,7 +69,7 @@ def uow() -> FakeUnitOfWork:
 
 @pytest.fixture
 def plugin(uow):
-    p = Plugin()
+    p = _make_testable_plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()

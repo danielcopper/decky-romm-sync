@@ -43,7 +43,6 @@ def plugin():
     )
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
-    p._metadata_cache = {}
 
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config

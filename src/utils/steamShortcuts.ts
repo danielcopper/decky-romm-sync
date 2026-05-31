@@ -14,7 +14,10 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
 
   if (typeof collectionStore === "undefined") return result;
 
-  const appIds = Array.from(collectionStore.deckDesktopApps.apps.keys());
+  const deckApps = collectionStore.deckDesktopApps?.apps;
+  if (!deckApps) return result;
+
+  const appIds = Array.from(deckApps.keys());
 
   // Fire up to 10 RegisterForAppDetails calls in parallel to avoid 2s-per-shortcut overhead
   const CONCURRENCY = 10;

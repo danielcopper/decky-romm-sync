@@ -48,7 +48,7 @@ const makeSetter = <S>() => vi.fn() as unknown as Dispatch<SetStateAction<S>>;
  *  the test assertions clean even though the underlying mock is `unknown`. */
 const lastUpdater = <S>(setter: Dispatch<SetStateAction<S>>): ((prev: S) => S) => {
   const calls = (setter as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-  return calls[calls.length - 1][0] as (prev: S) => S;
+  return calls[calls.length - 1]![0] as (prev: S) => S;
 };
 
 const callCount = <S>(setter: Dispatch<SetStateAction<S>>): number =>
@@ -92,13 +92,6 @@ describe("applyRefreshSlotResult", () => {
     applyRefreshSlotResult<RefreshState>({ success: true, slots: [], active_slot: null }, setter);
     const next = lastUpdater(setter)(refreshState({ activeSlot: "previous" }));
     expect(next.activeSlot).toBeNull();
-  });
-
-  it("defaults a missing slots field to []", () => {
-    const setter = makeSetter<RefreshState>();
-    applyRefreshSlotResult<RefreshState>({ success: true } as unknown as SlotsResponse, setter);
-    const next = lastUpdater(setter)(refreshState({ availableSlots: [slot("stale")] }));
-    expect(next.availableSlots).toEqual([]);
   });
 });
 
@@ -178,12 +171,5 @@ describe("applyLoadSlotsResult", () => {
     );
     const next = lastUpdater(setter)(loadState({ activeSlot: "previous" }));
     expect(next.activeSlot).toBeNull();
-  });
-
-  it("on success: defaults a missing slots field to []", () => {
-    const setter = makeSetter<LoadState>();
-    applyLoadSlotsResult<LoadState>({ success: true } as unknown as SlotsResponse, setter, { current: true }, vi.fn());
-    const next = lastUpdater(setter)(loadState({ availableSlots: [slot("stale")] }));
-    expect(next.availableSlots).toEqual([]);
   });
 });

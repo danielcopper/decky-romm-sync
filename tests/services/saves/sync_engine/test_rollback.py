@@ -18,6 +18,7 @@ from tests.services.saves._helpers import (
     _file_md5,
     _get_save_state,
     _install_rom,
+    _require_save_state,
     _seed_save_state,
     _server_save_with_syncs,
     make_service,
@@ -53,7 +54,7 @@ class TestResolveSyncConflict:
         assert result["action"] == "keep_local"
         assert not any(c[0] == "upload_save" for c in fake.call_log)
 
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 100
         assert file_state.last_sync_hash == local_hash
 
@@ -88,7 +89,7 @@ class TestResolveSyncConflict:
         # PUT — save_id was passed
         assert upload_calls[0][2]["save_id"] == 100
 
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
@@ -149,7 +150,7 @@ class TestResolveSyncConflict:
         assert len(download_calls) == 1
 
         # State carries the local hash from the successful PUT.
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
@@ -179,7 +180,7 @@ class TestResolveSyncConflict:
         assert result["success"] is True
         # Local file overwritten with server content
         assert save_path.read_bytes() == b"server-truth"
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 100
         assert file_state.last_sync_hash == _file_md5(str(save_path))
 
@@ -311,7 +312,7 @@ class TestResolveSyncConflict:
         upload_path = upload_calls[0][1][1]
         assert os.path.basename(upload_path) == "pokemon.srm"
         # State keyed by canonical filename — never by the frontend label.
-        files_state = _get_save_state(svc, 42).files
+        files_state = _require_save_state(svc, 42).files
         assert "pokemon.srm" in files_state
         assert "pokemon.sav" not in files_state
         assert files_state["pokemon.srm"].last_sync_hash == canonical_hash
@@ -350,7 +351,7 @@ class TestResolveSyncConflict:
         canonical_path = tmp_path / "saves" / "gba" / "pokemon.srm"
         assert canonical_path.read_bytes() == b"server-truth"
         assert not (tmp_path / "saves" / "gba" / "pokemon.sav").exists()
-        files_state = _get_save_state(svc, 42).files
+        files_state = _require_save_state(svc, 42).files
         assert "pokemon.srm" in files_state
         assert "pokemon.sav" not in files_state
         assert files_state["pokemon.srm"].tracked_save_id == 100
@@ -506,5 +507,5 @@ class TestResolveSyncConflictStaleConflict:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
         assert upload_calls[0][2]["save_id"] == 100
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash

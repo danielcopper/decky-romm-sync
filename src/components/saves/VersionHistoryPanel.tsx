@@ -37,7 +37,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({ romId, slot,
       const result: ListFileVersionsResult = await savesListFileVersions(romId, slot, filename);
       if (result.status === "ok") {
         setVersions(result.versions);
-      } else if (result.status === "server_unreachable") {
+      } else {
         detach(debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`));
         setVersions(null);
         setLoadError("Couldn't reach RomM. Tap retry.");
@@ -102,6 +102,7 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({ romId, slot,
         // we just couldn't reach the server to confirm. Prompt for retry
         // instead of telling the user the version is gone.
         toaster.toast({ title: "RomM Sync", body: "Couldn't reach RomM. Check your connection and try again." });
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhaustive final branch of the 8-member RollbackStatus union; an explicit check (vs. plain `else`) keeps the per-status symmetry and leaves any future-added status unhandled instead of silently routing it to the "unsupported" toast
       } else if (result.status === "unsupported") {
         toaster.toast({ title: "RomM Sync", body: "Version history requires RomM 4.7+" });
       }

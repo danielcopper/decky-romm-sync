@@ -9,14 +9,8 @@
 
 import { createElement } from "react";
 import { routerHook } from "@decky/api";
-import {
-  afterPatch,
-  findInReactTree,
-  appDetailsClasses,
-  createReactTreePatcher,
-  playSectionClasses,
-  basicAppDetailsSectionStylerClasses,
-} from "@decky/ui";
+import { afterPatch, findInReactTree, createReactTreePatcher } from "@decky/ui";
+import { appDetailsClasses, playSectionClasses, basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { RomMPlaySection } from "../components/RomMPlaySection";
 import { RomMGameInfoPanel } from "../components/RomMGameInfoPanel";
 import { debugLog } from "../api/backend";
@@ -87,10 +81,12 @@ function deepTreeDump(node: any, depth: number, index: number, prefix: string): 
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
 function findInsertionPoint(ret: any): any {
+  const innerContainerClass = appDetailsClasses?.InnerContainer;
+  if (!innerContainerClass) return undefined;
   return findInReactTree(
     ret,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
-    (x: any) => Array.isArray(x?.props?.children) && x?.props?.className?.includes(appDetailsClasses.InnerContainer),
+    (x: any) => Array.isArray(x?.props?.children) && x?.props?.className?.includes(innerContainerClass),
   );
 }
 

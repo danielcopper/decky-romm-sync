@@ -257,18 +257,6 @@ describe("SettingsPage", () => {
       expect(conn?.password).toBe("pendingpass");
     });
 
-    it("falls back to defaults when steam_input_mode and log_level are absent", async () => {
-      vi.mocked(backend.getSettings).mockResolvedValue({
-        ...defaultSettings(),
-        steam_input_mode: "" as unknown as "default",
-        log_level: undefined as unknown as "warn",
-      });
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-      expect(capturedController[capturedController.length - 1]?.steamInputMode).toBe("default");
-      expect(capturedAdvanced[capturedAdvanced.length - 1]?.logLevel).toBe("warn");
-    });
-
     it("does not set retroarchWarning when retroarch_input_check is absent", async () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();

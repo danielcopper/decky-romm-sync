@@ -319,14 +319,6 @@ describe("SaveSyncSection", () => {
       expect(dd?.selectedOption).toBe(20);
     });
 
-    it("defaults selectedOption to 10 when autocleanup_limit is missing", () => {
-      const partial = makeSettings();
-      delete (partial as { autocleanup_limit?: number }).autocleanup_limit;
-      render(<SaveSyncSection {...defaultProps({ saveSyncSettings: partial })} />);
-      const dd = dropdownCaptured.items.find((d) => d.label === "Save History Limit");
-      expect(dd?.selectedOption).toBe(10);
-    });
-
     it("dispatches partial settings with autocleanup_limit on change", () => {
       const onSettingChange = vi.fn();
       render(<SaveSyncSection {...defaultProps({ onSettingChange })} />);

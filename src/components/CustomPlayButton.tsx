@@ -11,17 +11,8 @@
 
 import { useState, useEffect, useRef, FC } from "react";
 import { addEventListener, removeEventListener, toaster } from "@decky/api";
-import {
-  Focusable,
-  DialogButton,
-  ConfirmModal,
-  Menu,
-  MenuItem,
-  showContextMenu,
-  showModal,
-  appActionButtonClasses,
-  basicAppDetailsSectionStylerClasses,
-} from "@decky/ui";
+import { Focusable, DialogButton, ConfirmModal, Menu, MenuItem, showContextMenu, showModal } from "@decky/ui";
+import { appActionButtonClasses, basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { hideNativePlaySection, showNativePlaySection } from "../utils/styleInjector";
 import { hasAnySaveConflict } from "../utils/saveStatus";
 import {

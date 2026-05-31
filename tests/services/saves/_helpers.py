@@ -97,6 +97,18 @@ def _get_save_state(svc, rom_id: int) -> RomSaveState | None:
         return uow.rom_save_states.get(rom_id)
 
 
+def _require_save_state(svc, rom_id: int) -> RomSaveState:
+    """Read back the persisted ``RomSaveState`` for *rom_id*, asserting it exists.
+
+    Member-access narrowing twin of :func:`_get_save_state` for the common
+    case where a test has just seeded/run a flow and the state is known to be
+    present — keeps the call site free of a per-line ``assert ... is not None``.
+    """
+    state = _get_save_state(svc, rom_id)
+    assert state is not None
+    return state
+
+
 def rom_save_state_from_dict(data: dict) -> RomSaveState:
     """Build a ``RomSaveState`` from the legacy dict shape used across saves tests.
 

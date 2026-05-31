@@ -12,6 +12,7 @@ from tests.services.saves._helpers import (
     _file_md5,
     _get_save_state,
     _install_rom,
+    _require_save_state,
     _seed_rom,
     _seed_save_state,
     _seed_save_state_dict,
@@ -81,7 +82,7 @@ class TestSaveSlots:
         assert slot["latest_updated_at"] == "2026-04-17T20:00:00"
 
         # Also verify the value is persisted in state (not None)
-        persisted = _get_save_state(svc, 123).slots["default"]
+        persisted = _require_save_state(svc, 123).slots["default"]
         assert persisted["latest_updated_at"] == "2026-04-17T20:00:00"
 
     @pytest.mark.asyncio
@@ -135,7 +136,7 @@ class TestSaveSlots:
         assert result["active_slot"] == "default"
         assert "connection refused" in result["message"]
         # Persisted slot map is untouched (no merge / overwrite happened).
-        assert _get_save_state(svc, 123).slots == original_slots
+        assert _require_save_state(svc, 123).slots == original_slots
 
     @pytest.mark.asyncio
     async def test_get_save_slots_empty_server_response_persists(self, tmp_path):
@@ -167,7 +168,7 @@ class TestSaveSlots:
         slot_names = [s["slot"] for s in result["slots"]]
         assert slot_names == ["default"]
         # State persisted: reload from SQLite and confirm the slots map matches.
-        assert "default" in _get_save_state(svc, 123).slots
+        assert "default" in _require_save_state(svc, 123).slots
 
     def test_set_active_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -175,7 +176,7 @@ class TestSaveSlots:
         _seed_save_state(svc, 123, RomSaveState(system="gba", active_slot="default"))
         result = svc._slots.set_active_slot(123, "desktop")
         assert result["success"] is True
-        assert _get_save_state(svc, 123).active_slot == "desktop"
+        assert _require_save_state(svc, 123).active_slot == "desktop"
 
     def test_set_active_slot_creates_entry(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -183,7 +184,7 @@ class TestSaveSlots:
         _seed_rom(svc, 456)
         result = svc._slots.set_active_slot(456, "my-slot")
         assert result["success"] is True
-        assert _get_save_state(svc, 456).active_slot == "my-slot"
+        assert _require_save_state(svc, 456).active_slot == "my-slot"
 
     def test_set_active_slot_empty_sets_none(self, tmp_path):
         """Empty string sets active_slot to None (legacy mode)."""
@@ -192,7 +193,7 @@ class TestSaveSlots:
         result = svc._slots.set_active_slot(123, "")
         assert result["success"] is True
         assert result["active_slot"] is None
-        assert _get_save_state(svc, 123).active_slot is None
+        assert _require_save_state(svc, 123).active_slot is None
 
     @pytest.mark.asyncio
     async def test_set_active_slot_triggers_background_check(self, tmp_path):
@@ -480,7 +481,7 @@ class TestConfirmSlotChoice:
         _seed_rom(svc, 42)
         result = await svc.confirm_slot_choice(42, "default")
         assert result["success"] is True
-        state = _get_save_state(svc, 42)
+        state = _require_save_state(svc, 42)
         assert state.slot_confirmed is True
         assert state.active_slot == "default"
 
@@ -510,7 +511,7 @@ class TestConfirmSlotChoice:
         )
         result = await svc.confirm_slot_choice(42, "new-slot")
         assert result["success"] is True
-        state = _get_save_state(svc, 42)
+        state = _require_save_state(svc, 42)
         assert state.active_slot == "new-slot"
         assert state.slot_confirmed is True
         # Existing files state preserved
@@ -599,7 +600,7 @@ class TestConfirmSlotChoice:
         assert result["success"] is True
         assert "migration failed" in result["message"].lower()
         # Slot is still confirmed despite migration failure
-        assert _get_save_state(svc, 42).slot_confirmed is True
+        assert _require_save_state(svc, 42).slot_confirmed is True
 
     @pytest.mark.asyncio
     async def test_facade_translates_none_to_no_migration(self, tmp_path):
@@ -618,7 +619,7 @@ class TestConfirmSlotChoice:
         assert len(upload_calls) == 0
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 0
-        assert _get_save_state(svc, 42).slot_confirmed is True
+        assert _require_save_state(svc, 42).slot_confirmed is True
 
     @pytest.mark.asyncio
     async def test_facade_translates_no_migration_string_to_no_migration(self, tmp_path):
@@ -637,7 +638,7 @@ class TestConfirmSlotChoice:
         assert len(upload_calls) == 0
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 0
-        assert _get_save_state(svc, 42).slot_confirmed is True
+        assert _require_save_state(svc, 42).slot_confirmed is True
 
     @pytest.mark.asyncio
     async def test_is_configured_after_confirm(self, tmp_path):
@@ -778,7 +779,7 @@ class TestSwitchSlot:
         assert result["success"] is True
         assert "save_status" in result
         # active_slot was updated
-        assert _get_save_state(svc, 42).active_slot == "desktop"
+        assert _require_save_state(svc, 42).active_slot == "desktop"
         # The server save was downloaded
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) >= 1
@@ -909,14 +910,14 @@ class TestSwitchSlot:
         result = await svc.switch_slot(42, "newslot")
 
         assert result["success"] is True
-        assert _get_save_state(svc, 42).active_slot == "newslot"
+        assert _require_save_state(svc, 42).active_slot == "newslot"
         # No downloads
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
         # Local file deleted (fresh start for empty slot)
         assert not save_path.exists()
         # File tracking state cleared
-        assert _get_save_state(svc, 42).files == {}
+        assert _require_save_state(svc, 42).files == {}
 
     @pytest.mark.asyncio
     async def test_empty_slot_deletes_local_files(self, tmp_path):
@@ -934,11 +935,11 @@ class TestSwitchSlot:
         result = await svc.switch_slot(42, "brand-new-slot")
 
         assert result["success"] is True
-        assert _get_save_state(svc, 42).active_slot == "brand-new-slot"
+        assert _require_save_state(svc, 42).active_slot == "brand-new-slot"
         # Local save file removed
         assert not save_path.exists()
         # File tracking state cleared so next play starts fresh
-        assert _get_save_state(svc, 42).files == {}
+        assert _require_save_state(svc, 42).files == {}
         # No downloads happened
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
@@ -961,7 +962,7 @@ class TestSwitchSlot:
         result = await svc.switch_slot(42, "target-slot")
 
         assert result["success"] is True
-        assert _get_save_state(svc, 42).active_slot == "target-slot"
+        assert _require_save_state(svc, 42).active_slot == "target-slot"
         # Server save was downloaded (replaces local)
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) >= 1
@@ -988,7 +989,7 @@ class TestSwitchSlot:
         result = await svc.switch_slot(42, "desktop")
 
         assert result["success"] is True
-        assert _get_save_state(svc, 42).active_slot == "desktop"
+        assert _require_save_state(svc, 42).active_slot == "desktop"
 
     @pytest.mark.asyncio
     async def test_switch_to_legacy_slot(self, tmp_path):
@@ -1010,9 +1011,9 @@ class TestSwitchSlot:
         assert result["success"] is True
         assert "save_status" in result
         # active_slot in state is None (legacy)
-        assert _get_save_state(svc, 42).active_slot is None
+        assert _require_save_state(svc, 42).active_slot is None
         # Legacy slot "" appears in the slots dict
-        slots_dict = _get_save_state(svc, 42).slots
+        slots_dict = _require_save_state(svc, 42).slots
         assert "" in slots_dict
 
     @pytest.mark.asyncio
@@ -1266,10 +1267,10 @@ class TestDeleteSlot:
         assert result["deleted_server_saves"] == 2
         assert result["cleaned_files"] == 2
         # Slot removed from state
-        assert "save1" not in _get_save_state(svc, 42).slots
+        assert "save1" not in _require_save_state(svc, 42).slots
         # File entries cleaned
-        assert "pokemon.srm" not in _get_save_state(svc, 42).files
-        assert "zelda.srm" not in _get_save_state(svc, 42).files
+        assert "pokemon.srm" not in _require_save_state(svc, 42).files
+        assert "zelda.srm" not in _require_save_state(svc, 42).files
         # delete_server_saves called with correct IDs
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 1
@@ -1289,7 +1290,7 @@ class TestDeleteSlot:
 
         assert result["success"] is True
         assert result["deleted_server_saves"] == 0
-        assert "local1" not in _get_save_state(svc, 42).slots
+        assert "local1" not in _require_save_state(svc, 42).slots
         # No server calls made
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 0
@@ -1305,7 +1306,7 @@ class TestDeleteSlot:
         assert result["success"] is False
         assert result["reason"] == "active_slot"
         # Slot still exists
-        assert "default" in _get_save_state(svc, 42).slots
+        assert "default" in _require_save_state(svc, 42).slots
 
     @pytest.mark.asyncio
     async def test_delete_slot_server_error(self, tmp_path):
@@ -1330,7 +1331,7 @@ class TestDeleteSlot:
         assert result["success"] is False
         assert result["reason"] == "server_error"
         # Slot NOT removed from state (rollback on failure)
-        assert "save1" in _get_save_state(svc, 42).slots
+        assert "save1" in _require_save_state(svc, 42).slots
 
         fake.delete_server_saves = original_delete
 
@@ -1354,7 +1355,7 @@ class TestDeleteSlot:
         result = await svc.delete_slot(42, "save1")
 
         assert result["success"] is True
-        files = _get_save_state(svc, 42).files
+        files = _require_save_state(svc, 42).files
         assert "pokemon.srm" not in files
         assert "zelda.srm" not in files
         assert "unrelated.srm" in files

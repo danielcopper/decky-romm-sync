@@ -76,7 +76,6 @@ describe("DangerZone", () => {
     vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
       success: true,
       message: "",
-      removed_count: 0,
       app_ids: [],
       rom_ids: [],
     });
@@ -234,7 +233,7 @@ describe("DangerZone", () => {
       // textContent gives us the visible label per row.
       fireEvent.click(getByText("Configure Whitelist (0 protected)"));
       const toggleRows = getAllByTestId("toggle");
-      const renderedNames = toggleRows.map((row) => row.textContent ?? "");
+      const renderedNames = toggleRows.map((row) => row.textContent);
       expect(renderedNames).toEqual(["Apple App", "Mango App", "Zebra App"]);
       logSpy.mockRestore();
     });
@@ -397,6 +396,30 @@ describe("DangerZone", () => {
         await Promise.resolve();
       });
       expect(container.textContent).toContain("Failed to remove shortcuts");
+    });
+
+    it("surfaces the migration-blocked message and skips removal when success is false", async () => {
+      setupOnePlatform();
+      // The @migration_blocked gate returns no app_ids/rom_ids — the handler
+      // must surface the message and not attempt any removal.
+      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
+        success: false,
+        message: "Blocked: RetroDECK migration pending",
+        blocked_by_migration: true,
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Super Nintendo (2)"));
+      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
+      await act(async () => {
+        modalProps?.onRemoveShortcuts?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Blocked: RetroDECK migration pending");
+      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
+      expect(vi.mocked(clearPlatformCollection)).not.toHaveBeenCalled();
     });
 
     it("renders the singular form for a 1-game platform", async () => {
@@ -564,7 +587,6 @@ describe("DangerZone", () => {
       vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
         success: true,
         message: "Removed 5",
-        removed_count: 5,
         app_ids: [10, 20],
         rom_ids: [1, 2],
       });
@@ -594,7 +616,6 @@ describe("DangerZone", () => {
       vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
         success: true,
         message: "Removed 0",
-        removed_count: 0,
         app_ids: [],
         rom_ids: [],
       });

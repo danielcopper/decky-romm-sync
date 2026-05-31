@@ -45,7 +45,7 @@ type FocusLike = { currentTarget: EventTarget | null };
  * scroll container. Use on DialogButton elements for gamepad navigation.
  */
 export function scrollFocusedToCenter(e: FocusLike): void {
-  const el = e.currentTarget as HTMLElement;
+  const el = e.currentTarget as HTMLElement | null;
   setTimeout(() => {
     if (!el) return;
     const scrollParent = findScrollParent(el);
@@ -63,7 +63,7 @@ export function scrollFocusedToCenter(e: FocusLike): void {
  * Use on the Play button so navigating back up reveals the banner/hero.
  */
 export function scrollToTop(e: FocusLike): void {
-  const el = e.currentTarget as HTMLElement;
+  const el = e.currentTarget as HTMLElement | null;
   setTimeout(() => {
     if (!el) return;
     // Use the outermost scroll parent so the banner/hero scrolls into view,

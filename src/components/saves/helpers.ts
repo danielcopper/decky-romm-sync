@@ -132,7 +132,7 @@ export function computeSyncSummary(
   }
 
   const hasConflict = conflicts.length > 0;
-  const fileCount = saveStatus.files?.length ?? 0;
+  const fileCount = saveStatus.files.length;
 
   if (hasConflict) return { syncSummaryText: "Conflict detected", syncSummaryColor: "#d94126" };
   if (fileCount > 0 && saveStatus.last_sync_check_at) {

@@ -65,7 +65,7 @@ const CustomSlotModal: FC<{
   return createElement(
     ConfirmModal,
     {
-      closeModal,
+      ...(closeModal !== undefined ? { closeModal } : {}),
       strTitle: "Custom Slot Name",
       bDisableBackgroundDismiss: true,
       onOK: () => {

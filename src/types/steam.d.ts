@@ -14,7 +14,12 @@ declare var SteamClient: {
       assetType: number,
     ): Promise<void>;
     ClearCustomArtworkForApp(appId: number, assetType: number): Promise<void>;
-    RegisterForAppDetails(appId: number, callback: (details: SteamAppDetails) => void): { unregister: () => void };
+    // The runtime may invoke the callback with no details before the app's
+    // data is loaded — `details` is genuinely absent on early fires.
+    RegisterForAppDetails(
+      appId: number,
+      callback: (details: SteamAppDetails | undefined) => void,
+    ): { unregister: () => void };
     RunGame(gameId: string | number, launchId: string, param2: number, param3: number): void;
     TerminateApp(appId: number, force: boolean): void;
     RegisterForGameActionStart(
@@ -88,7 +93,9 @@ interface SteamCollection {
 }
 
 declare var collectionStore: {
-  deckDesktopApps: { apps: Map<number, any> };
+  // Populated asynchronously by Steam — absent until the desktop-apps
+  // collection is built, so reads must guard.
+  deckDesktopApps?: { apps: Map<number, any> };
   localGamesCollection?: { apps: Map<number, any> };
   userCollections: SteamCollection[];
   GetCollection(id: string): SteamCollection | undefined;

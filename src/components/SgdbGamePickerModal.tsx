@@ -42,15 +42,15 @@ export interface SgdbGamePickerModalProps {
 const Tile: FC<{
   thumbUrl: string | null;
   title: string;
-  subtitle?: string;
+  subtitle?: string | undefined;
   onSelect: () => void;
   onFocus?: (e: { currentTarget: EventTarget | null }) => void;
   disabled?: boolean;
 }> = ({ thumbUrl, title, subtitle, onSelect, onFocus, disabled }) => (
   <DialogButton
     onClick={onSelect}
-    onFocus={onFocus}
-    disabled={disabled}
+    {...(onFocus !== undefined ? { onFocus } : {})}
+    {...(disabled !== undefined ? { disabled } : {})}
     style={{
       display: "flex",
       flexDirection: "column",
@@ -169,7 +169,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
 
   return (
     <ConfirmModal
-      closeModal={closeModal}
+      {...(closeModal !== undefined ? { closeModal } : {})}
       onOK={() => closeModal?.()}
       onCancel={() => closeModal?.()}
       strTitle="Choose SteamGridDB Game"

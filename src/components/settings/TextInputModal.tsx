@@ -31,7 +31,7 @@ export const TextInputModal: FC<TextInputModalProps> = ({
   const [value, setValue] = useState(initial);
   return (
     <ConfirmModal
-      closeModal={closeModal}
+      {...(closeModal !== undefined ? { closeModal } : {})}
       onOK={() => {
         if (field) {
           pendingEdits[field] = value;
@@ -45,7 +45,7 @@ export const TextInputModal: FC<TextInputModalProps> = ({
         focusOnMount={true}
         label={label}
         value={value}
-        bIsPassword={bIsPassword}
+        {...(bIsPassword !== undefined ? { bIsPassword } : {})}
         onChange={(e: ChangeEvent<HTMLInputElement>) => setValue(e.target.value)}
       />
     </ConfirmModal>

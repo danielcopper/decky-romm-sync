@@ -147,5 +147,7 @@ vi.mock("@decky/ui", () => {
     findSP: vi.fn(() => undefined),
     appActionButtonClasses: undefined,
     basicAppDetailsSectionStylerClasses: undefined,
+    appDetailsClasses: undefined,
+    playSectionClasses: undefined,
   };
 });

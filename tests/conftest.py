@@ -63,15 +63,24 @@ def _make_testable_plugin():
     class TestablePlugin(Plugin):
         """Plugin subclass that declares test-only attributes for type safety.
 
-        Only the genuinely test-fixture-only attributes (``_fake_api``,
-        ``_resolve_system``) live here. Test-fixture handles shared with
-        production wiring (``_state``, ``_http_adapter``, ...) are
-        declared on ``Plugin`` itself as ``Any``-typed annotation slots
+        Genuinely test-fixture-only attributes live here: ``_fake_api``,
+        ``_resolve_system``, ``_save_settings``, plus the Unit-of-Work
+        handles tests seed and assert against (``_uow``, ``_uow_factory``)
+        and the per-test ``_tmp_path`` scratch dir. Test-fixture handles
+        shared with production wiring (``_state``, ``_http_adapter``, ...)
+        are declared on ``Plugin`` itself as ``Any``-typed annotation slots
         so test-only construction paths type-check uniformly.
+        ``_save_settings`` is a test-only handle for the settings dict tests
+        thread into ``SaveService`` / ``PlaytimeService``; production threads
+        its settings store as ``self.settings``, never under this name.
         """
 
         _fake_api: Any
         _resolve_system: Any
+        _save_settings: Any
+        _uow: Any
+        _uow_factory: Any
+        _tmp_path: Any
 
     instance = TestablePlugin()
     instance._migration_service = MagicMock()

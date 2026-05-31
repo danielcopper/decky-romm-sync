@@ -80,7 +80,7 @@ function makeItem(overrides: Partial<DownloadItem> = {}): DownloadItem {
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | null {
-  const btn = Array.from(container.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes(text));
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent.includes(text));
   return (btn as HTMLButtonElement | undefined) ?? null;
 }
 
@@ -188,7 +188,7 @@ describe("DownloadQueue", () => {
 
       // startPolling calls setInterval(pollTick, 500). Pick out that id.
       const pollIntervalIds = setIntervalSpy.mock.results
-        .filter((_, i) => setIntervalSpy.mock.calls[i][1] === 500)
+        .filter((_, i) => setIntervalSpy.mock.calls[i]![1] === 500)
         .map((r) => r.value as ReturnType<typeof setInterval>);
       const expectedId = pollIntervalIds[pollIntervalIds.length - 1];
       expect(expectedId).toBeDefined();

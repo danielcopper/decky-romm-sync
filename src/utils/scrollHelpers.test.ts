@@ -41,10 +41,10 @@ function makeElement(opts: {
 /** Build a chain root → ... → leaf, append each to its parent, mount root in body. */
 function chain(...elements: HTMLElement[]): HTMLElement {
   for (let i = 0; i < elements.length - 1; i++) {
-    elements[i].appendChild(elements[i + 1]);
+    elements[i]!.appendChild(elements[i + 1]!); // i and i+1 both < elements.length
   }
-  document.body.appendChild(elements[0]);
-  return elements[elements.length - 1];
+  document.body.appendChild(elements[0]!); // caller always passes ≥1 element
+  return elements[elements.length - 1]!;
 }
 
 afterEach(() => {

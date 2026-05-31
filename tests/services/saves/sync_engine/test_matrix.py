@@ -21,6 +21,7 @@ from tests.services.saves._helpers import (
     _file_md5,
     _get_save_state,
     _install_rom,
+    _require_save_state,
     _seed_save_state,
     _seed_save_state_dict,
     _server_save,
@@ -716,7 +717,7 @@ class TestOwnUploadIds:
         # The save_id passed to upload_save should be None (POST path)
         assert returned_id is None
 
-        rom_state = _get_save_state(svc, 42)
+        rom_state = _require_save_state(svc, 42)
         own_ids = rom_state.own_upload_ids or []
         assert len(own_ids) == 1
         # The id in the list must match what fake returned
@@ -747,7 +748,7 @@ class TestOwnUploadIds:
         # Call internal upload with no server_save (POST path)
         _do_upload(svc, 42, str(save_file), "pokemon.srm", "gba", server_save=None)
 
-        rom_state = _get_save_state(svc, 42)
+        rom_state = _require_save_state(svc, 42)
         assert rom_state.own_upload_ids is not None
         # Should still have exactly one entry for that id
         assert rom_state.own_upload_ids.count(1000) == 1
@@ -775,7 +776,7 @@ class TestOwnUploadIds:
         server_save = fake.saves[100]
         _do_upload(svc, 42, str(save_file), "pokemon.srm", "gba", server_save=server_save)
 
-        rom_state = _get_save_state(svc, 42)
+        rom_state = _require_save_state(svc, 42)
         # This device pushed new content to id 100 → 100 is now ours; 99 untouched.
         assert rom_state.own_upload_ids == [99, 100]
 
@@ -802,7 +803,7 @@ class TestOwnUploadIds:
         _do_upload(svc, 42, str(save_file), "pokemon.srm", "gba", server_save=server_save)
         _do_upload(svc, 42, str(save_file), "pokemon.srm", "gba", server_save=server_save)
 
-        rom_state = _get_save_state(svc, 42)
+        rom_state = _require_save_state(svc, 42)
         assert rom_state.own_upload_ids is not None
         assert rom_state.own_upload_ids.count(100) == 1
         assert rom_state.own_upload_ids == [100]
@@ -867,7 +868,7 @@ class TestOwnUploadIds:
         assert result["status"] == "ok"
         # The switch re-uploads (PUTs) id=27's content to bump updated_at, so this
         # device is now the uploader of the bytes at id 27 → 27 joins the own list.
-        rom_state = _get_save_state(svc, 42)
+        rom_state = _require_save_state(svc, 42)
         assert rom_state.own_upload_ids == [26, 27]
 
 
@@ -907,7 +908,7 @@ class TestPromoteLocalSlotPersistsState:
         assert in_mem["count"] == 1
 
         # The promotion reached SQLite — re-reading the aggregate sees source=server.
-        reloaded = _get_save_state(svc, 42).slots["default"]
+        reloaded = _require_save_state(svc, 42).slots["default"]
         assert reloaded["source"] == "server"
         assert reloaded["count"] == 1
 
@@ -961,7 +962,7 @@ class TestDoUploadSaveFileStatePersistence:
 
         # The fresh hash reached SQLite — without it, the next sync re-detects
         # drift and uploads the same content again (#409 leak).
-        reloaded_file = _get_save_state(svc, 42).files["pokemon.srm"]
+        reloaded_file = _require_save_state(svc, 42).files["pokemon.srm"]
         assert reloaded_file.last_sync_hash == expected_hash
         assert reloaded_file.tracked_save_id == 100
 
@@ -1019,7 +1020,7 @@ class TestSyncRomSavesDispatch:
         # POST → save_id is None
         assert upload_calls[0][2]["save_id"] is None
 
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id is not None
         assert file_state.last_sync_hash
 
@@ -1060,7 +1061,7 @@ class TestSyncRomSavesDispatch:
         assert len(download_calls) == 1
         assert download_calls[0][1][0] == 100
 
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 100
         assert file_state.last_sync_hash  # updated to downloaded content's hash
 
@@ -1167,7 +1168,7 @@ class TestSyncRomSavesDispatch:
         # PUT — save_id is the existing server save id
         assert upload_calls[0][2]["save_id"] == 100
 
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
     def test_sync_rom_saves_skip_with_adopt_baseline_writes_hash(self, tmp_path):
@@ -1195,7 +1196,7 @@ class TestSyncRomSavesDispatch:
         # No I/O initiated.
         assert not any(c[0] in ("upload_save", "download_save_content", "download_save") for c in fake.call_log)
         # Baseline now persisted.
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
     def test_sync_rom_saves_recovery_download_when_no_local(self, tmp_path):
@@ -1290,7 +1291,7 @@ class TestSyncRomSavesDispatch:
 
         _do_sync(svc, 42)
 
-        after = _get_save_state(svc, 42).last_sync_check_at
+        after = _require_save_state(svc, 42).last_sync_check_at
         assert after is not None and isinstance(after, str)
 
 

@@ -6,8 +6,8 @@ from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
     _file_md5,
-    _get_save_state,
     _install_rom,
+    _require_save_state,
     _seed_save_state_dict,
     _server_save,
     _server_save_with_syncs,
@@ -448,7 +448,7 @@ class TestRollbackToVersion:
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert any(c[1][0] == 50 for c in download_calls)
         # State updated: tracked_save_id should now point to the rolled-back save
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
@@ -606,7 +606,7 @@ class TestRollbackToVersion:
         result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
         # Hash should match the (re-uploaded) local file content
         local_path = tmp_path / "saves" / "gba" / "pokemon.srm"
@@ -653,7 +653,7 @@ class TestRollbackToVersion:
         assert any(c[1][0] == 50 for c in download_calls)
         # Local state still updated to point at target — save_state was called
         # so disk file and state file remain consistent.
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
@@ -693,7 +693,7 @@ class TestRollbackToVersion:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert any(c[2].get("save_id") == 50 for c in upload_calls)
         # State updated
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
 
     @pytest.mark.asyncio
@@ -714,5 +714,5 @@ class TestRollbackToVersion:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert any(c[2].get("save_id") == 50 for c in upload_calls)
         # tracked_save_id still 50
-        file_state = _get_save_state(svc, 42).files["pokemon.srm"]
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50

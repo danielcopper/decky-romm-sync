@@ -156,7 +156,7 @@ function refreshMetadataInBackground(
 ): Promise<void> {
   return getRomMetadata(romId)
     .then((meta) => {
-      if (!cancelled() && meta) {
+      if (!cancelled()) {
         setter((prev) => ({ ...prev, metadata: meta }));
       }
     })
@@ -644,11 +644,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       gameInfoChildren.push(infoRow("platform", "Platform", state.platformName));
     }
 
-    if (meta.companies && meta.companies.length > 0) {
+    if (meta.companies.length > 0) {
       gameInfoChildren.push(infoRow("companies", "Developer / Publisher", meta.companies.join(", ")));
     }
 
-    if (meta.genres && meta.genres.length > 0) {
+    if (meta.genres.length > 0) {
       gameInfoChildren.push(
         createElement(
           "div",
@@ -668,7 +668,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       gameInfoChildren.push(infoRow("release-date", "Release Date", releaseDate));
     }
 
-    if (meta.game_modes && meta.game_modes.length > 0) {
+    if (meta.game_modes.length > 0) {
       gameInfoChildren.push(infoRow("game-modes", "Game Modes", meta.game_modes.join(", ")));
     }
 
@@ -1013,7 +1013,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
             createElement("span", { key: "date", className: "romm-cheevo-date" }, formatCheevoDate(earnedData.date)),
           );
         }
-        if (isHardcore && earnedData?.date_hardcore) {
+        if (isHardcore && earnedData.date_hardcore) {
           dateChildren.push(
             createElement(
               "span",

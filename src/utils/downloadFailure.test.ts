@@ -91,8 +91,8 @@ describe("handleGlobalDownloadFailure", () => {
       title: "RomM Sync",
       body: "Download failed: Super Mario 64 — ",
     });
-    const [[updated]] = (store.updateDownload as unknown as { mock: { calls: [DownloadItem][] } }).mock.calls;
-    expect(updated.error).toBe("");
+    const [updatedCall] = (store.updateDownload as unknown as { mock: { calls: [DownloadItem][] } }).mock.calls;
+    expect(updatedCall![0].error).toBe("");
   });
 
   it("ignores entries for other roms when selecting the prior state", () => {
@@ -114,10 +114,10 @@ describe("handleGlobalDownloadFailure", () => {
 
     handleGlobalDownloadFailure(makeEvent(), store, toast);
 
-    const [[updated]] = (store.updateDownload as unknown as { mock: { calls: [DownloadItem][] } }).mock.calls;
+    const [updatedCall] = (store.updateDownload as unknown as { mock: { calls: [DownloadItem][] } }).mock.calls;
     // Should NOT have pulled file_name / progress from rom 99.
-    expect(updated.file_name).toBe("");
-    expect(updated.progress).toBe(0);
+    expect(updatedCall![0].file_name).toBe("");
+    expect(updatedCall![0].progress).toBe(0);
   });
 });
 

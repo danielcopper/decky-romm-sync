@@ -53,8 +53,7 @@ async function processUnitShortcuts(
   total: number,
 ): Promise<void> {
   let lastHeartbeat = Date.now();
-  for (let i = 0; i < data.shortcuts.length; i++) {
-    const item = data.shortcuts[i];
+  for (const [i, item] of data.shortcuts.entries()) {
     try {
       updateSyncProgress({
         current: i + 1,
