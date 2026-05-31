@@ -76,7 +76,6 @@ describe("DangerZone", () => {
     vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
       success: true,
       message: "",
-      removed_count: 0,
       app_ids: [],
       rom_ids: [],
     });
@@ -564,7 +563,6 @@ describe("DangerZone", () => {
       vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
         success: true,
         message: "Removed 5",
-        removed_count: 5,
         app_ids: [10, 20],
         rom_ids: [1, 2],
       });
@@ -594,7 +592,6 @@ describe("DangerZone", () => {
       vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
         success: true,
         message: "Removed 0",
-        removed_count: 0,
         app_ids: [],
         rom_ids: [],
       });

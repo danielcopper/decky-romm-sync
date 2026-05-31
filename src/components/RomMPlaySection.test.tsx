@@ -114,6 +114,12 @@ vi.mock("@decky/ui", async () => {
   const { createElement: ce } = await import("react");
   return {
     basicAppDetailsSectionStylerClasses: { PlaySection: "play-section-cls" },
+    // deckyUiInternals re-exports these @decky/ui internals; they must exist on
+    // the mock even when this suite doesn't assert on them.
+    appActionButtonClasses: undefined,
+    appDetailsClasses: undefined,
+    playSectionClasses: undefined,
+    findSP: vi.fn(() => undefined),
     ConfirmModal: (p: AnyProps) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
     DialogButton: ({
       children,

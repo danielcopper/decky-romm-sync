@@ -13,7 +13,6 @@
 import { useState, useEffect, useRef, FC, createElement } from "react";
 import { toaster } from "@decky/api";
 import {
-  basicAppDetailsSectionStylerClasses,
   ConfirmModal,
   DialogButton,
   Focusable,
@@ -23,6 +22,7 @@ import {
   showContextMenu,
   showModal,
 } from "@decky/ui";
+import { basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { SgdbGamePickerModalContent } from "./SgdbGamePickerModal";

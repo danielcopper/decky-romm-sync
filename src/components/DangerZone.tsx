@@ -210,7 +210,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         await reportRemovalResults(result.rom_ids);
       }
       await clearAllRomMCollections();
-      setStatus(result.message);
+      setStatus(result.message ?? "All shortcuts removed");
     } catch {
       setStatus("Failed to remove shortcuts");
     }

@@ -1,4 +1,4 @@
-import { findSP } from "@decky/ui";
+import { findSP } from "./deckyUiInternals";
 
 const ROMM_PLAY_HIDE_ID = "romm-hide-native-play";
 const ROMM_FOCUS_STYLES_ID = "romm-focus-styles";
