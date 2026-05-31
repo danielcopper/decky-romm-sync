@@ -6,6 +6,7 @@
     "jsx": "react-jsx",
     "declaration": false,
     "moduleResolution": "node",
+    "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "esModuleInterop": true,

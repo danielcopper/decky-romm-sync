@@ -8,6 +8,7 @@
     "build:dev": "rollup -c rollup.dev.config.js",
     "size": "size-limit",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\"",
     "test": "vitest run",

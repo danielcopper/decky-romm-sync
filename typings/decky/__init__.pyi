@@ -1,5 +1,6 @@
 """Type stubs for the decky module provided by Decky Loader at runtime."""
-__version__ = '1.0.0'
+
+__version__ = "1.0.0"
 
 import logging
 from typing import Any

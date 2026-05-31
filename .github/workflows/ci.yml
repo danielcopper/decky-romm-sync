@@ -62,6 +62,9 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Type check
+        run: pnpm typecheck
+
       - name: Check bundle size budget
         run: pnpm size
 
@@ -107,6 +110,9 @@ jobs:
       - name: Ruff check
         run: ruff check .
 
+      - name: Ruff format check
+        run: ruff format --check .
+
       - name: Basedpyright check
         run: basedpyright
 
@@ -118,6 +124,9 @@ jobs:
 
       - name: Check aggregate field-assignment ban
         run: python scripts/check_aggregate_field_assignment.py
+
+      - name: Check no bare ignores
+        run: bash scripts/check_no_bare_ignores.sh
 
   sonarcloud:
     runs-on: ubuntu-latest
