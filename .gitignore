@@ -41,6 +41,7 @@ log.txt
 .worktrees/
 .coverage
 coverage.xml
+coverage.json
 
 # Frontend test coverage
 coverage/
