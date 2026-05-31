@@ -145,6 +145,8 @@ RomM exposes three mutually exclusive file-layout flags on every ROM detail. The
 
 **Why nested-single is flattened locally**: a nested-single-file ROM has no sidecars by definition — RomM would mark it `has_multiple_files` if any companion files existed. The parent folder adds no value at the local layer, so the plugin drops it and stores the ROM directly in the platform folder, matching the simple-single-file layout. Multi-file ROMs keep their per-game subfolder because they contain multiple related files that belong together.
 
+**Extract-vs-flat gate keys on `len(files) > 1`, not on `has_multiple_files`**: the plugin decides ZIP-extract vs single-file download with the `is_multi_file_download` helper (`domain/rom_files.py`), which returns `len(files) > 1 OR has_multiple_files`. This mirrors RomM's own download gate, which zips whenever the **total** file count is not exactly 1. RomM computes `has_multiple_files` from **top-level** files only, so the two counts disagree for a nested layout: a canonical Switch game (base file at the root plus `update/` and `dlc/` in subfolders) has exactly one top-level file (`has_multiple_files=False`, `has_nested_single_file=True`) yet more than one total file, so RomM serves a ZIP. Keying on `has_multiple_files` alone would take the single-file path and write the ZIP bytes verbatim into one unreadable `.nsp`. The boolean is kept as a defensive fallback for payloads that omit `files`; a genuine nested-single ROM has `len(files) == 1` and correctly stays on the flat single-file path.
+
 Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
 
 ### Adapters (`py_modules/adapters/`)

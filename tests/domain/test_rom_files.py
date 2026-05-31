@@ -5,7 +5,13 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 
-from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u, resolve_local_file_name
+from domain.rom_files import (
+    build_m3u_content,
+    detect_launch_file,
+    is_multi_file_download,
+    needs_m3u,
+    resolve_local_file_name,
+)
 
 
 def _with_sizes(paths: list[str]) -> list[tuple[str, int]]:
@@ -18,6 +24,69 @@ def _with_sizes(paths: list[str]) -> list[tuple[str, int]]:
             size = 0
         result.append((p, size))
     return result
+
+
+class TestIsMultiFileDownload:
+    def test_zero_files_and_no_flag_is_single(self):
+        assert is_multi_file_download({"files": []}) is False
+
+    def test_one_file_and_no_flag_is_single(self):
+        assert is_multi_file_download({"files": [{"file_name": "game.nsp"}]}) is False
+
+    def test_two_files_is_multi(self):
+        rom_detail = {
+            "files": [{"file_name": "base.nsp"}, {"file_name": "update/patch.nsp"}],
+        }
+        assert is_multi_file_download(rom_detail) is True
+
+    def test_three_files_is_multi(self):
+        rom_detail = {
+            "files": [
+                {"file_name": "base.nsp"},
+                {"file_name": "update/patch.nsp"},
+                {"file_name": "dlc/extra.nsp"},
+            ],
+        }
+        assert is_multi_file_download(rom_detail) is True
+
+    def test_flag_true_with_one_file_falls_back_to_multi(self):
+        # Defensive fallback: trust the boolean even when files implies single.
+        rom_detail = {"has_multiple_files": True, "files": [{"file_name": "game.zip"}]}
+        assert is_multi_file_download(rom_detail) is True
+
+    def test_nested_switch_single_top_level_but_many_files_is_multi(self):
+        # #855: Switch base/update/DLC folder — exactly one top-level file so
+        # has_multiple_files is False, but total file count > 1 → RomM zips it.
+        rom_detail = {
+            "has_multiple_files": False,
+            "has_nested_single_file": True,
+            "files": [
+                {"file_name": "base.nsp"},
+                {"file_name": "update/patch.nsp"},
+                {"file_name": "dlc/extra.nsp"},
+            ],
+        }
+        assert is_multi_file_download(rom_detail) is True
+
+    def test_genuine_nested_single_stays_single(self):
+        # has_nested_single_file with exactly one file must NOT be treated as multi.
+        rom_detail = {
+            "has_multiple_files": False,
+            "has_nested_single_file": True,
+            "files": [{"file_name": "game.chd"}],
+        }
+        assert is_multi_file_download(rom_detail) is False
+
+    def test_missing_files_key_uses_flag_only(self):
+        assert is_multi_file_download({"has_multiple_files": True}) is True
+        assert is_multi_file_download({"has_multiple_files": False}) is False
+
+    def test_missing_both_keys_is_single(self):
+        assert is_multi_file_download({}) is False
+
+    def test_files_explicitly_none_uses_flag_only(self):
+        assert is_multi_file_download({"files": None, "has_multiple_files": True}) is True
+        assert is_multi_file_download({"files": None}) is False
 
 
 class TestNeedsM3u:

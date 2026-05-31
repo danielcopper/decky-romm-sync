@@ -551,6 +551,50 @@ class TestDiskSpaceMultiFile:
 
         assert result["success"] is True
 
+    @pytest.mark.asyncio
+    async def test_nested_multi_file_rom_requires_double_space(self, plugin, tmp_path):
+        """#855: nested-multi (has_multiple_files=False, len(files) > 1) reserves 2x."""
+        from unittest.mock import AsyncMock
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+
+        file_size = 500 * 1024 * 1024  # 500MB
+        rom_detail = {
+            "id": 44,
+            "name": "Switch Game",
+            "fs_name": "game.nsp",
+            "fs_size_bytes": file_size,
+            "platform_slug": "switch",
+            "platform_name": "Nintendo Switch",
+            "has_multiple_files": False,
+            "has_nested_single_file": True,
+            "files": [
+                {"file_name": "game.nsp"},
+                {"file_name": "update/patch.nsp"},
+            ],
+        }
+
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
+
+        # 700MB free: enough for single-file (600MB) but not multi-file (1100MB).
+        # If the gate only read has_multiple_files (False), this would pass —
+        # the 2x reservation is what makes it fail.
+        plugin._download_service._download_file_store.disk_free = lambda _path: 700 * 1024 * 1024
+        result = await plugin.start_download(44)
+
+        assert result["success"] is False
+        assert "disk space" in result["message"].lower()
+
 
 class TestMultiFileRomDeletion:
     @pytest.mark.asyncio
@@ -815,6 +859,143 @@ class TestDoDownloadMultiFile:
         # Status is completed
         assert plugin._download_service._download_queue[55]["status"] == "completed"
 
+    @pytest.mark.asyncio
+    async def test_nested_multi_file_takes_extract_path(self, plugin, tmp_path):
+        """#855: one top-level file but len(files) > 1 → RomM zips → EXTRACT path.
+
+        Switch base/update/DLC: ``has_multiple_files=False`` (single top-level
+        file) yet ``len(files) > 1``. RomM streams a mod_zip ZIP, so the plugin
+        must extract it into a per-game folder instead of writing the ZIP bytes
+        verbatim into one .nsp.
+        """
+        import zipfile as zf
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "switch"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "Zelda.nsp")
+
+        # Real ZIP mirroring RomM's mod_zip output: base at root + nested update/DLC
+        zip_content_path = tmp_path / "source.zip"
+        with zf.ZipFile(str(zip_content_path), "w") as z:
+            z.writestr("Zelda.nsp", b"\x00" * 100)
+            z.writestr("update/Zelda_update.nsp", b"\x00" * 100)
+            z.writestr("dlc/Zelda_dlc.nsp", b"\x00" * 100)
+        zip_bytes = zip_content_path.read_bytes()
+
+        rom_detail = {
+            "id": 99,
+            "name": "Zelda",
+            "fs_name": "Zelda.nsp",
+            "fs_name_no_ext": "Zelda",
+            "platform_slug": "switch",
+            "platform_name": "Nintendo Switch",
+            "has_multiple_files": False,
+            "has_nested_single_file": True,
+            "files": [
+                {"file_name": "Zelda.nsp"},
+                {"file_name": "update/Zelda_update.nsp"},
+                {"file_name": "dlc/Zelda_dlc.nsp"},
+            ],
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(zip_bytes)
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[99] = {"rom_id": 99, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(99, rom_detail, target_path, "switch", "Zelda.nsp")
+
+        # ZIP is extracted into a per-game folder (not written verbatim into one .nsp)
+        extract_dir = roms_dir / "Zelda"
+        assert extract_dir.is_dir()
+        assert (extract_dir / "Zelda.nsp").exists()
+        assert (extract_dir / "update" / "Zelda_update.nsp").exists()
+        assert (extract_dir / "dlc" / "Zelda_dlc.nsp").exists()
+        # The verbatim single-file artifact must NOT exist
+        assert not os.path.exists(target_path)
+        # .zip.tmp is cleaned up
+        assert not os.path.exists(target_path + ".zip.tmp")
+        # installed_roms entry registers rom_dir (extract path), not a flat file
+        installed = plugin._state["installed_roms"].get("99")
+        assert installed is not None
+        assert installed["rom_dir"] == str(extract_dir)
+        assert plugin._download_service._download_queue[99]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_nested_multi_file_cleanup_removes_extract_dir(self, plugin, tmp_path):
+        """#855: a nested-multi download failure must remove the extract dir.
+
+        The partial-download cleanup keys on the same multi-file gate, so a
+        ZIP-extraction failure for a nested-multi ROM must tear down the
+        per-game folder (the 2x-reservation multi-file branch), not leave it.
+        """
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "switch"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "Zelda.nsp")
+
+        # Pre-seed an extract dir as if extraction had partially happened.
+        extract_dir = roms_dir / "Zelda"
+        extract_dir.mkdir()
+        (extract_dir / "Zelda.nsp").write_bytes(b"\x00" * 100)
+
+        rom_detail = {
+            "id": 99,
+            "name": "Zelda",
+            "fs_name": "Zelda.nsp",
+            "fs_name_no_ext": "Zelda",
+            "platform_slug": "switch",
+            "platform_name": "Nintendo Switch",
+            "has_multiple_files": False,
+            "has_nested_single_file": True,
+            "files": [
+                {"file_name": "Zelda.nsp"},
+                {"file_name": "update/Zelda_update.nsp"},
+            ],
+        }
+
+        def fake_download(_rom_id, _filename, _dest, _progress_callback=None):
+            raise OSError("network died mid-download")
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[99] = {"rom_id": 99, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(99, rom_detail, target_path, "switch", "Zelda.nsp")
+
+        # Failure path keyed on the multi-file gate → extract dir torn down.
+        assert not extract_dir.exists()
+        assert plugin._download_service._download_queue[99]["status"] == "failed"
+
 
 class TestDoDownloadNestedSingleFile:
     """Tests for has_nested_single_file: fs_name is the parent folder, not the file (#226)."""
@@ -915,6 +1096,10 @@ class TestDoDownloadNestedSingleFile:
         assert installed["file_path"] == target_path
         # Must NOT keep the parent-folder name from fs_name as a real on-disk file
         assert not os.path.exists(str(roms_dir / "My Game"))
+        # #855 regression: a genuine nested-single ROM (len(files) == 1) must
+        # stay on the single-file path — it flattens to a flat file and never
+        # registers an extract directory.
+        assert "rom_dir" not in installed
 
     @pytest.mark.asyncio
     async def test_nested_single_file_start_download_uses_files_entry(self, plugin, tmp_path):

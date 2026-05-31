@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING
 
 from models.state import InstalledRomEntry, PluginState
 
-from domain.rom_files import build_m3u_content, detect_launch_file, needs_m3u, resolve_local_file_name
+from domain.rom_files import (
+    build_m3u_content,
+    detect_launch_file,
+    is_multi_file_download,
+    needs_m3u,
+    resolve_local_file_name,
+)
 from lib.errors import error_response
 
 if TYPE_CHECKING:
@@ -186,7 +192,7 @@ class DownloadService:
         self._download_file_store.make_dirs(roms_dir)
         free_space = self._download_file_store.disk_free(roms_dir)
         buffer = 100 * 1024 * 1024
-        required = file_size * 2 + buffer if rom_detail.get("has_multiple_files") else file_size + buffer
+        required = file_size * 2 + buffer if is_multi_file_download(rom_detail) else file_size + buffer
         if file_size and free_space < required:
             self._download_in_progress.discard(rom_id)
             free_mb = free_space // (1024 * 1024)
@@ -312,7 +318,7 @@ class DownloadService:
     async def _do_download(self, rom_id, rom_detail, target_path, system, file_name):
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
-        has_multiple = rom_detail.get("has_multiple_files", False)
+        has_multiple = is_multi_file_download(rom_detail)
         progress_callback = self._make_progress_callback(rom_id, rom_name, platform_name, file_name)
 
         try:
@@ -351,14 +357,14 @@ class DownloadService:
 
         except asyncio.CancelledError:
             self._download_queue[rom_id]["status"] = "cancelled"
-            self._cleanup_partial_download(target_path, rom_detail.get("has_multiple_files", False), file_name)
+            self._cleanup_partial_download(target_path, has_multiple, file_name)
             self._logger.info(f"Download cancelled: {rom_name}")
             raise
 
         except Exception as e:
             self._download_queue[rom_id]["status"] = "failed"
             self._download_queue[rom_id]["error"] = str(e)
-            self._cleanup_partial_download(target_path, rom_detail.get("has_multiple_files", False), file_name)
+            self._cleanup_partial_download(target_path, has_multiple, file_name)
             self._logger.error(f"Download failed for {rom_name}: {e}")
             await self._emit(
                 "download_failed",
