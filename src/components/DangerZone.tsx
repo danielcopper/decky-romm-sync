@@ -138,10 +138,15 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     setActionStatus(`Removing ${p.name} shortcuts...`);
     try {
       const result = await removePlatformShortcuts(p.slug);
-      if (result.app_ids) {
-        for (const appId of result.app_ids) {
-          removeShortcut(appId);
-        }
+      // The @migration_blocked gate short-circuits to { success: false,
+      // message, blocked_by_migration } with no app_ids/rom_ids — surface
+      // that message instead of cosmetically reporting a removal.
+      if (!result.success) {
+        setActionStatus(result.message ?? "Failed to remove shortcuts");
+        return;
+      }
+      for (const appId of result.app_ids ?? []) {
+        removeShortcut(appId);
       }
       if (result.rom_ids?.length) {
         await reportRemovalResults(result.rom_ids);
@@ -421,7 +426,7 @@ const WhitelistSection: FC<WhitelistSectionProps> = ({
             <TextField
               label="Search games"
               value={whitelistSearch}
-              onChange={(e) => setWhitelistSearch(e?.target?.value ?? "")}
+              onChange={(e) => setWhitelistSearch(e.target.value)}
             />
           </PanelSectionRow>
           <PanelSectionRow>
@@ -601,7 +606,7 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
     setLoading(true);
     try {
       const result = await getRegistryPlatforms();
-      setPlatforms(result.platforms || []);
+      setPlatforms(result.platforms);
     } catch {
       setPlatforms([]);
     }

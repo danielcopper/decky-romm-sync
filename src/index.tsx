@@ -163,6 +163,7 @@ export default definePlugin(() => {
 
   detach(
     (async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `initDone` is flipped to true inside the awaited `loadAppIdsAndMetadata()`; TS's control-flow analysis can't see that cross-function mutation and narrows it to the `false` literal here. The guard is the real loop-exit: on success `initAttempt` is never incremented (only the catch bumps it), so without `!initDone` the loop would spin forever.
       while (!initDone && initAttempt < RETRY_DELAYS.length + 1) {
         try {
           await loadAppIdsAndMetadata();
@@ -268,7 +269,7 @@ export default definePlugin(() => {
       (async () => {
         try {
           // Create/update platform collections
-          if (data.platform_app_ids && Object.keys(data.platform_app_ids).length > 0) {
+          if (Object.keys(data.platform_app_ids).length > 0) {
             await createOrUpdateCollections(data.platform_app_ids);
           }
 
@@ -281,7 +282,7 @@ export default definePlugin(() => {
             const suffix = ` (${hostname})`;
 
             // Clean stale platform collections
-            const activePlatforms = new Set(Object.keys(data.platform_app_ids ?? {}));
+            const activePlatforms = new Set(Object.keys(data.platform_app_ids));
             const stalePlatform = collectionStore.userCollections.filter((c) => {
               if (!c.displayName.startsWith("RomM: ")) return false;
               const afterPrefix = c.displayName.slice(6);
@@ -375,7 +376,7 @@ export default definePlugin(() => {
   const syncCollectionsListener = addEventListener<[SyncCollectionsData]>(
     "sync_collections",
     (data: SyncCollectionsData) => {
-      logInfo(`sync_collections received: ${Object.keys(data.platform_app_ids ?? {}).length} platforms`);
+      logInfo(`sync_collections received: ${Object.keys(data.platform_app_ids).length} platforms`);
     },
   );
 
@@ -390,8 +391,8 @@ export default definePlugin(() => {
       updateDownload({
         rom_id: data.rom_id,
         rom_name: data.rom_name,
-        platform_name: data.platform_name ?? "",
-        file_name: data.file_name ?? "",
+        platform_name: data.platform_name,
+        file_name: data.file_name,
         status: data.status as "queued" | "downloading" | "completed" | "failed" | "cancelled",
         progress: data.progress,
         bytes_downloaded: data.bytes_downloaded,

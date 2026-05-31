@@ -152,7 +152,7 @@ describe("RegisteredDevicesSection", () => {
         makeDevice({ id: "device-bbbb2222", name: "Desktop", is_current_device: false }),
       ];
       const { container } = render(<RegisteredDevicesSection {...defaultProps({ registeredDevices: devices })} />);
-      const matches = container.textContent?.match(/\(this device\)/g) ?? [];
+      const matches = container.textContent.match(/\(this device\)/g) ?? [];
       expect(matches).toHaveLength(1);
     });
 

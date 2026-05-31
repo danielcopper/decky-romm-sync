@@ -58,7 +58,7 @@ export const ControllerSection: FC<ControllerSectionProps> = ({
         <>
           <PanelSectionRow>
             <Field
-              label={`RetroArch input_driver: "${retroarchWarning?.current}"`}
+              label={`RetroArch input_driver: "${retroarchWarning.current}"`}
               description="Controller navigation in RetroArch menus may not work with this setting."
             />
           </PanelSectionRow>

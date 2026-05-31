@@ -328,12 +328,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             detail: { type: "save_sync", rom_id: romId, has_conflict: hasConflict },
           }),
         );
-        const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
+        const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus.save_sync_display, saveStatus);
         setInfo((prev) => ({
           ...prev,
           saveSyncStatus: ss,
           saveSyncLabel: sl,
-          activeSlot: saveStatus && "active_slot" in saveStatus ? (saveStatus.active_slot ?? null) : prev.activeSlot,
+          activeSlot: "active_slot" in saveStatus ? (saveStatus.active_slot ?? null) : prev.activeSlot,
         }));
       } catch (e) {
         detach(debugLog(`RomMPlaySection: background save check error: ${e}`));
@@ -488,7 +488,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     try {
       const result = await syncRomSaves(info.romId);
       if (result.success) {
-        const n = result.synced ?? 0;
+        const n = result.synced;
         const c = result.conflicts?.length ?? 0;
         let label: string;
         if (n === 0) {

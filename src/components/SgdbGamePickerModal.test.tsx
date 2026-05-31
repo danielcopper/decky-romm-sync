@@ -14,7 +14,7 @@ vi.mock("../utils/artwork", () => ({
 
 // Find a <button> whose text content contains `text`.
 function buttonContaining(container: HTMLElement, text: string): HTMLButtonElement {
-  const btn = Array.from(container.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes(text));
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent.includes(text));
   if (!btn) throw new Error(`button containing "${text}" not found`);
   return btn as HTMLButtonElement;
 }

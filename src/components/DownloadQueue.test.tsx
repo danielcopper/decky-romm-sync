@@ -80,7 +80,7 @@ function makeItem(overrides: Partial<DownloadItem> = {}): DownloadItem {
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | null {
-  const btn = Array.from(container.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes(text));
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent.includes(text));
   return (btn as HTMLButtonElement | undefined) ?? null;
 }
 

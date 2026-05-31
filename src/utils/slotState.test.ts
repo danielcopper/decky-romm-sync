@@ -93,13 +93,6 @@ describe("applyRefreshSlotResult", () => {
     const next = lastUpdater(setter)(refreshState({ activeSlot: "previous" }));
     expect(next.activeSlot).toBeNull();
   });
-
-  it("defaults a missing slots field to []", () => {
-    const setter = makeSetter<RefreshState>();
-    applyRefreshSlotResult<RefreshState>({ success: true } as unknown as SlotsResponse, setter);
-    const next = lastUpdater(setter)(refreshState({ availableSlots: [slot("stale")] }));
-    expect(next.availableSlots).toEqual([]);
-  });
 });
 
 describe("applyLoadSlotsResult", () => {
@@ -178,12 +171,5 @@ describe("applyLoadSlotsResult", () => {
     );
     const next = lastUpdater(setter)(loadState({ activeSlot: "previous" }));
     expect(next.activeSlot).toBeNull();
-  });
-
-  it("on success: defaults a missing slots field to []", () => {
-    const setter = makeSetter<LoadState>();
-    applyLoadSlotsResult<LoadState>({ success: true } as unknown as SlotsResponse, setter, { current: true }, vi.fn());
-    const next = lastUpdater(setter)(loadState({ availableSlots: [slot("stale")] }));
-    expect(next.availableSlots).toEqual([]);
   });
 });

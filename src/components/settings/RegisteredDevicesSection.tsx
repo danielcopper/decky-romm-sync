@@ -45,7 +45,7 @@ export const RegisteredDevicesSection: FC<RegisteredDevicesSectionProps> = ({
             `${device.client ?? "unknown client"} v${device.client_version ?? "?"}`,
             ...(device.platform ? [device.platform] : []),
             `last seen ${formatRelativeTime(device.last_seen)}`,
-            `ID ${String(device.id ?? "").slice(0, 8) || "—"}`,
+            `ID ${String(device.id).slice(0, 8) || "—"}`,
           ];
           return (
             <PanelSectionRow key={device.id || `idx-${i}`}>

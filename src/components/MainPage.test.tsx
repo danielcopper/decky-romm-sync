@@ -246,7 +246,7 @@ function lastConfirmModalProps<T = Record<string, unknown>>(): T | null {
 }
 
 function fieldLabels(container: HTMLElement): string[] {
-  return Array.from(container.querySelectorAll('[data-testid="field-label"]')).map((n) => n.textContent ?? "");
+  return Array.from(container.querySelectorAll('[data-testid="field-label"]')).map((n) => n.textContent);
 }
 
 // -----------------------------------------------------------------------------
@@ -804,7 +804,7 @@ describe("MainPage", () => {
         remove_count: 2,
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d?.includes("ROMs: 3 added, 1 updated, 2 removed"))).toBe(true);
+      expect(descs.some((d) => d.includes("ROMs: 3 added, 1 updated, 2 removed"))).toBe(true);
     });
 
     it("renders Platforms section from platform_collection_diff", async () => {
@@ -816,7 +816,7 @@ describe("MainPage", () => {
         },
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d?.includes("Platforms: 2 added, 1 removed"))).toBe(true);
+      expect(descs.some((d) => d.includes("Platforms: 2 added, 1 removed"))).toBe(true);
     });
 
     it("renders Collections section from collection_diff", async () => {
@@ -828,7 +828,7 @@ describe("MainPage", () => {
         },
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d?.includes("Collections: 2 added, 1 removed"))).toBe(true);
+      expect(descs.some((d) => d.includes("Collections: 2 added, 1 removed"))).toBe(true);
     });
 
     it("filters zero counts from formatChanges (e.g. 0 removed → not rendered)", async () => {
@@ -839,7 +839,7 @@ describe("MainPage", () => {
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       // Should render "ROMs: 1 added" — no "updated" or "removed" tokens.
-      const romsLine = descs.find((d) => d?.startsWith("ROMs:"));
+      const romsLine = descs.find((d) => d.startsWith("ROMs:"));
       expect(romsLine).toBe("ROMs: 1 added");
     });
   });

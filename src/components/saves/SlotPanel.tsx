@@ -209,7 +209,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
 
   const { syncSummaryText, syncSummaryColor } = computeSyncSummary(isActive, saveStatus, conflicts);
 
-  const fileCount = isActive ? (saveStatus?.files?.length ?? 0) : (slotFiles?.length ?? slot.count);
+  const fileCount = isActive ? (saveStatus?.files.length ?? 0) : (slotFiles?.length ?? slot.count);
 
   const panelClasses = ["romm-slot-panel", isActive ? "romm-slot-panel-active" : ""].filter(Boolean).join(" ");
 

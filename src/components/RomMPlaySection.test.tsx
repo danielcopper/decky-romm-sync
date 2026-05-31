@@ -1354,12 +1354,13 @@ describe("RomMPlaySection", () => {
       );
     });
 
-    it("success with synced=undefined / conflicts=undefined → treats both as 0", async () => {
+    it("success with synced=0 / conflicts=undefined → treats conflicts as 0", async () => {
       const items = await setupSavesAction();
       vi.mocked(backend.syncRomSaves).mockResolvedValue({
         success: true,
         message: "",
-      } as never);
+        synced: 0,
+      });
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
         await items[2]!.props.onClick?.();

@@ -639,7 +639,7 @@ describe("SavesTab", () => {
       const initialCount = capturedSlotPanelProps.length;
       expect(initialCount).toBe(2);
       act(() => {
-        capturedSlotPanelProps[0]?.onVersionRestored?.();
+        capturedSlotPanelProps[0]?.onVersionRestored();
       });
       expect(capturedSlotPanelProps.length).toBe(initialCount + 2);
     });
@@ -650,7 +650,7 @@ describe("SavesTab", () => {
       globalThis.addEventListener("romm_data_changed", listener);
       try {
         act(() => {
-          capturedSlotPanelProps[0]?.onSlotDeleted?.();
+          capturedSlotPanelProps[0]?.onSlotDeleted();
         });
         expect(listener).toHaveBeenCalledTimes(1);
         const event = listener.mock.calls[0]?.[0] as CustomEvent;

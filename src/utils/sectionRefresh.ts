@@ -28,7 +28,7 @@ export function refreshActiveSlotInBackground<S extends ActiveSlotFields>(
 ): void {
   getSaveStatus(romId)
     .then((saveStatus) => {
-      if (!cancelled() && saveStatus && "active_slot" in saveStatus) {
+      if (!cancelled() && "active_slot" in saveStatus) {
         setter((prev) => ({ ...prev, activeSlot: saveStatus.active_slot ?? null }));
       }
     })

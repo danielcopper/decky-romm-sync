@@ -23,7 +23,7 @@ import {
   domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
 import { useVersionError } from "./VersionErrorCard";
-import type { MigrationStatus, SaveSortMigrationStatus } from "../types";
+import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata } from "../types";
 
 // Type-only imports — vi.mock(...) below replaces the runtime impl, but
 // pinning captured-props shapes to the real component keeps assertions in
@@ -147,6 +147,29 @@ const flushAsync = () =>
 
 let testAppId = 5000;
 
+// Complete RomMetadata fixture. The backend always serializes every field
+// (RomMetadata is a strict dataclass → MetadataCacheEntry TypedDict), so the
+// component never sees a partial metadata object. Tests that only care about a
+// subset still get a fully-shaped object so array fields (genres/companies/
+// game_modes) are present. The `& Record<string, unknown>` return makes the
+// fixture usable both for the `getRomMetadata` mock (typed `RomMetadata`) and
+// the `getCachedGameDetail` mock's loosely-typed `metadata` field — a
+// RomMetadata genuinely is a string-keyed record at runtime.
+function makeMetadata(overrides: Partial<RomMetadata> = {}): RomMetadata & Record<string, unknown> {
+  return {
+    summary: "",
+    genres: [],
+    companies: [],
+    first_release_date: null,
+    average_rating: null,
+    game_modes: [],
+    player_count: "",
+    cached_at: 0,
+    steam_categories: [],
+    ...overrides,
+  };
+}
+
 describe("RomMGameInfoPanel", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -201,7 +224,7 @@ describe("RomMGameInfoPanel", () => {
       retrodeck: { pending: false },
       save_sort: { pending: false },
     });
-    vi.mocked(backend.getRomMetadata).mockResolvedValue({} as never);
+    vi.mocked(backend.getRomMetadata).mockResolvedValue(makeMetadata());
     vi.mocked(backend.getInstalledRom).mockResolvedValue(null);
     vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
     vi.mocked(backend.checkPlatformBios).mockResolvedValue({ needs_bios: false });
@@ -317,7 +340,7 @@ describe("RomMGameInfoPanel", () => {
         platform_slug: "snes",
         installed: true,
         save_sync_enabled: true,
-        metadata: { summary: "An RPG.", genres: ["RPG"] } as never,
+        metadata: makeMetadata({ summary: "An RPG.", genres: ["RPG"] }),
         ra_id: 7,
         stale_fields: ["metadata"],
         bios_status: {
@@ -347,7 +370,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 99,
-        metadata: { summary: "ok" } as never,
+        metadata: makeMetadata({ summary: "ok" }),
         stale_fields: [],
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
@@ -372,7 +395,7 @@ describe("RomMGameInfoPanel", () => {
         rom_id: 99,
         installed: false,
         stale_fields: [],
-        metadata: {} as never,
+        metadata: makeMetadata(),
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -385,7 +408,7 @@ describe("RomMGameInfoPanel", () => {
         rom_id: 99,
         save_sync_enabled: false,
         stale_fields: [],
-        metadata: {} as never,
+        metadata: makeMetadata(),
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -405,7 +428,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 42,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.getSaveSlots).mockResolvedValue({
@@ -429,7 +452,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 42,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.isSaveTrackingConfigured).mockRejectedValue(new Error("net"));
@@ -500,7 +523,7 @@ describe("RomMGameInfoPanel", () => {
         rom_id: 100,
         installed: true,
         platform_name: "Super Nintendo",
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.getInstalledRom).mockResolvedValue({
@@ -533,7 +556,7 @@ describe("RomMGameInfoPanel", () => {
         rom_id: 100,
         installed: true,
         platform_name: "Super Nintendo",
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.getInstalledRom).mockResolvedValue({
@@ -564,7 +587,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 100,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
@@ -586,7 +609,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 100,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -610,7 +633,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: romId,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const view = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -674,7 +697,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 55,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -944,7 +967,7 @@ describe("RomMGameInfoPanel", () => {
           all_downloaded: true,
           active_core_label: "FROM_CORE_CHANGED",
         } as never,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       await act(async () => {
@@ -986,7 +1009,7 @@ describe("RomMGameInfoPanel", () => {
           all_downloaded: true,
           active_core_label: "INITIAL_CORE",
         } as never,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const view = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1146,7 +1169,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1163,7 +1186,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1187,7 +1210,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         platform_name: "Super Nintendo",
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1201,7 +1224,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         ra_id: null,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1214,7 +1237,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         ra_id: 42,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1233,7 +1256,7 @@ describe("RomMGameInfoPanel", () => {
           local_count: 0,
           all_downloaded: false,
         } as never,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1247,7 +1270,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         save_sync_enabled: false,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1260,7 +1283,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 88,
         ra_id: 42,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1284,7 +1307,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 88,
         ra_id: 42,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.getAchievements).mockResolvedValue({
@@ -1377,7 +1400,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 88,
         ra_id: 42,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.getAchievements).mockResolvedValue({
@@ -1410,7 +1433,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 88,
         ra_id: 42,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       // Hold the achievement promises so achievementsLoading stays true.
@@ -1434,7 +1457,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 88,
         ra_id: 42,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.getAchievements).mockRejectedValue(new Error("net"));
@@ -1464,7 +1487,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 88,
         ra_id: 42,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1511,7 +1534,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 77,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
@@ -1549,7 +1572,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 11,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
@@ -1571,7 +1594,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 22,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
@@ -1594,7 +1617,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 33,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
@@ -1646,7 +1669,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 44,
         save_sync_enabled: true,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       // Wizard not yet completed.
@@ -1722,7 +1745,7 @@ describe("RomMGameInfoPanel", () => {
             },
           ],
         } as never,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1751,16 +1774,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {
-          summary: "",
-          genres: [],
-          companies: [],
-          first_release_date: 1041379200,
-          average_rating: null,
-          game_modes: [],
-          player_count: "",
-          cached_at: 0,
-        } as never,
+        metadata: makeMetadata({ first_release_date: 1041379200 }),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1775,16 +1789,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {
-          summary: "",
-          genres: [],
-          companies: [],
-          first_release_date: 0,
-          average_rating: null,
-          game_modes: [],
-          player_count: "",
-          cached_at: 0,
-        } as never,
+        metadata: makeMetadata({ first_release_date: 0 }),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1796,16 +1801,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {
-          summary: "",
-          genres: [],
-          companies: [],
-          first_release_date: -1,
-          average_rating: null,
-          game_modes: [],
-          player_count: "",
-          cached_at: 0,
-        } as never,
+        metadata: makeMetadata({ first_release_date: -1 }),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1834,7 +1830,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         bios_status: bios as never,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const view = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1879,7 +1875,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         bios_status: null,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1898,7 +1894,7 @@ describe("RomMGameInfoPanel", () => {
           all_downloaded: true,
           active_core_label: "MyCore",
         } as never,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1935,7 +1931,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         rom_name: "Chrono Trigger",
-        metadata: { summary: "An RPG." } as never,
+        metadata: makeMetadata({ summary: "An RPG." }),
         platform_name: "Super Nintendo",
         stale_fields: [],
       });
@@ -1961,16 +1957,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {
-          summary: "",
-          genres: [],
-          companies: [],
-          first_release_date: null,
-          average_rating: 87,
-          game_modes: [],
-          player_count: "",
-          cached_at: 0,
-        } as never,
+        metadata: makeMetadata({ average_rating: 87 }),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1982,7 +1969,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: { summary: "x" } as never,
+        metadata: makeMetadata({ summary: "x" }),
         stale_fields: [],
       });
       vi.mocked(backend.getArtworkBase64).mockResolvedValue({
@@ -1997,7 +1984,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: { summary: "x" } as never,
+        metadata: makeMetadata({ summary: "x" }),
         stale_fields: [],
       });
       vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
@@ -2010,7 +1997,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: { summary: "x" } as never,
+        metadata: makeMetadata({ summary: "x" }),
         stale_fields: [],
       });
       vi.mocked(backend.getArtworkBase64).mockRejectedValue(new Error("net"));
@@ -2027,7 +2014,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         installed: true,
-        metadata: { summary: "x" } as never,
+        metadata: makeMetadata({ summary: "x" }),
         stale_fields: [],
       });
       vi.mocked(backend.getInstalledRom).mockRejectedValue(new Error("net"));
@@ -2045,7 +2032,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: { summary: "from cache" } as never,
+        metadata: makeMetadata({ summary: "from cache" }),
         stale_fields: ["metadata"],
       });
       vi.mocked(backend.getRomMetadata).mockRejectedValue(new Error("net"));
@@ -2065,7 +2052,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -2084,7 +2071,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
-        metadata: {} as never,
+        metadata: makeMetadata(),
         stale_fields: [],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);

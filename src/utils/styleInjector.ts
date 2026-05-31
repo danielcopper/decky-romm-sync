@@ -10,7 +10,7 @@ const ROMM_ACHIEVEMENTS_ID = "romm-achievements-styles";
 
 export function hideNativePlaySection(playSectionClass: string) {
   const sp = findSP();
-  if (!sp?.window?.document) return;
+  if (!sp?.window.document) return;
 
   // Hide native PlaySection — display:none + visibility:hidden + pointer-events:none
   // All three are needed: display:none hides visually, visibility:hidden is belt-and-suspenders,
@@ -759,7 +759,7 @@ export function hideNativePlaySection(playSectionClass: string) {
 
 export function showNativePlaySection() {
   const sp = findSP();
-  if (!sp?.window?.document) return;
+  if (!sp?.window.document) return;
   sp.window.document.getElementById(ROMM_PLAY_HIDE_ID)?.remove();
   sp.window.document.getElementById(ROMM_FOCUS_STYLES_ID)?.remove();
   sp.window.document.getElementById(ROMM_INFO_ITEMS_ID)?.remove();

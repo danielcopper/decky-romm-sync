@@ -41,7 +41,7 @@ export function applyRefreshSlotResult<S extends RefreshSlotFields>(
   if (!slotResult.success) return;
   setter((prev) => ({
     ...prev,
-    availableSlots: slotResult.slots || [],
+    availableSlots: slotResult.slots,
     activeSlot: slotResult.active_slot === undefined ? prev.activeSlot : slotResult.active_slot,
   }));
 }
@@ -64,7 +64,7 @@ export function applyLoadSlotsResult<S extends LoadSlotsFields>(
   setter((prev) => ({
     ...prev,
     activeSlot: result.active_slot === undefined ? prev.activeSlot : result.active_slot,
-    availableSlots: result.slots || [],
+    availableSlots: result.slots,
     slotsLoading: false,
   }));
 }
