@@ -667,6 +667,10 @@ Conflicts are no longer persisted. They are returned ephemerally from `_sync_rom
 
 The dropped `pending_conflicts`, `dismissed_saves_state`, and other obsolete sync-state fields are simply not loaded. They never appear in the rebuilt aggregate, and the next state write produces a clean file.
 
+### SaveSyncState SQLite cutover status
+
+The game-detail panel's cached has-saves badge (`get_cached_game_detail`) no longer reads the in-memory `SaveSyncState.saves` dict — it reads the `rom_save_states` aggregate through the Unit of Work (the per-file `last_sync_hash` → the `synced`/`unknown` status the badge renders), the lightweight counterpart to the live `getSaveStatus` flow above. With that and the playtime cutover, the legacy `SaveSyncState` container has **no live reader** and is fully dead pending teardown; the live save-sync engine still persists through `save_sync_state.json` (the SaveService SQLite migration is a separate cutover stream). `domain/save_state.py` is removed in the teardown stream, not here.
+
 ## Session Detection
 
 Game start and stop events are detected using Steam's frontend APIs, not by polling emulator processes.

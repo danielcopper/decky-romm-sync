@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from models.state import PluginState
 
+from domain.platform_names import decode_platform_names
 from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
 from domain.sync_diff import should_include_in_platform_collection
@@ -407,14 +408,7 @@ class SyncReporter:
 
     def _read_platform_name_cache(self, uow) -> dict[str, str]:
         """Decode the ``platform_slug → display_name`` cache, ``{}`` when absent/corrupt."""
-        raw = uow.kv_config.get(_PLATFORM_NAMES_KEY)
-        if not raw:
-            return {}
-        try:
-            decoded = json.loads(raw)
-        except (ValueError, TypeError):
-            return {}
-        return decoded if isinstance(decoded, dict) else {}
+        return decode_platform_names(uow.kv_config.get(_PLATFORM_NAMES_KEY))
 
     def get_registry_platforms(self):
         """Return synced platforms from ``uow.roms`` (works offline, no RomM API call).

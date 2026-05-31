@@ -6,8 +6,9 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
-from models.state import PluginState, make_default_plugin_state
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
+from domain.rom import Rom
 from services.settings import SettingsService, SettingsServiceConfig
 
 
@@ -17,8 +18,22 @@ def settings() -> dict:
 
 
 @pytest.fixture
-def state() -> PluginState:
-    return make_default_plugin_state()
+def uow() -> FakeUnitOfWork:
+    return FakeUnitOfWork()
+
+
+def _seed_rom(uow: FakeUnitOfWork, rom_id: int, app_id: int | None) -> None:
+    """Seed one ``Rom`` row bound to *app_id* (``None`` = unbound) into *uow*."""
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug="snes",
+        name=f"Game {rom_id}",
+        fs_name=f"game_{rom_id}.sfc",
+        shortcut_app_id=app_id,
+        last_synced_at="2026-01-01T00:00:00",
+    )
+    with uow:
+        uow.roms.save(rom)
 
 
 @pytest.fixture
@@ -43,11 +58,11 @@ def logger() -> logging.Logger:
 
 
 @pytest.fixture
-def service(settings, state, logger, settings_persister, steam_config) -> SettingsService:
+def service(settings, uow, logger, settings_persister, steam_config) -> SettingsService:
     return SettingsService(
         config=SettingsServiceConfig(
             settings=settings,
-            state=state,
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
             logger=logger,
             settings_persister=settings_persister,
             steam_config=steam_config,
@@ -300,39 +315,47 @@ class TestSaveSteamInputSetting:
 
 
 class TestApplySteamInputSetting:
-    def test_applies_to_registered_shortcuts(self, service, settings, state, steam_config):
+    def test_applies_to_bound_shortcuts(self, service, settings, uow, steam_config):
         settings["steam_input_mode"] = "force_on"
-        state["shortcut_registry"] = {
-            "1": {"app_id": 111},
-            "2": {"app_id": 222},
-            "3": {"name": "no app_id here"},
-        }
+        _seed_rom(uow, rom_id=1, app_id=111)
+        _seed_rom(uow, rom_id=2, app_id=222)
         result = service.apply_steam_input_setting()
         assert result["success"] is True
         assert "force_on" in result["message"]
+        assert "2 shortcuts" in result["message"]
         steam_config.set_steam_input_config.assert_called_once_with([111, 222], mode="force_on")
 
-    def test_empty_registry_returns_noop(self, service, state, steam_config):
-        state["shortcut_registry"] = {}
+    def test_skips_unbound_roms(self, service, settings, uow, steam_config):
+        """ROMs with NULL shortcut_app_id (unbound) are excluded from the apply set."""
+        settings["steam_input_mode"] = "force_off"
+        _seed_rom(uow, rom_id=1, app_id=111)
+        _seed_rom(uow, rom_id=2, app_id=None)  # unbound — must be skipped
+        result = service.apply_steam_input_setting()
+        assert result["success"] is True
+        assert "1 shortcuts" in result["message"]
+        steam_config.set_steam_input_config.assert_called_once_with([111], mode="force_off")
+
+    def test_empty_registry_returns_noop(self, service, steam_config):
         result = service.apply_steam_input_setting()
         assert result == {"success": True, "message": "No shortcuts to update"}
         steam_config.set_steam_input_config.assert_not_called()
 
-    def test_all_entries_lack_app_id(self, service, state, steam_config):
-        state["shortcut_registry"] = {"1": {"name": "x"}, "2": {"name": "y"}}
+    def test_all_roms_unbound(self, service, uow, steam_config):
+        _seed_rom(uow, rom_id=1, app_id=None)
+        _seed_rom(uow, rom_id=2, app_id=None)
         result = service.apply_steam_input_setting()
         assert result["success"] is True
         assert "No shortcuts" in result["message"]
         steam_config.set_steam_input_config.assert_not_called()
 
-    def test_default_mode_when_unset(self, service, state, steam_config):
-        state["shortcut_registry"] = {"1": {"app_id": 1}}
+    def test_default_mode_when_unset(self, service, uow, steam_config):
+        _seed_rom(uow, rom_id=1, app_id=1)
         result = service.apply_steam_input_setting()
         assert result["success"] is True
         steam_config.set_steam_input_config.assert_called_once_with([1], mode="default")
 
-    def test_adapter_failure_returns_error(self, service, state, steam_config):
-        state["shortcut_registry"] = {"1": {"app_id": 1}}
+    def test_adapter_failure_returns_error(self, service, uow, steam_config):
+        _seed_rom(uow, rom_id=1, app_id=1)
         steam_config.set_steam_input_config.side_effect = OSError("boom")
         result = service.apply_steam_input_setting()
         assert result["success"] is False

@@ -625,7 +625,7 @@ def wire_services(cfg: WiringConfig) -> dict:
     achievements_service = AchievementsService(
         config=AchievementsServiceConfig(
             romm_api=cfg.adapters.romm_api,
-            state=cfg.stores.state,
+            uow_factory=cfg.callbacks.uow_factory,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
@@ -635,8 +635,6 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     game_detail_service = GameDetailService(
         config=GameDetailServiceConfig(
-            state=cfg.stores.state,
-            save_sync_state=cfg.stores.save_sync_state,
             settings=cfg.stores.settings,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
@@ -649,7 +647,7 @@ def wire_services(cfg: WiringConfig) -> dict:
     settings_service = SettingsService(
         config=SettingsServiceConfig(
             settings=cfg.stores.settings,
-            state=cfg.stores.state,
+            uow_factory=cfg.callbacks.uow_factory,
             logger=cfg.runtime.logger,
             settings_persister=cfg.callbacks.settings_persister,
             steam_config=cfg.adapters.steam_config,

@@ -334,7 +334,9 @@ Every service receives its dependencies through a single `*ServiceConfig` datacl
 | **FirmwareService** | `RommApi`, `FirmwareFileStore`, `FirmwareCachePersister`, `CoreInfoProvider`, `RetroDeckPaths` |
 | **SteamGridService** | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `UnitOfWorkFactory` (sgdb_id on `roms`), `PendingSyncReader` |
 | **MigrationService** | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback |
-| **GameDetailService** | `BiosChecker`, `AchievementsReader` (cross-service), `Clock`, `UnitOfWorkFactory` (reads `rom_metadata`) |
+| **GameDetailService** | `BiosChecker`, `AchievementsReader` (cross-service), `Clock`, `UnitOfWorkFactory` (one read UoW over `roms` / `rom_installs` / `rom_save_states` / `rom_metadata` / `kv_config`) |
+| **AchievementsService** | `RommAchievementsApi`, `Clock`, `DebugLogger`, `UnitOfWorkFactory` (reads `ra_id` from `roms`) |
+| **SettingsService** | `SteamConfigStore`, `SettingsPersister`, `UnitOfWorkFactory` (reads bound `shortcut_app_id`s from `roms`) |
 | **PlaytimeService** | `RommPlaytimeApi`, `RetryStrategy`, `Clock`, `UnitOfWorkFactory` (reads/writes `rom_playtime`) |
 | **RomRemovalService** | `RomFileStore`, `RetroDeckPaths`, `DownloadQueueCleanup` peer, `UnitOfWorkFactory` (reads/deletes `rom_installs`) |
 | **ShortcutRemovalService** | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`) |
@@ -342,4 +344,4 @@ Every service receives its dependencies through a single `*ServiceConfig` datacl
 | **LaunchGateService** | `LaunchGateRomLookup`, `LaunchGateInstalledChecker`, `LaunchGateSaveStatusReader` cross-service seams |
 | **ConnectionService** | `RommConnectionApi`, `min_required_version` |
 
-All services also receive shared state (`state`, `settings`, `metadata_cache`, `save_sync_state`), the event loop, the logger, and the `DebugLogger` Protocol through their config.
+Most services also receive shared state (`state`, `settings`, `metadata_cache`, `save_sync_state`), the event loop, the logger, and the `DebugLogger` Protocol through their config. As the SQLite cutover proceeds, services that no longer read the in-memory dicts drop them: `GameDetailService`/`AchievementsService` no longer take `state`, and `SettingsService` reads bound shortcuts from `roms` rather than the in-memory `shortcut_registry`.

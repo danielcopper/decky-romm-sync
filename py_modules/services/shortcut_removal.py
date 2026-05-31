@@ -10,9 +10,10 @@ cache the library sync refreshes each run.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from domain.platform_names import decode_platform_names
 
 if TYPE_CHECKING:
     import asyncio
@@ -99,14 +100,7 @@ class ShortcutRemovalService:
 
     def _read_platform_name_cache(self, uow) -> dict[str, str]:
         """Decode the ``platform_slug → display_name`` cache, ``{}`` when absent/corrupt."""
-        raw = uow.kv_config.get(_PLATFORM_NAMES_KEY)
-        if not raw:
-            return {}
-        try:
-            decoded = json.loads(raw)
-        except (ValueError, TypeError):
-            return {}
-        return decoded if isinstance(decoded, dict) else {}
+        return decode_platform_names(uow.kv_config.get(_PLATFORM_NAMES_KEY))
 
     # ── Removal results ────────────────────────────────────────────────────
 

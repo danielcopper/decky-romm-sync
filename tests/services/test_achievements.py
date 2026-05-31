@@ -3,12 +3,13 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
 from adapters.steam_config import SteamConfigAdapter
+from domain.rom import Rom
 from domain.save_state import SaveSyncState
 
 # conftest.py patches decky before this import
@@ -16,6 +17,25 @@ from main import Plugin
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
+
+
+def _seed_rom(uow: FakeUnitOfWork, rom_id: int, *, app_id=None, ra_id=None, name="Game", platform_slug="snes") -> None:
+    """Seed one ``Rom`` row into *uow* (the synced-shortcut registry).
+
+    *app_id* defaults to ``1000 + rom_id`` so the ROM is bound; pass ``ra_id``
+    to expose a RetroAchievements id for the achievements reads.
+    """
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug=platform_slug,
+        name=name,
+        fs_name=f"game_{rom_id}.sfc",
+        shortcut_app_id=app_id if app_id is not None else 1000 + rom_id,
+        last_synced_at="2026-01-01T00:00:00",
+        ra_id=ra_id,
+    )
+    with uow:
+        uow.roms.save(rom)
 
 
 @pytest.fixture
@@ -42,6 +62,11 @@ def plugin(clock):
     p._romm_api = MagicMock()
     p._state = make_default_plugin_state()
     p._metadata_cache = {}
+
+    # Shared UoW: ra_id / save / install rows a test seeds are visible to both
+    # the achievements reader and the game-detail aggregation.
+    uow = FakeUnitOfWork()
+    p._uow = uow
 
     import decky
 
@@ -71,7 +96,7 @@ def plugin(clock):
     p._achievements_service = AchievementsService(
         config=AchievementsServiceConfig(
             romm_api=p._romm_api,
-            state=p._state,
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             clock=clock,
@@ -84,12 +109,10 @@ def plugin(clock):
     p._save_sync_state = SaveSyncState()
     p._game_detail_service = GameDetailService(
         config=GameDetailServiceConfig(
-            state=p._state,
-            save_sync_state=p._save_sync_state,
             settings=p.settings,
             logger=decky.logger,
             clock=clock,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
             bios_checker=bios_checker,
             achievements=p._achievements_service,
         ),
@@ -370,7 +393,7 @@ class TestGetAchievements:
     @pytest.mark.asyncio
     async def test_happy_path_fetches_and_caches(self, svc, plugin):
         """Fetches from API, returns achievements, caches result."""
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999, "app_id": 100}
+        _seed_rom(plugin._uow, 42, ra_id=9999, app_id=100)
         rom_data = _sample_rom_data()
 
         plugin._romm_api.get_rom.return_value = rom_data
@@ -392,7 +415,7 @@ class TestGetAchievements:
             "achievements": [{"ra_id": 1001, "title": "Cached"}],
             "cached_at": svc._clock.time(),
         }
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
 
         result = await svc.get_achievements(42)
 
@@ -408,7 +431,7 @@ class TestGetAchievements:
             "achievements": [{"ra_id": 1001, "title": "Old"}],
             "cached_at": svc._clock.time() - (25 * 3600),
         }
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
 
         plugin._romm_api.get_rom.return_value = rom_data
@@ -421,7 +444,7 @@ class TestGetAchievements:
     @pytest.mark.asyncio
     async def test_no_ra_id_returns_empty(self, svc, plugin):
         """When no ra_id in registry, returns empty with no_ra_id flag."""
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 100}
+        _seed_rom(plugin._uow, 42, app_id=100)  # no ra_id
 
         result = await svc.get_achievements(42)
 
@@ -446,7 +469,7 @@ class TestGetAchievements:
             "achievements": [{"ra_id": 1001, "title": "Stale"}],
             "cached_at": svc._clock.time() - (25 * 3600),  # expired
         }
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
 
         plugin._romm_api.get_rom.side_effect = Exception("Connection refused")
         result = await svc.get_achievements(42)
@@ -458,7 +481,7 @@ class TestGetAchievements:
     @pytest.mark.asyncio
     async def test_api_error_no_cache_returns_error(self, svc, plugin):
         """On API error with no cache, returns error with empty list."""
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
 
         plugin._romm_api.get_rom.side_effect = Exception("Connection refused")
         result = await svc.get_achievements(42)
@@ -471,7 +494,7 @@ class TestGetAchievements:
     @pytest.mark.asyncio
     async def test_rom_id_cast_to_int(self, svc, plugin):
         """rom_id is cast to int, so string input works too."""
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
 
         plugin._romm_api.get_rom.return_value = rom_data
@@ -483,7 +506,7 @@ class TestGetAchievements:
     @pytest.mark.asyncio
     async def test_empty_achievements_from_api(self, svc, plugin):
         """API returns ROM with no achievements."""
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = {"id": 42, "ra_metadata": {"achievements": []}}
 
         plugin._romm_api.get_rom.return_value = rom_data
@@ -502,7 +525,7 @@ class TestGetAchievementProgress:
     async def test_happy_path(self, svc, plugin):
         """Fetches user progression, returns earned/total."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = _sample_user_data(ra_id=9999, earned=5, total=10, earned_hardcore=3)
 
@@ -519,7 +542,7 @@ class TestGetAchievementProgress:
     @pytest.mark.asyncio
     async def test_no_ra_username_fetches_from_romm(self, svc, plugin):
         """When no cached RA username, fetches from get_current_user."""
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data_with_username = _sample_user_data(ra_id=9999, earned=5, total=10)
 
@@ -539,7 +562,7 @@ class TestGetAchievementProgress:
     @pytest.mark.asyncio
     async def test_no_ra_username_anywhere_returns_error(self, svc, plugin):
         """When no RA username in cache and RomM user has none, returns error."""
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
 
         plugin._romm_api.get_current_user.return_value = {"ra_username": None}
         result = await svc.get_achievement_progress(42)
@@ -552,7 +575,7 @@ class TestGetAchievementProgress:
     async def test_no_ra_id_returns_zeros(self, svc, plugin):
         """When no ra_id in registry, returns zeros with no_ra_id flag."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 100}
+        _seed_rom(plugin._uow, 42, app_id=100)  # no ra_id
 
         result = await svc.get_achievement_progress(42)
 
@@ -565,7 +588,7 @@ class TestGetAchievementProgress:
     async def test_cache_hit(self, svc, plugin):
         """Returns cached progress without API call."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         svc._achievements_cache["42"] = {
             "user_progress": {
                 "earned": 3,
@@ -588,7 +611,7 @@ class TestGetAchievementProgress:
     async def test_game_not_found_in_progression(self, svc, plugin):
         """When the game's ra_id is not in progression results, returns zeros."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         # User data has progression for a different game
         user_data = {
@@ -608,7 +631,7 @@ class TestGetAchievementProgress:
     async def test_api_error_returns_stale_cache(self, svc, plugin):
         """On API error, returns stale progress cache if available."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         # Pre-populate achievements cache so get_achievements succeeds from cache
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
@@ -634,7 +657,7 @@ class TestGetAchievementProgress:
     async def test_api_error_no_cache_returns_error(self, svc, plugin):
         """On API error with no stale cache, returns error."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         # Pre-populate achievements cache so get_achievements succeeds
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
@@ -653,7 +676,7 @@ class TestGetAchievementProgress:
     async def test_empty_ra_progression(self, svc, plugin):
         """User data with empty ra_progression returns zeros."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = {"ra_username": "RetroPlayer", "ra_progression": {"results": []}}
 
@@ -669,7 +692,7 @@ class TestGetAchievementProgress:
     async def test_none_ra_progression(self, svc, plugin):
         """User data with None ra_progression returns zeros."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = {"ra_username": "RetroPlayer", "ra_progression": None}
 
@@ -684,7 +707,7 @@ class TestGetAchievementProgress:
     async def test_progress_caches_result(self, svc, plugin):
         """Successful progress fetch is cached in _achievements_cache."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = _sample_user_data(ra_id=9999, earned=7, total=10)
 
@@ -701,7 +724,7 @@ class TestGetAchievementProgress:
     async def test_cached_at_not_in_response(self, svc, plugin):
         """The cached_at timestamp is not leaked into the response."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = _sample_user_data(ra_id=9999, earned=7, total=10)
 
@@ -715,7 +738,7 @@ class TestGetAchievementProgress:
     async def test_max_possible_fallback_to_total(self, svc, plugin):
         """When max_possible is None/0, falls back to total from achievements list."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = {
             "ra_username": "RetroPlayer",
@@ -737,7 +760,7 @@ class TestGetAchievementProgress:
     async def test_none_num_awarded_treated_as_zero(self, svc, plugin):
         """When num_awarded is None in progression, treat as 0."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = {
             "ra_username": "RetroPlayer",
@@ -764,7 +787,7 @@ class TestGetAchievementProgress:
     async def test_caches_ra_username_from_users_me_response(self, svc, plugin):
         """The get_current_user call in progress fetch also caches ra_username."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = _sample_user_data(ra_id=9999, earned=5, total=10, ra_username="NewUser")
 
@@ -784,7 +807,7 @@ class TestSyncAchievementsAfterSession:
     async def test_invalidates_cache_and_refetches(self, svc, plugin):
         """Invalidates progress cache and fetches fresh data."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
 
         # Pre-populate cache with old progress
         svc._achievements_cache["42"] = {
@@ -811,7 +834,7 @@ class TestSyncAchievementsAfterSession:
     async def test_cache_cleared_before_refetch(self, svc, plugin):
         """Verifies that user_progress is deleted before get_achievement_progress is called."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
             "cached_at": svc._clock.time(),
@@ -844,7 +867,7 @@ class TestSyncAchievementsAfterSession:
     async def test_works_when_no_prior_cache(self, svc, plugin):
         """Works correctly when no prior cache exists."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         rom_data = _sample_rom_data()
         user_data = _sample_user_data(ra_id=9999, earned=3, total=10)
 
@@ -859,7 +882,7 @@ class TestSyncAchievementsAfterSession:
     async def test_preserves_achievements_cache_on_invalidation(self, svc, plugin):
         """Invalidating progress cache preserves the achievements list cache."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {"ra_id": 9999}
+        _seed_rom(plugin._uow, 42, ra_id=9999)
         svc._achievements_cache["42"] = {
             "achievements": _sample_achievements(),
             "cached_at": svc._clock.time(),
@@ -889,12 +912,7 @@ class TestGetCachedGameDetailAchievements:
     async def test_includes_ra_id_and_summary_with_cache(self, svc, plugin):
         """When ra_id exists, RA username cached, and progress cached: includes achievement_summary."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {
-            "ra_id": 9999,
-            "app_id": 100,
-            "name": "Test Game",
-            "platform_slug": "",
-        }
+        _seed_rom(plugin._uow, 42, ra_id=9999, app_id=100, name="Test Game", platform_slug="")
         svc._achievements_cache["42"] = {
             "user_progress": {
                 "earned": 5,
@@ -903,7 +921,6 @@ class TestGetCachedGameDetailAchievements:
                 "cached_at": svc._clock.time(),
             },
         }
-        plugin._save_sync_state.replace_with(SaveSyncState())
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -918,13 +935,7 @@ class TestGetCachedGameDetailAchievements:
     async def test_no_ra_username_returns_none_summary(self, svc, plugin):
         """When ra_id exists but no RA username cached, achievement_summary is None."""
         _ = svc
-        plugin._state["shortcut_registry"]["42"] = {
-            "ra_id": 9999,
-            "app_id": 100,
-            "name": "Test Game",
-            "platform_slug": "",
-        }
-        plugin._save_sync_state.replace_with(SaveSyncState())
+        _seed_rom(plugin._uow, 42, ra_id=9999, app_id=100, name="Test Game", platform_slug="")
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -934,14 +945,9 @@ class TestGetCachedGameDetailAchievements:
 
     @pytest.mark.asyncio
     async def test_no_ra_id_returns_none(self, svc, plugin):
-        """When no ra_id in registry, ra_id is None and achievement_summary is None."""
+        """When no ra_id on the ROM, ra_id is None and achievement_summary is None."""
         _ = svc
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100,
-            "name": "Test Game",
-            "platform_slug": "",
-        }
-        plugin._save_sync_state.replace_with(SaveSyncState())
+        _seed_rom(plugin._uow, 42, app_id=100, name="Test Game", platform_slug="")  # no ra_id
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -953,13 +959,7 @@ class TestGetCachedGameDetailAchievements:
     async def test_ra_username_cached_but_no_progress(self, svc, plugin):
         """When RA username cached and ra_id exists but no progress cache, summary is None."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {
-            "ra_id": 9999,
-            "app_id": 100,
-            "name": "Test Game",
-            "platform_slug": "",
-        }
-        plugin._save_sync_state.replace_with(SaveSyncState())
+        _seed_rom(plugin._uow, 42, ra_id=9999, app_id=100, name="Test Game", platform_slug="")
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -971,12 +971,7 @@ class TestGetCachedGameDetailAchievements:
     async def test_expired_progress_cache_returns_none_summary(self, svc, plugin):
         """Expired progress cache returns None for achievement_summary."""
         _seed_ra_username_cache(svc)
-        plugin._state["shortcut_registry"]["42"] = {
-            "ra_id": 9999,
-            "app_id": 100,
-            "name": "Test Game",
-            "platform_slug": "",
-        }
+        _seed_rom(plugin._uow, 42, ra_id=9999, app_id=100, name="Test Game", platform_slug="")
         svc._achievements_cache["42"] = {
             "user_progress": {
                 "earned": 5,
@@ -985,7 +980,6 @@ class TestGetCachedGameDetailAchievements:
                 "cached_at": svc._clock.time() - (2 * 3600),  # expired
             },
         }
-        plugin._save_sync_state.replace_with(SaveSyncState())
 
         result = await plugin.get_cached_game_detail(100)
 
@@ -993,64 +987,40 @@ class TestGetCachedGameDetailAchievements:
         assert result["achievement_summary"] is None
 
 
-# --- Integration: sync captures ra_id in shortcuts_data / registry ---
+# --- Integration: the achievements reader picks up ra_id from the roms table ---
 
 
-class TestSyncCapturesRaId:
-    def test_rom_with_ra_id_appears_in_registry(self, plugin):
-        """Registry entry includes ra_id when present in pending sync data."""
-        rom_id_str = "42"
-        pending = {
-            "rom_id": 42,
-            "name": "Test Game",
-            "platform_slug": "snes",
-            "igdb_id": 1234,
-            "sgdb_id": 5678,
-            "ra_id": 9999,
-        }
-        # Simulate what sync does when writing registry
-        registry_entry = {
-            "name": pending["name"],
-            "platform_slug": pending.get("platform_slug", ""),
-            "cover_path": "",
-        }
-        for meta_key in ("igdb_id", "sgdb_id", "ra_id"):
-            if pending.get(meta_key):
-                registry_entry[meta_key] = pending[meta_key]
-        plugin._state["shortcut_registry"][rom_id_str] = registry_entry
+class TestReadsRaIdFromRoms:
+    """The ra_id the sync stamps on the ``Rom`` row drives the achievements reads."""
 
-        assert plugin._state["shortcut_registry"]["42"]["ra_id"] == 9999
+    @pytest.mark.asyncio
+    async def test_rom_with_ra_id_unlocks_fetch(self, svc, plugin):
+        """A ROM whose ``Rom.ra_id`` is set is fetched (not short-circuited as no_ra_id)."""
+        _seed_rom(plugin._uow, 42, ra_id=9999)
+        plugin._romm_api.get_rom.return_value = _sample_rom_data()
 
-    def test_rom_without_ra_id_not_in_registry(self, plugin):
-        """Registry entry does not include ra_id when not present in pending sync data."""
-        pending = {
-            "rom_id": 42,
-            "name": "Test Game",
-            "platform_slug": "snes",
-        }
-        registry_entry = {
-            "name": pending["name"],
-            "platform_slug": pending.get("platform_slug", ""),
-            "cover_path": "",
-        }
-        for meta_key in ("igdb_id", "sgdb_id", "ra_id"):
-            if pending.get(meta_key):
-                registry_entry[meta_key] = pending[meta_key]
-        plugin._state["shortcut_registry"]["42"] = registry_entry
+        result = await svc.get_achievements(42)
 
-        assert "ra_id" not in plugin._state["shortcut_registry"]["42"]
+        assert result["success"] is True
+        assert result["total"] == 2
+        assert "no_ra_id" not in result
 
-    def test_ra_id_preserved_across_registry_updates(self, plugin):
-        """ra_id is preserved when registry entry is updated."""
-        plugin._state["shortcut_registry"]["42"] = {
-            "name": "Test Game",
-            "platform_slug": "snes",
-            "ra_id": 9999,
-            "app_id": 100,
-        }
+    @pytest.mark.asyncio
+    async def test_rom_without_ra_id_short_circuits(self, svc, plugin):
+        """A ROM row with NULL ``ra_id`` short-circuits to the no_ra_id response."""
+        _seed_rom(plugin._uow, 42, app_id=100)  # ra_id stays None
 
-        # Simulate re-sync updating the entry
-        existing = plugin._state["shortcut_registry"]["42"]
-        existing["name"] = "Test Game (Updated)"
-        # ra_id should still be there
-        assert plugin._state["shortcut_registry"]["42"]["ra_id"] == 9999
+        result = await svc.get_achievements(42)
+
+        assert result["success"] is True
+        assert result["no_ra_id"] is True
+        plugin._romm_api.get_rom.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_rom_row_short_circuits(self, svc, plugin):
+        """No ``roms`` row at all short-circuits to the no_ra_id response."""
+        result = await svc.get_achievements(42)
+
+        assert result["success"] is True
+        assert result["no_ra_id"] is True
+        plugin._romm_api.get_rom.assert_not_called()

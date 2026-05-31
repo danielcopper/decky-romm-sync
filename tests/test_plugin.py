@@ -96,7 +96,7 @@ def plugin():
     p._settings_service = SettingsService(
         config=SettingsServiceConfig(
             settings=p.settings,
-            state=p._state,
+            uow_factory=FakeUnitOfWorkFactory(),
             logger=decky.logger,
             settings_persister=p._settings_persister,
             steam_config=steam_config,

@@ -13,28 +13,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain.achievements import extract_achievements_from_rom, extract_game_progress
 
 if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import Clock, DebugLogger, RommAchievementsApi
+    from services.protocols import Clock, DebugLogger, RommAchievementsApi, UnitOfWorkFactory
 
 
 @dataclass(frozen=True)
 class AchievementsServiceConfig:
     """Frozen wiring bundle handed to ``AchievementsService.__init__``.
 
-    Holds the Protocol-typed RomM adapter, the live state dict, runtime
-    infrastructure, and the clock/debug-logger seams AchievementsService
-    needs at construction time.
+    Holds the Protocol-typed RomM adapter, the SQLite Unit-of-Work factory
+    (the read seam over the ``roms`` aggregate for each ROM's ``ra_id``),
+    runtime infrastructure, and the clock/debug-logger seams
+    AchievementsService needs at construction time.
     """
 
     romm_api: RommAchievementsApi
-    state: PluginState
+    uow_factory: UnitOfWorkFactory
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
@@ -50,13 +49,23 @@ class AchievementsService:
 
     def __init__(self, *, config: AchievementsServiceConfig) -> None:
         self._romm_api = config.romm_api
-        self._state = config.state
+        self._uow_factory = config.uow_factory
         self._loop = config.loop
         self._logger = config.logger
         self._clock = config.clock
         self._log_debug = config.log_debug
 
         self._achievements_cache: dict = {}
+
+    def _read_ra_id(self, rom_id: int) -> int | None:
+        """Return the ROM's RetroAchievements id from ``uow.roms``, or ``None``.
+
+        Short synchronous read UoW — a single PK lookup, opened outside the
+        executor RomM fetch so no network I/O runs inside the transaction.
+        """
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+        return rom.ra_id if rom else None
 
     def get_ra_username(self):
         """Get RA username from RomM user profile (cached).
@@ -120,9 +129,8 @@ class AchievementsService:
             self._log_debug(f"Achievements cache hit for rom_id={rom_id}")
             return {"success": True, "achievements": cached["achievements"], "total": len(cached["achievements"])}
 
-        # Look up ra_id from registry
-        reg = self._state["shortcut_registry"].get(rom_id_str, {})
-        ra_id = reg.get("ra_id")
+        # Look up ra_id from the ``roms`` aggregate (short read UoW)
+        ra_id = self._read_ra_id(rom_id)
         if not ra_id:
             return {"success": True, "achievements": [], "total": 0, "no_ra_id": True}
 
@@ -174,7 +182,7 @@ class AchievementsService:
             self._log_debug(f"Achievement progress cache hit for rom_id={rom_id}")
             return {"success": True, **cached_progress}
 
-        ra_id = self._state["shortcut_registry"].get(rom_id_str, {}).get("ra_id")
+        ra_id = self._read_ra_id(rom_id)
         if not ra_id:
             return {"success": True, "earned": 0, "total": 0, "earned_achievements": [], "no_ra_id": True}
 

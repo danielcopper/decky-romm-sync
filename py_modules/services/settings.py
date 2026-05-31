@@ -16,12 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar
 
-from models.state import PluginState
-
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import SettingsPersister, SteamConfigStore
+    from services.protocols import SettingsPersister, SteamConfigStore, UnitOfWorkFactory
 
 
 _MASK_PLACEHOLDER = "••••"
@@ -33,13 +31,15 @@ _VALID_STEAM_INPUT_MODES = ("default", "force_on", "force_off")
 class SettingsServiceConfig:
     """Frozen wiring bundle handed to ``SettingsService.__init__``.
 
-    Carries the live settings/state dicts plus the runtime
+    Carries the live settings dict, the SQLite Unit-of-Work factory (the
+    read seam over the ``roms`` aggregate for the bound-shortcut app_ids
+    ``apply_steam_input_setting`` re-skins), plus the runtime
     infrastructure (logger, settings persister, steam-config adapter).
     Bundled here so the ctor stays within the S107 parameter budget.
     """
 
     settings: dict
-    state: PluginState
+    uow_factory: UnitOfWorkFactory
     logger: logging.Logger
     settings_persister: SettingsPersister
     steam_config: SteamConfigStore
@@ -52,7 +52,7 @@ class SettingsService:
 
     def __init__(self, *, config: SettingsServiceConfig) -> None:
         self._settings = config.settings
-        self._state = config.state
+        self._uow_factory = config.uow_factory
         self._logger = config.logger
         self._settings_persister = config.settings_persister
         self._steam_config = config.steam_config
@@ -144,9 +144,10 @@ class SettingsService:
         return {"success": True}
 
     def apply_steam_input_setting(self) -> dict:
-        """Apply the current Steam Input mode to every existing ROM shortcut."""
+        """Apply the current Steam Input mode to every bound ROM shortcut."""
         mode = self._settings.get("steam_input_mode", "default")
-        app_ids = [entry["app_id"] for entry in self._state["shortcut_registry"].values() if "app_id" in entry]
+        with self._uow_factory() as uow:
+            app_ids = [rom.shortcut_app_id for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None]
         if not app_ids:
             return {"success": True, "message": "No shortcuts to update"}
         try:
