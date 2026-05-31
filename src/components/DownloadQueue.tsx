@@ -122,7 +122,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
             {active.map((item) => (
               <PanelSectionRow key={item.rom_id}>
                 <ProgressBarWithInfo
-                  nProgress={item.total_bytes > 0 ? (item.bytes_downloaded / item.total_bytes) * 100 : undefined}
+                  {...(item.total_bytes > 0 ? { nProgress: (item.bytes_downloaded / item.total_bytes) * 100 } : {})}
                   indeterminate={item.total_bytes === 0}
                   sOperationText={`${item.rom_name} (${item.platform_name})`}
                   sTimeRemaining={

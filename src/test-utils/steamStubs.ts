@@ -36,8 +36,8 @@ export function stubAppStore(overviews: Record<number, OverviewLike>): void {
         appid: o.appid ?? id,
         display_name: o.display_name ?? "",
         strDisplayName: o.strDisplayName ?? "",
-        rt_last_time_played: o.rt_last_time_played,
-        minutes_playtime_forever: o.minutes_playtime_forever,
+        ...(o.rt_last_time_played !== undefined ? { rt_last_time_played: o.rt_last_time_played } : {}),
+        ...(o.minutes_playtime_forever !== undefined ? { minutes_playtime_forever: o.minutes_playtime_forever } : {}),
       };
     }),
     allApps: [],

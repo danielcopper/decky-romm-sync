@@ -453,7 +453,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               <span data-testid="sync-stage">{stageLabel(syncProgress?.stage)}</span>
               {stepText && <span data-testid="sync-step">{stepText}</span>}
             </div>
-            <ProgressBar indeterminate={coarseFraction === undefined} nProgress={coarseFraction} />
+            <ProgressBar
+              indeterminate={coarseFraction === undefined}
+              {...(coarseFraction !== undefined ? { nProgress: coarseFraction } : {})}
+            />
           </div>
         </PanelSectionRow>
         {hasFineDetail && (
@@ -651,7 +654,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           {activeDownloads.slice(0, 2).map((item) => (
             <PanelSectionRow key={item.rom_id}>
               <ProgressBarWithInfo
-                nProgress={item.total_bytes > 0 ? (item.bytes_downloaded / item.total_bytes) * 100 : undefined}
+                {...(item.total_bytes > 0 ? { nProgress: (item.bytes_downloaded / item.total_bytes) * 100 } : {})}
                 indeterminate={item.total_bytes === 0}
                 sOperationText={item.rom_name}
                 sTimeRemaining={

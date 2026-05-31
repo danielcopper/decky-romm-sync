@@ -15,7 +15,7 @@ export const NewSlotModal: FC<{
   return createElement(
     ConfirmModal,
     {
-      closeModal,
+      ...(closeModal !== undefined ? { closeModal } : {}),
       onOK: () => {
         onSubmit(value.trim());
       },

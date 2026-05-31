@@ -21,14 +21,27 @@ vi.mock("@decky/ui", () => ({
   }) => createElement("button", { onClick, disabled }, children as never),
 }));
 
-function makeMigration(overrides: Partial<SaveSortMigrationStatus> = {}): SaveSortMigrationStatus {
-  return {
+function makeMigration(
+  overrides: { [K in keyof SaveSortMigrationStatus]?: SaveSortMigrationStatus[K] | undefined } = {},
+): SaveSortMigrationStatus {
+  const result: Record<string, unknown> = {
     pending: true,
     old_settings: { sort_by_content: false, sort_by_core: false },
     new_settings: { sort_by_content: true, sort_by_core: false },
     saves_count: 12,
-    ...overrides,
   };
+  // An explicit `undefined` override removes the (optional) field entirely so
+  // the component's truthiness checks see it as absent — passing through
+  // `{ field: undefined }` would leave the key present under
+  // exactOptionalPropertyTypes.
+  for (const [key, val] of Object.entries(overrides)) {
+    if (val === undefined) {
+      delete result[key];
+    } else {
+      result[key] = val;
+    }
+  }
+  return result as unknown as SaveSortMigrationStatus;
 }
 
 function defaultProps(overrides: Partial<React.ComponentProps<typeof SaveSortMigrationSection>> = {}) {
