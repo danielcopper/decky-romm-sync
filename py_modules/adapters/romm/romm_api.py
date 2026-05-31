@@ -9,8 +9,26 @@ from __future__ import annotations
 import urllib.parse
 from typing import TYPE_CHECKING, Any
 
+from lib.errors import RommNotFoundError
+
 if TYPE_CHECKING:
     from adapters.romm.http import RommHttpAdapter
+
+# Scopes requested for the minted Client API Token. Deliberately excludes
+# ``me.write`` so the token itself cannot mint or delete tokens — that
+# stays a Basic-auth-only operation.
+_TOKEN_SCOPES = [
+    "me.read",
+    "platforms.read",
+    "roms.read",
+    "collections.read",
+    "firmware.read",
+    "assets.read",
+    "devices.read",
+    "assets.write",
+    "devices.write",
+    "roms.user.write",
+]
 
 
 class RommApiAdapter:
@@ -224,3 +242,38 @@ class RommApiAdapter:
 
     def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
         return self._client.put_json(f"/api/roms/{rom_id}/notes/{note_id}", data)
+
+    # ── Client Tokens ─────────────────────────────────────────────────
+
+    def mint_client_token(self, username: str, password: str, *, token_name: str) -> dict[str, Any]:
+        """Mint a scoped, never-expiring Client API Token via Basic auth.
+
+        ``username`` / ``password`` are passed straight to a one-off
+        Basic-authenticated ``POST /api/client-tokens``; the minting
+        identity needs ``me.write``, which the minted token deliberately
+        lacks. Returns the server response including ``id`` and the
+        one-time ``raw_token``.
+        """
+        return self._client.basic_auth_request(
+            "/api/client-tokens",
+            username,
+            password,
+            method="POST",
+            data={"name": token_name, "scopes": _TOKEN_SCOPES, "expires_in": "never"},
+        )
+
+    def delete_client_token(self, username: str, password: str, *, token_id: int) -> None:
+        """Delete a previously minted Client API Token via Basic auth.
+
+        Swallows a not-found response (the token is already gone, which
+        is the desired end state); any other error propagates.
+        """
+        try:
+            self._client.basic_auth_request(
+                f"/api/client-tokens/{token_id}",
+                username,
+                password,
+                method="DELETE",
+            )
+        except RommNotFoundError:
+            return

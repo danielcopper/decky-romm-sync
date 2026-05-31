@@ -85,6 +85,22 @@ class TestLocking:
 # ── Version stamping on save ───────────────────────────────────────────────────
 
 
+class TestSettingsSchema:
+    """Schema-level expectations for the settings defaults + version stamp."""
+
+    def test_settings_version_is_6(self):
+        assert _SETTINGS_VERSION == 6
+
+    def test_default_settings_carry_token_slots(self):
+        assert DEFAULT_SETTINGS["romm_api_token"] is None
+        assert DEFAULT_SETTINGS["romm_api_token_id"] is None
+
+    def test_load_settings_backfills_token_slots(self, adapter):
+        result = adapter.load_settings()
+        assert result["romm_api_token"] is None
+        assert result["romm_api_token_id"] is None
+
+
 class TestVersionStampingOnSave:
     def test_save_settings_stamps_version(self, adapter):
         adapter.save_settings({"romm_url": "http://example.com"})
@@ -92,6 +108,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
+        assert loaded["version"] == 6
 
     def test_save_firmware_cache_stamps_version(self, adapter):
         adapter.save_firmware_cache({"snes": {"files": []}})

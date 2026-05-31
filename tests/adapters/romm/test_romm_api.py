@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from adapters.romm.romm_api import RommApiAdapter
+from adapters.romm.romm_api import _TOKEN_SCOPES, RommApiAdapter
+from lib.errors import RommNotFoundError, RommServerError
 
 
 def _make_api():
@@ -16,6 +17,7 @@ def _make_api():
     client.post_json = MagicMock()
     client.put_json = MagicMock()
     client.upload_multipart = MagicMock()
+    client.basic_auth_request = MagicMock()
     return RommApiAdapter(client), client
 
 
@@ -707,3 +709,64 @@ class TestUpdateNote:
         result = api.update_note(42, 7, data)
         client.put_json.assert_called_once_with("/api/roms/42/notes/7", data)
         assert result["id"] == 7
+
+
+class TestTokenScopes:
+    def test_locked_scope_list(self):
+        """The 10 requested scopes are fixed and exclude ``me.write``."""
+        assert _TOKEN_SCOPES == [
+            "me.read",
+            "platforms.read",
+            "roms.read",
+            "collections.read",
+            "firmware.read",
+            "assets.read",
+            "devices.read",
+            "assets.write",
+            "devices.write",
+            "roms.user.write",
+        ]
+        assert "me.write" not in _TOKEN_SCOPES
+
+
+class TestMintClientToken:
+    def test_posts_to_client_tokens_with_scopes_and_never_expiry(self):
+        api, client = _make_api()
+        client.basic_auth_request.return_value = {"id": 7, "raw_token": "rmm_x"}
+        result = api.mint_client_token("alice", "secret", token_name="decky-romm-sync (Deck)")
+        client.basic_auth_request.assert_called_once_with(
+            "/api/client-tokens",
+            "alice",
+            "secret",
+            method="POST",
+            data={
+                "name": "decky-romm-sync (Deck)",
+                "scopes": _TOKEN_SCOPES,
+                "expires_in": "never",
+            },
+        )
+        assert result == {"id": 7, "raw_token": "rmm_x"}
+
+
+class TestDeleteClientToken:
+    def test_deletes_via_basic_auth(self):
+        api, client = _make_api()
+        api.delete_client_token("alice", "secret", token_id=7)
+        client.basic_auth_request.assert_called_once_with(
+            "/api/client-tokens/7",
+            "alice",
+            "secret",
+            method="DELETE",
+        )
+
+    def test_swallows_not_found(self):
+        api, client = _make_api()
+        client.basic_auth_request.side_effect = RommNotFoundError("404")
+        # Already-gone token is the desired end state — no raise.
+        assert api.delete_client_token("alice", "secret", token_id=7) is None
+
+    def test_propagates_other_errors(self):
+        api, client = _make_api()
+        client.basic_auth_request.side_effect = RommServerError("boom", status_code=500)
+        with pytest.raises(RommServerError):
+            api.delete_client_token("alice", "secret", token_id=7)

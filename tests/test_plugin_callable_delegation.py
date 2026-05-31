@@ -57,16 +57,18 @@ def plugin():
 
 class TestSettingsCallableDelegation:
     @pytest.mark.asyncio
-    async def test_save_settings_delegates(self, plugin):
-        plugin._settings_service.save_settings.return_value = {"ok": True}
-        result = await plugin.save_settings("http://x", "u", "p", True)
-        plugin._settings_service.save_settings.assert_called_once_with(
-            "http://x",
-            "u",
-            "p",
-            True,
-        )
-        assert result == {"ok": True}
+    async def test_connect_with_credentials_delegates(self, plugin):
+        plugin._connection_service.establish_token = AsyncMock(return_value={"success": True})
+        result = await plugin.connect_with_credentials("http://x", "u", "p", True)
+        plugin._connection_service.establish_token.assert_awaited_once_with("http://x", "u", "p", True)
+        assert result == {"success": True}
+
+    @pytest.mark.asyncio
+    async def test_save_server_url_delegates(self, plugin):
+        plugin._settings_service.save_server_url.return_value = {"success": True}
+        result = await plugin.save_server_url("http://x", True)
+        plugin._settings_service.save_server_url.assert_called_once_with("http://x", True)
+        assert result == {"success": True}
 
     @pytest.mark.asyncio
     async def test_frontend_log_delegates(self, plugin):
@@ -679,10 +681,10 @@ class TestGameDetailCallableDelegation:
 
 class TestCallableErrorPropagation:
     @pytest.mark.asyncio
-    async def test_save_settings_propagates(self, plugin):
-        plugin._settings_service.save_settings.side_effect = ValueError("bad")
+    async def test_save_server_url_propagates(self, plugin):
+        plugin._settings_service.save_server_url.side_effect = ValueError("bad")
         with pytest.raises(ValueError, match="bad"):
-            await plugin.save_settings("x", "u", "p")
+            await plugin.save_server_url("x")
 
     @pytest.mark.asyncio
     async def test_test_connection_propagates(self, plugin):

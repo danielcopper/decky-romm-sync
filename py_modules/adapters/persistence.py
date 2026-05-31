@@ -13,13 +13,15 @@ import os
 from typing import Any
 
 _FIRMWARE_CACHE_VERSION = 1
-_SETTINGS_VERSION = 4
+_SETTINGS_VERSION = 6
 _LOCK_EXT = ".lock"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "romm_url": "",
     "romm_user": "",
     "romm_pass": "",
+    "romm_api_token": None,
+    "romm_api_token_id": None,
     "enabled_platforms": {},
     "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
     "collection_create_platform_groups": False,

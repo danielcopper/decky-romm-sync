@@ -8,7 +8,7 @@ decky-romm-sync is a [Decky Loader](https://decky.xyz/) plugin that connects you
 
 Before installing the plugin, you need:
 
-1. **A RomM server** — a running RomM instance with your ROM library. You'll need the server URL, a username, and a password. Each user should have their own RomM account (see [Save Sync](save-sync.md) for why this matters).
+1. **A RomM server** — a running RomM instance with your ROM library. You'll need the server URL plus a username and password to connect the first time. The plugin exchanges those credentials for a RomM Client API Token and stores only the token — your password is never saved. Each user should have their own RomM account (see [Save Sync](save-sync.md) for why this matters).
 
 2. **RetroDECK** — installed on your Steam Deck or Linux PC. RetroDECK handles the actual emulation. The plugin creates shortcuts that launch games through RetroDECK.
 
@@ -57,11 +57,13 @@ After installation, you need to connect the plugin to your RomM server:
 
 1. Open the QAM and find **decky-romm-sync**
 2. Tap **Connection Settings**
-3. Enter your RomM server URL (e.g. `http://192.168.1.100:8080`)
-4. Enter your username and password
-5. Tap **Save Settings**, then **Test Connection** to verify
+3. Enter your RomM server URL (e.g. `http://192.168.1.100:8080`) — this saves automatically
+4. Tap **Connect**, enter your RomM username and password once, and confirm
+5. The **RomM Account** row shows **Connected** on success. Tap **Test Connection** to re-verify at any time
 
-<!-- Screenshot: Connection Settings page with URL, username, and password fields -->
+The plugin mints a RomM Client API Token from the credentials you enter and discards the password — it is never stored. The same applies if the plugin auto-migrates an older install that still had a saved password: the password is discarded as soon as a token is minted. If your RomM account is not allowed to create API tokens, the Connect step reports that and you'll need an account with token permissions.
+
+<!-- Screenshot: Connection Settings page with URL field, Connect button, and token status -->
 
 Once connected, you're ready to sync your library. See [Configuration](configuration.md) for additional settings, or jump straight to [Syncing Your Library](syncing-your-library.md).
 

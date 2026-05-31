@@ -1,38 +1,35 @@
 /**
- * RomM server connection settings — URL, username, password, SSL toggle, and
- * the "Test Connection" affordance. Pure renderer: the parent owns the field
- * values plus the test-status string and auto-save logic.
+ * RomM server connection settings — URL, account/token connection, SSL
+ * toggle, and the "Test Connection" affordance. Pure renderer: the parent
+ * owns the field values, the has-token flag, the status string, and the
+ * save/connect/test logic.
  */
 
 import { FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, Field, DialogButton, showModal, ToggleField } from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, DialogButton, Field, showModal, ToggleField } from "@decky/ui";
 import { TextInputModal } from "./TextInputModal";
-import { isSharedAccount } from "../../utils/sharedAccount";
+import { ConnectModal } from "./ConnectModal";
 
 interface ConnectionSectionProps {
   url: string;
-  username: string;
-  password: string;
+  hasToken: boolean;
   allowInsecureSsl: boolean;
   status: string;
   loading: boolean;
-  onUrlSubmit: (value: string) => void;
-  onUsernameSubmit: (value: string) => void;
-  onPasswordSubmit: (value: string) => void;
+  onUrlChange: (value: string) => void;
+  onConnect: (username: string, password: string) => void;
   onAllowInsecureSslChange: (value: boolean) => void;
   onTestConnection: () => void;
 }
 
 export const ConnectionSection: FC<ConnectionSectionProps> = ({
   url,
-  username,
-  password,
+  hasToken,
   allowInsecureSsl,
   status,
   loading,
-  onUrlSubmit,
-  onUsernameSubmit,
-  onPasswordSubmit,
+  onUrlChange,
+  onConnect,
   onAllowInsecureSslChange,
   onTestConnection,
 }) => {
@@ -41,8 +38,9 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
       <PanelSectionRow>
         <Field label="RomM URL" description={url || "(not set)"}>
           <DialogButton
+            style={{ minWidth: "auto", width: "auto" }}
             onClick={() =>
-              showModal(<TextInputModal label="RomM URL" value={url} field="url" onSubmit={onUrlSubmit} />)
+              showModal(<TextInputModal label="RomM URL" value={url} field="url" onSubmit={onUrlChange} />)
             }
           >
             Edit
@@ -50,36 +48,12 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
         </Field>
       </PanelSectionRow>
       <PanelSectionRow>
-        <Field label="Username" description={username || "(not set)"}>
+        <Field label="RomM Account" description={hasToken ? "Connected" : "Not connected"}>
           <DialogButton
-            onClick={() =>
-              showModal(
-                <TextInputModal label="Username" value={username} field="username" onSubmit={onUsernameSubmit} />,
-              )
-            }
+            style={{ minWidth: "auto", width: "auto" }}
+            onClick={() => showModal(<ConnectModal onConnect={onConnect} />)}
           >
-            Edit
-          </DialogButton>
-        </Field>
-      </PanelSectionRow>
-      {isSharedAccount(username) && (
-        <PanelSectionRow>
-          <Field
-            label={<span style={{ color: "#ff8800" }}>Shared account detected</span>}
-            description={`"${username}" looks like a shared account. Save sync requires a personal RomM account per device to avoid overwriting other users' saves.`}
-          />
-        </PanelSectionRow>
-      )}
-      <PanelSectionRow>
-        <Field label="Password" description={password ? "••••" : "(not set)"}>
-          <DialogButton
-            onClick={() =>
-              showModal(
-                <TextInputModal label="Password" value="" field="password" bIsPassword onSubmit={onPasswordSubmit} />,
-              )
-            }
-          >
-            Edit
+            Connect
           </DialogButton>
         </Field>
       </PanelSectionRow>

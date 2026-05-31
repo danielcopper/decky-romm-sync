@@ -3,7 +3,8 @@ import { PanelSection, PanelSectionRow, ButtonItem, ConfirmModal, showModal } fr
 import { toaster } from "@decky/api";
 import {
   getSettings,
-  saveSettings,
+  saveServerUrl,
+  connectWithCredentials,
   testConnection,
   saveSgdbApiKey,
   verifySgdbApiKey,
@@ -29,6 +30,7 @@ import {
   onSaveSortMigrationChange,
 } from "../utils/saveSortMigrationStore";
 import { scrollToTop } from "../utils/scrollHelpers";
+import { detach } from "../utils/detach";
 import type { SaveSyncSettings as SaveSyncSettingsType, RetroArchInputCheck } from "../types";
 import { pendingEdits } from "./settings/TextInputModal";
 import { SaveSortMigrationSection } from "./settings/SaveSortMigrationSection";
@@ -38,7 +40,6 @@ import { SaveSyncSection } from "./settings/SaveSyncSection";
 import { RegisteredDevicesSection } from "./settings/RegisteredDevicesSection";
 import { ControllerSection } from "./settings/ControllerSection";
 import { AdvancedSection } from "./settings/AdvancedSection";
-import { detach } from "../utils/detach";
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -47,8 +48,7 @@ interface SettingsPageProps {
 export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // Connection state
   const [url, setUrl] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [hasToken, setHasToken] = useState(false);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [allowInsecureSsl, setAllowInsecureSsl] = useState(false);
@@ -89,8 +89,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       .then((s) => {
         // Apply any pending edits that survived a remount, fall back to backend values
         setUrl(pendingEdits.url ?? s.romm_url);
-        setUsername(pendingEdits.username ?? s.romm_user);
-        setPassword(pendingEdits.password ?? s.romm_pass_masked);
+        setHasToken(s.has_token);
         setAllowInsecureSsl(s.romm_allow_insecure_ssl);
         setSgdbApiKey(s.sgdb_api_key_masked);
         setSteamInputMode(s.steam_input_mode);
@@ -158,19 +157,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         setDevicesLoading(false);
       });
   }
-
-  // Auto-save connection fields when a modal edit is confirmed
-  const autoSaveSettings = async (field: "url" | "username" | "password", newValue: string) => {
-    const currentUrl = field === "url" ? newValue : url;
-    const currentUser = field === "username" ? newValue : username;
-    const currentPass = field === "password" ? newValue : password;
-    try {
-      await saveSettings(currentUrl, currentUser, currentPass, allowInsecureSsl);
-      delete pendingEdits[field];
-    } catch {
-      setStatus("Failed to save settings");
-    }
-  };
 
   const handleTest = async () => {
     setLoading(true);
@@ -280,24 +266,33 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   }
 
   // --- Connection handlers wired into ConnectionSection ---
-  const handleUrlSubmit = (value: string) => {
+  const handleUrlChange = async (value: string) => {
     setUrl(value);
-    detach(autoSaveSettings("url", value));
-  };
-  const handleUsernameSubmit = (value: string) => {
-    setUsername(value);
-    detach(autoSaveSettings("username", value));
-  };
-  const handlePasswordSubmit = (value: string) => {
-    setPassword(value);
-    detach(autoSaveSettings("password", value));
+    try {
+      await saveServerUrl(value, allowInsecureSsl);
+      delete pendingEdits.url;
+    } catch {
+      setStatus("Failed to save settings");
+    }
   };
   const handleAllowInsecureSslChange = (val: boolean) => {
     setAllowInsecureSsl(val);
-    // Auto-save with the new SSL setting
-    saveSettings(url, username, password, val).catch(() => {
+    // Auto-save the URL with the new SSL setting
+    saveServerUrl(url, val).catch(() => {
       setStatus("Failed to save settings");
     });
+  };
+  const handleConnect = async (username: string, password: string) => {
+    setStatus("");
+    try {
+      const result = await connectWithCredentials(url, username, password, allowInsecureSsl);
+      setStatus(result.message);
+      if (result.success) {
+        setHasToken(true);
+      }
+    } catch {
+      setStatus("Connection failed");
+    }
   };
 
   // --- SteamGridDB handlers ---
@@ -429,14 +424,16 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       )}
       <ConnectionSection
         url={url}
-        username={username}
-        password={password}
+        hasToken={hasToken}
         allowInsecureSsl={allowInsecureSsl}
         status={status}
         loading={loading}
-        onUrlSubmit={handleUrlSubmit}
-        onUsernameSubmit={handleUsernameSubmit}
-        onPasswordSubmit={handlePasswordSubmit}
+        onUrlChange={(value) => {
+          detach(handleUrlChange(value));
+        }}
+        onConnect={(username, password) => {
+          detach(handleConnect(username, password));
+        }}
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
         onTestConnection={() => {
           detach(handleTest());

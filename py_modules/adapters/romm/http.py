@@ -105,8 +105,14 @@ class RommHttpAdapter:
         return ctx
 
     def auth_header(self) -> str:
-        """Base64-encoded Basic Auth header value for RomM."""
-        credentials = base64.b64encode(f"{self._settings['romm_user']}:{self._settings['romm_pass']}".encode()).decode()
+        """Bearer auth header value built from the stored Client API Token."""
+        token = self._settings.get("romm_api_token") or ""
+        return f"Bearer {token}"
+
+    @staticmethod
+    def _basic_auth_header(username: str, password: str) -> str:
+        """Base64-encoded Basic Auth header value for *username* / *password*."""
+        credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
         return f"Basic {credentials}"
 
     # ------------------------------------------------------------------
@@ -330,6 +336,44 @@ class RommHttpAdapter:
         try:
             with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
                 return json.loads(resp.read().decode())
+        except RommApiError:
+            raise
+        except Exception as exc:
+            raise self.translate_http_error(exc, url, method) from exc
+
+    # Intentionally skips with_retry: token mint/delete are not idempotent
+    # and must not be retried (a duplicate mint would orphan a token).
+    def basic_auth_request(
+        self,
+        path: str,
+        username: str,
+        password: str,
+        *,
+        method: str = "GET",
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Send a one-off Basic-authenticated request from the passed credentials.
+
+        Used for the Client API Token mint/delete flow, where the runtime
+        Bearer token deliberately lacks ``me.write`` and so cannot manage
+        tokens itself. The ``username`` / ``password`` are taken straight
+        from the caller — never from ``self._settings`` — so credentials
+        stay transient. Sends a JSON body when ``data`` is given. Returns
+        ``{}`` on a 204 No Content, parsed JSON otherwise.
+        """
+        url = self._settings["romm_url"].rstrip("/") + path
+        body = json.dumps(data).encode("utf-8") if data is not None else None
+        req = urllib.request.Request(url, data=body, method=method)
+        if body is not None:
+            req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", self._basic_auth_header(username, password))
+        req.add_header("User-Agent", self._user_agent)
+        try:
+            with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
+                if resp.status == 204:
+                    return {}
+                raw = resp.read().decode()
+                return json.loads(raw) if raw else {}
         except RommApiError:
             raise
         except Exception as exc:

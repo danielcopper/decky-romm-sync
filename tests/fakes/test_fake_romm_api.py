@@ -16,6 +16,7 @@ from services.protocols.transport import (
     RommRomReader,
     RommSaveApi,
     RommSyncApi,
+    RommTokenApi,
     RommVersion,
 )
 
@@ -175,6 +176,31 @@ class TestDeviceRegistration:
         assert api.list_devices()[0]["name"] == "deck"
 
 
+class TestClientTokens:
+    """Mint/delete record calls and honour staged responses."""
+
+    def test_mint_returns_staged_response(self) -> None:
+        api = FakeRommApi()
+        api.mint_client_token_response = {"id": 9, "raw_token": "rmm_seeded"}
+        result = api.mint_client_token("alice", "secret", token_name="decky-romm-sync (Deck)")
+        assert result == {"id": 9, "raw_token": "rmm_seeded"}
+        name, args, kwargs = api.call_log[-1]
+        assert name == "mint_client_token"
+        assert args == ("alice", "secret")
+        assert kwargs == {"token_name": "decky-romm-sync (Deck)"}
+
+    def test_delete_records_token_id(self) -> None:
+        api = FakeRommApi()
+        api.delete_client_token("alice", "secret", token_id=42)
+        assert api.deleted_token_ids == [42]
+
+    def test_mint_side_effect_fires(self) -> None:
+        api = FakeRommApi()
+        api.mint_client_token_side_effect = OSError("forbidden")
+        with pytest.raises(OSError, match="forbidden"):
+            api.mint_client_token("u", "p", token_name="x")
+
+
 class TestProtocolSatisfaction:
     """``FakeRommApi`` structurally satisfies every RomM Protocol.
 
@@ -198,6 +224,7 @@ class TestProtocolSatisfaction:
             RommConnectionApi,
             RommLibraryApi,
             RommSyncApi,
+            RommTokenApi,
         ],
     )
     def test_implements_every_protocol_member(self, protocol) -> None:

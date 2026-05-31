@@ -8,13 +8,10 @@ The Connection Settings page manages your RomM server connection.
 
 <!-- Screenshot: Connection Settings page -->
 
-- **RomM URL** — the full URL of your RomM server, including port if needed (e.g. `http://192.168.1.100:8080`)
-- **Username** — your RomM account username
-- **Password** — your RomM account password (displayed as dots when set)
-- **Save Settings** — persists your connection details
-- **Test Connection** — verifies the plugin can reach and authenticate with your RomM server
-
-Tap the **Edit** button next to any field to open a text input popup.
+- **RomM URL** — the full URL of your RomM server, including port if needed (e.g. `http://192.168.1.100:8080`). Tap **Edit** to change it; the URL saves automatically.
+- **RomM Account** — shows **Connected** once a token is stored, or **Not connected** otherwise. Tap **Connect** to open a one-time prompt for your RomM username and password. The plugin exchanges them for a RomM Client API Token and stores only the token; your password is discarded after the token is minted and never saved. The username and password are write-only — they are never pre-filled or shown back to you. If your account cannot create API tokens, the status reports that.
+- **Allow Insecure SSL** — shown only for `https://` URLs; skips certificate verification for self-signed certs (LAN only).
+- **Test Connection** — verifies the plugin can reach and authenticate with your RomM server using the stored token.
 
 ## SteamGridDB API Key
 

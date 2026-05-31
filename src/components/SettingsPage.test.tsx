@@ -157,9 +157,7 @@ const flushAsync = () =>
 function defaultSettings(): import("../types").PluginSettings {
   return {
     romm_url: "https://romm.local",
-    romm_user: "user",
-    romm_pass_masked: "••••",
-    has_credentials: true,
+    has_token: true,
     steam_input_mode: "default",
     sgdb_api_key_masked: "",
     log_level: "warn",
@@ -216,8 +214,7 @@ describe("SettingsPage", () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         romm_url: "https://my.romm",
-        romm_user: "alice",
-        romm_pass_masked: "********",
+        has_token: true,
         romm_allow_insecure_ssl: true,
         sgdb_api_key_masked: "abc",
         steam_input_mode: "force_on",
@@ -229,8 +226,7 @@ describe("SettingsPage", () => {
 
       const conn = capturedConnection[capturedConnection.length - 1];
       expect(conn?.url).toBe("https://my.romm");
-      expect(conn?.username).toBe("alice");
-      expect(conn?.password).toBe("********");
+      expect(conn?.hasToken).toBe(true);
       expect(conn?.allowInsecureSsl).toBe(true);
 
       const sgdb = capturedSgdb[capturedSgdb.length - 1];
@@ -244,17 +240,23 @@ describe("SettingsPage", () => {
       expect(adv?.logLevel).toBe("debug");
     });
 
-    it("prefers pendingEdits over the backend values for URL / username / password", async () => {
+    it("prefers a pendingEdits URL over the backend value", async () => {
       pendingEdits.url = "https://pending.url";
-      pendingEdits.username = "pendinguser";
-      pendingEdits.password = "pendingpass";
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
       const conn = capturedConnection[capturedConnection.length - 1];
       expect(conn?.url).toBe("https://pending.url");
-      expect(conn?.username).toBe("pendinguser");
-      expect(conn?.password).toBe("pendingpass");
+    });
+
+    it("hydrates hasToken from getSettings", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: false,
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(false);
     });
 
     it("does not set retroarchWarning when retroarch_input_check is absent", async () => {
@@ -474,54 +476,41 @@ describe("SettingsPage", () => {
     });
   });
 
-  describe("autoSaveSettings (handlers fed to ConnectionSection)", () => {
-    it("calls saveSettings and clears the pending edit for that field on success", async () => {
-      vi.mocked(backend.saveSettings).mockResolvedValue({ success: true, message: "" });
+  describe("connection handlers fed to ConnectionSection", () => {
+    it("handleUrlChange persists URL + SSL via saveServerUrl and clears the pending URL edit", async () => {
+      vi.mocked(backend.saveServerUrl).mockResolvedValue({ success: true, message: "" });
       pendingEdits.url = "draft";
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       const conn = capturedConnection[capturedConnection.length - 1];
 
       await act(async () => {
-        conn?.onUrlSubmit("https://new.url");
+        conn?.onUrlChange("https://new.url");
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.saveSettings)).toHaveBeenCalledWith("https://new.url", "user", "••••", false);
+      expect(vi.mocked(backend.saveServerUrl)).toHaveBeenCalledWith("https://new.url", false);
       expect(pendingEdits.url).toBeUndefined();
     });
 
-    it("does not delete the pending edit when saveSettings rejects (status fallback wired)", async () => {
-      vi.mocked(backend.saveSettings).mockRejectedValue(new Error("nope"));
-      pendingEdits.username = "draft";
+    it("does not delete the pending URL edit when saveServerUrl rejects (status fallback wired)", async () => {
+      vi.mocked(backend.saveServerUrl).mockRejectedValue(new Error("nope"));
+      pendingEdits.url = "draft";
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       const conn = capturedConnection[capturedConnection.length - 1];
 
       await act(async () => {
-        conn?.onUsernameSubmit("alice");
+        conn?.onUrlChange("https://new.url");
         await Promise.resolve();
       });
 
-      expect(pendingEdits.username).toBe("draft");
+      expect(pendingEdits.url).toBe("draft");
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Failed to save settings");
     });
 
-    it("handlePasswordSubmit routes through saveSettings with the new password", async () => {
-      vi.mocked(backend.saveSettings).mockResolvedValue({ success: true, message: "" });
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-      const conn = capturedConnection[capturedConnection.length - 1];
-
-      await act(async () => {
-        conn?.onPasswordSubmit("hunter2");
-        await Promise.resolve();
-      });
-
-      expect(vi.mocked(backend.saveSettings)).toHaveBeenCalledWith("https://romm.local", "user", "hunter2", false);
-    });
-
-    it("handleAllowInsecureSslChange forwards the new flag straight to saveSettings", async () => {
-      vi.mocked(backend.saveSettings).mockResolvedValue({ success: true, message: "" });
+    it("handleAllowInsecureSslChange forwards the URL + new flag to saveServerUrl", async () => {
+      vi.mocked(backend.saveServerUrl).mockResolvedValue({ success: true, message: "" });
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       const conn = capturedConnection[capturedConnection.length - 1];
@@ -531,11 +520,11 @@ describe("SettingsPage", () => {
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.saveSettings)).toHaveBeenCalledWith("https://romm.local", "user", "••••", true);
+      expect(vi.mocked(backend.saveServerUrl)).toHaveBeenCalledWith("https://romm.local", true);
     });
 
     it("handleAllowInsecureSslChange surfaces 'Failed to save settings' on rejection", async () => {
-      vi.mocked(backend.saveSettings).mockRejectedValue(new Error("ssl"));
+      vi.mocked(backend.saveServerUrl).mockRejectedValue(new Error("ssl"));
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       const conn = capturedConnection[capturedConnection.length - 1];
@@ -549,6 +538,75 @@ describe("SettingsPage", () => {
       // surfaced via ConnectionSection.status (mirrors the handleTest throw test).
       const last = capturedConnection[capturedConnection.length - 1];
       expect(last?.status).toBe("Failed to save settings");
+    });
+  });
+
+  describe("handleConnect (credential → token flow)", () => {
+    it("calls connectWithCredentials with url + creds + ssl, surfaces the message, and sets hasToken on success", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: false,
+      });
+      vi.mocked(backend.connectWithCredentials).mockResolvedValue({
+        success: true,
+        message: "Connected!",
+        romm_version: "4.8.1",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      // Precondition: not yet connected.
+      expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(false);
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.connectWithCredentials)).toHaveBeenCalledWith(
+        "https://romm.local",
+        "daniel",
+        "hunter2",
+        false,
+      );
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("Connected!");
+      expect(conn?.hasToken).toBe(true);
+    });
+
+    it("surfaces the failure message without setting hasToken (e.g. forbidden_error)", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: false,
+      });
+      vi.mocked(backend.connectWithCredentials).mockResolvedValue({
+        success: false,
+        message: "This account cannot create API tokens.",
+        error_code: "forbidden_error",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnect("admin", "pw");
+        await Promise.resolve();
+      });
+
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("This account cannot create API tokens.");
+      expect(conn?.hasToken).toBe(false);
+    });
+
+    it("sets status='Connection failed' when connectWithCredentials throws", async () => {
+      vi.mocked(backend.connectWithCredentials).mockRejectedValue(new Error("net"));
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
+        await Promise.resolve();
+      });
+
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Connection failed");
     });
   });
 

@@ -5,9 +5,13 @@ import { SaveSyncSection } from "./SaveSyncSection";
 import { showModal } from "@decky/ui";
 import type { SaveSyncSettings } from "../../types";
 
-// Local re-mock: ButtonItem must forward `disabled`; ToggleField + DropdownItem
-// expose their props so we can drive their controlled behavior without a real
-// Steam UI; Field renders both label + description for assertions.
+// Local re-mock: the Default Save Slot row is a Field + DialogButton again,
+// so Field renders its `label` + `description` (the slot copy stays assertable
+// via container.textContent / field-desc) and DialogButton renders its
+// `children` ("Edit") forwarding `onClick`; ButtonItem stays for the
+// layout="below" Reset / Sync All rows, forwarding `disabled` + `children`;
+// ToggleField + DropdownItem expose their props so we can drive their
+// controlled behavior without a real Steam UI.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 interface ToggleFieldProps {
   label?: unknown;
@@ -39,8 +43,8 @@ vi.mock("@decky/ui", () => ({
       createElement("span", { "data-testid": "field-desc" }, p.description as never),
       p.children as never,
     ),
-  DialogButton: ({ children, onClick }: AnyProps & { onClick?: () => void }) =>
-    createElement("button", { onClick }, children as never),
+  DialogButton: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    createElement("button", { onClick, disabled }, children as never),
   ButtonItem: ({
     children,
     onClick,
@@ -351,11 +355,16 @@ describe("SaveSyncSection", () => {
     });
 
     it("omits the status Field when empty", () => {
-      const { getAllByTestId } = render(<SaveSyncSection {...defaultProps()} />);
-      const labels = getAllByTestId("field-label").map((el) => el.textContent);
+      const { queryAllByTestId } = render(<SaveSyncSection {...defaultProps()} />);
+      const labels = queryAllByTestId("field-label").map((el) => el.textContent);
       // Catches the regression where the `{syncStatus && ...}` guard is
-      // dropped and the Field renders with an empty label.
+      // dropped and the Field renders with an empty label. With the default
+      // props the only Field is the Default Save Slot row (labelled
+      // "Default Save Slot") — no device/legacy/status Field renders, so
+      // there is no empty-label leak.
       expect(labels.filter((l) => l === "")).toHaveLength(0);
+      // Sanity-check the status row truly is absent (and the slot row present).
+      expect(labels).toEqual(["Default Save Slot"]);
     });
   });
 });

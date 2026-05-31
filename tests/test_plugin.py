@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_path_exists_reader import FakePathExistsReader
@@ -97,6 +97,7 @@ def plugin():
         config=ConnectionServiceConfig(
             settings=p.settings,
             romm_api=p._romm_api,
+            settings_persister=p._settings_persister,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
@@ -144,35 +145,36 @@ class TestPersistenceAttributeIsLoud:
 
 class TestSettings:
     @pytest.mark.asyncio
-    async def test_get_settings_masks_password(self, plugin):
-        plugin.settings["romm_pass"] = "secret123"
+    async def test_get_settings_reports_token_present(self, plugin):
+        plugin.settings["romm_api_token"] = "rmm_abc"
         result = await plugin.get_settings()
-        assert result["romm_pass_masked"] == "••••"
-        assert "secret123" not in str(result)
+        assert result["has_token"] is True
+        # The token itself is never sent to the frontend.
+        assert "rmm_abc" not in str(result)
 
     @pytest.mark.asyncio
-    async def test_get_settings_empty_password(self, plugin):
-        plugin.settings["romm_pass"] = ""
+    async def test_get_settings_reports_token_absent(self, plugin):
+        plugin.settings["romm_api_token"] = None
         result = await plugin.get_settings()
-        assert result["romm_pass_masked"] == ""
+        assert result["has_token"] is False
 
     @pytest.mark.asyncio
-    async def test_save_settings_skips_masked_password(self, plugin, tmp_path):
+    async def test_save_server_url_persists_url(self, plugin, tmp_path):
         import decky
 
         plugin._persistence = PersistenceAdapter(str(tmp_path), decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger)
-        plugin.settings["romm_pass"] = "original"
-        await plugin.save_settings("http://example.com", "user", "••••")
-        assert plugin.settings["romm_pass"] == "original"
+        result = await plugin.save_server_url("http://example.com")
+        assert result["success"] is True
+        assert plugin.settings["romm_url"] == "http://example.com"
 
     @pytest.mark.asyncio
-    async def test_save_settings_updates_real_password(self, plugin, tmp_path):
+    async def test_save_server_url_does_not_touch_token(self, plugin, tmp_path):
         import decky
 
         plugin._persistence = PersistenceAdapter(str(tmp_path), decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger)
-        plugin.settings["romm_pass"] = "old"
-        await plugin.save_settings("http://example.com", "user", "newpass")
-        assert plugin.settings["romm_pass"] == "newpass"
+        plugin.settings["romm_api_token"] = "rmm_keep"
+        await plugin.save_server_url("http://example.com")
+        assert plugin.settings["romm_api_token"] == "rmm_keep"
 
 
 class TestConnection:
@@ -190,6 +192,7 @@ class TestConnection:
             config=ConnectionServiceConfig(
                 settings=plugin.settings,
                 romm_api=plugin._romm_api,
+                settings_persister=MagicMock(),
                 loop=plugin.loop,
                 logger=decky.logger,
                 min_required_version=Plugin._MIN_REQUIRED_VERSION,
@@ -431,29 +434,29 @@ class TestInsecureSslSetting:
         assert result["romm_allow_insecure_ssl"] is False
 
     @pytest.mark.asyncio
-    async def test_save_settings_with_insecure_ssl(self, plugin, tmp_path):
+    async def test_save_server_url_with_insecure_ssl(self, plugin, tmp_path):
         import decky
 
         plugin._persistence = PersistenceAdapter(str(tmp_path), decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger)
-        await plugin.save_settings("https://romm.local", "user", "pass", True)
+        await plugin.save_server_url("https://romm.local", True)
         assert plugin.settings["romm_allow_insecure_ssl"] is True
 
     @pytest.mark.asyncio
-    async def test_save_settings_without_param_preserves(self, plugin, tmp_path):
+    async def test_save_server_url_without_param_preserves(self, plugin, tmp_path):
         import decky
 
         plugin._persistence = PersistenceAdapter(str(tmp_path), decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger)
         plugin.settings["romm_allow_insecure_ssl"] = True
-        await plugin.save_settings("https://romm.local", "user", "pass")
+        await plugin.save_server_url("https://romm.local")
         assert plugin.settings["romm_allow_insecure_ssl"] is True
 
     @pytest.mark.asyncio
-    async def test_save_settings_explicit_false(self, plugin, tmp_path):
+    async def test_save_server_url_explicit_false(self, plugin, tmp_path):
         import decky
 
         plugin._persistence = PersistenceAdapter(str(tmp_path), decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger)
         plugin.settings["romm_allow_insecure_ssl"] = True
-        await plugin.save_settings("https://romm.local", "user", "pass", False)
+        await plugin.save_server_url("https://romm.local", False)
         assert plugin.settings["romm_allow_insecure_ssl"] is False
 
 
@@ -630,7 +633,8 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # Connection / settings (read-only or non-retrodeck).
     "test_connection",
     "get_romm_version",
-    "save_settings",
+    "connect_with_credentials",
+    "save_server_url",
     "get_settings",
     "get_whitelist_settings",
     "update_whitelist_settings",
@@ -828,6 +832,9 @@ class TestMainStartupOrdering:
             "reconcile_orphaned_sync_runs"
         )
 
+        connection_service = MagicMock()
+        connection_service.migrate_legacy_credentials = AsyncMock()
+
         wired_services = {
             "save_sync_service": save_sync_service,
             "playtime_service": MagicMock(),
@@ -844,7 +851,7 @@ class TestMainStartupOrdering:
             "shortcut_removal_service": MagicMock(),
             "settings_service": MagicMock(),
             "core_service": MagicMock(),
-            "connection_service": MagicMock(),
+            "connection_service": connection_service,
             "startup_healing_service": startup_healing_service,
             "launch_gate_service": MagicMock(),
             "session_lifecycle_service": MagicMock(),

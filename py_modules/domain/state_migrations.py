@@ -23,6 +23,10 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v2_to_v3(new_data)
     if version < 4:
         new_data = _migrate_v3_to_v4(new_data)
+    if version < 5:
+        new_data = _migrate_v4_to_v5(new_data)
+    if version < 6:
+        new_data = _migrate_v5_to_v6(new_data)
     return new_data
 
 
@@ -140,6 +144,37 @@ def _migrate_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
     the schema version so the fold runs exactly once.
     """
     data["version"] = 4
+    return data
+
+
+def _migrate_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
+    """v<5 → v5: seed the Client API Token slots.
+
+    Introduces ``romm_api_token`` / ``romm_api_token_id`` as ``None``
+    placeholders so post-migration reads find the keys. Minting the
+    token from any stored legacy credentials is a network side effect
+    that lives in the service layer (``ConnectionService``); this step
+    only advances the schema.
+    """
+    data.setdefault("romm_api_token", None)
+    data.setdefault("romm_api_token_id", None)
+    data["version"] = 5
+    return data
+
+
+def _migrate_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
+    """v<6 → v6: drop legacy credentials once a Client API Token exists.
+
+    A stored token fully supersedes ``romm_user`` / ``romm_pass`` — nothing
+    reads the credentials at runtime once a token is present, so they are
+    plaintext-at-rest with no purpose. When a token is set, both credential
+    keys are removed; without a token the credentials are kept untouched so
+    the startup ``migrate_legacy_credentials`` path can still mint from them.
+    """
+    if data.get("romm_api_token"):
+        data.pop("romm_user", None)
+        data.pop("romm_pass", None)
+    data["version"] = 6
     return data
 
 

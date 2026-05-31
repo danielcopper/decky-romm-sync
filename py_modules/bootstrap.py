@@ -615,6 +615,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         config=ConnectionServiceConfig(
             settings=cfg.stores.settings,
             romm_api=cfg.adapters.romm_api,
+            settings_persister=cfg.callbacks.settings_persister,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             min_required_version=cfg.min_required_version,

@@ -92,7 +92,10 @@ export interface CachedGameDetail {
 // for back-compat with existing import sites.
 export { getCachedGameDetail, invalidateCachedGameDetail } from "../utils/cachedGameDetailStore";
 export const getSettings = callable<[], PluginSettings>("get_settings");
-export const saveSettings = callable<[string, string, string, boolean], BackendResult>("save_settings");
+export const saveServerUrl = callable<[string, boolean], BackendResult>("save_server_url");
+export const connectWithCredentials = callable<[string, string, string, boolean], BackendResult>(
+  "connect_with_credentials",
+);
 
 export interface WhitelistSettings {
   disabled_defaults: string[];

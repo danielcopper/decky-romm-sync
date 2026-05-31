@@ -5,10 +5,13 @@ import { SteamGridDBSection } from "./SteamGridDBSection";
 import { showModal } from "@decky/ui";
 
 // Local re-mock — we need:
-//  - DialogButton to forward `disabled` so we can assert the Verify state.
-//  - ButtonItem to forward `onClick` + `disabled` (not in global stub).
-//  - Field to render the `description` text so masked-key vs. "Not configured"
-//    can be asserted via container.textContent.
+//  - Field to render its `label` + `description` (the API Key row is a
+//    Field + DialogButton again) so masked-key vs. "Not configured" can be
+//    asserted via field-desc, plus the (Field-based) status row.
+//  - DialogButton to render its `children` ("Edit") and forward `onClick` so
+//    the modal-open wiring stays drivable.
+//  - ButtonItem to forward `onClick` + `disabled` and render its `children`
+//    (the Verify Key row stays a layout="below" ButtonItem).
 type AnyProps = Record<string, unknown> & { children?: unknown };
 vi.mock("@decky/ui", () => ({
   PanelSection: (p: AnyProps) => createElement("section", {}, p.children as never),
@@ -21,14 +24,8 @@ vi.mock("@decky/ui", () => ({
       createElement("span", { "data-testid": "field-desc" }, p.description as never),
       p.children as never,
     ),
-  DialogButton: ({
-    children,
-    onClick,
-    disabled,
-  }: AnyProps & {
-    onClick?: () => void;
-    disabled?: boolean;
-  }) => createElement("button", { onClick, disabled, "data-role": "dialog" }, children as never),
+  DialogButton: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    createElement("button", { onClick, disabled }, children as never),
   ButtonItem: ({
     children,
     onClick,
@@ -36,7 +33,7 @@ vi.mock("@decky/ui", () => ({
   }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
-  }) => createElement("button", { onClick, disabled, "data-role": "item" }, children as never),
+  }) => createElement("button", { onClick, disabled }, children as never),
   showModal: vi.fn(),
 }));
 
@@ -137,14 +134,16 @@ describe("SteamGridDBSection", () => {
       const { getAllByTestId } = render(<SteamGridDBSection {...defaultProps({ sgdbStatus: "Valid key ✓" })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Valid key ✓");
+      // API Key row + status row.
+      expect(getAllByTestId("field")).toHaveLength(2);
     });
 
     it("omits the status row when sgdbStatus is empty", () => {
       const { getAllByTestId } = render(<SteamGridDBSection {...defaultProps()} />);
-      // Only the "API Key" Field renders when sgdbStatus is empty (Verify is
-      // a ButtonItem, not a Field). Confirm no accidental empty-label leak.
+      // The API Key row is a Field + DialogButton, so with no status the only
+      // remaining Field is the API Key row — exactly one, labelled "API Key".
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
-      expect(labels.filter((l) => l === "")).toHaveLength(0);
+      expect(labels).toEqual(["API Key"]);
     });
   });
 });

@@ -39,9 +39,7 @@ export interface RetroArchInputCheck {
 
 export interface PluginSettings {
   romm_url: string;
-  romm_user: string;
-  romm_pass_masked: string;
-  has_credentials: boolean;
+  has_token: boolean;
   steam_input_mode: "default" | "force_on" | "force_off";
   sgdb_api_key_masked: string;
   log_level: "debug" | "info" | "warn" | "error";

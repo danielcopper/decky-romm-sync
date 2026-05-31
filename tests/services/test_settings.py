@@ -71,47 +71,40 @@ def service(settings, uow, logger, settings_persister, steam_config) -> Settings
     )
 
 
-# ── save_settings ──────────────────────────────────────────────────────
+# ── save_server_url ────────────────────────────────────────────────────
 
 
-class TestSaveSettings:
-    def test_persists_credentials(self, service, settings, settings_persister):
-        result = service.save_settings("http://romm.local", "alice", "secret")
+class TestSaveServerUrl:
+    def test_persists_url(self, service, settings, settings_persister):
+        result = service.save_server_url("http://romm.local")
         assert result == {"success": True, "message": "Settings saved"}
         assert settings["romm_url"] == "http://romm.local"
-        assert settings["romm_user"] == "alice"
-        assert settings["romm_pass"] == "secret"
         settings_persister.save_settings.assert_called_once_with()
 
-    def test_masked_password_preserves_existing(self, service, settings, settings_persister):
-        settings["romm_pass"] = "original"
-        result = service.save_settings("http://romm.local", "alice", "••••")
-        assert result["success"] is True
-        assert settings["romm_pass"] == "original"
-        settings_persister.save_settings.assert_called_once_with()
-
-    def test_empty_password_preserves_existing(self, service, settings):
-        settings["romm_pass"] = "original"
-        service.save_settings("http://romm.local", "alice", "")
-        assert settings["romm_pass"] == "original"
+    def test_does_not_touch_token_or_credentials(self, service, settings):
+        settings["romm_api_token"] = "rmm_keep"
+        settings["romm_api_token_id"] = 7
+        service.save_server_url("http://romm.local")
+        assert settings["romm_api_token"] == "rmm_keep"
+        assert settings["romm_api_token_id"] == 7
 
     def test_allow_insecure_ssl_none_does_not_touch_setting(self, service, settings):
         settings["romm_allow_insecure_ssl"] = True
-        service.save_settings("http://romm.local", "alice", "secret", None)
+        service.save_server_url("http://romm.local", None)
         assert settings["romm_allow_insecure_ssl"] is True
 
     def test_allow_insecure_ssl_true(self, service, settings):
-        service.save_settings("http://romm.local", "alice", "secret", True)
+        service.save_server_url("http://romm.local", True)
         assert settings["romm_allow_insecure_ssl"] is True
 
     def test_allow_insecure_ssl_false_overrides_true(self, service, settings):
         settings["romm_allow_insecure_ssl"] = True
-        service.save_settings("http://romm.local", "alice", "secret", False)
+        service.save_server_url("http://romm.local", False)
         assert settings["romm_allow_insecure_ssl"] is False
 
     def test_persistence_failure_returns_error(self, service, settings_persister):
         settings_persister.save_settings.side_effect = OSError("disk full")
-        result = service.save_settings("http://romm.local", "alice", "secret")
+        result = service.save_server_url("http://romm.local")
         assert result["success"] is False
         assert "disk full" in result["message"]
 
@@ -124,8 +117,7 @@ class TestGetSettings:
         settings.update(
             {
                 "romm_url": "http://romm.local",
-                "romm_user": "alice",
-                "romm_pass": "secret",
+                "romm_api_token": "rmm_tok",
                 "steam_input_mode": "force_on",
                 "steamgriddb_api_key": "abc",
                 "log_level": "info",
@@ -136,26 +128,38 @@ class TestGetSettings:
         steam_config.check_retroarch_input_driver.return_value = {"warning": False}
         result = service.get_settings()
         assert result["romm_url"] == "http://romm.local"
-        assert result["romm_user"] == "alice"
-        assert result["romm_pass_masked"] == "••••"
+        assert result["has_token"] is True
         assert result["sgdb_api_key_masked"] == "••••"
-        assert result["has_credentials"] is True
         assert result["steam_input_mode"] == "force_on"
         assert result["log_level"] == "info"
         assert result["romm_allow_insecure_ssl"] is True
         assert result["collection_create_platform_groups"] is True
         assert result["retroarch_input_check"] == {"warning": False}
 
-    def test_masks_password_when_set(self, service, settings):
-        settings["romm_pass"] = "secret"
+    def test_never_returns_credentials_or_token(self, service, settings):
+        settings["romm_api_token"] = "rmm_secret"
+        settings["romm_user"] = "alice"
+        settings["romm_pass"] = "pw"
         result = service.get_settings()
-        assert result["romm_pass_masked"] == "••••"
-        assert "secret" not in str(result)
+        assert "romm_user" not in result
+        assert "romm_pass_masked" not in result
+        assert "has_credentials" not in result
+        assert "rmm_secret" not in str(result)
 
-    def test_empty_password_returns_empty_mask(self, service, settings):
-        settings["romm_pass"] = ""
+    def test_has_token_true_when_set(self, service, settings):
+        settings["romm_api_token"] = "rmm_x"
         result = service.get_settings()
-        assert result["romm_pass_masked"] == ""
+        assert result["has_token"] is True
+
+    def test_has_token_false_when_none(self, service, settings):
+        settings["romm_api_token"] = None
+        result = service.get_settings()
+        assert result["has_token"] is False
+
+    def test_has_token_false_when_empty(self, service, settings):
+        settings["romm_api_token"] = ""
+        result = service.get_settings()
+        assert result["has_token"] is False
 
     def test_masks_sgdb_key_when_set(self, service, settings):
         settings["steamgriddb_api_key"] = "longkey"
@@ -168,25 +172,11 @@ class TestGetSettings:
         result = service.get_settings()
         assert result["sgdb_api_key_masked"] == ""
 
-    def test_no_credentials_reports_false(self, service, settings):
-        settings["romm_user"] = ""
-        settings["romm_pass"] = ""
-        result = service.get_settings()
-        assert result["has_credentials"] is False
-
-    def test_user_without_password_reports_false(self, service, settings):
-        settings["romm_user"] = "alice"
-        settings["romm_pass"] = ""
-        result = service.get_settings()
-        assert result["has_credentials"] is False
-
     def test_defaults_when_keys_missing(self, service):
         result = service.get_settings()
         assert result["romm_url"] == ""
-        assert result["romm_user"] == ""
-        assert result["romm_pass_masked"] == ""
+        assert result["has_token"] is False
         assert result["sgdb_api_key_masked"] == ""
-        assert result["has_credentials"] is False
         assert result["steam_input_mode"] == "default"
         assert result["log_level"] == "warn"
         assert result["romm_allow_insecure_ssl"] is False

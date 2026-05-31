@@ -114,7 +114,7 @@ Two services are large enough to be decomposed into sub-service packages (`servi
 | `metadata.py` | MetadataService — ROM metadata reads from `rom_metadata` (7-day TTL), app_id mapping |
 | `launch_gate.py` | LaunchGateService — pre-launch gate (rom lookup, install check, save status) |
 | `startup_healing.py` | StartupHealingService — prunes stale `rom_installs` rows against disk on load (via the UoW) + reconciles orphaned `running` SyncRuns (a hard crash leaves a `running` row → marked errored) |
-| `connection.py` | ConnectionService — connection test + RomM minimum-version gate |
+| `connection.py` | ConnectionService — connection test + RomM minimum-version gate + Client API Token lifecycle (mint/establish via credentials) |
 | `protocols/` | Protocol interfaces grouped by concern (see [Protocol Interfaces](#protocol-interfaces)) |
 
 #### LibraryService decomposition (`services/library/`)
@@ -344,6 +344,6 @@ Every service receives its dependencies through a single `*ServiceConfig` datacl
 | **ShortcutRemovalService** | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`) |
 | **SessionLifecycleService** | `Session*` cross-service seams (playtime / post-exit sync / achievement sync / migration reader) |
 | **LaunchGateService** | `LaunchGateRomLookup`, `LaunchGateInstalledChecker`, `LaunchGateSaveStatusReader` cross-service seams |
-| **ConnectionService** | `RommConnectionApi`, `min_required_version` |
+| **ConnectionService** | `RommConnectionApi`, `SettingsPersister`, `min_required_version` |
 
 Most services also receive shared state (`state`, `settings`, `metadata_cache`, `save_sync_state`), the event loop, the logger, and the `DebugLogger` Protocol through their config. As the SQLite cutover proceeds, services that no longer read the in-memory dicts drop them: `GameDetailService`/`AchievementsService` no longer take `state`, and `SettingsService` reads bound shortcuts from `roms` rather than the in-memory `shortcut_registry`.

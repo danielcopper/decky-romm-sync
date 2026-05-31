@@ -44,8 +44,6 @@ function reset() {
     delete captured[k];
   }
   delete pendingEdits.url;
-  delete pendingEdits.username;
-  delete pendingEdits.password;
 }
 
 describe("TextInputModal", () => {
@@ -125,24 +123,6 @@ describe("TextInputModal", () => {
       fireEvent.change(input, { target: { value: "http://romm.local" } });
       captured.onOK?.();
       expect(pendingEdits.url).toBe("http://romm.local");
-      expect(pendingEdits.username).toBeUndefined();
-      expect(pendingEdits.password).toBeUndefined();
-    });
-
-    it("writes pendingEdits.username when field='username'", () => {
-      render(<TextInputModal label="User" value="" field="username" onSubmit={vi.fn()} />);
-      const input = document.querySelector("input") as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "daniel" } });
-      captured.onOK?.();
-      expect(pendingEdits.username).toBe("daniel");
-    });
-
-    it("writes pendingEdits.password when field='password'", () => {
-      render(<TextInputModal label="Pwd" value="" field="password" bIsPassword onSubmit={vi.fn()} />);
-      const input = document.querySelector("input") as HTMLInputElement;
-      fireEvent.change(input, { target: { value: "s3cret" } });
-      captured.onOK?.();
-      expect(pendingEdits.password).toBe("s3cret");
     });
 
     it("does NOT touch pendingEdits when field is omitted", () => {
@@ -151,8 +131,6 @@ describe("TextInputModal", () => {
       fireEvent.change(input, { target: { value: "nope" } });
       captured.onOK?.();
       expect(pendingEdits.url).toBeUndefined();
-      expect(pendingEdits.username).toBeUndefined();
-      expect(pendingEdits.password).toBeUndefined();
     });
 
     it("still calls onSubmit when field is set (pendingEdits write does not short-circuit)", () => {

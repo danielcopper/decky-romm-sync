@@ -1,13 +1,16 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
 import { ConnectionSection } from "./ConnectionSection";
 import { showModal } from "@decky/ui";
 
-// Local re-mock: ButtonItem must forward `disabled`; ToggleField must
-// forward `checked` + a usable onChange that mirrors the global stub's
-// (boolean) signature; Field renders both label + description so we can
-// assert masked-password / "(not set)" copy.
+// Local re-mock: the URL + RomM Account rows are Field + DialogButton again,
+// so Field renders its `label` + `description` (those copy strings stay
+// queryable via field-label/field-desc) and DialogButton renders its
+// `children` ("Edit"/"Connect") forwarding `onClick`; ButtonItem stays for the
+// layout="below" Test Connection row, forwarding `disabled` + `children`;
+// ToggleField forwards `checked` + a usable onChange that mirrors the global
+// stub's (boolean) signature.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 interface ToggleFieldProps {
   label?: unknown;
@@ -28,8 +31,8 @@ vi.mock("@decky/ui", () => ({
       createElement("span", { "data-testid": "field-desc" }, p.description as never),
       p.children as never,
     ),
-  DialogButton: ({ children, onClick }: AnyProps & { onClick?: () => void }) =>
-    createElement("button", { onClick }, children as never),
+  DialogButton: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    createElement("button", { onClick, disabled }, children as never),
   ButtonItem: ({
     children,
     onClick,
@@ -50,32 +53,36 @@ vi.mock("@decky/ui", () => ({
   showModal: vi.fn(),
 }));
 
-interface TextInputProps {
-  label: string;
-  value: string;
+// Captured props off the modals opened via showModal. The URL Edit opens a
+// TextInputModal (field='url'); the Connect button opens a ConnectModal
+// (onConnect callback).
+interface UrlModalProps {
+  label?: string;
+  value?: string;
   field?: string;
   bIsPassword?: boolean;
-  onSubmit: (value: string) => void;
+  onSubmit?: (value: string) => void;
+}
+interface ConnectModalProps {
+  onConnect?: (username: string, password: string) => void;
 }
 
-function lastShownModalProps(): TextInputProps | null {
+function lastShownModalProps<T>(): T | null {
   const calls = vi.mocked(showModal).mock.calls;
   if (calls.length === 0) return null;
-  const el = calls[calls.length - 1]?.[0] as ReactElement<TextInputProps> | undefined;
+  const el = calls[calls.length - 1]?.[0] as ReactElement<T> | undefined;
   return el?.props ?? null;
 }
 
 function defaultProps(overrides: Partial<React.ComponentProps<typeof ConnectionSection>> = {}) {
   return {
     url: "",
-    username: "",
-    password: "",
+    hasToken: false,
     allowInsecureSsl: false,
     status: "",
     loading: false,
-    onUrlSubmit: vi.fn(),
-    onUsernameSubmit: vi.fn(),
-    onPasswordSubmit: vi.fn(),
+    onUrlChange: vi.fn(),
+    onConnect: vi.fn(),
     onAllowInsecureSslChange: vi.fn(),
     onTestConnection: vi.fn(),
     ...overrides,
@@ -102,86 +109,56 @@ describe("ConnectionSection", () => {
     });
 
     it("opens a TextInputModal with field='url' when Edit is clicked", () => {
-      const onUrlSubmit = vi.fn();
-      const { getAllByText } = render(
-        <ConnectionSection {...defaultProps({ url: "http://romm.local", onUrlSubmit })} />,
-      );
-      // Three Edit buttons (URL, username, password). URL is first.
-      fireEvent.click(getAllByText("Edit")[0]!);
-      const props = lastShownModalProps();
+      const onUrlChange = vi.fn();
+      const { getByText } = render(<ConnectionSection {...defaultProps({ url: "http://romm.local", onUrlChange })} />);
+      fireEvent.click(getByText("Edit"));
+      const props = lastShownModalProps<UrlModalProps>();
       expect(props?.label).toBe("RomM URL");
       expect(props?.value).toBe("http://romm.local");
       expect(props?.field).toBe("url");
       expect(props?.bIsPassword).toBeUndefined();
-      expect(props?.onSubmit).toBe(onUrlSubmit);
+      expect(props?.onSubmit).toBe(onUrlChange);
     });
   });
 
-  describe("username field", () => {
-    it("shows '(not set)' when username is empty", () => {
-      const { getAllByTestId } = render(<ConnectionSection {...defaultProps()} />);
-      const descs = getAllByTestId("field-desc").map((el) => el.textContent);
-      expect(descs.filter((d) => d === "(not set)").length).toBeGreaterThanOrEqual(2);
+  describe("connection status indicator", () => {
+    it("labels the account row 'RomM Account'", () => {
+      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ hasToken: true })} />);
+      const labels = getAllByTestId("field-label").map((el) => el.textContent);
+      expect(labels).toContain("RomM Account");
     });
 
-    it("shows the username when set", () => {
-      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ username: "daniel" })} />);
+    it("shows 'Connected' description when hasToken is true", () => {
+      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ hasToken: true })} />);
       const descs = getAllByTestId("field-desc").map((el) => el.textContent);
-      expect(descs).toContain("daniel");
+      expect(descs).toContain("Connected");
     });
 
-    it("opens a TextInputModal with field='username' on Edit", () => {
-      const onUsernameSubmit = vi.fn();
-      const { getAllByText } = render(
-        <ConnectionSection {...defaultProps({ username: "daniel", onUsernameSubmit })} />,
-      );
-      fireEvent.click(getAllByText("Edit")[1]!);
-      const props = lastShownModalProps();
-      expect(props?.label).toBe("Username");
-      expect(props?.value).toBe("daniel");
-      expect(props?.field).toBe("username");
-      expect(props?.onSubmit).toBe(onUsernameSubmit);
+    it("shows 'Not connected' description when hasToken is false", () => {
+      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ hasToken: false })} />);
+      const descs = getAllByTestId("field-desc").map((el) => el.textContent);
+      expect(descs).toContain("Not connected");
+    });
+
+    it("never renders the removed Username/Password fields", () => {
+      const { container } = render(<ConnectionSection {...defaultProps({ hasToken: true })} />);
+      expect(container.textContent).not.toContain("Username");
+      expect(container.textContent).not.toContain("Password");
     });
   });
 
-  describe("shared-account warning", () => {
-    it("is hidden for a personal username", () => {
-      const { container } = render(<ConnectionSection {...defaultProps({ username: "daniel" })} />);
-      expect(container.textContent).not.toContain("Shared account detected");
+  describe("Connect button", () => {
+    it("renders a Connect button", () => {
+      const { getByText } = render(<ConnectionSection {...defaultProps()} />);
+      expect(getByText("Connect")).toBeTruthy();
     });
 
-    it("renders for a known shared-account username", () => {
-      const { container } = render(<ConnectionSection {...defaultProps({ username: "admin" })} />);
-      expect(container.textContent).toContain("Shared account detected");
-      expect(container.textContent).toContain('"admin"');
-    });
-  });
-
-  describe("password field", () => {
-    it("shows '(not set)' when password is empty", () => {
-      const { getAllByTestId } = render(<ConnectionSection {...defaultProps()} />);
-      const descs = getAllByTestId("field-desc").map((el) => el.textContent);
-      expect(descs.filter((d) => d === "(not set)").length).toBe(3);
-    });
-
-    it("shows '••••' when a password is set", () => {
-      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ password: "stored" })} />);
-      const descs = getAllByTestId("field-desc").map((el) => el.textContent);
-      expect(descs).toContain("••••");
-    });
-
-    it("opens a TextInputModal with field='password' and bIsPassword=true on Edit", () => {
-      const onPasswordSubmit = vi.fn();
-      const { getAllByText } = render(
-        <ConnectionSection {...defaultProps({ password: "stored", onPasswordSubmit })} />,
-      );
-      fireEvent.click(getAllByText("Edit")[2]!);
-      const props = lastShownModalProps();
-      expect(props?.label).toBe("Password");
-      expect(props?.value).toBe("");
-      expect(props?.field).toBe("password");
-      expect(props?.bIsPassword).toBe(true);
-      expect(props?.onSubmit).toBe(onPasswordSubmit);
+    it("opens a ConnectModal wired to onConnect when clicked", () => {
+      const onConnect = vi.fn();
+      const { getByText } = render(<ConnectionSection {...defaultProps({ onConnect })} />);
+      fireEvent.click(getByText("Connect"));
+      const props = lastShownModalProps<ConnectModalProps>();
+      expect(props?.onConnect).toBe(onConnect);
     });
   });
 
@@ -239,13 +216,16 @@ describe("ConnectionSection", () => {
       const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ status: "Connected ✓" })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Connected ✓");
+      // URL row + RomM Account row + status row.
+      expect(getAllByTestId("field")).toHaveLength(3);
     });
 
     it("omits the status Field when empty", () => {
       const { getAllByTestId } = render(<ConnectionSection {...defaultProps()} />);
+      // URL + RomM Account are Field + DialogButton rows, so with no status the
+      // only Fields are those two — the status row does not render.
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
-      // No status label among the field labels (3 base fields: URL, Username, Password).
-      expect(labels).toEqual(["RomM URL", "Username", "Password"]);
+      expect(labels).toEqual(["RomM URL", "RomM Account"]);
     });
   });
 });

@@ -4,7 +4,7 @@
  */
 
 import { FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, Field, DialogButton, showModal } from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, DialogButton, Field, showModal } from "@decky/ui";
 import { TextInputModal } from "./TextInputModal";
 
 interface SteamGridDBSectionProps {
@@ -27,6 +27,7 @@ export const SteamGridDBSection: FC<SteamGridDBSectionProps> = ({
       <PanelSectionRow>
         <Field label="API Key" description={sgdbApiKey ? "••••" : "Not configured"}>
           <DialogButton
+            style={{ minWidth: "auto", width: "auto" }}
             onClick={() =>
               showModal(<TextInputModal label="SteamGridDB API Key" value="" bIsPassword onSubmit={onSubmitKey} />)
             }

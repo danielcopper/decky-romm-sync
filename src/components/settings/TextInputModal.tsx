@@ -1,20 +1,20 @@
 /**
  * Reusable text-input confirmation modal for SettingsPage edit flows.
- * Persists in-flight edits to module-level `pendingEdits` so that values
- * entered into the URL / username / password fields survive a QAM remount
- * triggered by closing the modal.
+ * Persists in-flight edits to module-level `pendingEdits` so that the value
+ * entered into the URL field survives a QAM remount triggered by closing
+ * the modal.
  */
 
 import { useState, FC, ChangeEvent } from "react";
 import { ConfirmModal, TextField } from "@decky/ui";
 
 /** Module-level state survives component remounts (modal close can remount QAM) */
-export const pendingEdits: { url?: string; username?: string; password?: string } = {};
+export const pendingEdits: { url?: string } = {};
 
 interface TextInputModalProps {
   label: string;
   value: string;
-  field?: "url" | "username" | "password";
+  field?: "url";
   bIsPassword?: boolean;
   closeModal?: () => void;
   onSubmit: (value: string) => void;

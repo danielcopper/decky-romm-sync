@@ -68,6 +68,7 @@ def plugin():
         config=ConnectionServiceConfig(
             settings=p.settings,
             romm_api=p._romm_api,
+            settings_persister=MagicMock(),
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
@@ -143,24 +144,141 @@ class TestRommSslContext:
 
 
 class TestRommAuthHeader:
-    def test_basic_auth_format(self, plugin):
-        import base64
-
-        plugin.settings["romm_user"] = "admin"
-        plugin.settings["romm_pass"] = "secret"
+    def test_bearer_format_with_token(self, plugin):
+        plugin.settings["romm_api_token"] = "rmm_abc123"
         header = plugin._http_adapter.auth_header()
-        assert header.startswith("Basic ")
-        decoded = base64.b64decode(header.split(" ", 1)[1]).decode()
-        assert decoded == "admin:secret"
+        assert header == "Bearer rmm_abc123"
 
-    def test_special_characters_in_password(self, plugin):
-        import base64
-
-        plugin.settings["romm_user"] = "user"
-        plugin.settings["romm_pass"] = "p@ss:w0rd!"
+    def test_bearer_empty_when_no_token(self, plugin):
+        plugin.settings.pop("romm_api_token", None)
         header = plugin._http_adapter.auth_header()
-        decoded = base64.b64decode(header.split(" ", 1)[1]).decode()
-        assert decoded == "user:p@ss:w0rd!"
+        assert header == "Bearer "
+
+    def test_bearer_empty_when_token_none(self, plugin):
+        plugin.settings["romm_api_token"] = None
+        header = plugin._http_adapter.auth_header()
+        assert header == "Bearer "
+
+
+class TestRommBasicAuthRequest:
+    """``basic_auth_request`` builds a one-off Basic header from passed creds."""
+
+    def _staged_resp(self, payload: bytes, status: int = 200):
+        from unittest.mock import MagicMock
+
+        resp = MagicMock()
+        resp.status = status
+        resp.read.return_value = payload
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def test_uses_passed_credentials_not_settings(self, plugin):
+        import base64
+        import json as _json
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_stored"  # must be ignored
+        resp = self._staged_resp(_json.dumps({"id": 7, "raw_token": "rmm_new"}).encode())
+
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            result = plugin._http_adapter.basic_auth_request(
+                "/api/client-tokens", "alice", "s3cret", method="POST", data={"name": "x"}
+            )
+
+        assert result == {"id": 7, "raw_token": "rmm_new"}
+        req = mock_open.call_args[0][0]
+        auth = req.get_header("Authorization")
+        assert auth.startswith("Basic ")
+        decoded = base64.b64decode(auth.split(" ", 1)[1]).decode()
+        assert decoded == "alice:s3cret"
+        assert "rmm_stored" not in auth
+
+    def test_posts_json_body_with_content_type(self, plugin):
+        import json as _json
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        resp = self._staged_resp(_json.dumps({"id": 1}).encode())
+
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            plugin._http_adapter.basic_auth_request(
+                "/api/client-tokens", "u", "p", method="POST", data={"name": "deck", "scopes": ["me.read"]}
+            )
+
+        req = mock_open.call_args[0][0]
+        assert req.get_method() == "POST"
+        assert req.get_header("Content-type") == "application/json"
+        assert _json.loads(req.data.decode()) == {"name": "deck", "scopes": ["me.read"]}
+
+    def test_no_body_when_data_none(self, plugin):
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        resp = self._staged_resp(b"", status=204)
+
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            result = plugin._http_adapter.basic_auth_request("/api/client-tokens/5", "u", "p", method="DELETE")
+
+        assert result == {}
+        req = mock_open.call_args[0][0]
+        assert req.data is None
+        assert req.get_method() == "DELETE"
+        # No JSON content-type header when there is no body.
+        assert req.get_header("Content-type") is None
+
+    def test_returns_empty_dict_on_204(self, plugin):
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        resp = self._staged_resp(b"", status=204)
+
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = plugin._http_adapter.basic_auth_request("/api/client-tokens/5", "u", "p", method="DELETE")
+
+        assert result == {}
+
+    def test_sends_user_agent(self, plugin):
+        import json as _json
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        resp = self._staged_resp(_json.dumps({"id": 1, "raw_token": "rmm_x"}).encode())
+
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            plugin._http_adapter.basic_auth_request("/api/client-tokens", "u", "p", method="POST", data={"name": "x"})
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
+
+    def test_does_not_retry_on_server_error(self, plugin):
+        """Mint/delete are not retry-safe — a 500 raises immediately, no retry."""
+        import http.client
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        exc = urllib.error.HTTPError(
+            "http://romm.local/api/client-tokens", 500, "Server Error", http.client.HTTPMessage(), None
+        )
+
+        with patch("urllib.request.urlopen", side_effect=exc) as mock_open, pytest.raises(RommServerError):
+            plugin._http_adapter.basic_auth_request("/api/client-tokens", "u", "p", method="POST", data={"name": "x"})
+
+        # Single attempt — with_retry would have retried a 500 three times.
+        assert mock_open.call_count == 1
+
+    def test_translates_403_to_forbidden(self, plugin):
+        import http.client
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        exc = urllib.error.HTTPError(
+            "http://romm.local/api/client-tokens", 403, "Forbidden", http.client.HTTPMessage(), None
+        )
+
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommForbiddenError):
+            plugin._http_adapter.basic_auth_request("/api/client-tokens", "u", "p", method="POST", data={"name": "x"})
 
 
 class TestRommRequest:
@@ -169,8 +287,7 @@ class TestRommRequest:
         from unittest.mock import MagicMock, patch
 
         plugin.settings["romm_url"] = "http://romm.local"
-        plugin.settings["romm_user"] = "user"
-        plugin.settings["romm_pass"] = "pass"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
         plugin.settings["romm_allow_insecure_ssl"] = False
 
         fake_resp = MagicMock()
@@ -183,7 +300,7 @@ class TestRommRequest:
 
         assert result == {"ok": True}
         req = mock_open.call_args[0][0]
-        assert "Basic " in req.get_header("Authorization")
+        assert req.get_header("Authorization") == "Bearer rmm_runtime"
 
     def test_sends_user_agent(self, plugin):
         """GET requests carry the injected ``User-Agent`` so Cloudflare Bot
@@ -192,8 +309,7 @@ class TestRommRequest:
         from unittest.mock import MagicMock, patch
 
         plugin.settings["romm_url"] = "http://romm.local"
-        plugin.settings["romm_user"] = "user"
-        plugin.settings["romm_pass"] = "pass"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
         plugin.settings["romm_allow_insecure_ssl"] = False
 
         fake_resp = MagicMock()
@@ -214,8 +330,7 @@ class TestRommJsonRequest:
         from unittest.mock import MagicMock, patch
 
         plugin.settings["romm_url"] = "http://romm.local"
-        plugin.settings["romm_user"] = "user"
-        plugin.settings["romm_pass"] = "pass"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
         plugin.settings["romm_allow_insecure_ssl"] = False
 
         fake_resp = MagicMock()
@@ -230,7 +345,7 @@ class TestRommJsonRequest:
         req = mock_open.call_args[0][0]
         assert req.get_method() == "POST"
         assert req.get_header("Content-type") == "application/json"
-        assert "Basic " in req.get_header("Authorization")
+        assert req.get_header("Authorization") == "Bearer rmm_runtime"
         assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
     def test_put_json(self, plugin):
@@ -238,8 +353,7 @@ class TestRommJsonRequest:
         from unittest.mock import MagicMock, patch
 
         plugin.settings["romm_url"] = "http://romm.local"
-        plugin.settings["romm_user"] = "user"
-        plugin.settings["romm_pass"] = "pass"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
         plugin.settings["romm_allow_insecure_ssl"] = False
 
         fake_resp = MagicMock()
@@ -260,8 +374,7 @@ class TestRommUploadMultipart:
         from unittest.mock import MagicMock, patch
 
         plugin.settings["romm_url"] = "http://romm.local"
-        plugin.settings["romm_user"] = "user"
-        plugin.settings["romm_pass"] = "pass"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
         plugin.settings["romm_allow_insecure_ssl"] = False
 
         save_file = tmp_path / "test.srm"
@@ -279,7 +392,7 @@ class TestRommUploadMultipart:
         req = mock_open.call_args[0][0]
         assert "multipart/form-data" in req.get_header("Content-type")
         assert b"save data here" in req.data
-        assert "Basic " in req.get_header("Authorization")
+        assert req.get_header("Authorization") == "Bearer rmm_runtime"
         assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
     def test_upload_strips_control_chars_from_filename(self, plugin, tmp_path):
@@ -354,6 +467,7 @@ def _setup_plugin(plugin):
         config=ConnectionServiceConfig(
             settings=plugin.settings,
             romm_api=plugin._romm_api,
+            settings_persister=MagicMock(),
             loop=plugin.loop,
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,

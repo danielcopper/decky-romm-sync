@@ -117,6 +117,12 @@ class Plugin:
         self._launch_gate_service = services["launch_gate_service"]
         self._session_lifecycle_service = services["session_lifecycle_service"]
 
+        # ── 4b. Legacy credential migration ─────────────────────────────────
+        # Upgrade a stored-password install to a Client API Token. The
+        # method swallows every failure (plugin stays inert, no Basic-auth
+        # fallback), so a mint failure here never blocks startup.
+        await self._connection_service.migrate_legacy_credentials()
+
         # ── 5. Startup healing ──────────────────────────────────────────────
         # Detect retrodeck path changes BEFORE pruning so the prune can skip
         # entries living under a pending migration's previous home.
@@ -148,8 +154,11 @@ class Plugin:
     async def test_connection(self):
         return await self._connection_service.test_connection()
 
-    async def save_settings(self, romm_url, romm_user, romm_pass, allow_insecure_ssl=None):
-        return self._settings_service.save_settings(romm_url, romm_user, romm_pass, allow_insecure_ssl)
+    async def connect_with_credentials(self, romm_url, username, password, allow_insecure_ssl=None):
+        return await self._connection_service.establish_token(romm_url, username, password, allow_insecure_ssl)
+
+    async def save_server_url(self, romm_url, allow_insecure_ssl=None):
+        return self._settings_service.save_server_url(romm_url, allow_insecure_ssl)
 
     async def frontend_log(self, level, message):
         self._settings_service.frontend_log(level, message)

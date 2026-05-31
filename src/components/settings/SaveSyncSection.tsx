@@ -9,9 +9,9 @@ import {
   PanelSection,
   PanelSectionRow,
   ButtonItem,
+  DialogButton,
   Field,
   DropdownItem,
-  DialogButton,
   showModal,
   ToggleField,
 } from "@decky/ui";
@@ -92,6 +92,7 @@ export const SaveSyncSection: FC<SaveSyncSectionProps> = ({
                   description={`${saveSyncSettings.default_slot || "(no slot)"} — applies to new games and games without a per-game slot override`}
                 >
                   <DialogButton
+                    style={{ minWidth: "auto", width: "auto" }}
                     onClick={() =>
                       showModal(
                         <TextInputModal

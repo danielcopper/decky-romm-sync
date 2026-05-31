@@ -122,9 +122,7 @@ const flushAsync = () =>
 function defaultSettings(): PluginSettings {
   return {
     romm_url: "",
-    romm_user: "",
-    romm_pass_masked: "",
-    has_credentials: true,
+    has_token: true,
     steam_input_mode: "default",
     sgdb_api_key_masked: "",
     log_level: "warn",

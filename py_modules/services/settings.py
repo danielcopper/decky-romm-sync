@@ -57,27 +57,17 @@ class SettingsService:
         self._settings_persister = config.settings_persister
         self._steam_config = config.steam_config
 
-    # ── Server credentials / connection settings ─────────────────────────
+    # ── Server connection settings ───────────────────────────────────────
 
-    def save_settings(
-        self,
-        romm_url: str,
-        romm_user: str,
-        romm_pass: str,
-        allow_insecure_ssl: bool | None = None,
-    ) -> dict[str, Any]:
-        """Persist server credentials.
+    def save_server_url(self, romm_url: str, allow_insecure_ssl: bool | None = None) -> dict[str, Any]:
+        """Persist the server URL and optional SSL flag.
 
-        The masked placeholder (``"••••"``) leaves the stored password
-        untouched so the frontend can round-trip the field without
-        revealing or overwriting it. ``allow_insecure_ssl=None`` leaves
-        the SSL flag unchanged.
+        Credentials and tokens are never touched here — minting and
+        storing the Client API Token is ``ConnectionService``'s job.
+        ``allow_insecure_ssl=None`` leaves the SSL flag unchanged.
         """
         try:
             self._settings["romm_url"] = romm_url
-            self._settings["romm_user"] = romm_user
-            if romm_pass and romm_pass != _MASK_PLACEHOLDER:
-                self._settings["romm_pass"] = romm_pass
             if allow_insecure_ssl is not None:
                 self._settings["romm_allow_insecure_ssl"] = bool(allow_insecure_ssl)
             self._settings_persister.save_settings()
@@ -89,15 +79,13 @@ class SettingsService:
     def get_settings(self) -> dict[str, Any]:
         """Return the read-shape settings dict for the frontend.
 
-        Secrets (RomM password, SteamGridDB API key) are reported as
-        masked placeholders so the frontend never receives raw values.
+        Reports whether a Client API Token is stored via ``has_token``;
+        the token itself is never sent to the frontend. The SteamGridDB
+        API key is reported as a masked placeholder.
         """
-        has_credentials = bool(self._settings.get("romm_user") and self._settings.get("romm_pass"))
         return {
             "romm_url": self._settings.get("romm_url", ""),
-            "romm_user": self._settings.get("romm_user", ""),
-            "romm_pass_masked": _MASK_PLACEHOLDER if self._settings.get("romm_pass") else "",
-            "has_credentials": has_credentials,
+            "has_token": bool(self._settings.get("romm_api_token")),
             "steam_input_mode": self._settings.get("steam_input_mode", "default"),
             "sgdb_api_key_masked": _MASK_PLACEHOLDER if self._settings.get("steamgriddb_api_key") else "",
             "retroarch_input_check": self._steam_config.check_retroarch_input_driver(),

@@ -5,8 +5,8 @@ implements every method declared on the per-domain Protocols in
 ``services.protocols.transport`` (``RommLibraryApi``, ``RommSyncApi``,
 ``RommConnectionApi``, ``RommAchievementsApi``, ``RommFirmwareApi``,
 ``RommPlaytimeApi``, ``RommDeviceApi``, ``RommPlatformReader``,
-``RommRomReader``, ``RommSaveApi``, ``RommVersion``) so a single instance
-satisfies any of them via duck typing.
+``RommRomReader``, ``RommSaveApi``, ``RommTokenApi``, ``RommVersion``) so a
+single instance satisfies any of them via duck typing.
 
 Seed in-memory state directly on the public attributes
 (``platforms`` / ``roms`` / ``firmware_files`` / ``collections`` /
@@ -104,6 +104,13 @@ class FakeRommApi:
         self.confirm_download_side_effect: Exception | None = None
         self.get_save_summary_side_effect: Exception | None = None
         self.delete_server_saves_side_effect: Exception | None = None
+        self.mint_client_token_side_effect: Exception | None = None
+        self.delete_client_token_side_effect: Exception | None = None
+
+        # Client-token mint: tests stage the response the next mint returns.
+        self.mint_client_token_response: dict[str, Any] = {"id": 1, "raw_token": "rmm_faketoken"}
+        # Deleted token ids, in call order.
+        self.deleted_token_ids: list[int] = []
 
         # Observability — every method records ``(name, args, kwargs)``.
         self.call_log: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
@@ -513,6 +520,20 @@ class FakeRommApi:
             self.saves.pop(sid, None)
             self._save_content.pop(sid, None)
         return {"deleted": len(save_ids)}
+
+    # ------------------------------------------------------------------
+    # RommTokenApi
+    # ------------------------------------------------------------------
+
+    def mint_client_token(self, username: str, password: str, *, token_name: str) -> dict[str, Any]:
+        self._log("mint_client_token", (username, password), {"token_name": token_name})
+        self._check_fail(self.mint_client_token_side_effect)
+        return dict(self.mint_client_token_response)
+
+    def delete_client_token(self, username: str, password: str, *, token_id: int) -> None:
+        self._log("delete_client_token", (username, password), {"token_id": token_id})
+        self._check_fail(self.delete_client_token_side_effect)
+        self.deleted_token_ids.append(token_id)
 
     # ------------------------------------------------------------------
     # Test helpers

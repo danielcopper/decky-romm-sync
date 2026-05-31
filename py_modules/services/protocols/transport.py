@@ -311,12 +311,33 @@ class RommVersion(Protocol):
         ...
 
 
+class RommTokenApi(Protocol):
+    """RomM Client API Token mint/delete surface.
+
+    The runtime Bearer token deliberately lacks ``me.write``, so both
+    operations need a transient Basic-auth identity built from the
+    username/password passed at call time — never from stored state.
+    """
+
+    def mint_client_token(self, username: str, password: str, *, token_name: str) -> dict[str, Any]:
+        """Mint a scoped, never-expiring Client API Token.
+
+        Returns the server response including ``id`` and the one-time
+        ``raw_token``.
+        """
+        ...
+
+    def delete_client_token(self, username: str, password: str, *, token_id: int) -> None:
+        """Delete a Client API Token by id; a missing token is treated as success."""
+        ...
+
+
 class RommAchievementsApi(RommRomReader, RommVersion, Protocol):
     """RomM surface for AchievementsService — ROM detail + server identity."""
 
 
-class RommConnectionApi(RommPlatformReader, RommVersion, Protocol):
-    """RomM surface for ConnectionService — platform listing + version/heartbeat."""
+class RommConnectionApi(RommPlatformReader, RommVersion, RommTokenApi, Protocol):
+    """RomM surface for ConnectionService — platform listing, version/heartbeat, token mint/delete."""
 
 
 class RommLibraryApi(RommPlatformReader, RommRomReader, Protocol):
