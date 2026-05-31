@@ -511,13 +511,8 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     metadata_service = MetadataService(
         config=MetadataServiceConfig(
-            state=cfg.stores.state,
-            metadata_cache=cfg.stores.metadata_cache,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            clock=cfg.runtime.clock,
-            metadata_cache_persister=cfg.callbacks.metadata_cache_persister,
-            metadata_store=cfg.callbacks.metadata_store,
             log_debug=cfg.callbacks.log_debug,
             uow_factory=cfg.callbacks.uow_factory,
         ),
@@ -562,7 +557,6 @@ def wire_services(cfg: WiringConfig) -> dict:
             sleeper=cfg.runtime.sleeper,
             settings_persister=cfg.callbacks.settings_persister,
             log_debug=cfg.callbacks.log_debug,
-            metadata_service=metadata_service,
             artwork=artwork_service,
             uow_factory=cfg.callbacks.uow_factory,
         ),
@@ -648,11 +642,11 @@ def wire_services(cfg: WiringConfig) -> dict:
     game_detail_service = GameDetailService(
         config=GameDetailServiceConfig(
             state=cfg.stores.state,
-            metadata_cache=cfg.stores.metadata_cache,
             save_sync_state=cfg.stores.save_sync_state,
             settings=cfg.stores.settings,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
+            uow_factory=cfg.callbacks.uow_factory,
             bios_checker=firmware_service,
             achievements=achievements_service,
         ),

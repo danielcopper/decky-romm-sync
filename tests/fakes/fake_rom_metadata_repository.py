@@ -6,6 +6,8 @@ import copy
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from domain.rom_metadata import RomMetadata
 
 
@@ -25,6 +27,9 @@ class FakeRomMetadataRepository:
 
     def delete(self, rom_id: int) -> None:
         self._metadata.pop(rom_id, None)
+
+    def iter_all(self) -> Iterator[tuple[int, RomMetadata]]:
+        return iter([(rom_id, copy.deepcopy(metadata)) for rom_id, metadata in self._metadata.items()])
 
     def _snapshot(self) -> dict[int, RomMetadata]:
         return copy.deepcopy(self._metadata)

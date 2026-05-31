@@ -13,6 +13,7 @@ from domain.rom_metadata import RomMetadata
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Iterator
 
 _COLUMNS = (
     "rom_id, summary, genres, companies, game_modes, steam_categories, "
@@ -62,3 +63,7 @@ class SqliteRomMetadataRepository(BaseRepository):
 
     def delete(self, rom_id: int) -> None:
         self._conn.execute("DELETE FROM rom_metadata WHERE rom_id = ?", (rom_id,))
+
+    def iter_all(self) -> Iterator[tuple[int, RomMetadata]]:
+        for row in self._conn.execute(f"SELECT {_COLUMNS} FROM rom_metadata"):
+            yield (row["rom_id"], self._row_to_metadata(row))

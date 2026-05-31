@@ -251,7 +251,7 @@ class TestCommitUnitResults:
             "ra_id": 777,
         }
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001})
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
 
         assert uow.committed is True
         with uow:
@@ -275,7 +275,7 @@ class TestCommitUnitResults:
             "cover_path": "/covers/staging.png",
         }
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001})
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
 
         with uow:
             rom = uow.roms.get(42)
@@ -298,7 +298,7 @@ class TestCommitUnitResults:
             "cover_path": "",
         }
 
-        plugin._sync_service._reporter._commit_unit_results_io({"10": 1010, "20": 1020})
+        plugin._sync_service._reporter._commit_unit_results_io({"10": 1010, "20": 1020}, [])
 
         assert uow.committed is True
         with uow:
@@ -339,7 +339,7 @@ class TestCommitUnitResults:
             "ra_id": None,
         }
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001})
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
 
         with uow:
             rom = uow.roms.get(42)
@@ -362,10 +362,146 @@ class TestCommitUnitResults:
             "sgdb_id": 9999,
         }
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001})
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
 
         with uow:
             assert uow.roms.get(42).sgdb_id == 9999
+
+
+class TestCommitUnitMetadataStamp:
+    """The metadata stamp folded into the per-unit ``roms`` write UoW.
+
+    The reporter saves each acked ROM's cached ``rom_metadata`` in the same
+    write UoW as the ``roms`` upsert (Rom row first, metadata second — the
+    FK is satisfied at commit), so a ROM and its metadata land atomically.
+    """
+
+    def test_stamps_metadata_alongside_rom(self, plugin):
+        """An acked ROM carrying a ``metadatum`` lands both a ``roms`` row and
+        a ``rom_metadata`` row in the same commit, with fields mapped + ms→s +
+        steam_categories computed."""
+        uow = plugin._uow
+        plugin._sync_service._box.pending_sync[42] = {
+            "name": "Game",
+            "fs_name": "game.z64",
+            "platform_slug": "gb",
+            "cover_path": "",
+        }
+        acked = [
+            {
+                "id": 42,
+                "summary": "A classic",
+                "metadatum": {
+                    "genres": ["Action", "Puzzle"],
+                    "companies": ["Nintendo"],
+                    "first_release_date": 946684800000,  # ms
+                    "average_rating": 88.5,
+                    "game_modes": ["Single player"],
+                    "player_count": "1",
+                },
+            },
+        ]
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, acked)
+
+        assert uow.committed is True
+        with uow:
+            rom = uow.roms.get(42)
+            meta = uow.rom_metadata.get(42)
+        # Rom row committed.
+        assert rom is not None
+        assert rom.shortcut_app_id == 100001
+        # Metadata row committed, fields mapped.
+        assert meta is not None
+        assert meta.summary == "A classic"
+        assert meta.genres == ("Action", "Puzzle")
+        assert meta.companies == ("Nintendo",)
+        assert meta.first_release_date == 946684800  # ms → s
+        assert meta.average_rating == 88.5
+        assert meta.game_modes == ("Single player",)
+        # Steam categories derived from genres + modes (28 = full controller).
+        assert 28 in meta.steam_categories
+        assert 21 in meta.steam_categories  # Action
+        assert 4 in meta.steam_categories  # Puzzle
+        assert 2 in meta.steam_categories  # Single player
+
+    def test_malformed_metadatum_skips_metadata_keeps_rom(self, plugin, caplog):
+        """A malformed ``metadatum`` (non-numeric release date) skips only that
+        ROM's metadata — the Rom row still commits and a warning is logged."""
+        import logging
+
+        uow = plugin._uow
+        plugin._sync_service._box.pending_sync[42] = {
+            "name": "Game",
+            "fs_name": "game.z64",
+            "platform_slug": "gb",
+            "cover_path": "",
+        }
+        # first_release_date is non-numeric → int(...) raises ValueError in the
+        # mapping, caught per-rom.
+        acked = [{"id": 42, "summary": "Bad", "metadatum": {"first_release_date": "not-a-number"}}]
+
+        with caplog.at_level(logging.WARNING):
+            plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, acked)
+
+        assert uow.committed is True
+        with uow:
+            # Rom survives; metadata was skipped.
+            assert uow.roms.get(42) is not None
+            assert uow.rom_metadata.get(42) is None
+        assert any("malformed metadatum" in r.message.lower() for r in caplog.records)
+
+    def test_no_metadatum_writes_no_metadata_row(self, plugin):
+        """An acked ROM without a ``metadatum`` field commits the Rom but no
+        ``rom_metadata`` row (defensive guard against thin-ROM cache erasure)."""
+        uow = plugin._uow
+        plugin._sync_service._box.pending_sync[42] = {
+            "name": "Game",
+            "fs_name": "game.z64",
+            "platform_slug": "gb",
+            "cover_path": "",
+        }
+        acked = [{"id": 42, "name": "Thin"}]  # no metadatum
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, acked)
+
+        assert uow.committed is True
+        with uow:
+            assert uow.roms.get(42) is not None
+            assert uow.rom_metadata.get(42) is None
+
+    def test_falsy_metadatum_writes_no_metadata_row(self, plugin):
+        """``metadatum: None`` and ``metadatum: {}`` both skip the metadata stamp."""
+        uow = plugin._uow
+        plugin._sync_service._box.pending_sync[10] = {
+            "name": "A",
+            "fs_name": "a.z64",
+            "platform_slug": "gb",
+            "cover_path": "",
+        }
+        plugin._sync_service._box.pending_sync[20] = {
+            "name": "B",
+            "fs_name": "b.z64",
+            "platform_slug": "gb",
+            "cover_path": "",
+        }
+        acked = [{"id": 10, "metadatum": None}, {"id": 20, "metadatum": {}}]
+
+        plugin._sync_service._reporter._commit_unit_results_io({"10": 1010, "20": 1020}, acked)
+
+        with uow:
+            assert uow.rom_metadata.get(10) is None
+            assert uow.rom_metadata.get(20) is None
+
+    def test_empty_unit_commits_nothing_extra(self, plugin):
+        """An empty unit (no acked ROMs) commits cleanly with no metadata rows."""
+        uow = plugin._uow
+
+        plugin._sync_service._reporter._commit_unit_results_io({}, [])
+
+        assert uow.committed is True
+        with uow:
+            assert list(uow.rom_metadata.iter_all()) == []
 
 
 class TestClearSyncCache:

@@ -113,6 +113,10 @@ class RomMetadataRepository(Protocol):
         """Remove cached metadata for *rom_id*. Idempotent. (metadata.py)"""
         ...
 
+    def iter_all(self) -> Iterator[tuple[int, RomMetadata]]:
+        """Iterate ``(rom_id, metadata)`` for every ROM. (metadata.py get_all_metadata_cache)"""
+        ...
+
 
 class PlaytimeRepository(Protocol):
     """Persistence seam for the ``Playtime`` aggregate (per-ROM session totals).

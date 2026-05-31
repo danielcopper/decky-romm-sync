@@ -73,13 +73,8 @@ def plugin(tmp_path):
 
     metadata_service = MetadataService(
         config=MetadataServiceConfig(
-            state=p._state,
-            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
-            clock=FakeClock(),
-            metadata_cache_persister=p._metadata_cache_persister,
-            metadata_store=p._metadata_store,
             log_debug=p._log_debug,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
@@ -116,7 +111,6 @@ def plugin(tmp_path):
             sleeper=FakeSleeper(),
             settings_persister=p._settings_persister,
             log_debug=p._log_debug,
-            metadata_service=metadata_service,
             artwork=artwork_service,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),

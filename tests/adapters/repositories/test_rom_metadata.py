@@ -113,6 +113,48 @@ class TestDelete:
         assert uow.rom_metadata.get(404) is None
 
 
+class TestIteration:
+    def test_iter_all_yields_rom_id_pairs(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 1)
+        _seed_rom(uow, 2)
+        uow.rom_metadata.save(
+            1,
+            RomMetadata(
+                summary="one",
+                genres=("RPG",),
+                companies=(),
+                first_release_date=None,
+                average_rating=None,
+                game_modes=(),
+                player_count="1",
+                cached_at=10.0,
+            ),
+        )
+        uow.rom_metadata.save(
+            2,
+            RomMetadata(
+                summary="two",
+                genres=("Action",),
+                companies=(),
+                first_release_date=None,
+                average_rating=None,
+                game_modes=(),
+                player_count="2",
+                cached_at=20.0,
+            ),
+        )
+
+        by_id = dict(uow.rom_metadata.iter_all())
+        assert set(by_id) == {1, 2}
+        assert by_id[1].summary == "one"
+        assert by_id[1].genres == ("RPG",)
+        assert by_id[2].summary == "two"
+        assert by_id[2].cached_at == 20.0
+
+    def test_iter_all_empty(self, uow: SqliteUnitOfWork):
+        assert list(uow.rom_metadata.iter_all()) == []
+
+
 class TestUpsert:
     def test_save_existing_overwrites(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)

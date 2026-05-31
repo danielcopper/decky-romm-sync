@@ -36,7 +36,6 @@ if TYPE_CHECKING:
         Clock,
         DebugLogger,
         EventEmitter,
-        MetadataExtractor,
         RommLibraryApi,
         SettingsPersister,
         Sleeper,
@@ -55,8 +54,8 @@ class LibraryServiceConfig:
     dir reference, event emitter, the ``settings.json`` persister and the
     SQLite Unit-of-Work factory (the synced-ROM registry, last-sync
     timestamp and sync stats now live in ``roms`` / ``sync_runs`` via the
-    UoW, not the JSON state), debug-logger seam, and the metadata/artwork
-    peer services LibraryService needs at construction time.
+    UoW, not the JSON state), debug-logger seam, and the artwork peer
+    service LibraryService needs at construction time.
     """
 
     romm_api: RommLibraryApi
@@ -73,7 +72,6 @@ class LibraryServiceConfig:
     sleeper: Sleeper
     settings_persister: SettingsPersister
     log_debug: DebugLogger
-    metadata_service: MetadataExtractor
     artwork: ArtworkManager
     uow_factory: UnitOfWorkFactory
 
@@ -138,7 +136,6 @@ class LibraryService:
                 sync_state_box=self._box,
                 fetcher=self._fetcher,
                 reporter=reporter_binding,
-                metadata_service=config.metadata_service,
                 artwork=config.artwork,
             )
         )

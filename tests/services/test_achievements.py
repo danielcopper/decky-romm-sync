@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
-from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
+from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
@@ -64,7 +64,6 @@ def plugin(clock):
             sleeper=FakeSleeper(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
-            metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
         ),
@@ -86,11 +85,11 @@ def plugin(clock):
     p._game_detail_service = GameDetailService(
         config=GameDetailServiceConfig(
             state=p._state,
-            metadata_cache=p._metadata_cache,
             save_sync_state=p._save_sync_state,
             settings=p.settings,
             logger=decky.logger,
             clock=clock,
+            uow_factory=FakeUnitOfWorkFactory(),
             bios_checker=bios_checker,
             achievements=p._achievements_service,
         ),

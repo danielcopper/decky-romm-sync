@@ -12,8 +12,8 @@ from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
-from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
@@ -45,6 +45,11 @@ def plugin(tmp_path):
 
     import decky
 
+    # Shared UoW so a metadata row seeded by a test is visible to the
+    # GameDetailService read (both wrap the same instance via the factory).
+    uow = FakeUnitOfWork()
+    p._uow = uow
+
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
@@ -64,9 +69,8 @@ def plugin(tmp_path):
             sleeper=FakeSleeper(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
-            metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)
@@ -173,15 +177,44 @@ def game_detail_service(plugin, clock):
     return GameDetailService(
         config=GameDetailServiceConfig(
             state=plugin._state,
-            metadata_cache=plugin._metadata_cache,
             save_sync_state=plugin._save_sync_state,
             settings=plugin.settings,
             logger=logging.getLogger("test"),
             clock=clock,
+            uow_factory=FakeUnitOfWorkFactory(uow=plugin._uow),
             bios_checker=plugin._firmware_service,
             achievements=plugin._achievements_service,
         ),
     )
+
+
+def _seed_metadata(plugin, rom_id, *, cached_at, summary="", genres=()):
+    """Seed cached metadata for *rom_id* in the shared UoW (Rom first for the FK)."""
+    from domain.rom import Rom
+    from domain.rom_metadata import RomMetadata
+
+    rom = Rom(
+        rom_id=rom_id,
+        platform_slug="snes",
+        name=f"Game {rom_id}",
+        fs_name=f"game_{rom_id}.sfc",
+        shortcut_app_id=1000 + rom_id,
+        last_synced_at="2025-01-01T00:00:00",
+    )
+    meta = RomMetadata(
+        summary=summary,
+        genres=tuple(genres),
+        companies=(),
+        first_release_date=None,
+        average_rating=None,
+        game_modes=(),
+        player_count="",
+        cached_at=cached_at,
+        steam_categories=(),
+    )
+    with plugin._uow:
+        plugin._uow.roms.save(rom)
+        plugin._uow.rom_metadata.save(rom_id, meta)
 
 
 @pytest.fixture(autouse=True)
@@ -254,11 +287,7 @@ class TestGetCachedGameDetailFound:
             },
             last_sync_check_at="2025-01-01T00:00:00Z",
         )
-        plugin._metadata_cache["123"] = {
-            "summary": "Classic SNES platformer",
-            "genres": ["Platformer"],
-            "cached_at": 100,
-        }
+        _seed_metadata(plugin, 123, cached_at=100, summary="Classic SNES platformer", genres=("Platformer",))
 
         result = game_detail_service.get_cached_game_detail(99999)
 
@@ -922,7 +951,7 @@ class TestStaleFields:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._metadata_cache["42"] = {"cached_at": clock.time(), "genres": []}
+        _seed_metadata(plugin, 42, cached_at=clock.time())
         result = game_detail_service.get_cached_game_detail(99999)
         assert "stale_fields" in result
         assert "metadata" not in result["stale_fields"]
@@ -936,7 +965,7 @@ class TestStaleFields:
             "platform_slug": "gba",
             "platform_name": "GBA",
         }
-        plugin._metadata_cache["42"] = {"cached_at": clock.time() - 8 * 24 * 3600, "genres": []}
+        _seed_metadata(plugin, 42, cached_at=clock.time() - 8 * 24 * 3600)
         result = game_detail_service.get_cached_game_detail(99999)
         assert "metadata" in result["stale_fields"]
 

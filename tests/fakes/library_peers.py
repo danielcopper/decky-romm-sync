@@ -1,51 +1,19 @@
-"""In-memory peer-service fakes consumed by the LibraryService test suite.
+"""In-memory peer-service fake consumed by the LibraryService test suite.
 
-Provides minimal ``MetadataExtractor`` and ``ArtworkManager`` Protocol
-implementations for tests that wire LibraryService (or its sub-services)
-without exercising metadata extraction or the SteamGridDB artwork
-pipeline. Both fakes record calls so tests that DO care about wiring
-can assert on the recorded activity.
+Provides a minimal ``ArtworkManager`` Protocol implementation for tests
+that wire LibraryService (or its sub-services) without exercising the
+SteamGridDB artwork pipeline. The fake records calls so tests that DO
+care about wiring can assert on the recorded activity.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from models.state import MetadataCacheEntry, ShortcutRegistryEntry
+from models.state import ShortcutRegistryEntry
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
-
-class FakeMetadataExtractor:
-    """In-memory ``MetadataExtractor`` for tests.
-
-    Returns the dict configured at construction (``canned_extract``) from
-    every ``extract_metadata`` call. Counts ``mark_metadata_dirty``,
-    ``flush_metadata_if_dirty``, and ``record_unit_metadata`` invocations
-    so tests that wire the peer can assert it was reached without
-    standing up the real service.
-    """
-
-    def __init__(self, canned_extract: dict | None = None) -> None:
-        self.canned_extract: dict = canned_extract if canned_extract is not None else {}
-        self.extract_calls: list[dict] = []
-        self.mark_dirty_count: int = 0
-        self.flush_count: int = 0
-        self.record_unit_calls: list[list[dict]] = []
-
-    def extract_metadata(self, rom: dict) -> MetadataCacheEntry:
-        self.extract_calls.append(rom)
-        return cast("MetadataCacheEntry", dict(self.canned_extract))
-
-    def mark_metadata_dirty(self) -> None:
-        self.mark_dirty_count += 1
-
-    def flush_metadata_if_dirty(self) -> None:
-        self.flush_count += 1
-
-    def record_unit_metadata(self, roms: list[dict]) -> None:
-        self.record_unit_calls.append(list(roms))
 
 
 class FakeArtworkManager:

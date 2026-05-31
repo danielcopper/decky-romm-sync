@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from models.state import InstalledRomEntry, MetadataCacheEntry, ShortcutRegistryEntry
+from models.state import InstalledRomEntry, ShortcutRegistryEntry
 
 
 class RetryStrategy(Protocol):
@@ -37,18 +37,6 @@ class AchievementsReader(Protocol):
     def get_ra_username(self) -> str: ...
 
     def get_progress_cache_entry(self, rom_id_str: str) -> dict | None: ...
-
-
-class MetadataExtractor(Protocol):
-    """Metadata extraction and cache flushing consumed by LibraryService."""
-
-    def extract_metadata(self, rom: dict) -> MetadataCacheEntry: ...
-
-    def mark_metadata_dirty(self) -> None: ...
-
-    def flush_metadata_if_dirty(self) -> None: ...
-
-    def record_unit_metadata(self, roms: list[dict]) -> None: ...
 
 
 class ArtworkManager(Protocol):

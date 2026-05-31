@@ -1,18 +1,18 @@
 """GameDetailService — game detail page data aggregation.
 
-Aggregates ROM registry data, save-sync state, firmware cache, metadata cache,
-and achievement progress into a single response payload for the frontend game
-detail page.  Uses callback injection (not direct service references) to stay
-independent of other service modules.
+Aggregates ROM registry data, save-sync state, firmware cache, cached ROM
+metadata, and achievement progress into a single response payload for the
+frontend game detail page.  Uses callback injection (not direct service
+references) to stay independent of other service modules.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from models.metadata import AchievementSummary
-from models.state import MetadataCache, MetadataCacheEntry, PluginState, ShortcutRegistryEntry
+from models.state import MetadataCacheEntry, PluginState, ShortcutRegistryEntry
 
 from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
 from domain.save_state import SaveSyncState
@@ -21,7 +21,7 @@ from domain.save_status import compute_save_sync_display
 if TYPE_CHECKING:
     import logging
 
-    from services.protocols import AchievementsReader, BiosChecker, Clock
+    from services.protocols import AchievementsReader, BiosChecker, Clock, UnitOfWorkFactory
 
 METADATA_TTL_SEC = 7 * 24 * 3600  # 7 days
 BIOS_TTL_SEC = 3600  # 1 hour
@@ -32,18 +32,20 @@ ACHIEVEMENT_TTL_SEC = 3600  # 1 hour
 class GameDetailServiceConfig:
     """Frozen wiring bundle handed to ``GameDetailService.__init__``.
 
-    Holds the live state, metadata cache, and settings dicts, the typed
-    save-sync aggregate, runtime infrastructure, clock seam, and the
-    Protocol-typed reader adapters (``BiosChecker``, ``AchievementsReader``)
-    GameDetailService consults to assemble the game-detail payload.
+    Holds the live state and settings dicts, the typed save-sync
+    aggregate, runtime infrastructure, the clock seam, the SQLite
+    Unit-of-Work factory (the read seam over the ``rom_metadata``
+    aggregate), and the Protocol-typed reader adapters (``BiosChecker``,
+    ``AchievementsReader``) GameDetailService consults to assemble the
+    game-detail payload.
     """
 
     state: PluginState
-    metadata_cache: MetadataCache
     save_sync_state: SaveSyncState
     settings: dict
     logger: logging.Logger
     clock: Clock
+    uow_factory: UnitOfWorkFactory
     bios_checker: BiosChecker
     achievements: AchievementsReader
 
@@ -53,11 +55,11 @@ class GameDetailService:
 
     def __init__(self, *, config: GameDetailServiceConfig) -> None:
         self._state = config.state
-        self._metadata_cache = config.metadata_cache
         self._save_sync_state = config.save_sync_state
         self._settings = config.settings
         self._logger = config.logger
         self._clock = config.clock
+        self._uow_factory = config.uow_factory
         self._bios_checker = config.bios_checker
         self._achievements = config.achievements
 
@@ -111,6 +113,33 @@ class GameDetailService:
                 earned_hardcore=cached_progress.get("earned_hardcore", 0),
                 cached_at=cached_progress.get("cached_at", 0.0),
             )
+        )
+
+    def _read_metadata(self, rom_id: int) -> MetadataCacheEntry | None:
+        """Read cached metadata for *rom_id* from ``uow.rom_metadata``.
+
+        Returns the frontend metadata entry (tuple fields flattened to
+        list arrays, nullable date/rating preserved) or ``None`` on a
+        cache miss — the ``None`` drives ``"metadata"`` into stale_fields
+        so the frontend triggers a background refresh.
+        """
+        with self._uow_factory() as uow:
+            cached = uow.rom_metadata.get(rom_id)
+        if cached is None:
+            return None
+        return cast(
+            "MetadataCacheEntry",
+            {
+                "summary": cached.summary,
+                "genres": list(cached.genres),
+                "companies": list(cached.companies),
+                "first_release_date": cached.first_release_date,
+                "average_rating": cached.average_rating,
+                "game_modes": list(cached.game_modes),
+                "player_count": cached.player_count,
+                "cached_at": cached.cached_at,
+                "steam_categories": list(cached.steam_categories),
+            },
         )
 
     @staticmethod
@@ -172,8 +201,9 @@ class GameDetailService:
                 )
             )
 
-        # Metadata from cache
-        metadata = self._metadata_cache.get(rom_id_str)
+        # Cached metadata from the ``rom_metadata`` aggregate (short read UoW —
+        # single PK lookup, matches the get_app_id_rom_id_map precedent).
+        metadata = self._read_metadata(rom_id)
 
         # ROM file name for per-game core overrides
         # Prefer installed_roms (set during download), fall back to registry (set during sync)

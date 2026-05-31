@@ -6,7 +6,7 @@ import pytest
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
-from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
+from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
@@ -81,7 +81,6 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
             sleeper=FakeSleeper(),
             settings_persister=p._settings_persister,
             log_debug=p._log_debug,
-            metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
@@ -1010,7 +1009,6 @@ class TestDebugLoggerProtocolSeam:
                 sleeper=FakeSleeper(),
                 settings_persister=FakeSettingsPersister(),
                 log_debug=capture,
-                metadata_service=FakeMetadataExtractor(),
                 artwork=FakeArtworkManager(),
                 uow_factory=FakeUnitOfWorkFactory(),
             ),

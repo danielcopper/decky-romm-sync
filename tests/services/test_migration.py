@@ -10,7 +10,7 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_state_persister import FakeStatePersister
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
-from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
+from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
@@ -90,7 +90,6 @@ def plugin(tmp_path, fake_romm_api):
             sleeper=FakeSleeper(),
             settings_persister=p._settings_persister,
             log_debug=p._log_debug,
-            metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
         ),

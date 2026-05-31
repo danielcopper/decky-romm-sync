@@ -163,6 +163,35 @@ class TestFakeRomMetadataRepository:
         repo.delete(1)
         assert repo.get(1) is None
 
+    def test_iter_all_yields_rom_id_pairs(self):
+        repo = FakeRomMetadataRepository()
+        meta1 = RomMetadata(
+            summary="one",
+            genres=("RPG",),
+            companies=(),
+            first_release_date=None,
+            average_rating=None,
+            game_modes=(),
+            player_count="1",
+            cached_at=1.0,
+        )
+        meta2 = RomMetadata(
+            summary="two",
+            genres=(),
+            companies=(),
+            first_release_date=None,
+            average_rating=None,
+            game_modes=(),
+            player_count="2",
+            cached_at=2.0,
+        )
+        repo.save(1, meta1)
+        repo.save(2, meta2)
+        by_id = dict(repo.iter_all())
+        assert set(by_id) == {1, 2}
+        assert by_id[1] == meta1
+        assert by_id[2] == meta2
+
 
 class TestFakePlaytimeRepository:
     def test_round_trip_iter_delete(self):

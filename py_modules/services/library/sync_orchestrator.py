@@ -9,10 +9,10 @@ lives here — sub-services that need to surface progress receive the
 orchestrator's ``emit_progress`` callback through their config.
 Anything that fetches ROMs belongs in :class:`LibraryFetcher`;
 anything that finalises shortcuts after the apply completes belongs
-in :class:`SyncReporter`. The metadata-cache is only stamped per
-applied unit (by :class:`MetadataExtractor.record_unit_metadata`), so
-preview never mutates the cache and an interrupted apply leaves only
-already-applied units stamped.
+in :class:`SyncReporter`. Cached ``rom_metadata`` is written by the
+reporter's per-unit commit (the same write UoW as the ``roms`` upsert),
+so preview never persists metadata and an interrupted apply leaves only
+already-committed units' metadata.
 """
 
 from __future__ import annotations
@@ -47,7 +47,6 @@ if TYPE_CHECKING:
         ArtworkManager,
         Clock,
         EventEmitter,
-        MetadataExtractor,
         Sleeper,
         UnitOfWorkFactory,
         UuidGen,
@@ -79,11 +78,10 @@ class SyncOrchestratorConfig:
     (the transactional seam over the ``roms`` / ``sync_runs`` repositories
     the lifecycle writes through), the plugin-dir reference for shortcut
     data construction, the shared
-    :class:`LibrarySyncStateBox`, and three peer references the
+    :class:`LibrarySyncStateBox`, and two peer references the
     orchestrator drives at runtime: the :class:`LibraryFetcher` it
-    delegates per-unit fetches to, an :class:`ArtworkManager` for the
-    apply-phase artwork download, and a :class:`MetadataExtractor` it
-    asks to stamp the metadata cache per applied unit. The ``reporter``
+    delegates per-unit fetches to and an :class:`ArtworkManager` for the
+    apply-phase artwork download. The ``reporter``
     field is a :class:`LateBinding` because :class:`LibraryService`
     constructs the orchestrator before the reporter exists; the façade
     plugs the reader in via ``set()`` once the reporter is built.
@@ -102,7 +100,6 @@ class SyncOrchestratorConfig:
     sync_state_box: LibrarySyncStateBox
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
-    metadata_service: MetadataExtractor
     artwork: ArtworkManager
 
 
@@ -122,7 +119,6 @@ class SyncOrchestrator:
         self._uow_factory = config.uow_factory
         self._sync_state = config.sync_state_box
         self._fetcher = config.fetcher
-        self._metadata_service = config.metadata_service
         self._artwork = config.artwork
         self._reporter = config.reporter
 
@@ -161,11 +157,11 @@ class SyncOrchestrator:
     async def sync_preview(self):
         """Read-only preview: paginate every unit, classify, return the summary.
 
-        Does NOT mutate the metadata cache — the metadata stamp happens
-        per applied unit, after the frontend acknowledges shortcuts for
-        that unit. Stamping during preview would erase populated entries
-        with the registry-reconstructed thin ROMs from the per-unit
-        incremental-skip path (#738).
+        Does NOT persist ``rom_metadata`` — the metadata stamp happens in
+        the reporter's per-unit commit, after the frontend acknowledges
+        shortcuts for that unit. Stamping during preview would persist the
+        registry-reconstructed thin ROMs from the per-unit incremental-skip
+        path, which carry no ``metadatum`` (#738).
         """
         box = self._sync_state
         if box.sync_state != SyncState.IDLE:
@@ -349,14 +345,14 @@ class SyncOrchestrator:
 
         Builds a work queue, opens a ``SyncRun`` for the planned counts,
         processes each platform/collection unit to completion (fetch ->
-        shortcuts -> artwork -> apply -> per-unit metadata stamp + ``roms``
-        upsert) before moving on, then emits stale-removal + Steam-
+        shortcuts -> artwork -> apply -> per-unit ``roms`` + ``rom_metadata``
+        commit) before moving on, then emits stale-removal + Steam-
         collection mappings + ``sync_complete`` at the end and writes the
         ``SyncRun``'s terminal status. Each completed unit is a crash-safe
-        checkpoint: metadata cache is written first, the ``roms`` table
-        second, both atomically — an orphaned metadata stamp after a crash
-        is harmless; the reverse order would re-introduce the #738 cache
-        wipe.
+        checkpoint: the reporter's per-unit commit writes the ``roms`` row
+        and its cached metadata in one write UoW (Rom first, metadata
+        second — FK-safe), so a ROM and its metadata are always consistent
+        across a crash.
         """
         box = self._sync_state
         # Cross-unit accumulators — built up unit-by-unit, consumed by the
@@ -494,8 +490,6 @@ class SyncOrchestrator:
             # (pre-``_open_sync_run`` failures, where the run was never opened).
             await self._loop.run_in_executor(None, self._mark_sync_run_errored, run_id or box.current_sync_id, _msg)
             box.sync_state = SyncState.IDLE
-        finally:
-            self._metadata_service.flush_metadata_if_dirty()
 
     # ── SyncRun lifecycle (short write UoWs) ─────────────────────
 
@@ -584,11 +578,10 @@ class SyncOrchestrator:
 
         The ROMs for the unit come from a live per-unit fetch. After the
         frontend acks the unit's shortcuts (via ``report_unit_results``),
-        the metadata cache is stamped for the acked ROMs *before* the
-        reporter commits the registry update — that ordering guarantees
-        any crash between the two leaves harmless orphan metadata
-        rather than orphan registry entries pointing at unstamped
-        metadata (#738).
+        the reporter commits the unit: it upserts each acked ROM into the
+        ``roms`` aggregate and stamps the ROM's cached ``rom_metadata`` in
+        the same write UoW (Rom row first, metadata second — FK-safe), so
+        a ROM and its metadata land atomically.
 
         When the fetcher reports ``skipped=True`` (registry already
         matches the server-side platform state), the entire apply +
@@ -678,17 +671,13 @@ class SyncOrchestrator:
             box.sync_state = SyncState.CANCELLING
             return 0
 
-        # Per-unit two-phase commit: stamp metadata cache for the acked
-        # ROMs first, then commit the registry + persist state via the
-        # reporter. The ordering matters across crashes: metadata-first
-        # means an interrupted apply leaves only orphan metadata
-        # (harmless, next sync re-stamps). Registry-first would leave
-        # registry entries pointing at an unstamped (or freshly wiped)
-        # cache (#738).
+        # Per-unit commit: the reporter upserts each acked ROM into the
+        # ``roms`` aggregate and stamps its cached ``rom_metadata`` in one
+        # write UoW (Rom row first, metadata second — FK-safe), so a ROM
+        # and its metadata always land atomically. ``acked_roms`` is the
+        # live RomM fetch for the acked ROMs — the source of ``metadatum``.
         acked_roms = [r for r in unit_roms if str(r["id"]) in applied]
-        await self._loop.run_in_executor(None, self._metadata_service.record_unit_metadata, acked_roms)
-
-        await self._reporter.get().commit_unit_results(applied)
+        await self._reporter.get().commit_unit_results(applied, acked_roms)
 
         box.pending_sync = {}
         box.unit_complete_event = None

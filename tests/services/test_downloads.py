@@ -10,7 +10,7 @@ import pytest
 from conftest import _make_testable_plugin
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
-from fakes.library_peers import FakeArtworkManager, FakeMetadataExtractor
+from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
@@ -70,7 +70,6 @@ def plugin():
             sleeper=FakeSleeper(),
             settings_persister=MagicMock(),
             log_debug=p._log_debug,
-            metadata_service=FakeMetadataExtractor(),
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
         ),

@@ -3,7 +3,9 @@
 Owns the post-apply path: the frontend-callable ``report_unit_results``
 ack (event signal only) and the orchestrator-driven
 ``commit_unit_results`` that finalises artwork file names and upserts
-each acked ROM into the ``roms`` aggregate. The terminal
+each acked ROM into the ``roms`` aggregate, stamping its cached
+``rom_metadata`` in the same write UoW (Rom row first, then metadata —
+FK-safe). The terminal
 ``finalize_per_unit_run`` step builds the cross-unit collection
 mappings, refreshes the ``platform_slug → display_name`` cache, and
 emits the ``sync_complete`` event. Also owns the registry-derived
@@ -24,6 +26,7 @@ from typing import TYPE_CHECKING
 from models.state import PluginState
 
 from domain.rom import Rom
+from domain.rom_metadata_mapping import build_rom_metadata
 from domain.sync_diff import should_include_in_platform_collection
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
@@ -259,16 +262,23 @@ class SyncReporter:
 
     # ── Report unit results (per-unit pipeline) ──────────────────
 
-    def _commit_unit_results_io(self, rom_id_to_app_id):
-        """Sync helper: finalise artwork file names, then upsert ``roms`` for one unit.
+    def _commit_unit_results_io(self, rom_id_to_app_id, acked_roms):
+        """Sync helper: finalise artwork file names, then upsert ``roms`` + metadata for one unit.
 
         ADR-0006 two-pass: cover-file RENAME is filesystem I/O so it runs
         FIRST (outside any UoW); the final paths are collected, then one
         short write UoW upserts every acked ROM via ``Rom.synced`` (+ the
         ``update_cover_path`` / ``assign_sgdb_id`` / ``assign_ra_id``
-        verbs). ``Rom.synced`` validates untrusted RomM fields; a
-        ``ValueError`` is caught per-rom so one bad row is skipped while
-        the rest of the unit still commits.
+        verbs) AND — in the same iteration, after the Rom is saved —
+        stamps the ROM's cached metadata into ``uow.rom_metadata`` when
+        the acked dict carries a ``metadatum``. Saving the Rom before its
+        metadata satisfies the ``rom_metadata.rom_id → roms(rom_id)`` FK
+        at commit, so a ROM and its metadata land atomically. ``Rom.synced``
+        validates untrusted RomM fields; a ``ValueError`` is caught per-rom
+        so one bad row is skipped while the rest of the unit still commits.
+        The metadata mapping is wrapped in its own per-rom
+        ``(ValueError, TypeError)`` catch so a malformed ``metadatum``
+        skips only that ROM's metadata — the Rom row still commits.
 
         Read-merge for the plugin-resolved ids (mirrors the
         ``_merge_optional_id`` contract): the live RomM fetch does not
@@ -282,6 +292,11 @@ class SyncReporter:
         grid = self._steam_config.grid_dir()
         box = self._sync_state
 
+        # ``acked_roms`` is the live RomM fetch for the ROMs the frontend
+        # acked — the only source of ``metadatum``. Keyed by rom_id so the
+        # Pass-2 loop can stamp metadata in the same iteration as the upsert.
+        roms_by_id = {int(r["id"]): r for r in acked_roms if "id" in r}
+
         # Pass 1: rename staged covers to their final ``{app_id}p.png``
         # path (file I/O — no UoW open).
         finalized: dict[str, str] = {}
@@ -289,7 +304,7 @@ class SyncReporter:
             pending = box.pending_sync.get(int(rom_id_str), {})
             finalized[rom_id_str] = self._finalize_cover_path(grid, pending.get("cover_path", ""), app_id, rom_id_str)
 
-        # Pass 2: one write UoW for the whole unit's ROM upserts.
+        # Pass 2: one write UoW for the whole unit's ROM + metadata upserts.
         with self._uow_factory() as uow:
             for rom_id_str, app_id in rom_id_to_app_id.items():
                 pending = box.pending_sync.get(int(rom_id_str), {})
@@ -319,6 +334,8 @@ class SyncReporter:
                     rom.assign_ra_id(ra_id)
                 uow.roms.save(rom)
 
+                self._stamp_rom_metadata(uow, rom_id, roms_by_id.get(rom_id))
+
         steam_input_mode = self._settings.get("steam_input_mode", "default")
         if steam_input_mode != "default" and rom_id_to_app_id:
             try:
@@ -327,6 +344,27 @@ class SyncReporter:
                 )
             except Exception as e:
                 self._logger.error(f"Failed to set Steam Input config: {e}")
+
+    def _stamp_rom_metadata(self, uow, rom_id: int, rom: dict | None) -> None:
+        """Stamp the ROM's cached metadata into ``uow.rom_metadata`` for this commit.
+
+        No-op when the acked ROM carries no ``metadatum`` (defensive: thin
+        registry-reconstructed ROMs from the incremental-skip path are
+        already gated out upstream, but this guard prevents accidental
+        cache erasure). The Rom row was saved just before this call in the
+        same UoW, so the ``rom_metadata.rom_id`` FK is satisfied at commit.
+        A malformed ``metadatum`` raises ``ValueError`` / ``TypeError`` in
+        the mapping — caught here so only this ROM's metadata is skipped
+        while its Rom row still commits.
+        """
+        if not rom or not rom.get("metadatum"):
+            return
+        try:
+            meta = build_rom_metadata(rom, self._clock.time())
+        except (ValueError, TypeError) as e:
+            self._logger.warning(f"Skipping metadata for ROM {rom_id} — malformed metadatum: {e}")
+            return
+        uow.rom_metadata.save(rom_id, meta)
 
     @staticmethod
     def _merge_optional_id(new_value, existing_value) -> int | None:
@@ -342,9 +380,8 @@ class SyncReporter:
 
         Records the rom_id→app_id mapping into the state box and signals
         the orchestrator's per-unit wait event. The orchestrator drives
-        the actual per-unit commit (metadata-cache stamp + ``roms``
-        upsert) after this returns, so the write order is metadata-first
-        then the ``roms`` table.
+        the actual per-unit commit (the ``roms`` upsert + metadata stamp,
+        atomic in one write UoW) after this returns.
         """
         box = self._sync_state
         box.last_unit_results = dict(rom_id_to_app_id)
@@ -354,15 +391,17 @@ class SyncReporter:
         self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
         return {"success": True, "count": len(rom_id_to_app_id)}
 
-    async def commit_unit_results(self, rom_id_to_app_id):
-        """Per-unit commit: cover-path finalize then ``roms`` upsert.
+    async def commit_unit_results(self, rom_id_to_app_id, acked_roms):
+        """Per-unit commit: cover-path finalize then atomic ``roms`` + metadata upsert.
 
-        Called by the orchestrator after metadata-cache stamping for the
-        unit completes. This is the second half of the per-unit write
-        transaction (metadata first, ``roms`` table second — crash-safe
-        order).
+        Called by the orchestrator once the frontend has acked the unit's
+        shortcuts. The ``roms`` upsert and the cached-metadata stamp land
+        in one write UoW (Rom row first, then ``rom_metadata`` — FK-safe),
+        so a ROM and its metadata are always consistent across a crash.
+        ``acked_roms`` is the live RomM fetch for the acked ROMs — the
+        source of each ROM's ``metadatum``.
         """
-        await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id)
+        await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id, acked_roms)
 
     # ── Registry queries ─────────────────────────────────────────
 

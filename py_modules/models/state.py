@@ -144,12 +144,13 @@ def make_default_plugin_state() -> PluginState:
 
 
 class MetadataCacheEntry(TypedDict):
-    """One ROM's cached metadata inside ``metadata_cache``.
+    """One ROM's cached metadata as the frontend ``RomMetadata`` wire shape.
 
-    Mirrors :class:`models.metadata.RomMetadata` after ``asdict``: the
-    cached value is built by :meth:`services.metadata.MetadataService.extract_metadata`
-    via ``asdict(RomMetadata(...))``, so ``tuple`` fields on
-    ``RomMetadata`` flatten to ``list`` here.
+    The list-shaped projection of the ``rom_metadata`` aggregate handed to
+    the frontend (``get_rom_metadata`` / ``get_all_metadata_cache`` and the
+    game-detail payload): tuple fields on the aggregate flatten to ``list``
+    arrays here, and ``first_release_date`` / ``average_rating`` stay
+    nullable.
     """
 
     summary: str
