@@ -48,7 +48,7 @@ const makeSetter = <S>() => vi.fn() as unknown as Dispatch<SetStateAction<S>>;
  *  the test assertions clean even though the underlying mock is `unknown`. */
 const lastUpdater = <S>(setter: Dispatch<SetStateAction<S>>): ((prev: S) => S) => {
   const calls = (setter as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-  return calls[calls.length - 1][0] as (prev: S) => S;
+  return calls[calls.length - 1]![0] as (prev: S) => S;
 };
 
 const callCount = <S>(setter: Dispatch<SetStateAction<S>>): number =>

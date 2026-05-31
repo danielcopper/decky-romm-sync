@@ -60,7 +60,7 @@ describe("refreshActiveSlotInBackground", () => {
     await flushMicrotasks();
 
     expect(setter).toHaveBeenCalledOnce();
-    const updater = setter.mock.calls[0][0];
+    const updater = setter.mock.calls[0]![0];
     expect(updater({ activeSlot: null, unrelated: 7 })).toEqual({
       activeSlot: "slot-2",
       unrelated: 7,
@@ -116,7 +116,7 @@ describe("refreshActiveSlotInBackground", () => {
     refreshActiveSlotInBackground(1, () => false, setter as unknown as Dispatch<SetStateAction<ActiveSlotState>>);
     await flushMicrotasks();
 
-    const updater = setter.mock.calls[0][0];
+    const updater = setter.mock.calls[0]![0];
     expect(updater({ activeSlot: "x", unrelated: 1 })).toEqual({
       activeSlot: null,
       unrelated: 1,
@@ -142,7 +142,7 @@ describe("refreshBiosInBackground", () => {
     await flushMicrotasks();
 
     expect(setter).toHaveBeenCalledOnce();
-    const next = setter.mock.calls[0][0]({
+    const next = setter.mock.calls[0]![0]({
       biosNeeded: false,
       biosStatus: null,
       biosLabel: "",
@@ -234,7 +234,7 @@ describe("refreshAchievementsInBackground", () => {
     await flushMicrotasks();
 
     expect(setter).toHaveBeenCalledOnce();
-    const next = setter.mock.calls[0][0]({
+    const next = setter.mock.calls[0]![0]({
       achievementEarned: 0,
       achievementTotal: 0,
       unrelated: true,

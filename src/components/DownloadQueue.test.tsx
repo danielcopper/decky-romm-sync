@@ -188,7 +188,7 @@ describe("DownloadQueue", () => {
 
       // startPolling calls setInterval(pollTick, 500). Pick out that id.
       const pollIntervalIds = setIntervalSpy.mock.results
-        .filter((_, i) => setIntervalSpy.mock.calls[i][1] === 500)
+        .filter((_, i) => setIntervalSpy.mock.calls[i]![1] === 500)
         .map((r) => r.value as ReturnType<typeof setInterval>);
       const expectedId = pollIntervalIds[pollIntervalIds.length - 1];
       expect(expectedId).toBeDefined();

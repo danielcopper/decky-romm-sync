@@ -1679,7 +1679,7 @@ describe("MainPage", () => {
 
       // Capture the 1000ms (downloadPollRef) interval id.
       const downloadIds = setIntervalSpy.mock.results
-        .filter((_, i) => setIntervalSpy.mock.calls[i][1] === 1000)
+        .filter((_, i) => setIntervalSpy.mock.calls[i]![1] === 1000)
         .map((r) => r.value as ReturnType<typeof setInterval>);
       const expectedId = downloadIds[downloadIds.length - 1];
       expect(expectedId).toBeDefined();

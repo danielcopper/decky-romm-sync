@@ -304,7 +304,7 @@ export default definePlugin(() => {
               if (!c.displayName.startsWith("RomM: [")) return false;
               if (!c.displayName.endsWith(suffix)) return false;
               const match = rommCollectionPattern.exec(c.displayName);
-              return match ? !activeNames.has(match[1]) : false;
+              return match ? !activeNames.has(match[1]!) : false; // group 1 present whenever match is non-null
             });
             for (const c of staleRomm) {
               logInfo(`Removing stale RomM collection "${c.displayName}"`);
