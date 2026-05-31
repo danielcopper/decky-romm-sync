@@ -16,10 +16,14 @@ reportArgumentType = "error"
 # white-box testing is a deliberate, accepted pattern here. The
 # reportPrivateUsage guardrail targets production encapsulation, not
 # test setup, so it's disabled under tests/. extraPaths is repeated
-# because execution environments do not inherit the top-level value.
+# because execution environments do not inherit the top-level value;
+# the repo root "." is added on top so test files can resolve the
+# top-level `main` module and sibling `tests.*` packages (without it,
+# those imports are unresolved and `main.*` symbols degrade to Unknown,
+# a blind spot on the callable surface the tests exercise).
 [[tool.basedpyright.executionEnvironments]]
 root = "tests"
-extraPaths = ["py_modules"]
+extraPaths = ["py_modules", "."]
 reportPrivateUsage = "none"
 
 [tool.ruff]
