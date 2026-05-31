@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 from bootstrap import (
@@ -30,9 +29,8 @@ from fakes.fake_save_file_store import FakeSaveFileStore
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import ShortcutRegistryEntry, make_default_plugin_state
+from models.state import make_default_plugin_state
 
-from adapters.metadata_cache_store import MetadataCacheStoreAdapter
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
@@ -105,18 +103,22 @@ class TestBootstrap:
         """First-run state contains the keys ``_default_state()`` ships.
 
         Regression for #671: ``_default_state`` must be a factory, not a
-        shared module-level dict — services mutate ``state`` in place.
+        shared module-level dict — the residual ``downloaded_bios`` index
+        is mutated in place by services.
         """
         result = _bootstrap_for(tmp_path)
         state = result.stores.state
         # Inner containers were independently constructed; mutating them
         # does not bleed into a future bootstrap call's state.
-        state["shortcut_registry"]["sentinel"] = cast("ShortcutRegistryEntry", {"app_id": 1})
-        state["sync_stats"]["platforms"] = 42
+        state["downloaded_bios"]["sentinel"] = {  # type: ignore[typeddict-item]
+            "file_path": "/x",
+            "firmware_id": 1,
+            "platform_slug": "gba",
+            "downloaded_at": "2026-01-01T00:00:00",
+        }
 
         second = _bootstrap_for(tmp_path)
-        assert second.stores.state["shortcut_registry"] == {}
-        assert second.stores.state["sync_stats"] == {"platforms": 0, "roms": 0}
+        assert second.stores.state["downloaded_bios"] == {}
 
     def test_handles_debug_logger_exposed(self, tmp_path):
         """``BootstrapHandles.debug_logger`` is the same instance the CallbackBundle wires."""
@@ -187,7 +189,6 @@ class TestWireServices:
         http_adapter = MagicMock(spec=RommHttpAdapter)
         steam_config = SteamConfigAdapter(user_home=str(tmp_path), logger=logger)
         state = make_default_plugin_state()
-        metadata_cache: dict = {}
         romm_api = MagicMock(spec=RommApiAdapter)
         return {
             "http_adapter": http_adapter,
@@ -205,8 +206,6 @@ class TestWireServices:
             "path_probe": FakePathExistsReader(),
             "state": state,
             "settings": settings,
-            "metadata_cache": metadata_cache,
-            "save_sync_state": {"saves": {}, "playtime": {}, "settings": {}},
             "loop": asyncio.new_event_loop(),
             "logger": logger,
             "plugin_dir": str(tmp_path / "plugin"),
@@ -225,13 +224,9 @@ class TestWireServices:
             ),
             "get_retroarch_save_sorting": MagicMock(return_value=(True, False)),
             "get_core_name": MagicMock(return_value="Snes9x"),
-            "state_persister": MagicMock(),
             "settings_persister": MagicMock(),
-            "metadata_cache_persister": MagicMock(),
             "firmware_cache_persister": FakeFirmwareCachePersister(),
             "core_info_provider": FakeCoreInfoProvider(),
-            "save_sync_state_persister": MagicMock(load=MagicMock(return_value=None), save=MagicMock()),
-            "metadata_store": MetadataCacheStoreAdapter(metadata_cache=metadata_cache),
             "log_debug": MagicMock(),
             "plugin_metadata": FakePluginMetadataReader(version="0.14.0"),
             "uow_factory": FakeUnitOfWorkFactory(),
@@ -260,8 +255,6 @@ class TestWireServices:
             stores=StateBundle(
                 state=deps["state"],
                 settings=deps["settings"],
-                metadata_cache=deps["metadata_cache"],
-                save_sync_state=deps["save_sync_state"],
             ),
             runtime=RuntimeBundle(
                 loop=deps["loop"],
@@ -278,12 +271,8 @@ class TestWireServices:
                 retrodeck_paths=deps["retrodeck_paths"],
                 get_retroarch_save_sorting=deps["get_retroarch_save_sorting"],
                 get_core_name=deps["get_core_name"],
-                state_persister=deps["state_persister"],
                 settings_persister=deps["settings_persister"],
-                metadata_cache_persister=deps["metadata_cache_persister"],
                 firmware_cache_persister=deps["firmware_cache_persister"],
-                save_sync_state_persister=deps["save_sync_state_persister"],
-                metadata_store=deps["metadata_store"],
                 log_debug=deps["log_debug"],
                 plugin_metadata=deps["plugin_metadata"],
                 uow_factory=deps["uow_factory"],
@@ -307,9 +296,9 @@ class TestWireServices:
     def test_services_share_state_reference(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        # sync_service still holds the live state dict; download_service no
-        # longer reads JSON state (install records moved to SQLite, #784).
-        assert result["sync_service"]._state is deps["state"]
+        # MigrationService still holds the live state dict for its residual
+        # ``downloaded_bios`` reads; the relational state moved to SQLite (#784).
+        assert result["migration_service"]._state is deps["state"]
         deps["loop"].close()
 
     def test_returns_expected_services(self, tmp_path):

@@ -19,12 +19,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from models.state import make_default_plugin_state
 
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
-from adapters.metadata_cache_store import MetadataCacheStoreAdapter
-from adapters.persistence import (
-    MetadataCachePersisterAdapter,
-    PersistenceAdapter,
-    StatePersisterAdapter,
-)
+from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
 
 # conftest.py patches decky before this import
@@ -53,13 +48,9 @@ def plugin(tmp_path):
     import decky
 
     # _persistence is wired so disk-touching tests round-trip through the real
-    # adapter. The Protocol-typed persisters are bound to the same instance and
-    # the live state/settings/metadata_cache dicts so service writes land on disk.
+    # adapter (settings + firmware cache). The settings persister is faked.
     p._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-    p._state_persister = StatePersisterAdapter(p._persistence, p._state)
     p._settings_persister = FakeSettingsPersister()
-    p._metadata_cache_persister = MetadataCachePersisterAdapter(p._persistence, p._metadata_cache)
-    p._metadata_store = MetadataCacheStoreAdapter(metadata_cache=p._metadata_cache)
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
@@ -86,7 +77,6 @@ def plugin(tmp_path):
             romm_api=p._romm_api,
             steam_config=steam_config,
             cover_art_file_store=CoverArtFileStoreAdapter(),
-            state=p._state,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             get_pending_sync=dict,
@@ -99,9 +89,7 @@ def plugin(tmp_path):
         config=LibraryServiceConfig(
             romm_api=p._romm_api,
             steam_config=steam_config,
-            state=p._state,
             settings=p.settings,
-            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,

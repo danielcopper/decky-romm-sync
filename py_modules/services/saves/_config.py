@@ -10,10 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
-from domain.save_state import SaveSyncState
-
 if TYPE_CHECKING:
     import asyncio
     import logging
@@ -32,7 +28,6 @@ if TYPE_CHECKING:
         RommSyncApi,
         SaveFileStore,
         SaveSortChangeFn,
-        SaveSyncStatePersister,
         SettingsPersister,
         UnitOfWorkFactory,
     )
@@ -50,22 +45,6 @@ class SaveServiceConfig:
         Retry strategy — provides ``with_retry`` and ``is_retryable``.
     settings:
         Live reference to the main plugin settings dict.
-    state:
-        Live reference to the main plugin state dict (``installed_roms``,
-        ``shortcut_registry``).
-    save_sync_state:
-        Live reference to the legacy JSON :class:`SaveSyncState`
-        aggregate. The per-ROM save state has migrated to SQLite (the
-        ``rom_save_states`` repository, reached via ``uow_factory``);
-        this aggregate survives only as the home of the ``playtime`` dict
-        still read/written by the not-yet-migrated PlaytimeService and
-        RomRemovalService through :meth:`SaveService.save_state`. Drop
-        this field once those consumers move to SQLite.
-    save_sync_state_persister:
-        Protocol-typed I/O wrapper for ``save_sync_state.json`` backing
-        the legacy aggregate above (``.save(data)`` /
-        ``.load() -> dict | None``). Kept for the same cross-service
-        reason; the saves vertical no longer reads or writes it.
     settings_persister:
         Protocol-typed zero-arg flush for ``settings.json``. SaveService
         calls ``.save_settings()`` after mutating the save-sync feature
@@ -145,9 +124,6 @@ class SaveServiceConfig:
     romm_api: RommSyncApi
     retry: RetryStrategy
     settings: dict
-    state: PluginState
-    save_sync_state: SaveSyncState
-    save_sync_state_persister: SaveSyncStatePersister
     settings_persister: SettingsPersister
     save_file_store: SaveFileStore
     loop: asyncio.AbstractEventLoop

@@ -414,9 +414,6 @@ class TestSyncApplyDelta:
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
-        }
         self._setup_pending_delta(plugin, "preview-xyz")
         # Apply runs the per-unit pipeline as a fire-and-forget task; stub
         # it out so the test can assert dispatch without driving the full
@@ -437,9 +434,6 @@ class TestSyncApplyDelta:
         plugin.loop = asyncio.get_event_loop()
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
-        }
         self._setup_pending_delta(plugin)
         do_sync = AsyncMock()
         plugin._sync_service._orchestrator._do_sync_per_unit = do_sync
@@ -475,9 +469,6 @@ class TestSyncApplyDelta:
 
         assert result["success"] is True
         assert plugin._sync_service._sync_state == SyncState.RUNNING
-        # The JSON sync_stats scalar is no longer written by apply — it stays
-        # at its default (the planned counts now live on the SyncRun).
-        assert plugin._state["sync_stats"] == {"platforms": 0, "roms": 0}
 
     @pytest.mark.asyncio
     async def test_clears_pending_delta(self, plugin, tmp_path):
@@ -487,9 +478,6 @@ class TestSyncApplyDelta:
         decky.emit.reset_mock()
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
 
-        plugin._state["shortcut_registry"] = {
-            "1": {"app_id": 1001, "name": "Game A", "platform_name": "N64"},
-        }
         self._setup_pending_delta(plugin)
         plugin._sync_service._orchestrator._do_sync_per_unit = AsyncMock()
 
@@ -725,8 +713,6 @@ class TestFetchPlatformUnit:
             slug="n64",
             roms=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
         roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
@@ -836,13 +822,6 @@ class TestDoSyncPerUnit:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
-        # Platform with registry-matching count → fetcher takes the
-        # incremental-skip branch (skipped=True), no live pagination.
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "platform_name": "N64", "platform_slug": "n64", "fs_name": "a.z64"},
-            "11": {"name": "B", "fs_name": "b.z64", "platform_name": "N64", "platform_slug": "n64"},
-        }
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 2}]
         plugin.settings["enabled_platforms"] = {"1": True}
 
@@ -882,8 +861,6 @@ class TestDoSyncPerUnit:
             slug="gba",
             roms=[{"id": 20, "name": "B"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -1024,8 +1001,6 @@ class TestDoSyncPerUnit:
             slug="n64",
             roms=[{"id": 10, "name": "A"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
         plugin.settings["enabled_platforms"] = {"1": True}
 
         download_artwork = AsyncMock(return_value={10: "/grid/a.png"})
@@ -1067,8 +1042,6 @@ class TestDoSyncPerUnit:
             slug="gba",
             roms=[{"id": 20, "name": "B"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -1107,8 +1080,6 @@ class TestDoSyncPerUnit:
             slug="n64",
             roms=[{"id": 10, "name": "A"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
         plugin.settings["enabled_platforms"] = {"1": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -1157,8 +1128,6 @@ class TestDoSyncPerUnit:
             slug="gba",
             roms=[{"id": 20, "name": "B"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -1431,28 +1400,6 @@ class TestReportUnitResults:
         assert result["count"] == 2
         assert plugin._sync_service._box.last_unit_results == {"10": 9001, "11": 9002}
 
-    @pytest.mark.asyncio
-    async def test_no_state_save_in_report_path(self, plugin):
-        """The frontend callable MUST NOT persist state — the orchestrator
-        drives ``commit_unit_results`` (the ``roms`` + ``rom_metadata``
-        write UoW) after the ack returns.
-        """
-        # Count persister invocations across the callable.
-        save_count = [0]
-        orig_save_state = plugin._state_persister.save_state
-
-        def counting_save():
-            save_count[0] += 1
-            orig_save_state()
-
-        plugin._state_persister.save_state = counting_save
-        plugin._sync_service._pending_sync = {}
-        plugin._sync_service._box.unit_complete_event = asyncio.Event()
-
-        await plugin.report_unit_results({"10": 9001})
-
-        assert save_count[0] == 0, "report_unit_results must NOT persist state — commit_unit_results does"
-
 
 class TestCommitUnitResults:
     """Orchestrator-driven per-unit commit: cover-path finalize + ``roms`` + ``rom_metadata`` upsert."""
@@ -1571,8 +1518,6 @@ class TestDoSyncPerUnitErrors:
 
         # build_work_queue succeeds (platforms listing returns a unit), then
         # list_roms blows up when the unit is fetched.
-        plugin._state["last_sync"] = None  # no incremental-skip path
-        plugin._state["shortcut_registry"] = {}
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         fake_romm_api.list_roms_side_effect = RuntimeError("boom")
         plugin.settings["enabled_platforms"] = {"1": True}
@@ -1614,14 +1559,6 @@ class TestDoSyncPerUnitErrors:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
-        # Existing registry the frontend would happily delete from if the
-        # orchestrator ever emitted a partial sync_stale.
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "Game A", "platform_name": "N64", "app_id": 1000},
-            "20": {"name": "Game B", "platform_name": "N64", "app_id": 2000},
-            "30": {"name": "Game C", "platform_name": "N64", "app_id": 3000},
-        }
-        plugin._state["last_sync"] = None  # no incremental-skip
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
         # Mid-pagination failure — the bug scenario from #630.
         fake_romm_api.list_roms_side_effect = RuntimeError("HTTP 500 on page 2")
@@ -1639,9 +1576,6 @@ class TestDoSyncPerUnitErrors:
             f"Pagination failure leaked a partial sync_stale event: {stale_events}. "
             "This is the #630 wipe-the-library bug."
         )
-        # And the registry is untouched — the orchestrator never reaches the
-        # reporter's finalize path when the fetcher raises.
-        assert set(plugin._state["shortcut_registry"].keys()) == {"10", "20", "30"}
         # The error path was taken instead.
         error_events = [
             c
@@ -1661,11 +1595,6 @@ class TestDoSyncPerUnitErrors:
         _use_fake_romm(plugin, fake_romm_api)
 
         # Two units in the queue; CANCELLING gates the loop before either fires.
-        plugin._state["last_sync"] = "2025-01-01T00:00:00Z"
-        plugin._state["shortcut_registry"] = {
-            "10": {"name": "A", "fs_name": "a.z64", "platform_name": "N64", "platform_slug": "n64"},
-            "20": {"name": "B", "fs_name": "b.gba", "platform_name": "GBA", "platform_slug": "gba"},
-        }
         fake_romm_api.platforms = [
             {"id": 1, "name": "N64", "slug": "n64", "rom_count": 1},
             {"id": 2, "name": "GBA", "slug": "gba", "rom_count": 1},
@@ -1740,8 +1669,6 @@ class TestSyncOneUnitCollectionAndCancel:
             slug="n64",
             roms=[{"id": 1, "name": "A"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         orig_list_roms = fake_romm_api.list_roms
 
@@ -1779,8 +1706,6 @@ class TestSyncOneUnitCollectionAndCancel:
             slug="n64",
             roms=[{"id": 1, "name": "A"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         async def cancel_during_artwork(*_a, **_kw):
             # Trigger CANCELLING in between the post-fetch check and the post-artwork check.
@@ -1816,8 +1741,6 @@ class TestSyncOneUnitCollectionAndCancel:
             slug="n64",
             roms=[{"id": 1, "name": "A"}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
@@ -1862,8 +1785,6 @@ class TestPerUnitMetadataStamping:
             slug="n64",
             roms=[{"id": 10, "name": "A", "metadatum": {"genres": ["RPG"]}}],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         commit_calls: list[tuple] = []
         original_commit = plugin._sync_service._reporter.commit_unit_results
@@ -1963,8 +1884,6 @@ class TestPerUnitMetadataStamping:
                 {"id": 5, "name": "E", "metadatum": {"genres": ["Strategy"]}},
             ],
         )
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         commit_calls: list[tuple] = []
 

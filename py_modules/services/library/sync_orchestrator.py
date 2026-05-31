@@ -21,8 +21,6 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import build_shortcuts_data
 from domain.sync_diff import (
@@ -72,8 +70,7 @@ _UNIT_WAIT_POLL_SEC = 1.0
 class SyncOrchestratorConfig:
     """Frozen wiring bundle handed to ``SyncOrchestrator.__init__``.
 
-    Holds the live state dict (read for the existing-registry stale
-    diff), runtime infrastructure (loop, logger), event emitter, the
+    Holds runtime infrastructure (loop, logger), event emitter, the
     Clock/UuidGen/Sleeper test seams, the SQLite Unit-of-Work factory
     (the transactional seam over the ``roms`` / ``sync_runs`` repositories
     the lifecycle writes through), the plugin-dir reference for shortcut
@@ -87,7 +84,6 @@ class SyncOrchestratorConfig:
     plugs the reader in via ``set()`` once the reporter is built.
     """
 
-    state: PluginState
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -107,7 +103,6 @@ class SyncOrchestrator:
     """Preview/apply/full-sync lifecycle with cancellation + heartbeat safety."""
 
     def __init__(self, *, config: SyncOrchestratorConfig) -> None:
-        self._state = config.state
         self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger

@@ -8,12 +8,6 @@ feature toggles and the device label live in ``settings.json`` and are
 read/written here directly. Most methods are thin delegations;
 orchestration that genuinely spans multiple sub-services lives here,
 single-sub-service logic does not.
-
-The legacy JSON :class:`SaveSyncState` aggregate and its persister
-survive only behind :meth:`load_state` / :meth:`save_state` so the
-not-yet-migrated PlaytimeService and RomRemovalService keep their
-``playtime`` reads/writes working; the saves vertical itself no longer
-touches them.
 """
 
 from __future__ import annotations
@@ -21,7 +15,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from domain.rom_save_state import RomSaveState
-from domain.save_state import SaveSyncState
 from services.saves._config import SaveServiceConfig
 from services.saves._settings import (
     ALLOWED_SETTINGS_KEYS,
@@ -37,7 +30,7 @@ from services.saves.sync_engine import SyncEngine, SyncEngineConfig
 from services.saves.versions import VersionsService, VersionsServiceConfig
 
 if TYPE_CHECKING:
-    from services.protocols import SaveSyncStatePersister, UnitOfWorkFactory
+    from services.protocols import UnitOfWorkFactory
 
 
 class SaveService:
@@ -65,10 +58,6 @@ class SaveService:
         self._save_file_store = config.save_file_store
         self._uow_factory: UnitOfWorkFactory = config.uow_factory
         self._settings_persister = config.settings_persister
-        # The legacy JSON aggregate + persister survive only for the
-        # not-yet-migrated playtime / rom-removal consumers (see save_state).
-        self._save_sync_state: SaveSyncState = config.save_sync_state
-        self._legacy_persister: SaveSyncStatePersister = config.save_sync_state_persister
         # Resolve plugin version once at construction; SyncEngine and any
         # other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
@@ -154,34 +143,6 @@ class SaveService:
                 get_active_core=config.get_active_core,
             ),
         )
-
-    # ------------------------------------------------------------------
-    # Legacy JSON state — survives only for PlaytimeService / RomRemovalService
-    # ------------------------------------------------------------------
-
-    def init_state(self) -> None:
-        """No-op for the legacy aggregate (defaults ship at construction)."""
-
-    def load_state(self) -> None:
-        """Load the legacy JSON save-sync state (playtime) from disk.
-
-        The per-ROM save state lives in SQLite now; this loads only the
-        residual ``playtime`` aggregate still consumed by PlaytimeService.
-        """
-        saved = self._legacy_persister.load()
-        if saved is None:
-            return
-        loaded = SaveSyncState.from_dict(saved)
-        self._save_sync_state.replace_with(loaded)
-
-    def save_state(self) -> None:
-        """Persist the legacy JSON save-sync state (playtime) to disk.
-
-        Implements the ``StatePersister`` Protocol consumed by PlaytimeService
-        and RomRemovalService. The saves vertical itself persists through the
-        SQLite ``rom_save_states`` repository, not this method.
-        """
-        self._legacy_persister.save(self._save_sync_state.to_dict())
 
     # ------------------------------------------------------------------
     # Device registration (delegated to SyncEngine)

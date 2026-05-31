@@ -33,16 +33,11 @@ class Plugin:
     # regression remains green).
     _persistence: Any
     _state: Any
-    _metadata_cache: Any
-    _state_persister: Any
     _settings_persister: Any
-    _metadata_cache_persister: Any
-    _metadata_store: Any
     _http_adapter: Any
     _romm_api: Any
     _steam_config: Any
     _retrodeck_paths: Any
-    _save_sync_state: Any
 
     _MIN_REQUIRED_VERSION = (4, 8, 1)
 
@@ -123,12 +118,6 @@ class Plugin:
         self._session_lifecycle_service = services["session_lifecycle_service"]
 
         # ── 5. Startup healing ──────────────────────────────────────────────
-        # Settings-schema migrations land before any sync state is observed
-        # so the v1→v2 hop (clears last_sync to fix #738 cache corruption)
-        # is applied before the per-unit pipeline reads ``last_sync``.
-        self._migration_service.apply_settings_schema_migrations()
-        self._save_sync_service.init_state()
-        self._save_sync_service.load_state()
         # Detect retrodeck path changes BEFORE pruning so the prune can skip
         # entries living under a pending migration's previous home.
         self._migration_service.detect_retrodeck_path_change()

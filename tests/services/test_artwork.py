@@ -11,7 +11,6 @@ import decky
 import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
-from models.state import make_default_plugin_state
 
 from domain.rom import Rom
 from services.artwork import ArtworkService, ArtworkServiceConfig
@@ -31,11 +30,6 @@ def _seed_rom(uow, rom_id, *, app_id, cover_path=None, platform_slug="n64", name
     )
     with uow:
         uow.roms.save(rom)
-
-
-@pytest.fixture
-def state():
-    return make_default_plugin_state()
 
 
 @pytest.fixture
@@ -70,7 +64,7 @@ def uow() -> FakeUnitOfWork:
 
 
 @pytest.fixture
-def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data, uow):
+def artwork_service(steam_config, file_store, romm_api, pending_sync_data, uow):
     # _loop is replaced by the autouse fixture below for async tests; for
     # sync tests it is never touched, so a MagicMock is fine here.
     return ArtworkService(
@@ -78,7 +72,6 @@ def artwork_service(state, steam_config, file_store, romm_api, pending_sync_data
             romm_api=romm_api,
             steam_config=steam_config,
             cover_art_file_store=file_store,
-            state=state,
             loop=MagicMock(),
             logger=decky.logger,
             get_pending_sync=lambda: pending_sync_data,
@@ -687,13 +680,12 @@ class TestIsStagingFileOrphaned:
 class TestPruneOrphanedStagingArtwork:
     """Tests for prune_orphaned_staging_artwork()."""
 
-    def test_removes_staging_not_in_registry(self, artwork_service, state, steam_config, file_store, tmp_path):
+    def test_removes_staging_not_in_registry(self, artwork_service, steam_config, file_store, tmp_path):
         grid_dir = str(tmp_path / "grid")
         staging = os.path.join(grid_dir, "romm_42_cover.png")
         file_store.files[staging] = b"fake"
 
         steam_config.grid_dir.return_value = grid_dir
-        state["shortcut_registry"] = {}
 
         artwork_service.prune_orphaned_staging_artwork()
         assert staging not in file_store.files
@@ -723,7 +715,7 @@ class TestPruneOrphanedStagingArtwork:
         artwork_service.prune_orphaned_staging_artwork()
         assert staging in file_store.files
 
-    def test_ignores_non_staging_files(self, artwork_service, state, steam_config, file_store, tmp_path):
+    def test_ignores_non_staging_files(self, artwork_service, steam_config, file_store, tmp_path):
         grid_dir = str(tmp_path / "grid")
         final = os.path.join(grid_dir, "1001p.png")
         other = os.path.join(grid_dir, "something_else.png")
@@ -731,32 +723,28 @@ class TestPruneOrphanedStagingArtwork:
         file_store.files[other] = b"other"
 
         steam_config.grid_dir.return_value = grid_dir
-        state["shortcut_registry"] = {}
 
         artwork_service.prune_orphaned_staging_artwork()
         assert final in file_store.files
         assert other in file_store.files
 
-    def test_no_grid_dir_no_crash(self, artwork_service, state, steam_config):
+    def test_no_grid_dir_no_crash(self, artwork_service, steam_config):
         steam_config.grid_dir.return_value = None
-        state["shortcut_registry"] = {}
         artwork_service.prune_orphaned_staging_artwork()  # should not raise
 
-    def test_grid_not_a_directory_no_crash(self, artwork_service, state, steam_config, file_store, tmp_path):
+    def test_grid_not_a_directory_no_crash(self, artwork_service, steam_config, file_store, tmp_path):
         grid_dir = str(tmp_path / "grid")
         steam_config.grid_dir.return_value = grid_dir
         # No files under grid_dir => isdir returns False
         file_store.isdir_paths = set()
-        state["shortcut_registry"] = {}
         artwork_service.prune_orphaned_staging_artwork()  # should not raise
 
-    def test_handles_os_error(self, artwork_service, state, steam_config, file_store, tmp_path, caplog):
+    def test_handles_os_error(self, artwork_service, steam_config, file_store, tmp_path, caplog):
         grid_dir = str(tmp_path / "grid")
         staging = os.path.join(grid_dir, "romm_42_cover.png")
         file_store.files[staging] = b"fake"
 
         steam_config.grid_dir.return_value = grid_dir
-        state["shortcut_registry"] = {}
 
         def boom(_path: str) -> None:
             raise OSError("permission denied")

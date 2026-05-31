@@ -191,10 +191,6 @@ class TestTryUnitIncrementalSkip:
     async def test_falls_back_on_delta_api_exception(self, plugin, fake_romm_api):
         """Lines 447-451: delta-fetch raises => warning logged, returns None to force full fetch."""
         _wire_fake(plugin, fake_romm_api)
-        plugin._state["shortcut_registry"] = {
-            "1": {"name": "Game A", "platform_name": "N64"},
-        }
-        plugin._state["last_sync"] = "2025-01-01T00:00:00"
 
         fake_romm_api.list_roms_updated_after_side_effect = RuntimeError("delta boom")
 
@@ -225,8 +221,6 @@ class TestFetchPlatformUnit:
         """
         _wire_fake(plugin, fake_romm_api)
         # No prior sync => incremental skip returns None and we fall through to pagination.
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         fake_romm_api.list_roms_side_effect = RuntimeError("page boom")
 
@@ -244,8 +238,6 @@ class TestFetchPlatformUnit:
         after the first page's bytes are already consumed by the caller.
         """
         _wire_fake(plugin, fake_romm_api)
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         # Seed exactly one full page worth of ROMs (50 items at limit=50).
         fake_romm_api.roms = {i: {"id": i, "platform_id": 1, "name": f"G{i}"} for i in range(50)}
@@ -269,8 +261,6 @@ class TestFetchPlatformUnit:
     async def test_paginates_across_multiple_pages(self, plugin, fake_romm_api):
         """Line 514: a full first page must trigger offset += limit and a second fetch."""
         _wire_fake(plugin, fake_romm_api)
-        plugin._state["last_sync"] = None
-        plugin._state["shortcut_registry"] = {}
 
         # 51 ROMs at limit=50 => page 1 fills to limit, page 2 carries the tail.
         fake_romm_api.roms = {i: {"id": i, "platform_id": 1, "name": f"G{i}"} for i in range(51)}

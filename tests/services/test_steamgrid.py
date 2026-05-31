@@ -8,10 +8,8 @@ from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
-from adapters.metadata_cache_store import MetadataCacheStoreAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from lib.errors import SgdbApiError, SteamGridDirMissingError
@@ -54,8 +52,6 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
     p = Plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._romm_api = fake_romm_api
-    p._state = make_default_plugin_state()
-    p._metadata_cache = {}
 
     import decky
 
@@ -64,14 +60,11 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
     p._steam_config = steam_config
 
     p._settings_persister = FakeSettingsPersister()
-    p._metadata_store = MetadataCacheStoreAdapter(metadata_cache=p._metadata_cache)
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
             romm_api=p._romm_api,
             steam_config=steam_config,
-            state=p._state,
             settings=p.settings,
-            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -96,7 +89,6 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
             romm_api=p._romm_api,
             steam_config=steam_config,
             sgdb_artwork_cache=sgdb_artwork_cache,
-            state=p._state,
             settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
@@ -295,13 +287,6 @@ class TestGetSgdbArtworkBase64:
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        # ROM in registry without sgdb_id.
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-        }
-
         result = await plugin.get_sgdb_artwork_base64(42, 1)
 
         assert result["base64"] is None
@@ -311,14 +296,6 @@ class TestGetSgdbArtworkBase64:
     async def test_download_fails_returns_null(self, plugin, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-
-        plugin._state["shortcut_registry"]["42"] = {
-            "app_id": 100001,
-            "name": "Zelda",
-            "platform_name": "N64",
-            "igdb_id": 1234,
-            "sgdb_id": 9999,
-        }
 
         # SGDB returns a URL but the image download fails (CDN 5xx).
         fake_steamgrid_db_api.seed_artwork(9999, "hero", "https://example.com/hero.png")
@@ -596,7 +573,6 @@ class TestApplySgdbGameId:
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
         # Stale art from a previous pick.
         for asset_type in ("hero", "logo", "grid", "icon"):
             sgdb_artwork_cache.files[_cached_path(sgdb_artwork_cache, 42, asset_type)] = b"old"
@@ -630,7 +606,6 @@ class TestApplySgdbGameId:
     async def test_coerces_string_args(self, plugin, sgdb_artwork_cache, fake_steamgrid_db_api):
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
         _seed_all_artwork(fake_steamgrid_db_api, 8888)
 
         result = await plugin.apply_sgdb_game_id("42", "8888")
@@ -658,7 +633,6 @@ class TestApplySgdbGameId:
         """One asset failing to download must not break the pick — the rest paint."""
         plugin.settings["steamgriddb_api_key"] = "some-key"
         plugin._sgdb_service._loop = asyncio.get_event_loop()
-        plugin._state["shortcut_registry"]["42"] = {"app_id": 1}
         # Seed only three of the four assets — "logo" stays unseeded so its
         # download yields no data, simulating a single-asset failure.
         for asset_type in ("hero", "grid", "icon"):
@@ -816,8 +790,6 @@ class TestPruneOrphanedArtworkCache:
         """OSError on cache.remove should log warning, not crash."""
         orphan = _cached_path(sgdb_artwork_cache, 42, "hero")
         sgdb_artwork_cache.files[orphan] = b"orphaned data"
-
-        plugin._state["shortcut_registry"] = {}
 
         def raising_remove(_path: str) -> None:
             raise OSError("Permission denied")
@@ -982,8 +954,6 @@ class TestDebugLoggerProtocolSeam:
         p = Plugin()
         p.settings = {"log_level": "debug", "steamgriddb_api_key": ""}
         p._romm_api = fake_romm_api
-        p._state = make_default_plugin_state()
-        p._metadata_cache = {}
 
         captured: list[str] = []
 
@@ -997,9 +967,7 @@ class TestDebugLoggerProtocolSeam:
             config=LibraryServiceConfig(
                 romm_api=p._romm_api,
                 steam_config=steam_config,
-                state=p._state,
                 settings=p.settings,
-                metadata_cache=p._metadata_cache,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
                 plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -1021,7 +989,6 @@ class TestDebugLoggerProtocolSeam:
                 romm_api=p._romm_api,
                 steam_config=steam_config,
                 sgdb_artwork_cache=sgdb_artwork_cache,
-                state=p._state,
                 settings=p.settings,
                 loop=asyncio.get_event_loop(),
                 logger=decky.logger,
@@ -1315,8 +1282,6 @@ class TestPruneOrphanedArtworkCacheEdgeCases:
         """OSError when removing a stale ``.tmp`` file is logged, not raised."""
         tmp_path = _cached_path(sgdb_artwork_cache, 42, "hero") + ".tmp"
         sgdb_artwork_cache.files[tmp_path] = b"tmp data"
-
-        plugin._state["shortcut_registry"] = {"42": {"app_id": 1}}
 
         def raising_remove(_path: str) -> None:
             raise OSError("permission denied")

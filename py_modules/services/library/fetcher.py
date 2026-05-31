@@ -16,8 +16,6 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import MetadataCache, PluginState
-
 from domain.sync_state import SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
@@ -67,19 +65,16 @@ def _collection_units(collections: list[dict], enabled_ids: set[str], kind: Coll
 class LibraryFetcherConfig:
     """Frozen wiring bundle handed to ``LibraryFetcher.__init__``.
 
-    Holds the Protocol-typed RomM adapter, the live state/settings/
-    metadata-cache dicts, runtime infrastructure (loop, logger),
-    plugin-dir reference (used for shortcut-data path construction),
-    settings persistence callback, debug-logger seam, the shared
-    ``LibrarySyncStateBox`` (read for the cancel signal), and an
-    ``_emit_progress`` callback the fetcher uses to surface long
-    paginated fetches to the frontend.
+    Holds the Protocol-typed RomM adapter, the live settings dict,
+    runtime infrastructure (loop, logger), plugin-dir reference (used
+    for shortcut-data path construction), settings persistence callback,
+    debug-logger seam, the shared ``LibrarySyncStateBox`` (read for the
+    cancel signal), and an ``_emit_progress`` callback the fetcher uses
+    to surface long paginated fetches to the frontend.
     """
 
     romm_api: RommLibraryApi
-    state: PluginState
     settings: dict
-    metadata_cache: MetadataCache
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
@@ -95,9 +90,7 @@ class LibraryFetcher:
 
     def __init__(self, *, config: LibraryFetcherConfig) -> None:
         self._romm_api = config.romm_api
-        self._state = config.state
         self._settings = config.settings
-        self._metadata_cache = config.metadata_cache
         self._loop = config.loop
         self._logger = config.logger
         self._plugin_dir = config.plugin_dir

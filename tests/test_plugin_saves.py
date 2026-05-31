@@ -14,10 +14,8 @@ from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.migration_file import MigrationFileAdapter
-from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -25,7 +23,6 @@ from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_state import FileSyncState, RomSaveState
-from domain.save_state import SaveSyncState
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
@@ -46,8 +43,6 @@ def plugin(tmp_path):
         p.settings, __import__("decky").DECKY_PLUGIN_DIR, logging.getLogger("test"), "decky-romm-sync/9.9.9"
     )
     p._romm_api = MagicMock()
-    p._state = make_default_plugin_state()
-    p._metadata_cache = {}
 
     import decky
 
@@ -58,9 +53,7 @@ def plugin(tmp_path):
         config=LibraryServiceConfig(
             romm_api=p._romm_api,
             steam_config=steam_config,
-            state=p._state,
             settings=p.settings,
-            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -80,7 +73,6 @@ def plugin(tmp_path):
     # bytes land on the same filesystem view the service inspects.
     save_file_adapter = SaveFileAdapter()
     fake_api = FakeSaveApi(save_file_store=save_file_adapter)
-    p._save_sync_state = SaveSyncState()
     # One shared Unit of Work so test seeds and the saves vertical agree on state.
     p._uow_factory = FakeUnitOfWorkFactory()
     saves_path = str(tmp_path / "retrodeck" / "saves")
@@ -93,18 +85,9 @@ def plugin(tmp_path):
             romm_api=fake_api,
             retry=_make_retry(),
             settings=p._save_settings,
-            state=p._state,
-            save_sync_state=p._save_sync_state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            save_sync_state_persister=SaveSyncStatePersisterAdapter(
-                PersistenceAdapter(
-                    settings_dir=str(tmp_path),
-                    runtime_dir=str(tmp_path),
-                    logger=logging.getLogger("test"),
-                )
-            ),
             settings_persister=MagicMock(),
             save_file_store=save_file_adapter,
             retrodeck_paths=FakeRetroDeckPaths(
@@ -123,7 +106,6 @@ def plugin(tmp_path):
             uow_factory=p._uow_factory,
         ),
     )
-    p._save_sync_service.init_state()
 
     p._playtime_service = PlaytimeService(
         config=PlaytimeServiceConfig(
@@ -529,11 +511,10 @@ class TestPostExitSync:
         real_migration = MigrationService(
             config=MigrationServiceConfig(
                 migration_file_store=MigrationFileAdapter(),
-                state=plugin._state,
+                state={"downloaded_bios": {}},
                 settings={},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),
-                state_persister=MagicMock(),
                 settings_persister=MagicMock(),
                 emit=MagicMock(),
                 get_bios_files_index=lambda: {},

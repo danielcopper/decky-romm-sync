@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState, ShortcutRegistryEntry
+from models.state import ShortcutRegistryEntry
 
 from domain.artwork_paths import final_filename, staging_filename
 from domain.sync_stage import SyncStage
@@ -31,15 +31,14 @@ if TYPE_CHECKING:
 class ArtworkServiceConfig:
     """Frozen wiring bundle handed to ``ArtworkService.__init__``.
 
-    Holds the Protocol-typed adapters, the live state dict, runtime
-    infrastructure, and the read seam ArtworkService uses to consult
-    the in-flight sync's pending cover paths.
+    Holds the Protocol-typed adapters, runtime infrastructure, and the
+    read seam ArtworkService uses to consult the in-flight sync's
+    pending cover paths.
     """
 
     romm_api: RommRomReader
     steam_config: SteamConfigStore
     cover_art_file_store: CoverArtFileStore
-    state: PluginState
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     get_pending_sync: PendingSyncReader
@@ -53,7 +52,6 @@ class ArtworkService:
         self._romm_api = config.romm_api
         self._steam_config = config.steam_config
         self._cover_art_file_store = config.cover_art_file_store
-        self._state = config.state
         self._loop = config.loop
         self._logger = config.logger
         self._get_pending_sync = config.get_pending_sync

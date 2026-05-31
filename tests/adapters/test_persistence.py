@@ -9,13 +9,10 @@ import pytest
 
 from adapters.persistence import (
     _FIRMWARE_CACHE_VERSION,
-    _METADATA_CACHE_VERSION,
     _SETTINGS_VERSION,
-    _STATE_VERSION,
     DEFAULT_SETTINGS,
     FirmwareCachePersisterAdapter,
     PersistenceAdapter,
-    SaveSyncStatePersisterAdapter,
 )
 
 
@@ -50,16 +47,6 @@ class TestLocking:
             loaded = json.load(f)
         assert loaded["romm_url"] == "http://example.com"
         assert loaded["romm_user"] == "testuser"
-
-    def test_save_state_creates_lock_file(self, adapter):
-        adapter.save_state({"shortcut_registry": {}})
-        lock_path = os.path.join(adapter._runtime_dir, "state.json.lock")
-        assert os.path.exists(lock_path)
-
-    def test_save_metadata_cache_creates_lock_file(self, adapter):
-        adapter.save_metadata_cache({"1": {"title": "Game"}})
-        lock_path = os.path.join(adapter._runtime_dir, "metadata_cache.json.lock")
-        assert os.path.exists(lock_path)
 
     def test_save_firmware_cache_creates_lock_file(self, adapter):
         adapter.save_firmware_cache({"snes": {"files": []}})
@@ -106,20 +93,6 @@ class TestVersionStampingOnSave:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
 
-    def test_save_state_stamps_version(self, adapter):
-        adapter.save_state({"shortcut_registry": {}})
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        with open(state_path) as f:
-            loaded = json.load(f)
-        assert loaded["version"] == _STATE_VERSION
-
-    def test_save_metadata_cache_stamps_version(self, adapter):
-        adapter.save_metadata_cache({"1": {"title": "Game"}})
-        cache_path = os.path.join(adapter._runtime_dir, "metadata_cache.json")
-        with open(cache_path) as f:
-            loaded = json.load(f)
-        assert loaded["version"] == _METADATA_CACHE_VERSION
-
     def test_save_firmware_cache_stamps_version(self, adapter):
         adapter.save_firmware_cache({"snes": {"files": []}})
         cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
@@ -132,14 +105,6 @@ class TestVersionStampingOnSave:
 
 
 class TestVersionMismatchOnLoad:
-    def test_load_metadata_cache_version_mismatch_discards(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "metadata_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump({"version": 999, "1": {"title": "stale"}}, f)
-        result = adapter.load_metadata_cache()
-        assert result == {"version": _METADATA_CACHE_VERSION}
-        assert "1" not in result
-
     def test_load_firmware_cache_version_mismatch_discards(self, adapter):
         cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
         with open(cache_path, "w") as f:
@@ -155,14 +120,6 @@ class TestVersionMismatchOnLoad:
         result = adapter.load_firmware_cache()
         assert result == {"version": _FIRMWARE_CACHE_VERSION}
         assert "snes" not in result
-
-    def test_load_metadata_cache_no_version_discards(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "metadata_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump({"1": {"title": "stale"}}, f)
-        result = adapter.load_metadata_cache()
-        assert result == {"version": _METADATA_CACHE_VERSION}
-        assert "1" not in result
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────
@@ -211,53 +168,9 @@ class TestLoadingEdgeCases:
         assert result["steam_input_mode"] == "default"
         assert result["romm_allow_insecure_ssl"] is False
 
-    def test_load_state_merges_defaults(self, adapter):
-        defaults = {"shortcut_registry": {}, "installed_roms": {}, "last_sync": None}
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        with open(state_path, "w") as f:
-            json.dump({"shortcut_registry": {"1": {"app_id": 123}}, "version": 1}, f)
-        result = adapter.load_state(defaults)
-        assert result["shortcut_registry"] == {"1": {"app_id": 123}}
-        assert result["installed_roms"] == {}
-        assert result["last_sync"] is None
-
-    def test_load_state_backfills_version(self, adapter):
-        defaults = {"shortcut_registry": {}}
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        with open(state_path, "w") as f:
-            json.dump({"shortcut_registry": {}}, f)
-        result = adapter.load_state(defaults)
-        assert result["version"] == _STATE_VERSION
-
-    def test_load_state_missing_file_returns_defaults(self, adapter):
-        defaults = {"shortcut_registry": {}, "installed_roms": {}}
-        result = adapter.load_state(defaults)
-        assert result["shortcut_registry"] == {}
-        assert result["installed_roms"] == {}
-        assert result["version"] == _STATE_VERSION
-
-    def test_load_state_corrupt_json_returns_defaults(self, adapter):
-        defaults = {"shortcut_registry": {}}
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        with open(state_path, "w") as f:
-            f.write("CORRUPT{{{")
-        result = adapter.load_state(defaults)
-        assert result["shortcut_registry"] == {}
-
-    def test_load_metadata_cache_missing_file_returns_empty(self, adapter):
-        result = adapter.load_metadata_cache()
-        assert result == {"version": _METADATA_CACHE_VERSION}
-
     def test_load_firmware_cache_missing_file_returns_empty(self, adapter):
         result = adapter.load_firmware_cache()
         assert result == {"version": _FIRMWARE_CACHE_VERSION}
-
-    def test_load_metadata_cache_corrupt_json_returns_empty(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "metadata_cache.json")
-        with open(cache_path, "w") as f:
-            f.write("CORRUPT{{{")
-        result = adapter.load_metadata_cache()
-        assert result == {"version": _METADATA_CACHE_VERSION}
 
     def test_load_firmware_cache_corrupt_json_returns_empty(self, adapter):
         cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
@@ -266,14 +179,6 @@ class TestLoadingEdgeCases:
         result = adapter.load_firmware_cache()
         assert result == {"version": _FIRMWARE_CACHE_VERSION}
 
-    def test_load_metadata_cache_valid_version_returns_data(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "metadata_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump({"version": _METADATA_CACHE_VERSION, "42": {"title": "Game"}}, f)
-        result = adapter.load_metadata_cache()
-        assert result["42"] == {"title": "Game"}
-        assert result["version"] == _METADATA_CACHE_VERSION
-
     def test_load_firmware_cache_valid_version_returns_data(self, adapter):
         cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
         with open(cache_path, "w") as f:
@@ -281,132 +186,6 @@ class TestLoadingEdgeCases:
         result = adapter.load_firmware_cache()
         assert result["snes"] == {"files": []}
         assert result["version"] == _FIRMWARE_CACHE_VERSION
-
-    def test_load_state_non_dict_json_returns_defaults(self, adapter):
-        defaults = {"shortcut_registry": {}}
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        with open(state_path, "w") as f:
-            json.dump([1, 2, 3], f)
-        result = adapter.load_state(defaults)
-        assert result["shortcut_registry"] == {}
-        assert result["version"] == _STATE_VERSION
-
-    def test_save_state_rotates_existing_to_prev(self, adapter):
-        """Each save_state call rotates the current state.json to state.json.prev."""
-        adapter.save_state({"shortcut_registry": {"1": {"name": "Game A"}}})
-        adapter.save_state({"shortcut_registry": {"2": {"name": "Game B"}}})
-
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        prev_path = state_path + ".prev"
-        with open(state_path) as f:
-            current = json.load(f)
-        with open(prev_path) as f:
-            prev = json.load(f)
-
-        assert current["shortcut_registry"] == {"2": {"name": "Game B"}}
-        assert prev["shortcut_registry"] == {"1": {"name": "Game A"}}
-
-    def test_save_state_first_write_creates_no_prev(self, adapter):
-        """First save_state has nothing to rotate; .prev should not be created."""
-        adapter.save_state({"shortcut_registry": {"1": {"name": "Game A"}}})
-
-        prev_path = os.path.join(adapter._runtime_dir, "state.json.prev")
-        assert not os.path.exists(prev_path)
-
-    def test_load_state_recovers_from_prev_when_primary_empty(self, adapter, caplog):
-        """state.json with empty registry → recovery from state.json.prev (full dict, not just registry)."""
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        prev_path = state_path + ".prev"
-        with open(prev_path, "w") as f:
-            json.dump(
-                {
-                    "version": _STATE_VERSION,
-                    "shortcut_registry": {"42": {"name": "Game A"}},
-                    "last_sync": "2026-05-15T10:00:00",
-                },
-                f,
-            )
-        with open(state_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
-
-        with caplog.at_level(logging.WARNING):
-            result = adapter.load_state({"shortcut_registry": {}, "last_sync": None})
-
-        assert result["shortcut_registry"] == {"42": {"name": "Game A"}}
-        # Non-registry fields recovered too — caller sees the full prior state.
-        assert result["last_sync"] == "2026-05-15T10:00:00"
-        assert any("state.json.prev" in rec.message for rec in caplog.records)
-
-    def test_load_state_recovers_from_prev_when_primary_corrupt(self, adapter):
-        """state.json with corrupt JSON → recovery from state.json.prev."""
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        prev_path = state_path + ".prev"
-        with open(prev_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {"42": {"name": "Game A"}}}, f)
-        with open(state_path, "w") as f:
-            f.write("{not valid json")
-
-        result = adapter.load_state({"shortcut_registry": {}})
-
-        assert result["shortcut_registry"] == {"42": {"name": "Game A"}}
-
-    def test_load_state_no_recovery_when_prev_also_empty(self, adapter, caplog):
-        """Both primary and .prev empty → no recovery, no warning."""
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        prev_path = state_path + ".prev"
-        with open(state_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
-        with open(prev_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
-
-        with caplog.at_level(logging.WARNING):
-            result = adapter.load_state({"shortcut_registry": {}})
-
-        assert result["shortcut_registry"] == {}
-        assert not any("recovered" in rec.message for rec in caplog.records)
-
-    def test_load_state_no_recovery_when_prev_missing(self, adapter):
-        """Empty primary + missing .prev → no crash, returns defaults."""
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        with open(state_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
-
-        result = adapter.load_state({"shortcut_registry": {}})
-
-        assert result["shortcut_registry"] == {}
-
-    def test_load_state_no_recovery_when_prev_corrupt(self, adapter):
-        """Empty primary + corrupt .prev → no crash, no recovery."""
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        prev_path = state_path + ".prev"
-        with open(state_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {}}, f)
-        with open(prev_path, "w") as f:
-            f.write("garbage{")
-
-        result = adapter.load_state({"shortcut_registry": {}})
-
-        assert result["shortcut_registry"] == {}
-
-    def test_load_state_prefers_primary_when_registry_populated(self, adapter):
-        """Primary with populated registry → use it, ignore .prev."""
-        state_path = os.path.join(adapter._runtime_dir, "state.json")
-        prev_path = state_path + ".prev"
-        with open(state_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {"1": {"name": "Current"}}}, f)
-        with open(prev_path, "w") as f:
-            json.dump({"version": _STATE_VERSION, "shortcut_registry": {"2": {"name": "Stale"}}}, f)
-
-        result = adapter.load_state({"shortcut_registry": {}})
-
-        assert result["shortcut_registry"] == {"1": {"name": "Current"}}
-
-    def test_load_metadata_cache_non_dict_json_returns_empty(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "metadata_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump([1, 2, 3], f)
-        result = adapter.load_metadata_cache()
-        assert result == {"version": _METADATA_CACHE_VERSION}
 
     def test_load_firmware_cache_non_dict_json_returns_empty(self, adapter):
         cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
@@ -431,77 +210,34 @@ class TestLoadingEdgeCases:
         assert mode == 0o600
 
 
-# ── Save-sync state ────────────────────────────────────────────────────────────
+# ── Save-sync state (legacy read — consumed only by the settings fold) ───────────
 
 
-class TestSaveSyncState:
-    def test_save_creates_lock_file(self, adapter):
-        adapter.save_save_sync_state({"version": 1, "saves": {}})
-        lock_path = os.path.join(adapter._runtime_dir, "save_sync_state.json.lock")
-        assert os.path.exists(lock_path)
+class TestLoadSaveSyncState:
+    def _write(self, adapter, raw: str) -> None:
+        path = os.path.join(adapter._runtime_dir, "save_sync_state.json")
+        with open(path, "w") as f:
+            f.write(raw)
 
-    def test_save_round_trip(self, adapter):
+    def test_load_round_trip(self, adapter):
         payload = {
             "version": 1,
             "device_id": "dev-1",
             "saves": {"42": {"files": {"game.srm": {"tracked_save_id": 7}}}},
         }
-        adapter.save_save_sync_state(payload)
-        loaded = adapter.load_save_sync_state()
-        assert loaded == payload
-
-    def test_save_does_not_stamp_version_when_caller_omits_it(self, adapter):
-        """Adapter is dumb I/O — it must not inject a version when the caller
-        didn't supply one. Migrations and version stamping live in StateService."""
-        adapter.save_save_sync_state({"saves": {}, "playtime": {}})
-        loaded = adapter.load_save_sync_state()
-        assert loaded == {"saves": {}, "playtime": {}}
-        assert "version" not in loaded
+        self._write(adapter, json.dumps(payload))
+        assert adapter.load_save_sync_state() == payload
 
     def test_load_missing_file_returns_none(self, adapter):
-        result = adapter.load_save_sync_state()
-        assert result is None
+        assert adapter.load_save_sync_state() is None
 
     def test_load_corrupt_json_returns_none(self, adapter):
-        path = os.path.join(adapter._runtime_dir, "save_sync_state.json")
-        with open(path, "w") as f:
-            f.write("CORRUPT{{{")
-        result = adapter.load_save_sync_state()
-        assert result is None
+        self._write(adapter, "CORRUPT{{{")
+        assert adapter.load_save_sync_state() is None
 
     def test_load_non_dict_json_returns_none(self, adapter):
-        path = os.path.join(adapter._runtime_dir, "save_sync_state.json")
-        with open(path, "w") as f:
-            json.dump([1, 2, 3], f)
-        result = adapter.load_save_sync_state()
-        assert result is None
-
-    def test_save_atomic_write_no_tmp_file_after_success(self, adapter):
-        adapter.save_save_sync_state({"version": 1})
-        tmp_path = os.path.join(adapter._runtime_dir, "save_sync_state.json.tmp")
-        assert not os.path.exists(tmp_path)
-
-
-class TestSaveSyncStatePersisterAdapter:
-    def test_save_delegates_to_persistence_adapter(self, adapter):
-        wrapper = SaveSyncStatePersisterAdapter(adapter)
-        wrapper.save({"version": 1, "device_id": "dev-1"})
-
-        path = os.path.join(adapter._runtime_dir, "save_sync_state.json")
-        with open(path) as f:
-            on_disk = json.load(f)
-        assert on_disk == {"version": 1, "device_id": "dev-1"}
-
-    def test_load_delegates_to_persistence_adapter(self, adapter):
-        wrapper = SaveSyncStatePersisterAdapter(adapter)
-        wrapper.save({"version": 1, "saves": {"42": {"files": {}}}})
-
-        loaded = wrapper.load()
-        assert loaded == {"version": 1, "saves": {"42": {"files": {}}}}
-
-    def test_load_returns_none_when_missing(self, adapter):
-        wrapper = SaveSyncStatePersisterAdapter(adapter)
-        assert wrapper.load() is None
+        self._write(adapter, json.dumps([1, 2, 3]))
+        assert adapter.load_save_sync_state() is None
 
 
 class TestFirmwareCachePersisterAdapter:

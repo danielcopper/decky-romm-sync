@@ -14,26 +14,12 @@ from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock
-from models.state import make_default_plugin_state
 
-from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.save_file import SaveFileAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_state import FileSyncState, RomSaveState
-from domain.save_state import SaveSyncState
 from services.saves import SaveService, SaveServiceConfig
-
-
-def _make_save_sync_state_persister(tmp_path) -> SaveSyncStatePersisterAdapter:
-    """Adapter rooted at tmp_path so disk-touching tests stay end-to-end."""
-    return SaveSyncStatePersisterAdapter(
-        PersistenceAdapter(
-            settings_dir=str(tmp_path),
-            runtime_dir=str(tmp_path),
-            logger=logging.getLogger("test"),
-        )
-    )
 
 
 async def _noop_emit(_event: str, /, *_args: object) -> None:
@@ -53,9 +39,6 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         romm_api=fake,
         retry=_make_retry(),
         settings={"log_level": "debug"},
-        state=make_default_plugin_state(),
-        save_sync_state=SaveSyncState(),
-        save_sync_state_persister=_make_save_sync_state_persister(tmp_path),
         settings_persister=FakeSettingsPersister(),
         save_file_store=save_file_store,
         loop=asyncio.get_event_loop(),
@@ -78,7 +61,6 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
     )
     config_kwargs.update(overrides)
     svc = SaveService(config=SaveServiceConfig(**config_kwargs))
-    svc.init_state()
     return svc, fake
 
 

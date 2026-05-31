@@ -6,11 +6,9 @@ import pytest
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
-from domain.save_state import SaveSyncState
 
 # conftest.py patches decky before this import
 from main import Plugin
@@ -60,8 +58,6 @@ def plugin(clock):
     }
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
-    p._state = make_default_plugin_state()
-    p._metadata_cache = {}
 
     # Shared UoW: ra_id / save / install rows a test seeds are visible to both
     # the achievements reader and the game-detail aggregation.
@@ -77,9 +73,7 @@ def plugin(clock):
         config=LibraryServiceConfig(
             romm_api=p._romm_api,
             steam_config=steam_config,
-            state=p._state,
             settings=p.settings,
-            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -106,7 +100,6 @@ def plugin(clock):
     bios_checker = MagicMock()
     bios_checker.check_platform_bios_cached.return_value = None
     bios_checker.check_platform_bios = AsyncMock(return_value={"needs_bios": False})
-    p._save_sync_state = SaveSyncState()
     p._game_detail_service = GameDetailService(
         config=GameDetailServiceConfig(
             settings=p.settings,

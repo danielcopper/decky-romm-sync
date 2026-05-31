@@ -16,8 +16,6 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain.sgdb_artwork import (
     asset_type_endpoint,
     asset_type_name,
@@ -50,19 +48,17 @@ class SteamGridServiceConfig:
     """Frozen wiring bundle handed to ``SteamGridService.__init__``.
 
     Holds the Protocol-typed adapters (``sgdb_api``, ``romm_api``,
-    ``steam_config``, ``sgdb_artwork_cache``), the live state and
-    settings dicts, runtime infrastructure, the ``settings.json``
-    persister, the SQLite Unit-of-Work factory (the ``sgdb_id`` cross-ref
-    is persisted onto the ``roms`` aggregate via the UoW), the
-    pending-sync read seam, and the debug-logger seam SteamGridService
-    needs at construction time.
+    ``steam_config``, ``sgdb_artwork_cache``), the live settings dict,
+    runtime infrastructure, the ``settings.json`` persister, the SQLite
+    Unit-of-Work factory (the ``sgdb_id`` cross-ref is persisted onto the
+    ``roms`` aggregate via the UoW), the pending-sync read seam, and the
+    debug-logger seam SteamGridService needs at construction time.
     """
 
     sgdb_api: SteamGridDbApi
     romm_api: RommRomReader
     steam_config: SteamConfigStore
     sgdb_artwork_cache: SgdbArtworkCache
-    state: PluginState
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -80,7 +76,6 @@ class SteamGridService:
         self._romm_api = config.romm_api
         self._steam_config = config.steam_config
         self._sgdb_artwork_cache = config.sgdb_artwork_cache
-        self._state = config.state
         self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger

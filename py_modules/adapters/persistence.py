@@ -1,4 +1,4 @@
-"""Persistence adapter — pure I/O for settings, state, and cache files.
+"""Persistence adapter — pure I/O for settings and cache JSON files.
 
 Handles atomic writes, file locking, and schema version stamping.
 Migration logic lives in ``domain/state_migrations.py``.
@@ -10,12 +10,7 @@ import fcntl
 import json
 import logging
 import os
-from typing import cast
 
-from models.state import MetadataCache, PluginState
-
-_STATE_VERSION = 1
-_METADATA_CACHE_VERSION = 1
 _FIRMWARE_CACHE_VERSION = 1
 _SETTINGS_VERSION = 4
 _LOCK_EXT = ".lock"
@@ -49,8 +44,8 @@ class PersistenceAdapter:
         Absolute path to the directory that holds ``settings.json``
         (typically ``decky.DECKY_PLUGIN_SETTINGS_DIR``).
     runtime_dir:
-        Absolute path to the directory that holds ``state.json`` and
-        ``metadata_cache.json`` (typically ``decky.DECKY_PLUGIN_RUNTIME_DIR``).
+        Absolute path to the directory that holds the cache JSON files
+        (typically ``decky.DECKY_PLUGIN_RUNTIME_DIR``).
     logger:
         A standard-library ``logging.Logger`` instance.
     """
@@ -133,90 +128,6 @@ class PersistenceAdapter:
         self._locked_write(settings_path, data)
 
     # ------------------------------------------------------------------
-    # State
-    # ------------------------------------------------------------------
-
-    def load_state(self, defaults: dict) -> dict:
-        """Read ``state.json`` and merge with *defaults*.
-
-        If the primary file is missing/corrupt or its ``shortcut_registry``
-        is empty, falls back to the one-deep ``state.json.prev`` backup
-        when that file has a non-empty registry — a crash mid-write
-        otherwise wipes the user's shortcut library.
-        """
-        state_path = os.path.join(self._runtime_dir, "state.json")
-        backup_path = state_path + ".prev"
-        state = dict(defaults)
-
-        primary = self._read_state_json(state_path)
-        if primary is not None and primary.get("shortcut_registry"):
-            saved = primary
-        else:
-            backup = self._read_state_json(backup_path)
-            if backup is not None and backup.get("shortcut_registry"):
-                self._logger.warning(
-                    "state.json empty/corrupt; recovered %d shortcut_registry entries from state.json.prev",
-                    len(backup["shortcut_registry"]),
-                )
-                saved = backup
-            else:
-                saved = primary if primary is not None else {}
-
-        if "version" not in saved:
-            saved["version"] = _STATE_VERSION
-        state.update(saved)
-        state.setdefault("version", _STATE_VERSION)
-        return state
-
-    def _read_state_json(self, path: str) -> dict | None:
-        """Read a state.json-shaped file. Returns ``None`` on missing or corrupt input."""
-        try:
-            with open(path) as f:
-                loaded = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return None
-        return loaded if isinstance(loaded, dict) else None
-
-    def save_state(self, data: dict) -> None:
-        """Atomic write of *data* to ``state.json`` with flock, stamping version.
-
-        Rotates the current ``state.json`` to ``state.json.prev`` before
-        the write — that backup is the recovery source if a subsequent
-        crash leaves the primary empty (see :meth:`load_state`).
-        """
-        data["version"] = _STATE_VERSION
-        state_path = os.path.join(self._runtime_dir, "state.json")
-        self._locked_write(state_path, data, rotate_to=state_path + ".prev")
-
-    # ------------------------------------------------------------------
-    # Metadata cache
-    # ------------------------------------------------------------------
-
-    def load_metadata_cache(self) -> dict:
-        """Read ``metadata_cache.json`` with version check.
-
-        Returns an empty cache dict if the file is missing, corrupt, or
-        has a version mismatch (stale/incompatible schema).
-        """
-        cache_path = os.path.join(self._runtime_dir, "metadata_cache.json")
-        try:
-            with open(cache_path) as f:
-                loaded = json.load(f)
-            if not isinstance(loaded, dict):
-                return {"version": _METADATA_CACHE_VERSION}
-            if loaded.get("version") != _METADATA_CACHE_VERSION:
-                return {"version": _METADATA_CACHE_VERSION}
-            return loaded
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {"version": _METADATA_CACHE_VERSION}
-
-    def save_metadata_cache(self, data: dict) -> None:
-        """Atomic write of *data* to ``metadata_cache.json`` with flock, stamping version."""
-        data["version"] = _METADATA_CACHE_VERSION
-        cache_path = os.path.join(self._runtime_dir, "metadata_cache.json")
-        self._locked_write(cache_path, data)
-
-    # ------------------------------------------------------------------
     # Firmware cache
     # ------------------------------------------------------------------
 
@@ -245,26 +156,17 @@ class PersistenceAdapter:
         self._locked_write(cache_path, data)
 
     # ------------------------------------------------------------------
-    # Save-sync state
+    # Save-sync state (legacy read — consumed only by the settings fold)
     # ------------------------------------------------------------------
-
-    def save_save_sync_state(self, data: dict) -> None:
-        """Atomic write of *data* to ``save_sync_state.json`` with flock.
-
-        Does not stamp a version — ``save_sync_state.json`` carries its
-        own ``version`` key managed by the service-side migration layer
-        (``StateService._migrate_loaded_state``). Adapters do dumb I/O.
-        """
-        state_path = os.path.join(self._runtime_dir, "save_sync_state.json")
-        self._locked_write(state_path, data)
 
     def load_save_sync_state(self) -> dict | None:
         """Read ``save_sync_state.json`` and return the raw dict.
 
         Returns ``None`` when the file is missing, corrupt, or not a
-        JSON object — callers (``StateService.load_state``) treat that
-        as "first run, keep defaults". Migrations on the returned payload
-        live in the service layer.
+        JSON object. The sole remaining caller is the one-time settings
+        fold in ``bootstrap`` (``fold_legacy_save_sync_settings``), which
+        lifts the legacy save-sync toggles + device label out of this
+        file into ``settings.json``.
         """
         state_path = os.path.join(self._runtime_dir, "save_sync_state.json")
         try:
@@ -275,24 +177,6 @@ class PersistenceAdapter:
         if not isinstance(loaded, dict):
             return None
         return loaded
-
-
-class StatePersisterAdapter:
-    """Adapter view exposing the ``StatePersister`` Protocol.
-
-    Binds a :class:`PersistenceAdapter` and the live ``state`` dict so
-    services receive a zero-arg ``save_state()`` seam without any
-    knowledge of the underlying file or dict payload. Lives in the
-    adapters layer so services depend only on the Protocol, never on
-    this class.
-    """
-
-    def __init__(self, persistence: PersistenceAdapter, state: PluginState) -> None:
-        self._persistence = persistence
-        self._state = state
-
-    def save_state(self) -> None:
-        self._persistence.save_state(cast("dict", self._state))
 
 
 class SettingsPersisterAdapter:
@@ -310,42 +194,6 @@ class SettingsPersisterAdapter:
 
     def save_settings(self) -> None:
         self._persistence.save_settings(self._settings)
-
-
-class MetadataCachePersisterAdapter:
-    """Adapter view exposing the ``MetadataCachePersister`` Protocol.
-
-    Binds a :class:`PersistenceAdapter` and the live ``metadata_cache``
-    dict so services receive a zero-arg ``save_metadata()`` seam. Lives
-    in the adapters layer so services depend only on the Protocol,
-    never on this class.
-    """
-
-    def __init__(self, persistence: PersistenceAdapter, metadata_cache: MetadataCache) -> None:
-        self._persistence = persistence
-        self._metadata_cache = metadata_cache
-
-    def save_metadata(self) -> None:
-        self._persistence.save_metadata_cache(cast("dict", self._metadata_cache))
-
-
-class SaveSyncStatePersisterAdapter:
-    """Adapter view exposing the ``SaveSyncStatePersister`` Protocol.
-
-    Wraps a :class:`PersistenceAdapter` and forwards ``save`` / ``load``
-    to its ``save_save_sync_state`` / ``load_save_sync_state`` methods.
-    Lives in the adapters layer so services depend only on the Protocol,
-    never on this class.
-    """
-
-    def __init__(self, persistence: PersistenceAdapter) -> None:
-        self._persistence = persistence
-
-    def save(self, data: dict) -> None:
-        self._persistence.save_save_sync_state(data)
-
-    def load(self) -> dict | None:
-        return self._persistence.load_save_sync_state()
 
 
 class FirmwareCachePersisterAdapter:

@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import cast
 
-from models.state import MetadataCache, PluginState, make_default_plugin_state
+from models.state import PluginState, make_default_plugin_state
 
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
@@ -26,16 +26,12 @@ from adapters.download_file import DownloadFileAdapter
 from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
-from adapters.metadata_cache_store import MetadataCacheStoreAdapter
 from adapters.migration_file import MigrationFileAdapter
 from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import (
     FirmwareCachePersisterAdapter,
-    MetadataCachePersisterAdapter,
     PersistenceAdapter,
-    SaveSyncStatePersisterAdapter,
     SettingsPersisterAdapter,
-    StatePersisterAdapter,
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
 from adapters.repositories.unit_of_work import SqliteUnitOfWork
@@ -52,8 +48,7 @@ from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
-from domain.save_state import SaveSyncState
-from domain.state_migrations import fold_legacy_save_sync_settings, migrate_settings, migrate_state
+from domain.state_migrations import fold_legacy_save_sync_settings, migrate_settings
 from lib.late_binding import LateBinding
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.artwork import ArtworkService, ArtworkServiceConfig
@@ -79,8 +74,6 @@ from services.protocols import (
     FirmwareFileStore,
     GamelistXmlEditor,
     HostnameReader,
-    MetadataCachePersister,
-    MetadataCacheStore,
     MigrationFileStore,
     PathExistsReader,
     PluginMetadataReader,
@@ -89,11 +82,9 @@ from services.protocols import (
     RomFileStore,
     RommApi,
     SaveFileStore,
-    SaveSyncStatePersister,
     SettingsPersister,
     SgdbArtworkCache,
     Sleeper,
-    StatePersister,
     SteamConfigStore,
     UnitOfWorkFactory,
     UuidGen,
@@ -123,6 +114,27 @@ def _default_state() -> PluginState:
     return make_default_plugin_state()
 
 
+def _load_downloaded_bios(runtime_dir: str) -> PluginState:
+    """Read the residual ``downloaded_bios`` index from ``state.json``.
+
+    Post-cutover (#784) the only key still read out of the legacy
+    ``state.json`` is ``downloaded_bios`` — MigrationService consults it
+    when the RetroDECK home path changes. This is a one-shot startup read
+    with no lock or backup machinery: a missing, corrupt, non-object, or
+    ``downloaded_bios``-less file yields the empty default.
+    """
+    state = _default_state()
+    state_path = os.path.join(runtime_dir, "state.json")
+    try:
+        with open(state_path) as f:
+            loaded = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return state
+    if isinstance(loaded, dict) and isinstance(loaded.get("downloaded_bios"), dict):
+        state["downloaded_bios"] = loaded["downloaded_bios"]
+    return state
+
+
 @dataclass(frozen=True)
 class AdapterBundle:
     """Concrete I/O adapters wired into services."""
@@ -149,8 +161,6 @@ class StateBundle:
 
     state: PluginState
     settings: dict
-    metadata_cache: MetadataCache
-    save_sync_state: SaveSyncState
 
 
 @dataclass(frozen=True)
@@ -175,12 +185,8 @@ class CallbackBundle:
     retrodeck_paths: RetroDeckPaths
     get_retroarch_save_sorting: RetroArchSaveSortingProvider
     get_core_name: CoreNameProviderFn
-    state_persister: StatePersister
     settings_persister: SettingsPersister
-    metadata_cache_persister: MetadataCachePersister
     firmware_cache_persister: FirmwareCachePersister
-    save_sync_state_persister: SaveSyncStatePersister
-    metadata_store: MetadataCacheStore
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
     uow_factory: UnitOfWorkFactory
@@ -263,13 +269,12 @@ def bootstrap(
     """Build every adapter and bundle the composition root hands to ``main.py``.
 
     Bootstrap owns adapter instantiation and is the only path that
-    constructs ``PersistenceAdapter``. Settings, plugin state, and the
-    metadata cache are loaded + migrated inside here so the three
-    domain-specific persister adapters (``StatePersisterAdapter`` /
-    ``SettingsPersisterAdapter`` / ``MetadataCachePersisterAdapter``)
-    bind the live dicts at construction; mutating any of those dicts
-    from the caller side is visible to every adapter/service that
-    holds the same reference.
+    constructs ``PersistenceAdapter``. Settings are loaded + migrated
+    inside here so the ``SettingsPersisterAdapter`` binds the live dict
+    at construction; mutating that dict from the caller side is visible
+    to every adapter/service that holds the same reference. The residual
+    ``downloaded_bios`` index is read once from ``state.json`` into
+    :class:`PluginState`.
 
     Parameters
     ----------
@@ -321,7 +326,6 @@ def bootstrap(
 
     persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
     firmware_cache_persister = FirmwareCachePersisterAdapter(persistence)
-    save_sync_state_persister = SaveSyncStatePersisterAdapter(persistence)
     settings = persistence.load_settings()
     # One-time JSON→JSON lift (ADR-0003): fold the legacy save-sync knobs +
     # device_name out of save_sync_state.json before the schema bump stamps
@@ -331,18 +335,10 @@ def bootstrap(
         settings = fold_legacy_save_sync_settings(settings, persistence.load_save_sync_state())
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
-    # Persistence + migration round-trip through bare ``dict`` because
-    # ``load_state`` / ``migrate_state`` / ``load_metadata_cache`` predate the
-    # TypedDicts and operate on the on-disk JSON shape. Cast down to ``dict``
-    # at the boundary, cast up to ``PluginState`` / ``MetadataCache`` once the
-    # shape is in hand so the rest of bootstrap sees the typed dict.
-    state = cast("PluginState", persistence.load_state(cast("dict", _default_state())))
-    state = cast("PluginState", migrate_state(cast("dict", state)))
-    metadata_cache = cast("MetadataCache", persistence.load_metadata_cache())
-    state_persister = StatePersisterAdapter(persistence, state)
+    # The relational state moved to SQLite (#784); only the residual
+    # ``downloaded_bios`` index is still read from ``state.json`` at startup.
+    state = _load_downloaded_bios(runtime_dir)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
-    metadata_cache_persister = MetadataCachePersisterAdapter(persistence, metadata_cache)
-    metadata_store = MetadataCacheStoreAdapter(metadata_cache=metadata_cache)
     plugin_metadata = PluginMetadataAdapter()
     # Single source of truth for outgoing User-Agent — read package.json
     # version once at boot and thread the string to every HTTP-talking
@@ -366,10 +362,6 @@ def bootstrap(
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
-    # Legacy JSON aggregate — survives only for the not-yet-migrated
-    # PlaytimeService / RomRemovalService playtime reads/writes. The per-ROM
-    # save state lives in SQLite (the rom_save_states repository).
-    save_sync_state = SaveSyncState()
 
     adapters = AdapterBundle(
         http_adapter=http_adapter,
@@ -390,19 +382,13 @@ def bootstrap(
     stores = StateBundle(
         state=state,
         settings=settings,
-        metadata_cache=metadata_cache,
-        save_sync_state=save_sync_state,
     )
     callbacks = CallbackBundle(
         retrodeck_paths=retrodeck_paths,
         get_retroarch_save_sorting=retroarch_config.get_retroarch_save_sorting,
         get_core_name=retroarch_core_info.get_corename,
-        state_persister=state_persister,
         settings_persister=settings_persister,
-        metadata_cache_persister=metadata_cache_persister,
         firmware_cache_persister=firmware_cache_persister,
-        save_sync_state_persister=save_sync_state_persister,
-        metadata_store=metadata_store,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
         uow_factory=uow_factory,
@@ -455,7 +441,6 @@ def wire_services(cfg: WiringConfig) -> dict:
             settings=cfg.stores.settings,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
-            state_persister=cfg.callbacks.state_persister,
             settings_persister=cfg.callbacks.settings_persister,
             emit=cfg.runtime.emit,
             get_bios_files_index=bios_files_index_binding.get,
@@ -471,9 +456,6 @@ def wire_services(cfg: WiringConfig) -> dict:
         romm_api=cfg.adapters.romm_api,
         retry=cfg.adapters.http_adapter,
         settings=cfg.stores.settings,
-        state=cfg.stores.state,
-        save_sync_state=cfg.stores.save_sync_state,
-        save_sync_state_persister=cfg.callbacks.save_sync_state_persister,
         settings_persister=cfg.callbacks.settings_persister,
         save_file_store=cfg.adapters.save_file_store,
         loop=cfg.runtime.loop,
@@ -521,7 +503,6 @@ def wire_services(cfg: WiringConfig) -> dict:
             romm_api=cfg.adapters.romm_api,
             steam_config=cfg.adapters.steam_config,
             cover_art_file_store=cfg.adapters.cover_art_file_store,
-            state=cfg.stores.state,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             get_pending_sync=pending_sync_binding.get,
@@ -543,9 +524,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         config=LibraryServiceConfig(
             romm_api=cfg.adapters.romm_api,
             steam_config=cfg.adapters.steam_config,
-            state=cfg.stores.state,
             settings=cfg.stores.settings,
-            metadata_cache=cfg.stores.metadata_cache,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             plugin_dir=cfg.runtime.plugin_dir,
@@ -611,7 +590,6 @@ def wire_services(cfg: WiringConfig) -> dict:
             romm_api=cfg.adapters.romm_api,
             steam_config=cfg.adapters.steam_config,
             sgdb_artwork_cache=cfg.adapters.sgdb_artwork_cache,
-            state=cfg.stores.state,
             settings=cfg.stores.settings,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,

@@ -15,14 +15,11 @@ from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
-from adapters.persistence import PersistenceAdapter, SaveSyncStatePersisterAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom_save_state import FileSyncState
-from domain.save_state import SaveSyncState
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
@@ -41,8 +38,6 @@ def plugin(tmp_path):
         "enabled_platforms": {},
         "log_level": "warn",
     }
-    p._state = make_default_plugin_state()
-    p._metadata_cache = {}
 
     import decky
 
@@ -59,9 +54,7 @@ def plugin(tmp_path):
         config=LibraryServiceConfig(
             romm_api=MagicMock(),
             steam_config=steam_config,
-            state=p._state,
             settings=p.settings,
-            metadata_cache=p._metadata_cache,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             plugin_dir=decky.DECKY_PLUGIN_DIR,
@@ -79,7 +72,6 @@ def plugin(tmp_path):
 
     # Wire services with FakeSaveApi
     fake_api = FakeSaveApi()
-    p._save_sync_state = SaveSyncState()
     saves_path = str(tmp_path / "retrodeck" / "saves")
 
     p._save_sync_service = SaveService(
@@ -87,18 +79,9 @@ def plugin(tmp_path):
             romm_api=fake_api,
             retry=_make_retry(),
             settings={"log_level": "debug"},
-            state=p._state,
-            save_sync_state=p._save_sync_state,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
             clock=FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC)),
-            save_sync_state_persister=SaveSyncStatePersisterAdapter(
-                PersistenceAdapter(
-                    settings_dir=str(tmp_path),
-                    runtime_dir=str(tmp_path),
-                    logger=logging.getLogger("test"),
-                )
-            ),
             settings_persister=MagicMock(),
             save_file_store=SaveFileAdapter(),
             retrodeck_paths=FakeRetroDeckPaths(
@@ -117,7 +100,6 @@ def plugin(tmp_path):
             uow_factory=FakeUnitOfWorkFactory(),
         ),
     )
-    p._save_sync_service.init_state()
 
     p._playtime_service = PlaytimeService(
         config=PlaytimeServiceConfig(

@@ -986,10 +986,8 @@ class TestCollectionSyncEdgeCases:
         only ROM A appears in shortcuts_data (via collection). ROM B has no
         source and must be classified as stale.
         """
-        svc = plugin._sync_service
-
         # Registry after first sync
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001),
             "2": _make_registry_entry("ROM B", "Game Boy Advance", app_id=1002),
         }
@@ -1009,7 +1007,7 @@ class TestCollectionSyncEdgeCases:
         fetched_platform_names = set()
 
         new, _changed, unchanged_ids, stale, _disabled_count = classify_roms(
-            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
+            shortcuts_data, registry, fetched_platform_names
         )
 
         assert 1 in unchanged_ids, "ROM A should be unchanged (collection keeps it alive)"
@@ -1027,10 +1025,8 @@ class TestCollectionSyncEdgeCases:
         Platform GBA enabled → ROM A stays. PSX not enabled and Favorites
         collection disabled → ROM C has no source and is stale.
         """
-        svc = plugin._sync_service
-
         # Registry after first sync: ROM A (GBA via platform), ROM C (PSX via collection)
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001, platform_slug="gba"),
             "3": _make_registry_entry("ROM C", "PlayStation", app_id=1003, platform_slug="psx"),
         }
@@ -1049,7 +1045,7 @@ class TestCollectionSyncEdgeCases:
         fetched_platform_names = {"Game Boy Advance"}
 
         new, _changed, unchanged_ids, stale, disabled_count = classify_roms(
-            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
+            shortcuts_data, registry, fetched_platform_names
         )
 
         assert 1 in unchanged_ids, "ROM A should be unchanged (platform still enabled)"
@@ -1064,9 +1060,7 @@ class TestCollectionSyncEdgeCases:
 
     def test_sc3_rom_stays_alive_when_one_of_two_collections_disabled(self, plugin):
         """ROM A stays because RPG collection still references it even after Favorites is disabled."""
-        svc = plugin._sync_service
-
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001),
         }
 
@@ -1083,7 +1077,7 @@ class TestCollectionSyncEdgeCases:
         fetched_platform_names = set()
 
         _new, _changed, unchanged_ids, stale, _disabled_count = classify_roms(
-            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
+            shortcuts_data, registry, fetched_platform_names
         )
 
         assert 1 in unchanged_ids, "ROM A should stay alive via RPG collection"
@@ -1171,9 +1165,7 @@ class TestCollectionSyncEdgeCases:
 
     def test_sc8_rom_becomes_stale_when_no_source_references_it(self, plugin):
         """ROM A classified as stale when neither platform nor collection brings it in."""
-        svc = plugin._sync_service
-
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("ROM A", "Game Boy Advance", app_id=1001),
         }
 
@@ -1182,7 +1174,7 @@ class TestCollectionSyncEdgeCases:
         fetched_platform_names: set = set()
 
         new, changed, unchanged_ids, stale, _disabled_count = classify_roms(
-            shortcuts_data, svc._state["shortcut_registry"], fetched_platform_names
+            shortcuts_data, registry, fetched_platform_names
         )
 
         assert 1 in stale
@@ -1226,8 +1218,7 @@ class TestCollectionSyncEdgeCases:
 
     def test_classify_roms_new_when_not_in_registry(self, plugin):
         """ROMs not present in the registry at all are classified as new."""
-        svc = plugin._sync_service
-        svc._state["shortcut_registry"] = {}
+        registry = {}
 
         shortcuts_data = [
             {
@@ -1239,9 +1230,7 @@ class TestCollectionSyncEdgeCases:
             }
         ]
 
-        new, changed, unchanged_ids, stale, _disabled_count = classify_roms(
-            shortcuts_data, svc._state["shortcut_registry"], {"GBA"}
-        )
+        new, changed, unchanged_ids, stale, _disabled_count = classify_roms(shortcuts_data, registry, {"GBA"})
 
         assert len(new) == 1
         assert new[0]["rom_id"] == 1
@@ -1251,8 +1240,7 @@ class TestCollectionSyncEdgeCases:
 
     def test_classify_roms_changed_when_name_differs(self, plugin):
         """ROMs whose name changed since last sync are classified as changed."""
-        svc = plugin._sync_service
-        svc._state["shortcut_registry"] = {
+        registry = {
             "1": _make_registry_entry("Old Name", "GBA", app_id=1001),
         }
 
@@ -1266,9 +1254,7 @@ class TestCollectionSyncEdgeCases:
             }
         ]
 
-        new, changed, unchanged_ids, _stale, _disabled_count = classify_roms(
-            shortcuts_data, svc._state["shortcut_registry"], {"GBA"}
-        )
+        new, changed, unchanged_ids, _stale, _disabled_count = classify_roms(shortcuts_data, registry, {"GBA"})
 
         assert len(changed) == 1
         assert changed[0]["rom_id"] == 1
