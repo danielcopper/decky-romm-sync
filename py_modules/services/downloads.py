@@ -217,14 +217,16 @@ class DownloadService:
         self._download_tasks[rom_id] = task
         return {"success": True, "message": "Download started"}
 
-    def _record_install_io(self, *, rom_id, rom_detail, file_path, install_path, system, cleanup):
+    def _record_install_io(self, *, rom_id, rom_detail, file_path, rom_dir, system, cleanup):
         """Build the ``RomInstall`` aggregate and persist it in a short write UoW.
 
         The filesystem work (rename, extraction, M3U detection) has already run
         outside any transaction; only the ``RomInstall`` upsert is wrapped here
-        (ADR-0006). If the RomM data fails the aggregate's invariant
-        (non-positive ``rom_id``), nothing is persisted, *cleanup* removes the
-        just-installed artifact, and a failure message is returned.
+        (ADR-0006). ``rom_dir`` is the dedicated extract directory for a
+        multi-file ROM, or ``None`` for a single-file ROM (which owns no folder).
+        If the RomM data fails the aggregate's invariant (non-positive
+        ``rom_id``), nothing is persisted, *cleanup* removes the just-installed
+        artifact, and a failure message is returned.
 
         Returns ``(file_path, None)`` on success or ``(None, error)`` when the
         invariant rejects the data.
@@ -233,7 +235,7 @@ class DownloadService:
             install = RomInstall.mark_installed(
                 rom_id=int(rom_id),
                 file_path=file_path,
-                install_path=install_path,
+                rom_dir=rom_dir,
                 platform_slug=rom_detail.get("platform_slug", ""),
                 system=system,
                 installed_at=self._clock.now().isoformat(),
@@ -272,7 +274,7 @@ class DownloadService:
             rom_id=rom_id,
             rom_detail=rom_detail,
             file_path=launch_file,
-            install_path=extract_dir,
+            rom_dir=extract_dir,
             system=system,
             cleanup=lambda: self._download_file_store.remove_tree(extract_dir),
         )
@@ -291,7 +293,7 @@ class DownloadService:
             rom_id=rom_id,
             rom_detail=rom_detail,
             file_path=target_path,
-            install_path=os.path.dirname(target_path),
+            rom_dir=None,
             system=system,
             cleanup=lambda: self._download_file_store.remove_file(target_path),
         )

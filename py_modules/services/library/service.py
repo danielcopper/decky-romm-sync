@@ -143,7 +143,6 @@ class LibraryService:
         self._reporter = SyncReporter(
             config=SyncReporterConfig(
                 steam_config=config.steam_config,
-                state=config.state,
                 settings=config.settings,
                 loop=config.loop,
                 logger=config.logger,

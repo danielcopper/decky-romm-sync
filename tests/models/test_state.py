@@ -12,8 +12,6 @@ class TestMakeDefaultPluginState:
         "last_sync",
         "sync_stats",
         "downloaded_bios",
-        "retrodeck_home_path",
-        "save_sort_settings",
     }
 
     def test_returns_all_required_keys(self):
@@ -27,8 +25,6 @@ class TestMakeDefaultPluginState:
         assert state["last_sync"] is None
         assert state["sync_stats"] == {"platforms": 0, "roms": 0}
         assert state["downloaded_bios"] == {}
-        assert state["retrodeck_home_path"] == ""
-        assert state["save_sort_settings"] is None
 
     def test_sync_stats_zero_initialised(self):
         state = make_default_plugin_state()
@@ -69,7 +65,5 @@ class TestMakeDefaultPluginState:
     def test_transient_keys_absent_by_default(self):
         """NotRequired keys must be absent until a particular event populates them."""
         state = make_default_plugin_state()
-        assert "retrodeck_home_path_previous" not in state
-        assert "save_sort_settings_previous" not in state
         assert "last_synced_collections" not in state
         assert "last_synced_platforms" not in state

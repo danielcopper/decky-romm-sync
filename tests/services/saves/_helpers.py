@@ -218,7 +218,7 @@ def _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba"
             RomInstall.mark_installed(
                 rom_id=rom_id,
                 file_path=str(tmp_path / "retrodeck" / "roms" / system / file_name),
-                install_path=str(tmp_path / "retrodeck" / "roms" / system),
+                rom_dir=None,
                 platform_slug=system,
                 system=system,
                 installed_at="2026-01-01T00:00:00",
@@ -227,7 +227,7 @@ def _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba"
 
 
 def _seed_install(
-    svc, rom_id: int, *, file_path: str, system: str, platform_slug: str, install_path: str = "", allow_empty=False
+    svc, rom_id: int, *, file_path: str, system: str, platform_slug: str, rom_dir: str | None = None, allow_empty=False
 ) -> None:
     """Seed a ``RomInstall`` with arbitrary fields (for path/system edge-case tests).
 
@@ -239,7 +239,7 @@ def _seed_install(
     install = RomInstall(
         rom_id=rom_id,
         file_path=file_path,
-        install_path=install_path,
+        rom_dir=rom_dir,
         platform_slug=platform_slug,
         system=system,
         installed_at="2026-01-01T00:00:00",
@@ -315,6 +315,22 @@ def _get_device_id(svc) -> str | None:
     """Read the persisted server device id from ``kv_config``."""
     with _uow(svc) as uow:
         return uow.kv_config.get("device_id")
+
+
+def _set_sort_settings(svc, settings: dict) -> None:
+    """Seed the last-seen save-sort observation marker in ``kv_config``."""
+    import json
+
+    with _uow(svc) as uow:
+        uow.kv_config.set("save_sort_settings", json.dumps(settings))
+
+
+def _set_sort_settings_previous(svc, settings: dict) -> None:
+    """Seed the pending pre-change save-sort marker in ``kv_config``."""
+    import json
+
+    with _uow(svc) as uow:
+        uow.kv_config.set("save_sort_settings_previous", json.dumps(settings))
 
 
 def _server_save_with_syncs(

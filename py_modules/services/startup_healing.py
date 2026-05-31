@@ -14,8 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain.installed_roms import is_pending_migration_path
 
 if TYPE_CHECKING:
@@ -33,16 +31,14 @@ if TYPE_CHECKING:
 class StartupHealingServiceConfig:
     """Frozen wiring bundle handed to ``StartupHealingService.__init__``.
 
-    Carries the live state dict (read only for the pending-migration
-    previous home), the runtime logger, the clock, the bundled RetroDECK
-    paths provider, the generic path-exists probe, and the SQLite
-    Unit-of-Work factory (the transactional seam over the ``rom_installs``
-    and ``sync_runs`` repositories). Bundled here so the ctor stays within
-    the S107 parameter budget and the service stays free of raw
-    filesystem I/O.
+    Carries the runtime logger, the clock, the bundled RetroDECK paths
+    provider, the generic path-exists probe, and the SQLite Unit-of-Work
+    factory (the transactional seam over the ``rom_installs``, ``sync_runs``,
+    and ``kv_config`` repositories — the last holding the pending-migration
+    previous home marker). Bundled here so the ctor stays within the S107
+    parameter budget and the service stays free of raw filesystem I/O.
     """
 
-    state: PluginState
     logger: logging.Logger
     clock: Clock
     retrodeck_paths: RetroDeckPaths
@@ -54,7 +50,6 @@ class StartupHealingService:
     """Reconciles persisted ``rom_installs`` against disk and heals orphaned ``SyncRun``s."""
 
     def __init__(self, *, config: StartupHealingServiceConfig) -> None:
-        self._state = config.state
         self._logger = config.logger
         self._clock = config.clock
         self._retrodeck_paths = config.retrodeck_paths
@@ -81,18 +76,15 @@ class StartupHealingService:
 
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
-
-        pending_home = self._state.get("retrodeck_home_path_previous", "")
+            pending_home = uow.kv_config.get("retrodeck_home_path_previous") or ""
         stale: list[int] = []
         for install in installs:
             file_path = install.file_path
-            install_path = install.install_path
-            if is_pending_migration_path(file_path, install_path, pending_home):
+            rom_dir = install.rom_dir
+            if is_pending_migration_path(file_path, rom_dir, pending_home):
                 self._logger.info(f"Skipping prune of {install.rom_id} ({file_path}): pending migration")
                 continue
-            if (file_path and self._path_probe.exists(file_path)) or (
-                install_path and self._path_probe.exists(install_path)
-            ):
+            if (file_path and self._path_probe.exists(file_path)) or (rom_dir and self._path_probe.exists(rom_dir)):
                 continue
             self._logger.info(f"Pruned stale installed_roms entry: {install.rom_id} ({file_path})")
             stale.append(install.rom_id)

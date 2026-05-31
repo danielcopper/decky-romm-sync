@@ -75,7 +75,6 @@ class SaveService:
 
         self._rom_info = RomInfoService(
             config=RomInfoServiceConfig(
-                state=config.state,
                 uow_factory=config.uow_factory,
                 save_file_store=config.save_file_store,
                 retrodeck_paths=config.retrodeck_paths,

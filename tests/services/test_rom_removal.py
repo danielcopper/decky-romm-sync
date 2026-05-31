@@ -75,11 +75,11 @@ def _make_rom(rom_id: int, *, platform_slug: str = "n64") -> Rom:
     )
 
 
-def _make_install(rom_id: int, *, file_path: str, install_path: str, system: str = "n64") -> RomInstall:
+def _make_install(rom_id: int, *, file_path: str, rom_dir: str | None = None, system: str = "n64") -> RomInstall:
     return RomInstall.mark_installed(
         rom_id=rom_id,
         file_path=file_path,
-        install_path=install_path,
+        rom_dir=rom_dir,
         platform_slug=system,
         system=system,
         installed_at="2025-01-01T00:00:00",
@@ -98,11 +98,11 @@ class TestDeleteRomFiles:
         rom_path = f"{_ROMS_BASE}/n64/game.z64"
         rom_files.files[rom_path] = b"\x00" * 100
 
-        service._delete_rom_files(_make_install(1, file_path=rom_path, install_path=f"{_ROMS_BASE}/n64"))
+        service._delete_rom_files(_make_install(1, file_path=rom_path))
 
         assert rom_path not in rom_files.files
         assert rom_files.remove_file_calls == [rom_path]
-        # The shared system dir (install_path) is never trees-removed for a single-file ROM.
+        # A single-file ROM has no rom_dir, so no directory tree is ever removed.
         assert rom_files.remove_tree_calls == []
 
     def test_deletes_rom_dir(self, service, rom_files):
@@ -110,18 +110,18 @@ class TestDeleteRomFiles:
         rom_files.files[f"{rom_dir}/disc1.cue"] = b"cue"
         rom_files.files[f"{rom_dir}/disc1.bin"] = b"\x00" * 100
 
-        service._delete_rom_files(_make_install(1, file_path=f"{rom_dir}/FF7.m3u", install_path=rom_dir, system="psx"))
+        service._delete_rom_files(_make_install(1, file_path=f"{rom_dir}/FF7.m3u", rom_dir=rom_dir, system="psx"))
 
         assert f"{rom_dir}/disc1.cue" not in rom_files.files
         assert f"{rom_dir}/disc1.bin" not in rom_files.files
         assert rom_files.remove_tree_calls == [rom_dir]
 
-    def test_single_file_install_path_is_shared_system_dir_not_removed(self, service, rom_files):
-        """Guard (D3 / downloads.py:294): a single-file install_path is the shared ``<roms>/<system>`` dir.
+    def test_single_file_owns_no_dir_so_system_dir_not_removed(self, service, rom_files):
+        """A single-file ROM (``rom_dir`` is ``None``) lives in the shared ``<roms>/<system>`` dir.
 
-        It is only one segment below the roms base, so ``is_safe_rom_path`` rejects
-        it and the directory tree is never removed — only the launch file is.
-        Deleting the system dir would wipe the whole platform's folder.
+        With no ``rom_dir`` set, the directory tree is never removed — only the
+        launch file is deleted. Removing the shared system dir would wipe the
+        whole platform's folder.
         """
         system_dir = f"{_ROMS_BASE}/n64"
         rom_path = f"{system_dir}/game.z64"
@@ -130,7 +130,7 @@ class TestDeleteRomFiles:
         rom_files.files[sibling] = b"\x00" * 100
         rom_files.dirs.add(system_dir)
 
-        service._delete_rom_files(_make_install(1, file_path=rom_path, install_path=system_dir))
+        service._delete_rom_files(_make_install(1, file_path=rom_path, rom_dir=None))
 
         assert rom_path not in rom_files.files
         assert sibling in rom_files.files  # the platform's other ROM survives
@@ -141,7 +141,7 @@ class TestDeleteRomFiles:
         evil = "/evil/important.txt"
         rom_files.files[evil] = b"do not delete"
 
-        service._delete_rom_files(_make_install(1, file_path=evil, install_path="/evil"))
+        service._delete_rom_files(_make_install(1, file_path=evil, rom_dir=None))
 
         assert evil in rom_files.files
         assert rom_files.remove_file_calls == []
@@ -151,20 +151,18 @@ class TestDeleteRomFiles:
         evil_dir = "/evil/dir"
         rom_files.files[f"{evil_dir}/file.txt"] = b"important"
 
-        service._delete_rom_files(_make_install(1, file_path="", install_path=evil_dir))
+        service._delete_rom_files(_make_install(1, file_path="", rom_dir=evil_dir))
 
         assert f"{evil_dir}/file.txt" in rom_files.files
         assert rom_files.remove_tree_calls == []
 
     def test_missing_file_no_crash(self, service):
         # File doesn't exist — should not raise and should not call any I/O
-        service._delete_rom_files(
-            _make_install(1, file_path=f"{_ROMS_BASE}/n64/gone.z64", install_path=f"{_ROMS_BASE}/n64")
-        )
+        service._delete_rom_files(_make_install(1, file_path=f"{_ROMS_BASE}/n64/gone.z64"))
 
     def test_empty_paths_no_crash(self, service):
-        # No file_path, no install_path
-        service._delete_rom_files(_make_install(1, file_path="", install_path=""))
+        # No file_path, no rom_dir
+        service._delete_rom_files(_make_install(1, file_path="", rom_dir=None))
 
 
 class TestRemoveRom:
@@ -172,7 +170,7 @@ class TestRemoveRom:
     async def test_removes_file_and_clears_install_record(self, service, uow, rom_files):
         rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
         rom_files.files[rom_path] = b"\x00" * 100
-        _seed_install(uow, _make_install(42, file_path=rom_path, install_path=f"{_ROMS_BASE}/n64"))
+        _seed_install(uow, _make_install(42, file_path=rom_path))
 
         result = await service.remove_rom(42)
 
@@ -191,7 +189,7 @@ class TestRemoveRom:
     async def test_accepts_string_rom_id(self, service, uow, rom_files):
         rom_path = f"{_ROMS_BASE}/n64/game.z64"
         rom_files.files[rom_path] = b"\x00" * 100
-        _seed_install(uow, _make_install(7, file_path=rom_path, install_path=f"{_ROMS_BASE}/n64"))
+        _seed_install(uow, _make_install(7, file_path=rom_path))
 
         result = await service.remove_rom("7")
 
@@ -203,7 +201,7 @@ class TestRemoveRom:
         """Edge: the file is already gone on disk → the install record is still dropped."""
         _seed_install(
             uow,
-            _make_install(42, file_path=f"{_ROMS_BASE}/n64/gone.z64", install_path=f"{_ROMS_BASE}/n64"),
+            _make_install(42, file_path=f"{_ROMS_BASE}/n64/gone.z64"),
         )
 
         result = await service.remove_rom(42)
@@ -227,7 +225,7 @@ class TestRemoveRom:
         save_state = RomSaveState(active_slot="default", slot_confirmed=True)
         with uow:
             uow.roms.save(_make_rom(42))
-            uow.rom_installs.save(_make_install(42, file_path=rom_path, install_path=f"{_ROMS_BASE}/n64"))
+            uow.rom_installs.save(_make_install(42, file_path=rom_path))
             uow.playtime.save(42, playtime)
             uow.rom_save_states.save(42, save_state)
 
@@ -256,7 +254,7 @@ class TestRemoveRom:
         rom_files.dirs.add(f"{_ROMS_BASE}/psx")
         _seed_install(
             uow,
-            _make_install(42, file_path=f"{rom_dir}/FF7.m3u", install_path=rom_dir, system="psx"),
+            _make_install(42, file_path=f"{rom_dir}/FF7.m3u", rom_dir=rom_dir, system="psx"),
             platform_slug="psx",
         )
 
@@ -272,7 +270,7 @@ class TestRemoveRom:
     async def test_path_traversal_rejected_record_still_deleted(self, service, uow, rom_files):
         evil = "/etc/passwd"
         rom_files.files[evil] = b"root:x:0:0"
-        _seed_install(uow, _make_install(99, file_path=evil, install_path="/etc"))
+        _seed_install(uow, _make_install(99, file_path=evil, rom_dir=None))
 
         result = await service.remove_rom(99)
 
@@ -282,14 +280,14 @@ class TestRemoveRom:
 
     @pytest.mark.asyncio
     async def test_removes_nested_single_file_entry(self, service, uow, rom_files):
-        """Nested-single-file installs (#226): the resolved filename is in file_path; install_path is the system dir."""
+        """Nested-single-file installs (#226): the resolved filename is in file_path; rom_dir is None (no folder)."""
         system_dir = f"{_ROMS_BASE}/dc"
         rom_path = f"{system_dir}/Resident Evil.chd"
         rom_files.files[rom_path] = b"\x00" * 100
         rom_files.dirs.add(system_dir)
         _seed_install(
             uow,
-            _make_install(42, file_path=rom_path, install_path=system_dir, system="dc"),
+            _make_install(42, file_path=rom_path, rom_dir=None, system="dc"),
             platform_slug="dc",
         )
 
@@ -312,8 +310,8 @@ class TestUninstallAllRoms:
         with uow:
             uow.roms.save(_make_rom(1))
             uow.roms.save(_make_rom(2))
-            uow.rom_installs.save(_make_install(1, file_path=file_a, install_path=f"{_ROMS_BASE}/n64"))
-            uow.rom_installs.save(_make_install(2, file_path=file_b, install_path=f"{_ROMS_BASE}/n64"))
+            uow.rom_installs.save(_make_install(1, file_path=file_a))
+            uow.rom_installs.save(_make_install(2, file_path=file_b))
 
         result = await service.uninstall_all_roms()
 
@@ -325,9 +323,7 @@ class TestUninstallAllRoms:
 
     @pytest.mark.asyncio
     async def test_clears_records_even_if_files_missing(self, service, uow):
-        _seed_install(
-            uow, _make_install(1, file_path=f"{_ROMS_BASE}/n64/nonexistent.z64", install_path=f"{_ROMS_BASE}/n64")
-        )
+        _seed_install(uow, _make_install(1, file_path=f"{_ROMS_BASE}/n64/nonexistent.z64"))
 
         result = await service.uninstall_all_roms()
         assert result["success"] is True
@@ -355,8 +351,8 @@ class TestUninstallAllRoms:
         with uow:
             uow.roms.save(_make_rom(1))
             uow.roms.save(_make_rom(2))
-            uow.rom_installs.save(_make_install(1, file_path=file_a, install_path=f"{_ROMS_BASE}/n64"))
-            uow.rom_installs.save(_make_install(2, file_path=file_b, install_path=f"{_ROMS_BASE}/n64"))
+            uow.rom_installs.save(_make_install(1, file_path=file_a))
+            uow.rom_installs.save(_make_install(2, file_path=file_b))
             uow.playtime.save(1, Playtime(total_seconds=100, session_count=1))
             uow.playtime.save(2, Playtime(total_seconds=200, session_count=1))
 
@@ -379,7 +375,7 @@ class TestUninstallAllRoms:
         rom_files.files[f"{rom_dir}/disc1.bin"] = b"\x00" * 100
         _seed_install(
             uow,
-            _make_install(1, file_path=f"{rom_dir}/FF7.m3u", install_path=rom_dir, system="psx"),
+            _make_install(1, file_path=f"{rom_dir}/FF7.m3u", rom_dir=rom_dir, system="psx"),
             platform_slug="psx",
         )
 
@@ -397,8 +393,8 @@ class TestUninstallAllRoms:
         with uow:
             uow.roms.save(_make_rom(1))
             uow.roms.save(_make_rom(2, platform_slug="snes"))
-            uow.rom_installs.save(_make_install(1, file_path=good_file, install_path=f"{_ROMS_BASE}/n64"))
-            uow.rom_installs.save(_make_install(2, file_path=bad_file, install_path="/outside", system="snes"))
+            uow.rom_installs.save(_make_install(1, file_path=good_file))
+            uow.rom_installs.save(_make_install(2, file_path=bad_file, rom_dir=None, system="snes"))
 
         result = await service.uninstall_all_roms()
         assert result["success"] is True
@@ -421,9 +417,9 @@ class TestUninstallAllRoms:
             uow.roms.save(_make_rom(1))
             uow.roms.save(_make_rom(2))
             uow.roms.save(_make_rom(3))
-            uow.rom_installs.save(_make_install(1, file_path=file_a, install_path=f"{_ROMS_BASE}/n64"))
-            uow.rom_installs.save(_make_install(2, file_path=file_b, install_path=f"{_ROMS_BASE}/n64"))
-            uow.rom_installs.save(_make_install(3, file_path=file_c, install_path=f"{_ROMS_BASE}/n64"))
+            uow.rom_installs.save(_make_install(1, file_path=file_a))
+            uow.rom_installs.save(_make_install(2, file_path=file_b))
+            uow.rom_installs.save(_make_install(3, file_path=file_c))
 
         result = await service.uninstall_all_roms()
 
@@ -448,7 +444,7 @@ class TestUninstallAllRoms:
         with uow:
             for rid, fp in ((1, file_a), (2, file_b), (3, file_c)):
                 uow.roms.save(_make_rom(rid))
-                uow.rom_installs.save(_make_install(rid, file_path=fp, install_path=f"{_ROMS_BASE}/n64"))
+                uow.rom_installs.save(_make_install(rid, file_path=fp))
 
         result = await service.uninstall_all_roms()
 
@@ -474,7 +470,7 @@ class TestDownloadQueueCleanup:
     async def test_remove_rom_evicts_queue_on_success(self, service, uow, queue_cleanup, rom_files):
         rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
         rom_files.files[rom_path] = b"\x00" * 100
-        _seed_install(uow, _make_install(42, file_path=rom_path, install_path=f"{_ROMS_BASE}/n64"))
+        _seed_install(uow, _make_install(42, file_path=rom_path))
 
         result = await service.remove_rom(42)
         assert result["success"] is True
@@ -491,7 +487,7 @@ class TestDownloadQueueCleanup:
     async def test_uninstall_all_roms_clears_queue(self, service, uow, queue_cleanup, rom_files):
         rom_path = f"{_ROMS_BASE}/n64/game.z64"
         rom_files.files[rom_path] = b"\x00" * 100
-        _seed_install(uow, _make_install(1, file_path=rom_path, install_path=f"{_ROMS_BASE}/n64"))
+        _seed_install(uow, _make_install(1, file_path=rom_path))
 
         result = await service.uninstall_all_roms()
         assert result["success"] is True
@@ -504,7 +500,7 @@ class TestDownloadQueueCleanup:
         uow = FakeUnitOfWork()
         rom_path = f"{_ROMS_BASE}/n64/g.z64"
         rom_files.files[rom_path] = b"\x00" * 100
-        _seed_install(uow, _make_install(7, file_path=rom_path, install_path=f"{_ROMS_BASE}/n64"))
+        _seed_install(uow, _make_install(7, file_path=rom_path))
 
         svc = RomRemovalService(
             config=RomRemovalServiceConfig(
@@ -535,7 +531,7 @@ class TestBadPathRemoveRom:
         rom_files.remove_tree_failures.add(rom_dir)
         _seed_install(
             uow,
-            _make_install(42, file_path=f"{rom_dir}/FF7.m3u", install_path=rom_dir, system="psx"),
+            _make_install(42, file_path=f"{rom_dir}/FF7.m3u", rom_dir=rom_dir, system="psx"),
             platform_slug="psx",
         )
 

@@ -39,7 +39,7 @@ def _seed_install(db_path: str, *, rom_id: int, file_path: str) -> None:
             RomInstall.mark_installed(
                 rom_id=rom_id,
                 file_path=file_path,
-                install_path=os.path.dirname(file_path),
+                rom_dir=None,
                 platform_slug="n64",
                 system="n64",
                 installed_at="2026-02-02T00:00:00+00:00",

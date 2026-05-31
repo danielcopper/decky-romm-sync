@@ -114,15 +114,16 @@ CREATE TABLE roms (
 -- -----------------------------------------------------------------------------
 -- rom_installs — RomInstall aggregate: where a downloaded ROM lives on disk.
 -- Present ONLY while the ROM is downloaded (row created on download-complete,
--- deleted on uninstall). All columns NOT NULL: the row's existence means a
--- complete install record — the all-or-nothing group the split exists to
--- enforce. platform_slug / system are denormalized so migration + save-sort
--- read an install without joining roms.
+-- deleted on uninstall). file_path is always the launch target; rom_dir names
+-- the dedicated per-ROM folder and is NULL for single-file ROMs that own no
+-- folder (presence is the single-vs-multi discriminator, ADR-0008).
+-- platform_slug / system are denormalized so migration + save-sort read an
+-- install without joining roms.
 -- -----------------------------------------------------------------------------
 CREATE TABLE rom_installs (
     rom_id        INTEGER PRIMARY KEY REFERENCES roms(rom_id) ON DELETE CASCADE,
     file_path     TEXT NOT NULL,                    -- the specific launch file
-    install_path  TEXT NOT NULL,                    -- the install directory
+    rom_dir       TEXT,                             -- dedicated per-ROM dir; NULL for single-file ROMs
     platform_slug TEXT NOT NULL,                    -- RomM platform slug (no platforms table)
     system        TEXT NOT NULL,                    -- emulator system slug; plain TEXT (#2, no lookup)
     installed_at  TEXT NOT NULL                     -- ISO-8601

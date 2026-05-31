@@ -64,21 +64,19 @@ class RomRemovalService:
     def _delete_rom_files(self, install: RomInstall) -> None:
         """Delete ROM files for an install record. Handles both single-file and multi-file ROMs.
 
-        A multi-file ROM lives in its own per-ROM directory (``install_path``
-        is two-or-more segments below the roms base) and is removed whole. A
-        single-file ROM's ``install_path`` is the *shared* system directory
-        (``<roms_base>/<system>/``, only one segment below the base), so its
-        directory must **never** be removed — only the launch file itself is
-        deleted. ``is_safe_rom_path`` is the discriminator: it rejects the
-        one-segment system directory, so the ``install_path`` tree branch only
-        ever fires for a genuine per-ROM directory.
+        A multi-file ROM owns a dedicated per-ROM directory (``rom_dir`` is set)
+        and is removed whole. A single-file ROM has no ``rom_dir`` (``None``) —
+        it lives as a bare file in the shared ``<roms_base>/<system>/`` dir,
+        which must **never** be removed — so only the launch file itself is
+        deleted. ``is_safe_rom_path`` stays the path-containment guard before
+        any removal.
         """
-        install_path = install.install_path
+        rom_dir = install.rom_dir
         file_path = install.file_path
 
         roms_base = self._retrodeck_paths.roms_path()
-        if install_path and is_safe_rom_path(install_path, roms_base) and self._rom_file_store.is_dir(install_path):
-            self._rom_file_store.remove_tree(install_path)
+        if rom_dir and is_safe_rom_path(rom_dir, roms_base) and self._rom_file_store.is_dir(rom_dir):
+            self._rom_file_store.remove_tree(rom_dir)
         elif file_path:
             if not is_safe_rom_path(file_path, roms_base):
                 self._logger.error(f"Refusing to delete path outside roms directory: {file_path}")

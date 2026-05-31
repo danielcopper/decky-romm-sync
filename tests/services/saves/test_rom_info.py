@@ -8,6 +8,8 @@ from tests.services.saves._helpers import (
     _create_save,
     _install_rom,
     _seed_install,
+    _set_sort_settings,
+    _set_sort_settings_previous,
     make_service,
 )
 
@@ -45,7 +47,7 @@ class TestFindSaveFiles:
             file_path=str(tmp_path / "retrodeck" / "roms" / "psx" / "FF7" / "Final Fantasy VII.m3u"),
             system="psx",
             platform_slug="psx",
-            install_path=str(tmp_path / "retrodeck" / "roms" / "psx" / "FF7"),
+            rom_dir=str(tmp_path / "retrodeck" / "roms" / "psx" / "FF7"),
         )
         # With sort_by_content=True, saves land in saves_base/{content_dir} where
         # content_dir = last folder component of the ROM's directory = "FF7"
@@ -127,9 +129,9 @@ class TestGetRomSaveInfo:
         )
         _install_rom(svc, tmp_path)
         # NEW layout (what settings currently say):
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
         # OLD layout (what the session actually wrote to):
-        svc._rom_info._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
+        _set_sort_settings_previous(svc, {"sort_by_content": True, "sort_by_core": False})
 
         result = svc._rom_info.get_rom_save_info(42)
 
@@ -146,9 +148,9 @@ class TestGetRomSaveInfo:
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
-        # Only save_sort_settings is present — no pending migration key at all.
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
-        assert "save_sort_settings_previous" not in svc._rom_info._state
+        # Only save_sort_settings is present — no pending migration marker at all.
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
+        assert svc._rom_info.pending_sort_settings() is None
 
         result = svc._rom_info.get_rom_save_info(42)
 
@@ -174,8 +176,8 @@ class TestGetRomSaveInfo:
         )
         _install_rom(svc, tmp_path)
         # Half-state input: empty previous, populated current (NEW).
-        svc._rom_info._state["save_sort_settings_previous"] = cast("SaveSortSettings", {})
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+        _set_sort_settings_previous(svc, cast("SaveSortSettings", {}))
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
 
         # Both call sites must agree there is NO pending migration.
         assert svc._rom_info.is_save_sort_changed() is False
@@ -201,7 +203,7 @@ class TestGetRomSaveInfo:
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": False})
 
         result = svc._rom_info.get_rom_save_info(42)
 
@@ -217,7 +219,7 @@ class TestGetRomSaveInfo:
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
 
         result = svc._rom_info.get_rom_save_info(42)
 
@@ -232,7 +234,7 @@ class TestGetRomSaveInfo:
             get_core_name=lambda core_so: "Snes9x",
         )
         _install_rom(svc, tmp_path, system="snes", file_name="mario.sfc")
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
 
         result = svc._rom_info.get_rom_save_info(42)
 
@@ -252,7 +254,7 @@ class TestGetRomSaveInfo:
             get_core_name=lambda core_so: None,  # .info unreadable / field missing
         )
         _install_rom(svc, tmp_path)
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
 
         with caplog.at_level("WARNING"):
             result = svc._rom_info.get_rom_save_info(42)
@@ -276,7 +278,7 @@ class TestGetRomSaveInfo:
             get_core_name=lambda core_so: None,
         )
         _install_rom(svc, tmp_path)
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
 
         with caplog.at_level("WARNING"):
             result = svc._rom_info.get_rom_save_info(42)
@@ -299,7 +301,7 @@ class TestGetRomSaveInfo:
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": True}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
 
         with caplog.at_level("WARNING"):
             result = svc._rom_info.get_rom_save_info(42)

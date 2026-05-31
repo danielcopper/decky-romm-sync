@@ -23,8 +23,6 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState
-
 from domain.platform_names import decode_platform_names
 from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
@@ -60,19 +58,18 @@ class SyncReporterConfig:
     """Frozen wiring bundle handed to ``SyncReporter.__init__``.
 
     Holds the Protocol-typed Steam-config adapter (used for grid-dir
-    lookup and Steam-Input mode application), the live state/settings
-    dicts, runtime infrastructure (loop, logger), event emitter, clock,
+    lookup and Steam-Input mode application), the live settings dict,
+    runtime infrastructure (loop, logger), event emitter, clock,
     the SQLite Unit-of-Work factory (the transactional seam over the
-    ``roms`` / ``sync_runs`` / ``kv_config`` repositories), the shared
-    ``LibrarySyncStateBox`` (the reporter reads the pending-sync dicts
-    populated by the orchestrator and clears the active sync id when
-    reporting completes), an orchestrator-supplied ``emit_progress``
-    callback for the terminal "done" event, and the ``ArtworkManager``
-    peer used for cover-path finalisation.
+    ``roms`` / ``rom_installs`` / ``sync_runs`` / ``kv_config``
+    repositories), the shared ``LibrarySyncStateBox`` (the reporter reads
+    the pending-sync dicts populated by the orchestrator and clears the
+    active sync id when reporting completes), an orchestrator-supplied
+    ``emit_progress`` callback for the terminal "done" event, and the
+    ``ArtworkManager`` peer used for cover-path finalisation.
     """
 
     steam_config: SteamConfigStore
-    state: PluginState
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -89,7 +86,6 @@ class SyncReporter:
 
     def __init__(self, *, config: SyncReporterConfig) -> None:
         self._steam_config = config.steam_config
-        self._state = config.state
         self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
@@ -491,7 +487,7 @@ class SyncReporter:
             if rom is None:
                 return None
             display = self._read_platform_name_cache(uow).get(rom.platform_slug, rom.platform_slug)
-        installed = self._state["installed_roms"].get(str(rom.rom_id))
+            installed = uow.rom_installs.get(rom.rom_id) is not None
         return {
             "rom_id": rom.rom_id,
             "name": rom.name,

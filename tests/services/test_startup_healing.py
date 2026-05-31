@@ -9,7 +9,6 @@ from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock
-from models.state import PluginState, make_default_plugin_state
 
 from domain.rom import Rom
 from domain.rom_install import RomInstall
@@ -24,10 +23,6 @@ def logger() -> logging.Logger:
     return logging.getLogger("test_startup_healing")
 
 
-def _make_state() -> PluginState:
-    return make_default_plugin_state()
-
-
 def _make_rom(rom_id: int) -> Rom:
     return Rom(
         rom_id=rom_id,
@@ -39,12 +34,12 @@ def _make_rom(rom_id: int) -> Rom:
     )
 
 
-def _seed_install(uow: FakeUnitOfWork, rom_id: int, *, file_path: str, install_path: str = "") -> None:
+def _seed_install(uow: FakeUnitOfWork, rom_id: int, *, file_path: str, rom_dir: str | None = None) -> None:
     """Seed the FK-parent Rom THEN its install record, in one commit."""
     install = RomInstall.mark_installed(
         rom_id=rom_id,
         file_path=file_path,
-        install_path=install_path,
+        rom_dir=rom_dir,
         platform_slug="n64",
         system="n64",
         installed_at="2025-01-01T00:00:00",
@@ -56,7 +51,6 @@ def _seed_install(uow: FakeUnitOfWork, rom_id: int, *, file_path: str, install_p
 
 def _make_service(
     *,
-    state: PluginState,
     logger: logging.Logger,
     retrodeck_home: str = _RETRODECK_HOME,
     path_probe: FakePathExistsReader | None = None,
@@ -66,7 +60,6 @@ def _make_service(
     probe = path_probe if path_probe is not None else FakePathExistsReader(paths={retrodeck_home})
     return StartupHealingService(
         config=StartupHealingServiceConfig(
-            state=state,
             logger=logger,
             clock=clock if clock is not None else FakeClock(),
             retrodeck_paths=FakeRetroDeckPaths(home=retrodeck_home),
@@ -83,7 +76,6 @@ class TestPruneStaleInstalledRoms:
         _seed_install(uow, 1, file_path="/run/media/deck/Emulation/retrodeck/roms/n64/a.z64")
         # path_probe knows nothing — retrodeck home not on disk.
         service = _make_service(
-            state=_make_state(),
             logger=logger,
             path_probe=FakePathExistsReader(),
             uow=uow,
@@ -98,7 +90,6 @@ class TestPruneStaleInstalledRoms:
         uow = FakeUnitOfWork()
         _seed_install(uow, 1, file_path="/somewhere/a.z64")
         service = _make_service(
-            state=_make_state(),
             logger=logger,
             retrodeck_home="",
             path_probe=FakePathExistsReader(),
@@ -110,7 +101,7 @@ class TestPruneStaleInstalledRoms:
     def test_prune_missing_file_path(self, logger):
         uow = FakeUnitOfWork()
         _seed_install(uow, 1, file_path="/nonexistent/game.z64")
-        service = _make_service(state=_make_state(), logger=logger, uow=uow)
+        service = _make_service(logger=logger, uow=uow)
         service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is None
         assert uow.committed is True
@@ -120,17 +111,17 @@ class TestPruneStaleInstalledRoms:
         rom_file = "/run/media/deck/Emulation/retrodeck/roms/n64/game.z64"
         _seed_install(uow, 1, file_path=rom_file)
         probe = FakePathExistsReader(paths={_RETRODECK_HOME, rom_file})
-        service = _make_service(state=_make_state(), logger=logger, path_probe=probe, uow=uow)
+        service = _make_service(logger=logger, path_probe=probe, uow=uow)
         service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is not None
 
-    def test_preserve_via_install_path_fallback(self, logger):
-        """file_path missing but install_path exists → record preserved (PSX multi-file fallback)."""
+    def test_preserve_via_rom_dir_fallback(self, logger):
+        """file_path missing but rom_dir exists → record preserved (PSX multi-file fallback)."""
         uow = FakeUnitOfWork()
-        install_dir = "/run/media/deck/Emulation/retrodeck/roms/psx/FF7"
-        _seed_install(uow, 1, file_path=f"{install_dir}/FF7.m3u", install_path=install_dir)  # file gone
-        probe = FakePathExistsReader(paths={_RETRODECK_HOME, install_dir})
-        service = _make_service(state=_make_state(), logger=logger, path_probe=probe, uow=uow)
+        rom_dir = "/run/media/deck/Emulation/retrodeck/roms/psx/FF7"
+        _seed_install(uow, 1, file_path=f"{rom_dir}/FF7.m3u", rom_dir=rom_dir)  # file gone
+        probe = FakePathExistsReader(paths={_RETRODECK_HOME, rom_dir})
+        service = _make_service(logger=logger, path_probe=probe, uow=uow)
         service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is not None
 
@@ -138,9 +129,9 @@ class TestPruneStaleInstalledRoms:
         """Install under pending migration's previous home → preserved with info log."""
         uow = FakeUnitOfWork()
         _seed_install(uow, 1, file_path="/old/retrodeck/roms/n64/zelda.z64")
-        state = _make_state()
-        state["retrodeck_home_path_previous"] = "/old/retrodeck"
-        service = _make_service(state=state, logger=logger, uow=uow)
+        with uow:
+            uow.kv_config.set("retrodeck_home_path_previous", "/old/retrodeck")
+        service = _make_service(logger=logger, uow=uow)
         with caplog.at_level(logging.INFO):
             service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is not None
@@ -150,7 +141,7 @@ class TestPruneStaleInstalledRoms:
         """When no record is pruned, no write UoW is opened."""
         uow = FakeUnitOfWork()
         # Empty rom_installs — nothing to prune.
-        service = _make_service(state=_make_state(), logger=logger, uow=uow)
+        service = _make_service(logger=logger, uow=uow)
         service.prune_stale_installed_roms()
         assert uow.rom_installs.save_count == 0
 
@@ -160,7 +151,7 @@ class TestPruneStaleInstalledRoms:
         _seed_install(uow, 1, file_path=existing)
         _seed_install(uow, 2, file_path="/gone/dead.z64")
         probe = FakePathExistsReader(paths={_RETRODECK_HOME, existing})
-        service = _make_service(state=_make_state(), logger=logger, path_probe=probe, uow=uow)
+        service = _make_service(logger=logger, path_probe=probe, uow=uow)
         service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is not None
         assert uow.rom_installs.get(2) is None
@@ -170,9 +161,9 @@ class TestPruneStaleInstalledRoms:
         """``pending_home="/foo"`` does NOT preserve ``/foobar/x``."""
         uow = FakeUnitOfWork()
         _seed_install(uow, 1, file_path="/foobar/x.z64")
-        state = _make_state()
-        state["retrodeck_home_path_previous"] = "/foo"
-        service = _make_service(state=state, logger=logger, uow=uow)
+        with uow:
+            uow.kv_config.set("retrodeck_home_path_previous", "/foo")
+        service = _make_service(logger=logger, uow=uow)
         service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is None
         assert uow.committed is True
@@ -181,7 +172,7 @@ class TestPruneStaleInstalledRoms:
         """RETENTION (ADR-0007): a stale prune drops the ``rom_installs`` row, never the ``roms`` identity row."""
         uow = FakeUnitOfWork()
         _seed_install(uow, 1, file_path="/gone/dead.z64")
-        service = _make_service(state=_make_state(), logger=logger, uow=uow)
+        service = _make_service(logger=logger, uow=uow)
         service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is None
         assert uow.roms.get(1) is not None
@@ -199,7 +190,7 @@ class TestReconcileOrphanedSyncRuns:
         self._seed_run(
             uow, SyncRun.start(id="run-1", at="2026-01-01T00:00:00+00:00", platforms_planned=2, roms_planned=5)
         )
-        service = _make_service(state=_make_state(), logger=logger, uow=uow, clock=clock)
+        service = _make_service(logger=logger, uow=uow, clock=clock)
 
         service.reconcile_orphaned_sync_runs()
 
@@ -217,7 +208,7 @@ class TestReconcileOrphanedSyncRuns:
         run = SyncRun.start(id="run-1", at="2026-01-01T00:00:00+00:00", platforms_planned=1, roms_planned=3)
         run.complete(at="2026-01-01T00:05:00+00:00", platforms=["n64"], collections=[])
         self._seed_run(uow, run)
-        service = _make_service(state=_make_state(), logger=logger, uow=uow)
+        service = _make_service(logger=logger, uow=uow)
 
         service.reconcile_orphaned_sync_runs()
 
@@ -231,7 +222,7 @@ class TestReconcileOrphanedSyncRuns:
     def test_no_running_run_is_noop(self, logger):
         """No running run → nothing to heal, no save."""
         uow = FakeUnitOfWork()
-        service = _make_service(state=_make_state(), logger=logger, uow=uow)
+        service = _make_service(logger=logger, uow=uow)
 
         service.reconcile_orphaned_sync_runs()
 

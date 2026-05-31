@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from unittest.mock import AsyncMock, MagicMock
@@ -10,10 +11,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
-from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
-from models.state import PluginState, SaveSortSettings, make_default_plugin_state
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from models.state import SaveSortSettings, make_default_plugin_state
 
 from adapters.migration_file import MigrationFileAdapter
+from domain.rom import Rom
+from domain.rom_install import RomInstall
 from services.migration import MigrationService, MigrationServiceConfig
 
 
@@ -23,6 +26,50 @@ def _active_core(system_name: str, rom_filename: str | None = None) -> tuple[str
 
 def _no_corename(core_so: str) -> str | None:
     return None
+
+
+def _seed_installs(uow, installed_roms: dict) -> None:
+    """Seed Rom (FK parent) + RomInstall rows from the legacy installed_roms dict shape."""
+    with uow:
+        for rom_id_str, entry in installed_roms.items():
+            rom_id = int(rom_id_str)
+            file_path = entry.get("file_path", "")
+            uow.roms.save(
+                Rom(
+                    rom_id=rom_id,
+                    platform_slug=entry.get("platform_slug", "") or entry.get("system", "x"),
+                    name=f"Game {rom_id}",
+                    fs_name=f"game{rom_id}",
+                    shortcut_app_id=None,
+                    last_synced_at="2025-01-01T00:00:00",
+                )
+            )
+            uow.rom_installs.save(
+                RomInstall.mark_installed(
+                    rom_id=rom_id,
+                    file_path=file_path,
+                    rom_dir=entry.get("rom_dir"),
+                    platform_slug=entry.get("platform_slug", ""),
+                    system=entry.get("system", ""),
+                    installed_at="2025-01-01T00:00:00",
+                )
+            )
+
+
+def _read_marker(uow, key: str) -> dict:
+    """Decode a save-sort kv_config marker, asserting it is present."""
+    raw = uow.kv_config.get(key)
+    assert raw is not None, f"expected kv_config marker {key!r} to be set"
+    return json.loads(raw)
+
+
+def _seed_markers(uow, state_overrides: dict) -> None:
+    """Write the save-sort kv_config markers from the legacy state_overrides shape."""
+    with uow:
+        if "save_sort_settings" in state_overrides:
+            uow.kv_config.set("save_sort_settings", json.dumps(state_overrides["save_sort_settings"]))
+        if "save_sort_settings_previous" in state_overrides:
+            uow.kv_config.set("save_sort_settings_previous", json.dumps(state_overrides["save_sort_settings_previous"]))
 
 
 def _make_service(
@@ -37,20 +84,20 @@ def _make_service(
 ):
     """Create a MigrationService with sensible defaults for sort migration tests.
 
-    Returns (service, save_state_mock) so callers can assert on save_state calls.
-    Pass ``migration_file_store`` to swap the real ``MigrationFileAdapter``
-    for a fake when a test needs failure injection.
+    Returns (service, uow) so callers can seed installs/markers and assert on the
+    commit flag and the kv_config values. Pass ``migration_file_store`` to swap
+    the real ``MigrationFileAdapter`` for a fake when a test needs failure injection.
     """
-    state: PluginState = make_default_plugin_state()
+    state = make_default_plugin_state()
+
+    uow = FakeUnitOfWork()
     if installed_roms:
-        state["installed_roms"] = installed_roms
+        _seed_installs(uow, installed_roms)
     if state_overrides:
-        state.update(state_overrides)
+        _seed_markers(uow, state_overrides)
 
     saves_path = str(tmp_path / "saves")
     roms_path = str(tmp_path / "roms")
-
-    save_state_mock = MagicMock()
 
     svc = MigrationService(
         config=MigrationServiceConfig(
@@ -59,7 +106,7 @@ def _make_service(
             settings={},
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
-            state_persister=save_state_mock,
+            state_persister=MagicMock(),
             settings_persister=MagicMock(),
             emit=MagicMock(),
             get_bios_files_index=lambda: {},
@@ -72,41 +119,48 @@ def _make_service(
             get_retroarch_save_sorting=lambda: sort_settings,
             get_active_core=active_core,
             get_core_name=get_core_name,
-            uow_factory=FakeUnitOfWorkFactory(),
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
-    return svc, save_state_mock
+    return svc, uow
 
 
 class TestDetectSaveSortChange:
     def test_first_run_stores_settings(self, tmp_path):
         """First run (stored=None) stores current settings, no event emitted."""
-        svc, save_state_mock = _make_service(tmp_path, sort_settings=(True, False))
+        svc, uow = _make_service(tmp_path, sort_settings=(True, False))
         mock_loop = MagicMock()
         svc._loop = mock_loop
 
         svc.detect_save_sort_change()
 
-        assert svc._state["save_sort_settings"] == {"sort_by_content": True, "sort_by_core": False}
-        assert "save_sort_settings_previous" not in svc._state
+        with uow:
+            assert _read_marker(uow, "save_sort_settings") == {
+                "sort_by_content": True,
+                "sort_by_core": False,
+            }
+            assert uow.kv_config.get("save_sort_settings_previous") is None
+        assert uow.committed is True
         mock_loop.create_task.assert_not_called()
-        save_state_mock.save_state.assert_called_once()
 
     def test_no_change_no_event(self, tmp_path):
-        """Stored settings equal current — no event, no state mutation."""
-        svc, save_state_mock = _make_service(
+        """Stored settings equal current — no event, no marker write."""
+        svc, uow = _make_service(
             tmp_path,
             sort_settings=(True, False),
             state_overrides={"save_sort_settings": {"sort_by_content": True, "sort_by_core": False}},
         )
         mock_loop = MagicMock()
         svc._loop = mock_loop
+        set_count_before = uow.kv_config.set_count
 
         svc.detect_save_sort_change()
 
         mock_loop.create_task.assert_not_called()
-        save_state_mock.save_state.assert_not_called()
-        assert "save_sort_settings_previous" not in svc._state
+        # No marker write occurred (no new kv_config.set beyond the seed).
+        assert uow.kv_config.set_count == set_count_before
+        with uow:
+            assert uow.kv_config.get("save_sort_settings_previous") is None
 
     def test_change_emits_event(self, tmp_path):
         """Settings changed — emits event, stores old + new."""
@@ -115,7 +169,7 @@ class TestDetectSaveSortChange:
         # detect_save_sort_change schedules the emit coroutine via
         # asyncio.run_coroutine_threadsafe, which validates that its
         # first arg is an actual coroutine (#238 review finding 1).
-        svc, save_state_mock = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             sort_settings=(False, True),
             state_overrides={"save_sort_settings": old},
@@ -141,10 +195,14 @@ class TestDetectSaveSortChange:
         finally:
             migration_module.asyncio.run_coroutine_threadsafe = original  # type: ignore[assignment]
 
-        assert svc._state["save_sort_settings"] == {"sort_by_content": False, "sort_by_core": True}
-        assert svc._state.get("save_sort_settings_previous") == old
+        with uow:
+            assert _read_marker(uow, "save_sort_settings") == {
+                "sort_by_content": False,
+                "sort_by_core": True,
+            }
+            assert _read_marker(uow, "save_sort_settings_previous") == old
+        assert uow.committed is True
         assert len(scheduled) == 1
-        save_state_mock.save_state.assert_called_once()
 
 
 class TestCollectSaveSortingItems:
@@ -171,20 +229,19 @@ class TestCollectSaveSortingItems:
                 "platform_slug": "gba",
             }
         }
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             sort_settings=(False, False),
             installed_roms=installed_roms,
-            state_overrides={
-                "save_sort_settings": {"sort_by_content": False, "sort_by_core": False},
-                "installed_roms": installed_roms,
-            },
+            state_overrides={"save_sort_settings": {"sort_by_content": False, "sort_by_core": False}},
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        items = svc._collect_save_sorting_items(old_settings, new_settings)
+        with uow:
+            installs = list(uow.rom_installs.iter_all())
+        items = svc._collect_save_sorting_items(old_settings, new_settings, installs)
 
         assert len(items) == 1
         label, old_path, _new_path, _, kind = items[0]
@@ -210,12 +267,14 @@ class TestCollectSaveSortingItems:
                 "platform_slug": "gba",
             }
         }
-        svc, _ = _make_service(tmp_path, installed_roms=installed_roms)
+        svc, uow = _make_service(tmp_path, installed_roms=installed_roms)
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         # Same settings -> same dir
         same_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
-        items = svc._collect_save_sorting_items(same_settings, same_settings)
+        with uow:
+            installs = list(uow.rom_installs.iter_all())
+        items = svc._collect_save_sorting_items(same_settings, same_settings, installs)
 
         assert items == []
 
@@ -237,12 +296,14 @@ class TestCollectSaveSortingItems:
                 "platform_slug": "gba",
             }
         }
-        svc, _ = _make_service(tmp_path, installed_roms=installed_roms)
+        svc, uow = _make_service(tmp_path, installed_roms=installed_roms)
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
 
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        items = svc._collect_save_sorting_items(old_settings, new_settings)
+        with uow:
+            installs = list(uow.rom_installs.iter_all())
+        items = svc._collect_save_sorting_items(old_settings, new_settings, installs)
 
         assert items == []
 
@@ -287,7 +348,6 @@ class TestSaveSortMigrationStatus:
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -330,11 +390,10 @@ class TestMigrateSaveSortFiles:
         }
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -349,7 +408,8 @@ class TestMigrateSaveSortFiles:
         new_save = saves_path / "Pokemon.srm"
         assert new_save.exists()
         assert not old_save.exists()
-        assert "save_sort_settings_previous" not in svc._state
+        with uow:
+            assert uow.kv_config.get("save_sort_settings_previous") is None
 
     @pytest.mark.asyncio
     async def test_conflict_destination_newer_deletes_old(self, tmp_path):
@@ -387,11 +447,10 @@ class TestMigrateSaveSortFiles:
         }
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -405,7 +464,8 @@ class TestMigrateSaveSortFiles:
         # Destination (newer) preserved unchanged, old orphan deleted.
         assert new_save.read_text() == "fresh in-game save"
         assert not old_save.exists()
-        assert "save_sort_settings_previous" not in svc._state
+        with uow:
+            assert uow.kv_config.get("save_sort_settings_previous") is None
 
     @pytest.mark.asyncio
     async def test_conflict_source_newer_overwrites(self, tmp_path):
@@ -440,11 +500,10 @@ class TestMigrateSaveSortFiles:
         }
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -458,7 +517,8 @@ class TestMigrateSaveSortFiles:
         # New file was overwritten with the source contents, old removed.
         assert new_save.read_text() == "newer save at source"
         assert not old_save.exists()
-        assert "save_sort_settings_previous" not in svc._state
+        with uow:
+            assert uow.kv_config.get("save_sort_settings_previous") is None
 
     @pytest.mark.asyncio
     async def test_conflict_mtime_read_oserror_records_error(self, tmp_path):
@@ -486,11 +546,10 @@ class TestMigrateSaveSortFiles:
         }
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -508,8 +567,8 @@ class TestMigrateSaveSortFiles:
         assert fake.files[str(new_save)] == b"new"
         # state_previous must be preserved when errors occur — users must still see
         # the migration prompt on the next detect pass
-        assert "save_sort_settings_previous" in svc._state
-        assert svc._state["save_sort_settings_previous"] == old_settings
+        with uow:
+            assert _read_marker(uow, "save_sort_settings_previous") == old_settings
 
     @pytest.mark.asyncio
     async def test_conflict_remove_oserror_records_error(self, tmp_path):
@@ -539,11 +598,10 @@ class TestMigrateSaveSortFiles:
         }
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -558,8 +616,8 @@ class TestMigrateSaveSortFiles:
         assert "simulated remove failure" in result["errors"][0]
         # state_previous must be preserved when errors occur — users must still see
         # the migration prompt on the next detect pass
-        assert "save_sort_settings_previous" in svc._state
-        assert svc._state["save_sort_settings_previous"] == old_settings
+        with uow:
+            assert _read_marker(uow, "save_sort_settings_previous") == old_settings
 
     @pytest.mark.asyncio
     async def test_conflict_replace_oserror_records_error(self, tmp_path):
@@ -589,11 +647,10 @@ class TestMigrateSaveSortFiles:
         }
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -608,8 +665,8 @@ class TestMigrateSaveSortFiles:
         assert "simulated rename failure" in result["errors"][0]
         # state_previous must be preserved when errors occur — users must still see
         # the migration prompt on the next detect pass
-        assert "save_sort_settings_previous" in svc._state
-        assert svc._state["save_sort_settings_previous"] == old_settings
+        with uow:
+            assert _read_marker(uow, "save_sort_settings_previous") == old_settings
 
     @pytest.mark.asyncio
     async def test_clears_previous_on_success(self, tmp_path):
@@ -622,10 +679,9 @@ class TestMigrateSaveSortFiles:
         old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
         new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": False}
         # No installed ROMs — migration runs with 0 items but still succeeds
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             state_overrides={
-                "installed_roms": {},
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -635,7 +691,8 @@ class TestMigrateSaveSortFiles:
         result = await svc.migrate_save_sort_files()
 
         assert result["success"] is True
-        assert "save_sort_settings_previous" not in svc._state
+        with uow:
+            assert uow.kv_config.get("save_sort_settings_previous") is None
 
     @pytest.mark.asyncio
     async def test_no_migration_needed(self, tmp_path):
@@ -756,11 +813,10 @@ class TestSortByCoreMigrationEndToEnd:
         def get_core_name(core_so: str) -> str | None:
             return "Snes9x"
 
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -768,8 +824,10 @@ class TestSortByCoreMigrationEndToEnd:
             get_core_name=get_core_name,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
+        with uow:
+            installs = list(uow.rom_installs.iter_all())
 
-        items = svc._collect_save_sorting_items(old_settings, new_settings)
+        items = svc._collect_save_sorting_items(old_settings, new_settings, installs)
 
         # One item produced, destination path contains "Snes9x" (not "Snes9x - Current")
         assert len(items) == 1
@@ -809,11 +867,10 @@ class TestSortByCoreMigrationEndToEnd:
         def get_core_name(core_so: str) -> str | None:
             return None
 
-        svc, _ = _make_service(
+        svc, uow = _make_service(
             tmp_path,
             installed_roms=installed_roms,
             state_overrides={
-                "installed_roms": installed_roms,
                 "save_sort_settings_previous": old_settings,
                 "save_sort_settings": new_settings,
             },
@@ -821,9 +878,11 @@ class TestSortByCoreMigrationEndToEnd:
             get_core_name=get_core_name,
         )
         svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
+        with uow:
+            installs = list(uow.rom_installs.iter_all())
 
         with caplog.at_level(logging.WARNING):
-            items = svc._collect_save_sorting_items(old_settings, new_settings)
+            items = svc._collect_save_sorting_items(old_settings, new_settings, installs)
 
         assert items == []
         assert any("unable to resolve RetroArch corename" in rec.getMessage() for rec in caplog.records), (

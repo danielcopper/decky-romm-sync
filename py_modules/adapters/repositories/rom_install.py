@@ -11,14 +11,14 @@ if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Iterator
 
-_COLUMNS = "rom_id, file_path, install_path, platform_slug, system, installed_at"
+_COLUMNS = "rom_id, file_path, rom_dir, platform_slug, system, installed_at"
 
 
 def _row_to_install(row: sqlite3.Row) -> RomInstall:
     return RomInstall(
         rom_id=row["rom_id"],
         file_path=row["file_path"],
-        install_path=row["install_path"],
+        rom_dir=row["rom_dir"],
         platform_slug=row["platform_slug"],
         system=row["system"],
         installed_at=row["installed_at"],
@@ -26,7 +26,7 @@ def _row_to_install(row: sqlite3.Row) -> RomInstall:
 
 
 class SqliteRomInstallRepository(BaseRepository):
-    """Install records — present only while a ROM is downloaded (all columns NOT NULL)."""
+    """Install records — present only while a ROM is downloaded; ``rom_dir`` is NULL for single-file ROMs."""
 
     def get(self, rom_id: int) -> RomInstall | None:
         row = self._conn.execute(
@@ -41,7 +41,7 @@ class SqliteRomInstallRepository(BaseRepository):
             (
                 install.rom_id,
                 install.file_path,
-                install.install_path,
+                install.rom_dir,
                 install.platform_slug,
                 install.system,
                 install.installed_at,

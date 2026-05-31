@@ -18,6 +18,8 @@ from tests.services.saves._helpers import (
     _install_rom,
     _server_save,
     _set_device_id,
+    _set_sort_settings,
+    _set_sort_settings_previous,
     make_service,
 )
 
@@ -79,8 +81,8 @@ class TestSyncRomSaves:
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         # Mark migration pending — detect has fired, user hasn't resolved yet.
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
-        svc._rom_info._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": False})
+        _set_sort_settings_previous(svc, {"sort_by_content": True, "sort_by_core": False})
         # Server has a save, no local file anywhere.
         ss = _server_save()
         fake.saves[100] = ss
@@ -101,8 +103,8 @@ class TestSyncRomSaves:
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
-        svc._rom_info._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": False})
+        _set_sort_settings_previous(svc, {"sort_by_content": True, "sort_by_core": False})
         # Local save at the (previous == current, same layout) location.
         _create_save(tmp_path, content=b"user progress")
 
@@ -715,9 +717,9 @@ class TestPreLaunchSaveSortGate:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
-        # Flag save-sort changed via the rom_info state path used by RomInfoService.
-        svc._rom_info._state["save_sort_settings"] = {"sort_by_content": True, "sort_by_core": False}
-        svc._rom_info._state["save_sort_settings_previous"] = {"sort_by_content": False, "sort_by_core": False}
+        # Flag save-sort changed via the kv_config markers RomInfoService reads.
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": False})
+        _set_sort_settings_previous(svc, {"sort_by_content": False, "sort_by_core": False})
 
         result = await svc.pre_launch_sync(42)
 

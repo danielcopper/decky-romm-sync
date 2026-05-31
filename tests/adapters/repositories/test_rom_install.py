@@ -24,11 +24,11 @@ def _seed_rom(uow: SqliteUnitOfWork, rom_id: int) -> None:
     )
 
 
-def _install(rom_id: int, *, path: str = "/roms/game.sfc") -> RomInstall:
+def _install(rom_id: int, *, path: str = "/roms/snes/game.sfc", rom_dir: str | None = None) -> RomInstall:
     return RomInstall(
         rom_id=rom_id,
         file_path=path,
-        install_path="/roms",
+        rom_dir=rom_dir,
         platform_slug="snes",
         system="snes",
         installed_at="2026-02-02T00:00:00Z",
@@ -36,12 +36,23 @@ def _install(rom_id: int, *, path: str = "/roms/game.sfc") -> RomInstall:
 
 
 class TestRoundTrip:
-    def test_all_fields_preserved(self, uow: SqliteUnitOfWork):
+    def test_all_fields_preserved_multi_file(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        install = _install(5)
+        install = _install(5, path="/roms/psx/FF7/FF7.m3u", rom_dir="/roms/psx/FF7")
         uow.rom_installs.save(install)
 
         assert uow.rom_installs.get(5) == install
+
+    def test_null_rom_dir_round_trips(self, uow: SqliteUnitOfWork):
+        """A single-file ROM's ``rom_dir`` (``None``) persists as SQL NULL and reads back ``None``."""
+        _seed_rom(uow, 6)
+        install = _install(6, rom_dir=None)
+        uow.rom_installs.save(install)
+
+        loaded = uow.rom_installs.get(6)
+        assert loaded is not None
+        assert loaded.rom_dir is None
+        assert loaded == install
 
 
 class TestMiss:

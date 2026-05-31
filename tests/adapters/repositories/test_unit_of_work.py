@@ -47,7 +47,7 @@ class TestPragmas:
                 RomInstall(
                     rom_id=12345,
                     file_path="/x",
-                    install_path="/x",
+                    rom_dir=None,
                     platform_slug="snes",
                     system="snes",
                     installed_at="2026-01-01T00:00:00Z",

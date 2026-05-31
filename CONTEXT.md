@@ -140,6 +140,33 @@ Three things spell similarly; distinct meanings:
 Convention: always write `Rom` (PascalCase) when referring to the aggregate.
 Write "ROM file" when referring to the on-disk artifact.
 
+### file_path vs rom_dir (RomInstall paths)
+
+The two path fields on `RomInstall` (`domain/rom_install.py`) answer different
+questions and must not be conflated:
+
+- **`file_path`** — the **launch target**: the single file RetroDECK is handed
+  (`romm-launcher` execs it, per
+  [ADR-0005](docs/adr/0005-launcher-resolves-path-from-sqlite.md)). Present for
+  every ROM. Save-path resolution, ES-DE core resolution, and the displayed
+  filename all derive from it.
+- **`rom_dir`** — the **dedicated per-ROM directory**, present only for
+  folder-backed (multi-file) ROMs. **NULL for single-file ROMs**, which live as a
+  bare file directly in the shared `<roms>/<system>/` directory and own no
+  dedicated folder.
+
+Single-file vs multi-file is **read from `rom_dir` presence** — never re-derived
+from the file's parent directory, never stored as a separate boolean
+([ADR-0008](docs/adr/0008-rom-install-launch-file-and-rom-dir.md)). Migration
+moves `rom_dir` whole when set, else the file; uninstall removes `rom_dir` whole
+when set, else the file. A future per-file `RomFile[]` model — one row per
+physical file, each tagged with a RomM `category` (`game` / `dlc` / `update` /
+`mod` / …) — is the planned shape for the multi-file features in
+[#140](https://github.com/danielcopper/decky-romm-sync/issues/140) /
+[#129](https://github.com/danielcopper/decky-romm-sync/issues/129); it is an
+additive 1:N child of `rom_installs` (deferred until those land), and
+`file_path` + `rom_dir` are its forward-compatible projection.
+
 ### platform_slug (denormalized)
 
 The RomM platform identifier (e.g. `gba`, `psx`) carried as a plain string on

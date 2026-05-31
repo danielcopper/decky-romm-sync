@@ -677,7 +677,6 @@ def wire_services(cfg: WiringConfig) -> dict:
 
     startup_healing_service = StartupHealingService(
         config=StartupHealingServiceConfig(
-            state=cfg.stores.state,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,

@@ -419,23 +419,22 @@ class TestWireServices:
         assert save_sync_service._sync_engine._detect_sort_change.__self__ is migration_service  # type: ignore[union-attr]
         deps["loop"].close()
 
-    def test_save_sync_and_migration_share_state_reference(self, tmp_path):
+    def test_save_sync_and_migration_share_uow(self, tmp_path):
         """Regression test for #238: SaveService and MigrationService must
-        observe the same state dict by reference.
+        observe the same save-sort markers.
 
-        Without shared state, ``detect_save_sort_change`` would mutate
-        MigrationService's local copy while SaveService reads its own
-        stale copy — defeating the detect-first invariant.
+        Post-cutover the save-sort markers live in ``kv_config`` behind the
+        Unit of Work, so the detect-first invariant holds as long as
+        MigrationService (which writes the markers) and SaveService's
+        RomInfoService (which reads them) resolve the same UoW.
         """
         deps = self._make_deps(tmp_path)
+        shared_uow = deps["uow_factory"].uow
         result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
         migration_service = result["migration_service"]
-        # SaveService shares the live state dict with MigrationService through
-        # its RomInfoService (the save-sort reads live there post-cutover).
-        assert save_sync_service._rom_info._state is deps["state"]
-        assert migration_service._state is deps["state"]
-        assert save_sync_service._rom_info._state is migration_service._state
+        assert migration_service._uow_factory() is shared_uow
+        assert save_sync_service._rom_info._uow_factory() is shared_uow
         deps["loop"].close()
 
     def test_save_service_receives_is_retrodeck_migration_pending(self, tmp_path):
@@ -456,28 +455,30 @@ class TestWireServices:
 
     def test_save_sync_detect_sort_change_mutates_shared_state(self, tmp_path):
         """Functional check for #238: invoking the wired detect callback
-        from SaveService updates state that SaveService subsequently
-        reads.
+        from SaveService writes the marker SaveService subsequently reads.
 
-        The wired callback writes current sort settings into
-        ``_state["save_sort_settings"]`` on first run. SaveService and
-        MigrationService must see that write through the same live dict.
+        The wired callback writes the current sort settings into the
+        ``save_sort_settings`` ``kv_config`` marker on first run. SaveService
+        and MigrationService must see that write through the same UoW.
         """
+        import json
+
         deps = self._make_deps(tmp_path)
-        # The default mock returns (True, False); no prior state seeded
-        # (the factory default for ``save_sort_settings`` is ``None``).
-        assert deps["state"]["save_sort_settings"] is None
+        shared_uow = deps["uow_factory"].uow
+        # The default mock returns (True, False); no prior marker seeded.
+        with shared_uow as uow:
+            assert uow.kv_config.get("save_sort_settings") is None
         result = wire_services(self._make_config(deps))
         save_sync_service = result["save_sync_service"]
 
         # Invoke the bound detect callback SaveService received.
         save_sync_service._sync_engine._detect_sort_change()  # type: ignore[misc]
 
-        # State now has the current sort settings written through the
-        # shared dict — SaveService will read this on its next
-        # _get_rom_save_info call.
-        assert deps["state"]["save_sort_settings"] == {
-            "sort_by_content": True,
-            "sort_by_core": False,
-        }
+        # The marker now holds the current sort settings through the shared
+        # UoW — SaveService reads it on its next get_rom_save_info call.
+        with shared_uow as uow:
+            assert json.loads(uow.kv_config.get("save_sort_settings")) == {
+                "sort_by_content": True,
+                "sort_by_core": False,
+            }
         deps["loop"].close()

@@ -93,7 +93,7 @@ class SaveSortSettings(TypedDict):
 class PluginState(TypedDict):
     """Top-level on-disk plugin state dict (``state.json``).
 
-    The seven canonical keys mirror :func:`bootstrap._default_state` —
+    The five canonical keys mirror :func:`bootstrap._default_state` —
     production wiring always initialises them, so they are required at
     the type level and direct-access (``state["shortcut_registry"]``) is
     safe. Transient keys (only present while a particular event is in
@@ -101,15 +101,8 @@ class PluginState(TypedDict):
 
     Transient keys:
 
-    - ``retrodeck_home_path_previous`` — populated while a RetroDECK
-      home migration is awaiting user confirmation.
-    - ``save_sort_settings_previous`` — populated while a RetroArch
-      save-sort change is awaiting user confirmation.
     - ``last_synced_collections`` / ``last_synced_platforms`` — written
       after the first successful sync; absent until then.
-
-    ``save_sort_settings`` is ``None`` before RetroArch save-sort has
-    been observed for the first time.
     """
 
     shortcut_registry: dict[str, ShortcutRegistryEntry]
@@ -117,10 +110,6 @@ class PluginState(TypedDict):
     last_sync: str | None
     sync_stats: SyncStats
     downloaded_bios: dict[str, DownloadedBiosEntry]
-    retrodeck_home_path: str
-    save_sort_settings: SaveSortSettings | None
-    retrodeck_home_path_previous: NotRequired[str]
-    save_sort_settings_previous: NotRequired[SaveSortSettings]
     last_synced_collections: NotRequired[list[str]]
     last_synced_platforms: NotRequired[list[str]]
 
@@ -138,8 +127,6 @@ def make_default_plugin_state() -> PluginState:
         "last_sync": None,
         "sync_stats": {"platforms": 0, "roms": 0},
         "downloaded_bios": {},
-        "retrodeck_home_path": "",
-        "save_sort_settings": None,
     }
 
 

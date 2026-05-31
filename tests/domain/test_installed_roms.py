@@ -47,6 +47,11 @@ class TestIsPendingMigrationPath:
         """Empty file_path and rom_dir → False even when pending_home set."""
         assert is_pending_migration_path("", "", "/old/retrodeck") is False
 
+    def test_none_rom_dir_falls_back_to_file_path(self):
+        """Single-file ROM (``rom_dir`` is ``None``) → decided by file_path alone."""
+        assert is_pending_migration_path("/old/retrodeck/roms/n64/zelda.z64", None, "/old/retrodeck") is True
+        assert is_pending_migration_path("/new/retrodeck/roms/n64/a.z64", None, "/old/retrodeck") is False
+
     def test_prefix_false_match_rejected(self):
         """``/foo`` does NOT preserve ``/foobar/x`` — the separator must follow."""
         assert is_pending_migration_path("/foobar/x.z64", "", "/foo") is False

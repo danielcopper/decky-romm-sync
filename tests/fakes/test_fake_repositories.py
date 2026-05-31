@@ -131,7 +131,7 @@ class TestFakeRomInstallRepository:
         install = RomInstall(
             rom_id=1,
             file_path="/x",
-            install_path="/i",
+            rom_dir=None,
             platform_slug="snes",
             system="snes",
             installed_at="2026-01-01T00:00:00Z",
@@ -370,7 +370,7 @@ def _save_rom_install(uow: FakeUnitOfWork, rom_id: int) -> None:
         RomInstall(
             rom_id=rom_id,
             file_path="/x",
-            install_path="/i",
+            rom_dir=None,
             platform_slug="snes",
             system="snes",
             installed_at="2026-01-01T00:00:00Z",

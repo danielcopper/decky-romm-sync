@@ -282,7 +282,7 @@ def _install_rom(plugin, tmp_path, rom_id=42, system="gba", file_name="pokemon.g
             RomInstall(
                 rom_id=rom_id,
                 file_path=str(install_dir / file_name),
-                install_path=str(install_dir),
+                rom_dir=None,
                 platform_slug=system,
                 system=system,
                 installed_at="2025-01-01T00:00:00",

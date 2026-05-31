@@ -236,7 +236,7 @@ def _install_rom(plugin, tmp_path, rom_id=42, system="gba", file_name="pokemon.g
             RomInstall.mark_installed(
                 rom_id=rom_id,
                 file_path=str(tmp_path / "retrodeck" / "roms" / system / file_name),
-                install_path=str(tmp_path / "retrodeck" / "roms" / system),
+                rom_dir=None,
                 platform_slug=system,
                 system=system,
                 installed_at="2026-01-01T00:00:00",
@@ -415,12 +415,17 @@ class TestPostExitSync:
     @pytest.mark.asyncio
     async def test_post_exit_sync_new_from_start_skips_stale_download(self, plugin, tmp_path):
         """NEW-from-start edge: sync must not download stale server content to previous layout (#238)."""
+        import json
+
         _install_rom(plugin, tmp_path)
         # Detect just fired at session end. Session ran entirely under the
         # NEW layout because the user had already flipped the setting before
         # launching.
-        plugin._state["save_sort_settings"] = {"sort_by_content": False, "sort_by_core": False}
-        plugin._state["save_sort_settings_previous"] = {"sort_by_content": True, "sort_by_core": False}
+        with plugin._uow_factory.uow as uow:
+            uow.kv_config.set("save_sort_settings", json.dumps({"sort_by_content": False, "sort_by_core": False}))
+            uow.kv_config.set(
+                "save_sort_settings_previous", json.dumps({"sort_by_content": True, "sort_by_core": False})
+            )
 
         # Real user progress at the NEW layout (where the session wrote).
         new_save_path = tmp_path / "retrodeck" / "saves" / "pokemon.srm"
@@ -485,15 +490,15 @@ class TestPostExitSync:
         """
         _install_rom(plugin, tmp_path)
 
+        import json
+
         # Preconditions:
-        # - Plugin state thinks save sort is still "sort_by_content only"
+        # - The kv_config marker thinks save sort is still "sort_by_content only"
         #   (this is what detect LAST wrote — before the user flipped cfg).
-        # - No ``previous`` key at all — detect has never seen the change.
-        plugin._state["save_sort_settings"] = {
-            "sort_by_content": True,
-            "sort_by_core": False,
-        }
-        assert "save_sort_settings_previous" not in plugin._state
+        # - No ``previous`` marker at all — detect has never seen the change.
+        with plugin._uow_factory.uow as uow:
+            uow.kv_config.set("save_sort_settings", json.dumps({"sort_by_content": True, "sort_by_core": False}))
+            assert uow.kv_config.get("save_sort_settings_previous") is None
 
         # Real user progress at the NEW layout (where the session wrote).
         # NEW layout: sort_by_content=True + sort_by_core=True adds /mGBA.
@@ -516,12 +521,11 @@ class TestPostExitSync:
         stale_upload.write_bytes(b"STALE_SERVER_CONTENT")
         plugin._fake_api.uploaded_files[100] = str(stale_upload)
 
-        # Wire a REAL MigrationService on the SAME state dict as the
-        # plugin's SaveService, then point SaveService's
-        # ``detect_sort_change`` at the real bound method.
-        # ``get_retroarch_save_sorting`` reports the CURRENT on-disk cfg
-        # (NEW: sort_by_content=False, sort_by_core=False) — the mismatch
-        # with state is what detect will discover.
+        # Wire a REAL MigrationService on the SAME UoW as the plugin's
+        # SaveService, then point SaveService's ``detect_sort_change`` at the
+        # real bound method. ``get_retroarch_save_sorting`` reports the CURRENT
+        # on-disk cfg (NEW: sort_by_content=False, sort_by_core=False) — the
+        # mismatch with the stored marker is what detect will discover.
         real_migration = MigrationService(
             config=MigrationServiceConfig(
                 migration_file_store=MigrationFileAdapter(),
@@ -537,12 +541,12 @@ class TestPostExitSync:
                 get_retroarch_save_sorting=lambda: (False, False),
                 get_active_core=lambda system_name, rom_filename=None: (None, None),
                 get_core_name=lambda core_so: None,
-                uow_factory=FakeUnitOfWorkFactory(),
+                uow_factory=plugin._uow_factory,
             ),
         )
-        # Sanity: same state object — mutations through migration will be
-        # visible to SaveService on the next state read.
-        assert real_migration._state is plugin._save_sync_service._rom_info._state
+        # Sanity: same UoW — marker writes through migration are visible to
+        # SaveService's RomInfoService on the next kv_config read.
+        assert real_migration._uow_factory() is plugin._save_sync_service._rom_info._uow_factory()
 
         plugin._save_sync_service._sync_engine._detect_sort_change = real_migration.detect_save_sort_change
 
@@ -554,16 +558,17 @@ class TestPostExitSync:
 
         assert result["success"] is True
 
-        # 1. detect fired inside post_exit_sync and populated
-        #    ``save_sort_settings_previous`` on the shared state dict.
-        assert plugin._state["save_sort_settings_previous"] == {
-            "sort_by_content": True,
-            "sort_by_core": False,
-        }
-        assert plugin._state["save_sort_settings"] == {
-            "sort_by_content": False,
-            "sort_by_core": False,
-        }
+        # 1. detect fired inside post_exit_sync and populated the
+        #    ``save_sort_settings_previous`` marker through the shared UoW.
+        with plugin._uow_factory.uow as uow:
+            assert json.loads(uow.kv_config.get("save_sort_settings_previous")) == {
+                "sort_by_content": True,
+                "sort_by_core": False,
+            }
+            assert json.loads(uow.kv_config.get("save_sort_settings")) == {
+                "sort_by_content": False,
+                "sort_by_core": False,
+            }
 
         # 2. NO file was written to the OLD layout path (no stale download).
         assert not prev_save_path.exists()

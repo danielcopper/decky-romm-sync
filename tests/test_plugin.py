@@ -115,7 +115,6 @@ def plugin():
 
     p._startup_healing_service = StartupHealingService(
         config=StartupHealingServiceConfig(
-            state=p._state,
             logger=decky.logger,
             clock=FakeClock(),
             retrodeck_paths=p._retrodeck_paths,
