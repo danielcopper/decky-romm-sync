@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  getCachedGameDetail,
-  invalidateCachedGameDetail,
-  _cacheForTests,
-} from "./cachedGameDetailStore";
+import { getCachedGameDetail, invalidateCachedGameDetail, _cacheForTests } from "./cachedGameDetailStore";
 import type { CachedGameDetail } from "../api/backend";
 
 describe("getCachedGameDetail", () => {

@@ -5,13 +5,7 @@
  */
 
 import { FC } from "react";
-import {
-  PanelSection,
-  PanelSectionRow,
-  ButtonItem,
-  Field,
-  DropdownItem,
-} from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, Field, DropdownItem } from "@decky/ui";
 import type { RetroArchInputCheck } from "../../types";
 
 interface ControllerSectionProps {
@@ -51,11 +45,7 @@ export const ControllerSection: FC<ControllerSectionProps> = ({
         />
       </PanelSectionRow>
       <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={onApplyMode}
-          disabled={loading}
-        >
+        <ButtonItem layout="below" onClick={onApplyMode} disabled={loading}>
           Apply to All Shortcuts
         </ButtonItem>
       </PanelSectionRow>
@@ -73,10 +63,7 @@ export const ControllerSection: FC<ControllerSectionProps> = ({
             />
           </PanelSectionRow>
           <PanelSectionRow>
-            <ButtonItem
-              layout="below"
-              onClick={onFixInputDriver}
-            >
+            <ButtonItem layout="below" onClick={onFixInputDriver}>
               Fix input_driver to sdl2
             </ButtonItem>
           </PanelSectionRow>

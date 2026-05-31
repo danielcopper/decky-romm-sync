@@ -5,15 +5,7 @@
  */
 
 import { FC } from "react";
-import {
-  PanelSection,
-  PanelSectionRow,
-  ButtonItem,
-  Field,
-  DialogButton,
-  showModal,
-  ToggleField,
-} from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, Field, DialogButton, showModal, ToggleField } from "@decky/ui";
 import { TextInputModal } from "./TextInputModal";
 import { isSharedAccount } from "../../utils/sharedAccount";
 
@@ -48,28 +40,24 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
     <PanelSection title="Connection">
       <PanelSectionRow>
         <Field label="RomM URL" description={url || "(not set)"}>
-          <DialogButton onClick={() => showModal(
-            <TextInputModal
-              label="RomM URL"
-              value={url}
-              field="url"
-              onSubmit={onUrlSubmit}
-            />
-          )}>
+          <DialogButton
+            onClick={() =>
+              showModal(<TextInputModal label="RomM URL" value={url} field="url" onSubmit={onUrlSubmit} />)
+            }
+          >
             Edit
           </DialogButton>
         </Field>
       </PanelSectionRow>
       <PanelSectionRow>
         <Field label="Username" description={username || "(not set)"}>
-          <DialogButton onClick={() => showModal(
-            <TextInputModal
-              label="Username"
-              value={username}
-              field="username"
-              onSubmit={onUsernameSubmit}
-            />
-          )}>
+          <DialogButton
+            onClick={() =>
+              showModal(
+                <TextInputModal label="Username" value={username} field="username" onSubmit={onUsernameSubmit} />,
+              )
+            }
+          >
             Edit
           </DialogButton>
         </Field>
@@ -84,20 +72,18 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
       )}
       <PanelSectionRow>
         <Field label="Password" description={password ? "••••" : "(not set)"}>
-          <DialogButton onClick={() => showModal(
-            <TextInputModal
-              label="Password"
-              value=""
-              field="password"
-              bIsPassword
-              onSubmit={onPasswordSubmit}
-            />
-          )}>
+          <DialogButton
+            onClick={() =>
+              showModal(
+                <TextInputModal label="Password" value="" field="password" bIsPassword onSubmit={onPasswordSubmit} />,
+              )
+            }
+          >
             Edit
           </DialogButton>
         </Field>
       </PanelSectionRow>
-      {(url.toLowerCase().startsWith("https")) && (
+      {url.toLowerCase().startsWith("https") && (
         <PanelSectionRow>
           <ToggleField
             label="Allow Insecure SSL"

@@ -191,16 +191,12 @@ describe("statusLabel", () => {
 describe("slotDeleteFailureToast", () => {
   it("explains the active-slot guard when reason='active_slot'", () => {
     const info: SlotDeleteInfo = { success: false, reason: "active_slot" };
-    expect(slotDeleteFailureToast(info)).toBe(
-      "Cannot delete the active slot. Switch to a different slot first.",
-    );
+    expect(slotDeleteFailureToast(info)).toBe("Cannot delete the active slot. Switch to a different slot first.");
   });
 
   it("explains the active-slot guard when is_active flag is set", () => {
     const info: SlotDeleteInfo = { success: false, is_active: true };
-    expect(slotDeleteFailureToast(info)).toBe(
-      "Cannot delete the active slot. Switch to a different slot first.",
-    );
+    expect(slotDeleteFailureToast(info)).toBe("Cannot delete the active slot. Switch to a different slot first.");
   });
 
   it("surfaces the server-unreachable warning when reason='server_unreachable'", () => {
@@ -211,16 +207,12 @@ describe("slotDeleteFailureToast", () => {
       reason: "server_unreachable",
       message: "Cannot inspect slot — server unreachable",
     };
-    expect(slotDeleteFailureToast(info)).toBe(
-      "Cannot inspect slot — server unreachable",
-    );
+    expect(slotDeleteFailureToast(info)).toBe("Cannot inspect slot — server unreachable");
   });
 
   it("falls back to a generic server-unreachable message when no message is provided", () => {
     const info: SlotDeleteInfo = { success: false, reason: "server_unreachable" };
-    expect(slotDeleteFailureToast(info)).toBe(
-      "Cannot inspect slot — RomM server is not reachable",
-    );
+    expect(slotDeleteFailureToast(info)).toBe("Cannot inspect slot — RomM server is not reachable");
   });
 
   it("surfaces the backend message for unrecognised failure reasons", () => {

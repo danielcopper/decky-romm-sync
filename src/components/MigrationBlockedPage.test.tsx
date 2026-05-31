@@ -13,11 +13,7 @@ import { showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { MigrationBlockedPage, useMigrationStatus } from "./MigrationBlockedPage";
 import * as backend from "../api/backend";
-import {
-  setMigrationStatus,
-  clearMigration,
-  getMigrationState,
-} from "../utils/migrationStore";
+import { setMigrationStatus, clearMigration, getMigrationState } from "../utils/migrationStore";
 import * as migrationStore from "../utils/migrationStore";
 import type { MigrationStatus, MigrationResult } from "../types";
 // Type-only — vi.mock("./MigrationConflictModal") below replaces the runtime
@@ -41,8 +37,7 @@ vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 // case any future code path actually mounts the modal).
 type CapturedConflictModalProps = ComponentProps<typeof MigrationConflictModal>;
 vi.mock("./MigrationConflictModal", () => ({
-  MigrationConflictModal: () =>
-    createElement("div", { "data-testid": "migration-conflict-modal" }),
+  MigrationConflictModal: () => createElement("div", { "data-testid": "migration-conflict-modal" }),
 }));
 
 // Helpers — pull props off the React element passed to showModal.
@@ -87,9 +82,7 @@ describe("MigrationBlockedPage component", () => {
 
   describe("render", () => {
     it("renders header + migration paths + counts", () => {
-      const { container } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { container } = render(<MigrationBlockedPage migration={defaultMigration} />);
       // PanelSection's `title` prop is forwarded by the global stub as a DOM
       // attribute on <section>, so assert via getAttribute, not textContent.
       const section = container.querySelector("section");
@@ -97,43 +90,29 @@ describe("MigrationBlockedPage component", () => {
       expect(container.textContent).toContain("RetroDECK location changed");
       expect(container.textContent).toContain("From: /old/retrodeck");
       expect(container.textContent).toContain("To: /new/retrodeck");
-      expect(container.textContent).toContain(
-        "3 ROM(s), 2 BIOS, 5 save(s) to migrate",
-      );
+      expect(container.textContent).toContain("3 ROM(s), 2 BIOS, 5 save(s) to migrate");
     });
 
     it("renders 'unknown' / zero counts when migration fields are missing", () => {
-      const { container } = render(
-        <MigrationBlockedPage migration={{ pending: true }} />,
-      );
+      const { container } = render(<MigrationBlockedPage migration={{ pending: true }} />);
       expect(container.textContent).toContain("From: unknown");
       expect(container.textContent).toContain("To: unknown");
-      expect(container.textContent).toContain(
-        "0 ROM(s), 0 BIOS, 0 save(s) to migrate",
-      );
+      expect(container.textContent).toContain("0 ROM(s), 0 BIOS, 0 save(s) to migrate");
     });
 
     it("shows the dismissal hint footer", () => {
-      const { container } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
-      expect(container.textContent).toContain(
-        "Or revert RetroDECK to its previous location",
-      );
+      const { container } = render(<MigrationBlockedPage migration={defaultMigration} />);
+      expect(container.textContent).toContain("Or revert RetroDECK to its previous location");
     });
 
     it("renders Migrate Files button labelled 'Migrate Files' by default", () => {
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       expect(getByText("Migrate Files")).toBeInTheDocument();
       expect(getByText("Dismiss")).toBeInTheDocument();
     });
 
     it("does not render the result Field until migrateResult is non-empty", () => {
-      const { queryByTestId } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { queryByTestId } = render(<MigrationBlockedPage migration={defaultMigration} />);
       expect(queryByTestId("field")).toBeNull();
     });
   });
@@ -145,9 +124,7 @@ describe("MigrationBlockedPage component", () => {
         success: true,
         message: "Migrated 3 ROMs",
       });
-      const { getByText, queryByTestId } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText, queryByTestId } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();
@@ -169,9 +146,7 @@ describe("MigrationBlockedPage component", () => {
         success: true,
         message: "",
       });
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();
@@ -188,9 +163,7 @@ describe("MigrationBlockedPage component", () => {
         success: false,
         message: "Partial failure",
       });
-      const { getByText, queryByTestId } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText, queryByTestId } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();
@@ -214,9 +187,7 @@ describe("MigrationBlockedPage component", () => {
           success: true,
           message: "Done after overwrite",
         });
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();
@@ -250,9 +221,7 @@ describe("MigrationBlockedPage component", () => {
         message: "",
         needs_confirmation: true,
       } as MigrationResult);
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();
@@ -262,12 +231,8 @@ describe("MigrationBlockedPage component", () => {
     });
 
     it("catch: migrateRetroDeckFiles rejects → Field shows 'Migration failed'", async () => {
-      vi.mocked(backend.migrateRetroDeckFiles).mockRejectedValue(
-        new Error("net"),
-      );
-      const { getByText, queryByTestId } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      vi.mocked(backend.migrateRetroDeckFiles).mockRejectedValue(new Error("net"));
+      const { getByText, queryByTestId } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();
@@ -285,9 +250,7 @@ describe("MigrationBlockedPage component", () => {
           resolveFn = res;
         }),
       );
-      const { getByText, queryByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText, queryByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
       });
@@ -313,9 +276,7 @@ describe("MigrationBlockedPage component", () => {
         needs_confirmation: true,
         conflict_count: 1,
       });
-      const { getByText, queryByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText, queryByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();
@@ -329,9 +290,7 @@ describe("MigrationBlockedPage component", () => {
 
   describe("handleDismiss via 'Dismiss' button", () => {
     it("opens ConfirmModal with the expected title + button text", () => {
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       fireEvent.click(getByText("Dismiss"));
       expect(showModal).toHaveBeenCalledTimes(1);
       const props = lastShownModalProps<{
@@ -343,9 +302,7 @@ describe("MigrationBlockedPage component", () => {
       expect(props?.strTitle).toBe("Dismiss Migration?");
       expect(props?.strOKButtonText).toBe("Dismiss");
       expect(props?.strCancelButtonText).toBe("Cancel");
-      expect(props?.strDescription).toContain(
-        "This will accept that some ROMs",
-      );
+      expect(props?.strDescription).toContain("This will accept that some ROMs");
     });
 
     it("onOK happy path: success → clearMigration + toast 'Migration dismissed.'", async () => {
@@ -353,9 +310,7 @@ describe("MigrationBlockedPage component", () => {
       vi.mocked(backend.dismissRetrodeckMigration).mockResolvedValue({
         success: true,
       });
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       fireEvent.click(getByText("Dismiss"));
       const confirm = lastShownModalProps<{
         onOK?: () => void | Promise<void>;
@@ -376,9 +331,7 @@ describe("MigrationBlockedPage component", () => {
       vi.mocked(backend.dismissRetrodeckMigration).mockResolvedValue({
         success: false,
       });
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       fireEvent.click(getByText("Dismiss"));
       const confirm = lastShownModalProps<{
         onOK?: () => void | Promise<void>;
@@ -391,12 +344,8 @@ describe("MigrationBlockedPage component", () => {
     });
 
     it("catch: dismissRetrodeckMigration rejects → Field shows 'Dismiss failed'", async () => {
-      vi.mocked(backend.dismissRetrodeckMigration).mockRejectedValue(
-        new Error("io"),
-      );
-      const { getByText, queryByTestId } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      vi.mocked(backend.dismissRetrodeckMigration).mockRejectedValue(new Error("io"));
+      const { getByText, queryByTestId } = render(<MigrationBlockedPage migration={defaultMigration} />);
       fireEvent.click(getByText("Dismiss"));
       const confirm = lastShownModalProps<{
         onOK?: () => void | Promise<void>;
@@ -418,9 +367,7 @@ describe("MigrationBlockedPage component", () => {
         needs_confirmation: true,
         conflict_count: 1,
       });
-      const { getByText } = render(
-        <MigrationBlockedPage migration={defaultMigration} />,
-      );
+      const { getByText } = render(<MigrationBlockedPage migration={defaultMigration} />);
       await act(async () => {
         fireEvent.click(getByText("Migrate Files"));
         await flushAsync();

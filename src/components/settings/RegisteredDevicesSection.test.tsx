@@ -8,10 +8,8 @@ import type { RegisteredDevice } from "../../types";
 // pipe-separated parts string. PanelSection/PanelSectionRow are pass-through.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 vi.mock("@decky/ui", () => ({
-  PanelSection: (p: AnyProps) =>
-    createElement("section", {}, p.children as never),
-  PanelSectionRow: (p: AnyProps) =>
-    createElement("div", { "data-testid": "row" }, p.children as never),
+  PanelSection: (p: AnyProps) => createElement("section", {}, p.children as never),
+  PanelSectionRow: (p: AnyProps) => createElement("div", { "data-testid": "row" }, p.children as never),
   Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
     createElement(
       "div",
@@ -35,9 +33,7 @@ function makeDevice(overrides: Partial<RegisteredDevice> = {}): RegisteredDevice
   };
 }
 
-function defaultProps(
-  overrides: Partial<React.ComponentProps<typeof RegisteredDevicesSection>> = {},
-) {
+function defaultProps(overrides: Partial<React.ComponentProps<typeof RegisteredDevicesSection>> = {}) {
   return {
     devicesLoading: false,
     devicesError: null,
@@ -55,18 +51,14 @@ describe("RegisteredDevicesSection", () => {
 
   describe("loading state", () => {
     it("renders 'Loading...' when devicesLoading is true", () => {
-      const { getAllByTestId } = render(
-        <RegisteredDevicesSection {...defaultProps({ devicesLoading: true })} />,
-      );
+      const { getAllByTestId } = render(<RegisteredDevicesSection {...defaultProps({ devicesLoading: true })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Loading...");
     });
 
     it("hides loading even if devicesError is also set (loading takes precedence)", () => {
       const { getAllByTestId } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ devicesLoading: true, devicesError: "boom" })}
-        />,
+        <RegisteredDevicesSection {...defaultProps({ devicesLoading: true, devicesError: "boom" })} />,
       );
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Loading...");
@@ -77,9 +69,7 @@ describe("RegisteredDevicesSection", () => {
   describe("error state", () => {
     it("renders 'Could not load devices' with the error in the description", () => {
       const { getAllByTestId } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ devicesError: "Network unreachable" })}
-        />,
+        <RegisteredDevicesSection {...defaultProps({ devicesError: "Network unreachable" })} />,
       );
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       const descs = getAllByTestId("field-desc").map((el) => el.textContent);
@@ -90,11 +80,7 @@ describe("RegisteredDevicesSection", () => {
 
   describe("empty state", () => {
     it("renders 'No devices registered' when the list is empty", () => {
-      const { getAllByTestId } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ registeredDevices: [] })}
-        />,
-      );
+      const { getAllByTestId } = render(<RegisteredDevicesSection {...defaultProps({ registeredDevices: [] })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("No devices registered");
     });
@@ -111,9 +97,7 @@ describe("RegisteredDevicesSection", () => {
         makeDevice({ id: "device-aaaaaaaa", name: "Steam Deck" }),
         makeDevice({ id: "device-bbbbbbbb", name: "Desktop" }),
       ];
-      const { getAllByTestId } = render(
-        <RegisteredDevicesSection {...defaultProps({ registeredDevices: devices })} />,
-      );
+      const { getAllByTestId } = render(<RegisteredDevicesSection {...defaultProps({ registeredDevices: devices })} />);
       // 2 device rows; no loading/error/empty rows are rendered.
       expect(getAllByTestId("field")).toHaveLength(2);
     });
@@ -127,9 +111,7 @@ describe("RegisteredDevicesSection", () => {
         last_seen: "2025-06-15T11:55:00Z", // 5 minutes ago
       });
       const { getAllByTestId } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ registeredDevices: [device] })}
-        />,
+        <RegisteredDevicesSection {...defaultProps({ registeredDevices: [device] })} />,
       );
       const desc = getAllByTestId("field-desc")[0]?.textContent ?? "";
       expect(desc).toContain("decky-romm-sync v0.17.1");
@@ -141,9 +123,7 @@ describe("RegisteredDevicesSection", () => {
     it("omits the platform segment when device.platform is null", () => {
       const device = makeDevice({ platform: null });
       const { getAllByTestId } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ registeredDevices: [device] })}
-        />,
+        <RegisteredDevicesSection {...defaultProps({ registeredDevices: [device] })} />,
       );
       const desc = getAllByTestId("field-desc")[0]?.textContent ?? "";
       // No "linux" or platform string — segments are: client, last seen, ID.
@@ -154,9 +134,7 @@ describe("RegisteredDevicesSection", () => {
     it("falls back to 'unknown client v?' when client/client_version are null", () => {
       const device = makeDevice({ client: null, client_version: null });
       const { getAllByTestId } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ registeredDevices: [device] })}
-        />,
+        <RegisteredDevicesSection {...defaultProps({ registeredDevices: [device] })} />,
       );
       const desc = getAllByTestId("field-desc")[0]?.textContent ?? "";
       expect(desc).toContain("unknown client v?");
@@ -164,11 +142,7 @@ describe("RegisteredDevicesSection", () => {
 
     it("renders '(unnamed)' when device.name is null", () => {
       const device = makeDevice({ name: null });
-      const { container } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ registeredDevices: [device] })}
-        />,
-      );
+      const { container } = render(<RegisteredDevicesSection {...defaultProps({ registeredDevices: [device] })} />);
       expect(container.textContent).toContain("(unnamed)");
     });
 
@@ -177,9 +151,7 @@ describe("RegisteredDevicesSection", () => {
         makeDevice({ id: "device-aaaa1111", name: "Steam Deck", is_current_device: true }),
         makeDevice({ id: "device-bbbb2222", name: "Desktop", is_current_device: false }),
       ];
-      const { container } = render(
-        <RegisteredDevicesSection {...defaultProps({ registeredDevices: devices })} />,
-      );
+      const { container } = render(<RegisteredDevicesSection {...defaultProps({ registeredDevices: devices })} />);
       const matches = container.textContent?.match(/\(this device\)/g) ?? [];
       expect(matches).toHaveLength(1);
     });
@@ -187,9 +159,7 @@ describe("RegisteredDevicesSection", () => {
     it("renders 'ID —' when the id is empty string", () => {
       const device = makeDevice({ id: "" });
       const { getAllByTestId } = render(
-        <RegisteredDevicesSection
-          {...defaultProps({ registeredDevices: [device] })}
-        />,
+        <RegisteredDevicesSection {...defaultProps({ registeredDevices: [device] })} />,
       );
       const desc = getAllByTestId("field-desc")[0]?.textContent ?? "";
       expect(desc).toContain("ID —");

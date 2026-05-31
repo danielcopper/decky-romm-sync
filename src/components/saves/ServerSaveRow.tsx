@@ -13,17 +13,27 @@ export function renderServerSaveRow(f: SlotSaveFile): ReturnType<typeof createEl
   if (f.size != null) details.push(formatBytes(f.size));
   if (f.updated_at) details.push(`Updated ${formatRelativeTime(f.updated_at)}`);
 
-  return createElement("div", {
-    key: `server-${f.id}`,
-    style: { padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" },
-  },
-    createElement("div", {
-      style: { fontSize: "12px", color: "#dcdedf", fontWeight: 500 },
-    }, f.filename),
+  return createElement(
+    "div",
+    {
+      key: `server-${f.id}`,
+      style: { padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" },
+    },
+    createElement(
+      "div",
+      {
+        style: { fontSize: "12px", color: "#dcdedf", fontWeight: 500 },
+      },
+      f.filename,
+    ),
     details.length > 0
-      ? createElement("div", {
-          style: { fontSize: "11px", color: "#8f98a0", marginTop: "2px" },
-        }, details.join(" · "))
+      ? createElement(
+          "div",
+          {
+            style: { fontSize: "11px", color: "#8f98a0", marginTop: "2px" },
+          },
+          details.join(" · "),
+        )
       : null,
   );
 }

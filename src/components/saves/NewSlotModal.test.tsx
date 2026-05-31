@@ -15,12 +15,14 @@ const captured: {
 } = {};
 
 vi.mock("@decky/ui", () => ({
-  ConfirmModal: (p: AnyProps & {
-    onOK?: () => void;
-    bDisableBackgroundDismiss?: boolean;
-    closeModal?: unknown;
-    strTitle?: string;
-  }) => {
+  ConfirmModal: (
+    p: AnyProps & {
+      onOK?: () => void;
+      bDisableBackgroundDismiss?: boolean;
+      closeModal?: unknown;
+      strTitle?: string;
+    },
+  ) => {
     captured.onOK = p.onOK;
     captured.bDisableBackgroundDismiss = p.bDisableBackgroundDismiss;
     captured.closeModal = p.closeModal;

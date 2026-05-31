@@ -11,7 +11,11 @@ import type { SaveVersionEntry, RollbackStatus } from "../../types";
 // assert it. The global stub only wires onClick.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 vi.mock("@decky/ui", () => ({
-  DialogButton: ({ children, onClick, disabled }: AnyProps & {
+  DialogButton: ({
+    children,
+    onClick,
+    disabled,
+  }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
   }) => createElement("button", { onClick, disabled }, children as never),
@@ -28,9 +32,7 @@ function makeVersion(overrides: Partial<SaveVersionEntry> = {}): SaveVersionEntr
     emulator: "mgba",
     updated_at: "2025-06-14T10:00:00Z",
     file_size_bytes: 1024,
-    device_syncs: [
-      { device_id: "d1", device_name: "deck", is_current: true, last_synced_at: "2025-06-14T10:00:00Z" },
-    ],
+    device_syncs: [{ device_id: "d1", device_name: "deck", is_current: true, last_synced_at: "2025-06-14T10:00:00Z" }],
     uploaded_by_us: true,
     ...overrides,
   };
@@ -71,11 +73,7 @@ describe("VersionHistoryPanel", () => {
     fireEvent.click(getByText("Previous Versions"));
     await flushAsync();
     expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledWith(
-      1,
-      "default",
-      "save.srm",
-    );
+    expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledWith(1, "default", "save.srm");
     // After load, list count appears in label
     expect(container.textContent).toContain("Previous Versions (1)");
     // ▾ expanded chevron
@@ -103,9 +101,7 @@ describe("VersionHistoryPanel", () => {
       status: "ok",
       versions: [],
     });
-    const { getByText, container } = render(
-      <VersionHistoryPanel {...defaultProps({ isOffline: true })} />,
-    );
+    const { getByText, container } = render(<VersionHistoryPanel {...defaultProps({ isOffline: true })} />);
     fireEvent.click(getByText("Previous Versions"));
     await flushAsync();
     expect(vi.mocked(backend.savesListFileVersions)).not.toHaveBeenCalled();
@@ -115,7 +111,10 @@ describe("VersionHistoryPanel", () => {
   it("shows a loading body while the fetch is in flight", async () => {
     let resolveFetch: (v: { status: "ok"; versions: SaveVersionEntry[] }) => void = () => undefined;
     vi.mocked(backend.savesListFileVersions).mockImplementation(
-      () => new Promise((res) => { resolveFetch = res; }),
+      () =>
+        new Promise((res) => {
+          resolveFetch = res;
+        }),
     );
     const { getByText, container } = render(<VersionHistoryPanel {...defaultProps()} />);
     fireEvent.click(getByText("Previous Versions"));
@@ -222,9 +221,7 @@ describe("VersionHistoryPanel", () => {
         versions: [makeVersion({ id: 11 })],
       });
       const onRestored = vi.fn();
-      const utils = render(
-        <VersionHistoryPanel {...defaultProps({ ...props, onRestored })} />,
-      );
+      const utils = render(<VersionHistoryPanel {...defaultProps({ ...props, onRestored })} />);
       fireEvent.click(utils.getByText("Previous Versions"));
       await flushAsync();
       return { ...utils, onRestored };
@@ -403,7 +400,10 @@ describe("VersionHistoryPanel", () => {
     });
     let resolveRestore: (v: RollbackStatus) => void = () => undefined;
     vi.mocked(backend.savesRollbackToVersion).mockImplementation(
-      () => new Promise((res) => { resolveRestore = res; }),
+      () =>
+        new Promise((res) => {
+          resolveRestore = res;
+        }),
     );
     const { getByText } = render(<VersionHistoryPanel {...defaultProps()} />);
     fireEvent.click(getByText("Previous Versions"));

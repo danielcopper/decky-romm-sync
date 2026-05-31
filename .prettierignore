@@ -1,0 +1,15 @@
+# Prettier only formats frontend sources under src/.
+# Generated, vendored, and non-frontend paths are out of scope.
+dist
+node_modules
+defaults
+bin
+coverage
+.worktrees
+py_modules
+
+# Generated / lockfiles
+pnpm-lock.yaml
+
+# Markdown is owned by mkdocs + markdownlint — don't fight them.
+*.md

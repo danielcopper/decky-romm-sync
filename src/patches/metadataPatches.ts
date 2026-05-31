@@ -57,10 +57,7 @@ function applyDirectMutations(appId: number, metadata: RomMetadata) {
  * Initialize metadata state and apply direct property mutations.
  * Call on plugin load after fetching the metadata cache and app ID map.
  */
-export function registerMetadataPatches(
-  cache: Record<string, RomMetadata>,
-  appIdMap: Record<string, number>,
-) {
+export function registerMetadataPatches(cache: Record<string, RomMetadata>, appIdMap: Record<string, number>) {
   metadataCache = cache;
 
   // Build reverse lookup: app_id → rom_id
@@ -115,7 +112,11 @@ export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updat
       overview.rt_last_time_played = Math.floor(Date.now() / 1000);
     }
   });
-  detach(debugLog(`updatePlaytimeDisplay: appId=${appId} wrote ${totalMinutes}min (was ${prevMinutes}), rt_last_time_played was ${prevLastPlayed}`));
+  detach(
+    debugLog(
+      `updatePlaytimeDisplay: appId=${appId} wrote ${totalMinutes}min (was ${prevMinutes}), rt_last_time_played was ${prevLastPlayed}`,
+    ),
+  );
   return true;
 }
 
@@ -160,7 +161,11 @@ export async function applyAllPlaytime(
     }
   }
 
-  detach(debugLog(`applyAllPlaytime: ${Object.keys(playtimeMap).length} entries in playtimeMap, ${pending.length} with appId and >0 seconds`));
+  detach(
+    debugLog(
+      `applyAllPlaytime: ${Object.keys(playtimeMap).length} entries in playtimeMap, ${pending.length} with appId and >0 seconds`,
+    ),
+  );
 
   if (pending.length === 0) return;
 
@@ -174,7 +179,11 @@ export async function applyAllPlaytime(
     pending = tryWritePlaytime(pending);
 
     if (pending.length > 0 && attempt < delays.length - 1) {
-      detach(debugLog(`applyAllPlaytime: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`));
+      detach(
+        debugLog(
+          `applyAllPlaytime: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`,
+        ),
+      );
     }
   }
 
@@ -182,4 +191,3 @@ export async function applyAllPlaytime(
     detach(debugLog(`applyAllPlaytime: ${pending.length} apps still unavailable in appStore after all retries`));
   }
 }
-

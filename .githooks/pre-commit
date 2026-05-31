@@ -1,38 +1,64 @@
 #!/usr/bin/env bash
-# Pre-commit hook: format and lint staged Python files with ruff. Fast only —
-# heavy validation (basedpyright, lint-imports, cosmic bans, pytest) runs in CI
-# on PR push, not in the commit hook. Keep this hook fast (<2s) so commits don't
-# become friction; CI + branch protection is where correctness is enforced.
+# Pre-commit hook: format (and lint) staged source files. Fast only —
+# heavy validation (basedpyright, lint-imports, cosmic bans, pytest, eslint,
+# full prettier --check) runs in CI on PR push, not in the commit hook. Keep
+# this hook fast (<2s) so commits don't become friction; CI + branch protection
+# is where correctness is enforced.
+#
+# Two independent sections — Python (ruff) and frontend (prettier). A no-op or
+# missing tool in one section must NOT skip the other, so each section guards
+# itself rather than exiting the whole hook.
 
+# --- Python: format + lint staged files with ruff -------------------------
 # Find ruff — prefer Mason binary, fall back to PATH
 RUFF="${HOME}/.local/share/nvim/mason/bin/ruff"
 if [ ! -x "$RUFF" ]; then
     RUFF="$(command -v ruff 2>/dev/null)"
 fi
 if [ -z "$RUFF" ]; then
-    echo "pre-commit: ruff not found (install via Mason or pip), skipping"
-    exit 0
-fi
+    echo "pre-commit: ruff not found (install via Mason or pip), skipping Python format"
+else
+    # Get staged Python files. Skip the Python step if none changed.
+    STAGED=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
+    if [ -n "$STAGED" ]; then
+        # Format staged files, then re-stage
+        $RUFF format $STAGED
+        $RUFF check --fix $STAGED
 
-# Get staged Python files. Hook exits early if no Python changed.
-STAGED=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
-if [ -z "$STAGED" ]; then
-    exit 0
-fi
+        # Re-stage any files that were modified by ruff
+        for file in $STAGED; do
+            if [ -f "$file" ]; then
+                git add "$file"
+            fi
+        done
 
-# Format staged files, then re-stage
-$RUFF format $STAGED
-$RUFF check --fix $STAGED
-
-# Re-stage any files that were modified by ruff
-for file in $STAGED; do
-    if [ -f "$file" ]; then
-        git add "$file"
+        # Final ruff check — abort on unfixable errors (e.g. line too long)
+        if ! $RUFF check $STAGED; then
+            echo "pre-commit: ruff found unfixable errors, aborting commit"
+            exit 1
+        fi
     fi
-done
+fi
 
-# Final ruff check — abort on unfixable errors (e.g. line too long)
-if ! $RUFF check $STAGED; then
-    echo "pre-commit: ruff found unfixable errors, aborting commit"
-    exit 1
+# --- Frontend: format staged TypeScript with Prettier ---------------------
+# Find prettier — prefer the project-local node_modules binary, fall back to PATH
+PRETTIER="$(git rev-parse --show-toplevel)/node_modules/.bin/prettier"
+if [ ! -x "$PRETTIER" ]; then
+    PRETTIER="$(command -v prettier 2>/dev/null)"
+fi
+if [ -z "$PRETTIER" ]; then
+    echo "pre-commit: prettier not found (run 'mise run setup'), skipping frontend format"
+else
+    # Get staged frontend files. Skip the frontend step if none changed.
+    STAGED_FE=$(git diff --cached --name-only --diff-filter=ACM -- 'src/*.ts' 'src/*.tsx')
+    if [ -n "$STAGED_FE" ]; then
+        # Format staged files, then re-stage
+        $PRETTIER --write $STAGED_FE
+
+        for file in $STAGED_FE; do
+            if [ -f "$file" ]; then
+                git add "$file"
+            fi
+        done
+    fi
 fi

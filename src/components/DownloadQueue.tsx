@@ -1,11 +1,5 @@
 import { useState, useEffect, useRef, FC } from "react";
-import {
-  PanelSection,
-  PanelSectionRow,
-  ButtonItem,
-  Field,
-  ProgressBarWithInfo,
-} from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, Field, ProgressBarWithInfo } from "@decky/ui";
 import { getDownloadQueue, cancelDownload } from "../api/backend";
 import { getDownloadState, setDownloads } from "../utils/downloadStore";
 import { formatBytes } from "../utils/formatters";
@@ -39,15 +33,17 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
   };
 
   // Un-clear rom_ids that have new active downloads (re-download case)
-  const unclearRestarted = (current: DownloadItem[]) => (prev: Set<number>): Set<number> => {
-    const restarted = current.filter(
-      (d) => (d.status === "downloading" || d.status === "queued") && prev.has(d.rom_id),
-    );
-    if (restarted.length === 0) return prev;
-    const next = new Set(prev);
-    for (const d of restarted) next.delete(d.rom_id);
-    return next;
-  };
+  const unclearRestarted =
+    (current: DownloadItem[]) =>
+    (prev: Set<number>): Set<number> => {
+      const restarted = current.filter(
+        (d) => (d.status === "downloading" || d.status === "queued") && prev.has(d.rom_id),
+      );
+      if (restarted.length === 0) return prev;
+      const next = new Set(prev);
+      for (const d of restarted) next.delete(d.rom_id);
+      return next;
+    };
 
   const pollTick = () => {
     const current = getDownloadState();
@@ -95,16 +91,10 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
   };
 
   const visible = downloads.filter((d) => !cleared.has(d.rom_id));
-  const active = visible.filter(
-    (d) => d.status === "queued" || d.status === "downloading"
-  );
-  const finished = visible.filter(
-    (d) => d.status === "completed" || d.status === "failed" || d.status === "cancelled"
-  );
+  const active = visible.filter((d) => d.status === "queued" || d.status === "downloading");
+  const finished = visible.filter((d) => d.status === "completed" || d.status === "failed" || d.status === "cancelled");
   const hasFinished = downloads.some(
-    (d) =>
-      !cleared.has(d.rom_id) &&
-      (d.status === "completed" || d.status === "failed" || d.status === "cancelled")
+    (d) => !cleared.has(d.rom_id) && (d.status === "completed" || d.status === "failed" || d.status === "cancelled"),
   );
 
   return (
@@ -132,11 +122,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
             {active.map((item) => (
               <PanelSectionRow key={item.rom_id}>
                 <ProgressBarWithInfo
-                  nProgress={
-                    item.total_bytes > 0
-                      ? (item.bytes_downloaded / item.total_bytes) * 100
-                      : undefined
-                  }
+                  nProgress={item.total_bytes > 0 ? (item.bytes_downloaded / item.total_bytes) * 100 : undefined}
                   indeterminate={item.total_bytes === 0}
                   sOperationText={`${item.rom_name} (${item.platform_name})`}
                   sTimeRemaining={
@@ -151,7 +137,9 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
               <PanelSectionRow key={`cancel-${item.rom_id}`}>
                 <ButtonItem
                   layout="below"
-                  onClick={() => { detach(handleCancel(item.rom_id)); }}
+                  onClick={() => {
+                    detach(handleCancel(item.rom_id));
+                  }}
                 >
                   Cancel {item.rom_name}
                 </ButtonItem>
@@ -160,10 +148,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
 
             {finished.map((item) => (
               <PanelSectionRow key={item.rom_id}>
-                <Field
-                  label={item.rom_name}
-                  description={formatFinishedDescription(item)}
-                />
+                <Field label={item.rom_name} description={formatFinishedDescription(item)} />
               </PanelSectionRow>
             ))}
 

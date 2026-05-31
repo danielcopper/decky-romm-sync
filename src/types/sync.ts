@@ -25,14 +25,7 @@ export interface CollectionSyncSetting {
   is_favorite: boolean;
 }
 
-export type SyncStage =
-  | "discovering"
-  | "fetching"
-  | "applying"
-  | "finalizing"
-  | "done"
-  | "cancelled"
-  | "error";
+export type SyncStage = "discovering" | "fetching" | "applying" | "finalizing" | "done" | "cancelled" | "error";
 
 export interface SyncProgress {
   running: boolean;

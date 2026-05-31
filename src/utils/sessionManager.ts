@@ -7,13 +7,7 @@
  */
 
 import { toaster } from "@decky/api";
-import {
-  recordSessionStart,
-  getAppIdRomIdMap,
-  finalizeGameSession,
-  logInfo,
-  logError,
-} from "../api/backend";
+import { recordSessionStart, getAppIdRomIdMap, finalizeGameSession, logInfo, logError } from "../api/backend";
 import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
@@ -153,30 +147,28 @@ export async function initSessionManager(): Promise<void> {
   await refreshAppIdMap();
 
   // Game lifecycle notifications
-  lifetimeHook = SteamClient.GameSessions.RegisterForAppLifetimeNotifications(
-    (update) => {
-      lifecycleChain = lifecycleChain
-        .then(async () => {
-          if (update.bRunning) {
-            // Game started — wait for Router.MainRunningApp to populate
-            await delay(500);
-            const running = typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
-            const appId = running?.appid ?? update.unAppID;
-            if (appId) {
-              // Refresh map in case a sync happened since init
-              await refreshAppIdMap();
-              await handleGameStart(appId);
-            }
-          } else {
-            // Game stopped
-            await handleGameStop();
+  lifetimeHook = SteamClient.GameSessions.RegisterForAppLifetimeNotifications((update) => {
+    lifecycleChain = lifecycleChain
+      .then(async () => {
+        if (update.bRunning) {
+          // Game started — wait for Router.MainRunningApp to populate
+          await delay(500);
+          const running = typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
+          const appId = running?.appid ?? update.unAppID;
+          if (appId) {
+            // Refresh map in case a sync happened since init
+            await refreshAppIdMap();
+            await handleGameStart(appId);
           }
-        })
-        .catch((e) => {
-          logError(`Lifecycle event error: ${e}`);
-        });
-    },
-  );
+        } else {
+          // Game stopped
+          await handleGameStop();
+        }
+      })
+      .catch((e) => {
+        logError(`Lifecycle event error: ${e}`);
+      });
+  });
 
   // Suspend/resume for accurate playtime
   try {

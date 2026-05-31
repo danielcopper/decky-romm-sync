@@ -14,9 +14,7 @@ vi.mock("../utils/artwork", () => ({
 
 // Find a <button> whose text content contains `text`.
 function buttonContaining(container: HTMLElement, text: string): HTMLButtonElement {
-  const btn = Array.from(container.querySelectorAll("button")).find((b) =>
-    (b.textContent ?? "").includes(text),
-  );
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes(text));
   if (!btn) throw new Error(`button containing "${text}" not found`);
   return btn as HTMLButtonElement;
 }
@@ -48,9 +46,7 @@ describe("SgdbGamePickerModal", () => {
           romId: 88,
           appId: 6000,
           romName: "Mario",
-          candidates: [
-            { id: 1, name: "Super Mario", release_year: 1985, thumb_url: "https://x/m.png" },
-          ],
+          candidates: [{ id: 1, name: "Super Mario", release_year: 1985, thumb_url: "https://x/m.png" }],
           onApplied,
           closeModal,
         }),
@@ -78,9 +74,7 @@ describe("SgdbGamePickerModal", () => {
           closeModal: vi.fn(),
         }),
       );
-      expect(container.textContent).toContain(
-        "No SteamGridDB match was found automatically",
-      );
+      expect(container.textContent).toContain("No SteamGridDB match was found automatically");
     });
 
     it("does not render the 'top 6' note when there are no results", () => {
@@ -103,9 +97,7 @@ describe("SgdbGamePickerModal", () => {
           romId: 88,
           appId: 6000,
           romName: "Mario",
-          candidates: [
-            { id: 1, name: "Super Mario", release_year: 1985, thumb_url: null },
-          ],
+          candidates: [{ id: 1, name: "Super Mario", release_year: 1985, thumb_url: null }],
           onApplied: vi.fn(),
           closeModal: vi.fn(),
         }),
@@ -202,9 +194,7 @@ describe("SgdbGamePickerModal", () => {
       await flushAsync();
       // Catch's observable effects: the inline error + the debugLog.
       expect(container.textContent).toContain("Search failed");
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("searchSgdbGames rejected"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("searchSgdbGames rejected"));
     });
 
     it("R2 (TRIGGER_RIGHT) on the body fires a search", async () => {
@@ -218,10 +208,7 @@ describe("SgdbGamePickerModal", () => {
       // DOM event). GamepadButton.TRIGGER_RIGHT === 8.
       const body = container.querySelector('[data-testid="focusable"]') as HTMLElement;
       await act(async () => {
-        fireEvent(
-          body,
-          new CustomEvent("decky-button-down", { detail: { button: 8 } }),
-        );
+        fireEvent(body, new CustomEvent("decky-button-down", { detail: { button: 8 } }));
       });
       await flushAsync();
       expect(vi.mocked(backend.searchSgdbGames)).toHaveBeenCalledWith("Zelda");
@@ -233,10 +220,7 @@ describe("SgdbGamePickerModal", () => {
       const body = container.querySelector('[data-testid="focusable"]') as HTMLElement;
       await act(async () => {
         // GamepadButton.DIR_DOWN === 10 — navigation, not search.
-        fireEvent(
-          body,
-          new CustomEvent("decky-button-down", { detail: { button: 10 } }),
-        );
+        fireEvent(body, new CustomEvent("decky-button-down", { detail: { button: 10 } }));
       });
       await flushAsync();
       expect(vi.mocked(backend.searchSgdbGames)).not.toHaveBeenCalled();
@@ -297,9 +281,7 @@ describe("SgdbGamePickerModal", () => {
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({ body: "Failed to apply artwork selection" }),
       );
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("applySgdbGameId rejected"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("applySgdbGameId rejected"));
     });
 
     it("applyArtwork returning -1 → key toast", async () => {
@@ -336,9 +318,7 @@ describe("SgdbGamePickerModal", () => {
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({ body: "No artwork available for this game" }),
       );
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("applyArtwork rejected"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("applyArtwork rejected"));
       expect(onApplied).toHaveBeenCalledWith(0);
     });
   });

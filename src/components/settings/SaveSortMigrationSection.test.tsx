@@ -8,13 +8,14 @@ import type { SaveSortMigrationStatus } from "../../types";
 // disabled state while migrating.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 vi.mock("@decky/ui", () => ({
-  PanelSection: (p: AnyProps) =>
-    createElement("section", {}, p.children as never),
-  PanelSectionRow: (p: AnyProps) =>
-    createElement("div", {}, p.children as never),
-  Field: (p: AnyProps & { label?: unknown }) =>
-    createElement("div", { "data-testid": "field" }, p.label as never),
-  ButtonItem: ({ children, onClick, disabled }: AnyProps & {
+  PanelSection: (p: AnyProps) => createElement("section", {}, p.children as never),
+  PanelSectionRow: (p: AnyProps) => createElement("div", {}, p.children as never),
+  Field: (p: AnyProps & { label?: unknown }) => createElement("div", { "data-testid": "field" }, p.label as never),
+  ButtonItem: ({
+    children,
+    onClick,
+    disabled,
+  }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
   }) => createElement("button", { onClick, disabled }, children as never),
@@ -30,9 +31,7 @@ function makeMigration(overrides: Partial<SaveSortMigrationStatus> = {}): SaveSo
   };
 }
 
-function defaultProps(
-  overrides: Partial<React.ComponentProps<typeof SaveSortMigrationSection>> = {},
-) {
+function defaultProps(overrides: Partial<React.ComponentProps<typeof SaveSortMigrationSection>> = {}) {
   return {
     migration: makeMigration(),
     migrating: false,
@@ -52,50 +51,38 @@ describe("SaveSortMigrationSection", () => {
 
     it("renders the 'From:' line when old_settings is present", () => {
       const { container } = render(<SaveSortMigrationSection {...defaultProps()} />);
-      expect(container.textContent).toContain(
-        "From: Sort by content: OFF, Sort by core: OFF",
-      );
+      expect(container.textContent).toContain("From: Sort by content: OFF, Sort by core: OFF");
     });
 
     it("renders the 'To:' line when new_settings is present", () => {
       const { container } = render(<SaveSortMigrationSection {...defaultProps()} />);
-      expect(container.textContent).toContain(
-        "To: Sort by content: ON, Sort by core: OFF",
-      );
+      expect(container.textContent).toContain("To: Sort by content: ON, Sort by core: OFF");
     });
 
     it("omits the 'From:' line when old_settings is missing", () => {
       const { container } = render(
-        <SaveSortMigrationSection
-          {...defaultProps({ migration: makeMigration({ old_settings: undefined }) })}
-        />,
+        <SaveSortMigrationSection {...defaultProps({ migration: makeMigration({ old_settings: undefined }) })} />,
       );
       expect(container.textContent).not.toContain("From:");
     });
 
     it("omits the 'To:' line when new_settings is missing", () => {
       const { container } = render(
-        <SaveSortMigrationSection
-          {...defaultProps({ migration: makeMigration({ new_settings: undefined }) })}
-        />,
+        <SaveSortMigrationSection {...defaultProps({ migration: makeMigration({ new_settings: undefined }) })} />,
       );
       expect(container.textContent).not.toContain("To:");
     });
 
     it("renders the saves_count line", () => {
       const { container } = render(
-        <SaveSortMigrationSection
-          {...defaultProps({ migration: makeMigration({ saves_count: 7 }) })}
-        />,
+        <SaveSortMigrationSection {...defaultProps({ migration: makeMigration({ saves_count: 7 }) })} />,
       );
       expect(container.textContent).toContain("7 save file(s) to migrate");
     });
 
     it("falls back to '0 save file(s) to migrate' when saves_count is missing", () => {
       const { container } = render(
-        <SaveSortMigrationSection
-          {...defaultProps({ migration: makeMigration({ saves_count: undefined }) })}
-        />,
+        <SaveSortMigrationSection {...defaultProps({ migration: makeMigration({ saves_count: undefined }) })} />,
       );
       expect(container.textContent).toContain("0 save file(s) to migrate");
     });
@@ -104,26 +91,20 @@ describe("SaveSortMigrationSection", () => {
   describe("buttons", () => {
     it("calls onMigrate when 'Migrate Save Files' is clicked", () => {
       const onMigrate = vi.fn();
-      const { getByText } = render(
-        <SaveSortMigrationSection {...defaultProps({ onMigrate })} />,
-      );
+      const { getByText } = render(<SaveSortMigrationSection {...defaultProps({ onMigrate })} />);
       fireEvent.click(getByText("Migrate Save Files"));
       expect(onMigrate).toHaveBeenCalledTimes(1);
     });
 
     it("calls onDismiss when 'Dismiss (I migrated manually)' is clicked", () => {
       const onDismiss = vi.fn();
-      const { getByText } = render(
-        <SaveSortMigrationSection {...defaultProps({ onDismiss })} />,
-      );
+      const { getByText } = render(<SaveSortMigrationSection {...defaultProps({ onDismiss })} />);
       fireEvent.click(getByText("Dismiss (I migrated manually)"));
       expect(onDismiss).toHaveBeenCalledTimes(1);
     });
 
     it("renders 'Migrating...' label and disables both buttons while migrating=true", () => {
-      const { getByText } = render(
-        <SaveSortMigrationSection {...defaultProps({ migrating: true })} />,
-      );
+      const { getByText } = render(<SaveSortMigrationSection {...defaultProps({ migrating: true })} />);
       const migrateBtn = getByText("Migrating...");
       const dismissBtn = getByText("Dismiss (I migrated manually)");
       expect(migrateBtn).toBeDisabled();

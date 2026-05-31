@@ -62,11 +62,7 @@ import type {
 vi.mock("./VersionErrorCard", () => ({
   useVersionError: vi.fn(() => null),
   VersionErrorCard: (props: { message: string; compact?: boolean }) =>
-    createElement(
-      "div",
-      { "data-testid": "version-error-card" },
-      props.message,
-    ),
+    createElement("div", { "data-testid": "version-error-card" }, props.message),
 }));
 
 vi.mock("./MigrationBlockedPage", () => ({
@@ -125,24 +121,17 @@ vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 vi.mock("@decky/ui", async () => {
   type AnyProps = Record<string, unknown> & { children?: unknown };
   const { createElement: ce } = await import("react");
-  const passthrough = (tag: string) => (p: AnyProps) =>
-    ce(tag, {}, p.children as never);
+  const passthrough = (tag: string) => (p: AnyProps) => ce(tag, {}, p.children as never);
   return {
     PanelSection: (p: AnyProps & { title?: unknown }) =>
       ce(
         "section",
         { "data-testid": "panel-section", "data-title": typeof p.title === "string" ? p.title : undefined },
-        typeof p.title === "string"
-          ? ce("h2", { "data-testid": "panel-title" }, p.title)
-          : null,
+        typeof p.title === "string" ? ce("h2", { "data-testid": "panel-title" }, p.title) : null,
         p.children as never,
       ),
     PanelSectionRow: passthrough("div"),
-    ButtonItem: ({
-      children,
-      onClick,
-      disabled,
-    }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       ce("button", { onClick, disabled }, children as never),
     Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
       ce(
@@ -152,11 +141,13 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "field-desc" }, p.description as never),
         p.children as never,
       ),
-    ToggleField: (p: AnyProps & {
-      checked?: boolean;
-      onChange?: (v: boolean) => void;
-      label?: unknown;
-    }) =>
+    ToggleField: (
+      p: AnyProps & {
+        checked?: boolean;
+        onChange?: (v: boolean) => void;
+        label?: unknown;
+      },
+    ) =>
       ce(
         "div",
         { "data-testid": "toggle" },
@@ -164,33 +155,31 @@ vi.mock("@decky/ui", async () => {
           type: "checkbox",
           "data-testid": "toggle-input",
           checked: p.checked ?? false,
-          onChange: (e: { target: { checked: boolean } }) =>
-            p.onChange?.(e.target.checked),
+          onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
         }),
         typeof p.label === "string" ? p.label : null,
       ),
     Spinner: () => ce("div", { "data-testid": "spinner" }),
-    DialogButton: ({
-      children,
-      onClick,
-      disabled,
-    }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    DialogButton: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       ce("button", { "data-testid": "dialog-button", onClick, disabled }, children as never),
-    ConfirmModal: (p: AnyProps & {
-      strTitle?: string;
-      strDescription?: string;
-      strOKButtonText?: string;
-      strCancelButtonText?: string;
-      onOK?: () => void;
-      onCancel?: () => void;
-    }) =>
-      ce("div", { "data-testid": "confirm-modal" }, p.children as never),
-    ProgressBarWithInfo: (p: AnyProps & {
-      nProgress?: number;
-      indeterminate?: boolean;
-      sOperationText?: string;
-      sTimeRemaining?: string;
-    }) =>
+    ConfirmModal: (
+      p: AnyProps & {
+        strTitle?: string;
+        strDescription?: string;
+        strOKButtonText?: string;
+        strCancelButtonText?: string;
+        onOK?: () => void;
+        onCancel?: () => void;
+      },
+    ) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
+    ProgressBarWithInfo: (
+      p: AnyProps & {
+        nProgress?: number;
+        indeterminate?: boolean;
+        sOperationText?: string;
+        sTimeRemaining?: string;
+      },
+    ) =>
       ce(
         "div",
         { "data-testid": "progress" },
@@ -244,13 +233,8 @@ function defaultStats(): SyncStats {
   };
 }
 
-function buttonByExactText(
-  container: HTMLElement,
-  text: string,
-): HTMLButtonElement | null {
-  const btn = Array.from(container.querySelectorAll("button")).find(
-    (b) => b.textContent === text,
-  );
+function buttonByExactText(container: HTMLElement, text: string): HTMLButtonElement | null {
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === text);
   return (btn as HTMLButtonElement | undefined) ?? null;
 }
 
@@ -262,9 +246,7 @@ function lastConfirmModalProps<T = Record<string, unknown>>(): T | null {
 }
 
 function fieldLabels(container: HTMLElement): string[] {
-  return Array.from(
-    container.querySelectorAll('[data-testid="field-label"]'),
-  ).map((n) => n.textContent ?? "");
+  return Array.from(container.querySelectorAll('[data-testid="field-label"]')).map((n) => n.textContent ?? "");
 }
 
 // -----------------------------------------------------------------------------
@@ -291,38 +273,26 @@ describe("MainPage", () => {
     vi.mocked(useVersionError).mockReturnValue(null);
 
     // Re-stub migrationStore impls.
-    vi.mocked(migrationStore.getMigrationState).mockImplementation(
-      () => currentMigrationState,
-    );
-    vi.mocked(migrationStore.setMigrationStatus).mockImplementation(
-      (s: MigrationStatus) => {
-        currentMigrationState = s;
-        migrationListeners.forEach((fn) => fn());
-      },
-    );
-    vi.mocked(migrationStore.onMigrationChange).mockImplementation(
-      (cb: () => void) => {
-        migrationListeners.push(cb);
-        return () => {
-          const i = migrationListeners.indexOf(cb);
-          if (i >= 0) migrationListeners.splice(i, 1);
-        };
-      },
-    );
+    vi.mocked(migrationStore.getMigrationState).mockImplementation(() => currentMigrationState);
+    vi.mocked(migrationStore.setMigrationStatus).mockImplementation((s: MigrationStatus) => {
+      currentMigrationState = s;
+      migrationListeners.forEach((fn) => fn());
+    });
+    vi.mocked(migrationStore.onMigrationChange).mockImplementation((cb: () => void) => {
+      migrationListeners.push(cb);
+      return () => {
+        const i = migrationListeners.indexOf(cb);
+        if (i >= 0) migrationListeners.splice(i, 1);
+      };
+    });
 
     // Re-stub saveSortMigrationStore impls.
-    vi.mocked(
-      saveSortMigrationStore.getSaveSortMigrationState,
-    ).mockImplementation(() => currentSaveSortState);
-    vi.mocked(
-      saveSortMigrationStore.setSaveSortMigrationStatus,
-    ).mockImplementation((s: SaveSortMigrationStatus) => {
+    vi.mocked(saveSortMigrationStore.getSaveSortMigrationState).mockImplementation(() => currentSaveSortState);
+    vi.mocked(saveSortMigrationStore.setSaveSortMigrationStatus).mockImplementation((s: SaveSortMigrationStatus) => {
       currentSaveSortState = s;
       saveSortListeners.forEach((fn) => fn());
     });
-    vi.mocked(
-      saveSortMigrationStore.onSaveSortMigrationChange,
-    ).mockImplementation((cb: () => void) => {
+    vi.mocked(saveSortMigrationStore.onSaveSortMigrationChange).mockImplementation((cb: () => void) => {
       saveSortListeners.push(cb);
       return () => {
         const i = saveSortListeners.indexOf(cb);
@@ -418,9 +388,7 @@ describe("MainPage", () => {
     it("renders the full panel with Status / Sync / Settings sections by default", async () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      const titles = Array.from(
-        container.querySelectorAll('[data-testid="panel-title"]'),
-      ).map((n) => n.textContent);
+      const titles = Array.from(container.querySelectorAll('[data-testid="panel-title"]')).map((n) => n.textContent);
       expect(titles).toEqual(expect.arrayContaining(["Status", "Sync", "Settings"]));
     });
   });
@@ -438,10 +406,8 @@ describe("MainPage", () => {
       });
       render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(vi.mocked(migrationStore.setMigrationStatus))
-        .toHaveBeenCalledWith(retrodeck);
-      expect(vi.mocked(saveSortMigrationStore.setSaveSortMigrationStatus))
-        .toHaveBeenCalledWith(saveSort);
+      expect(vi.mocked(migrationStore.setMigrationStatus)).toHaveBeenCalledWith(retrodeck);
+      expect(vi.mocked(saveSortMigrationStore.setSaveSortMigrationStatus)).toHaveBeenCalledWith(saveSort);
     });
 
     it("logs the failure when refreshMigrationState rejects", async () => {
@@ -449,9 +415,7 @@ describe("MainPage", () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to refresh migration state"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to refresh migration state"));
       logSpy.mockRestore();
     });
 
@@ -542,8 +506,7 @@ describe("MainPage", () => {
       // button) and the determinate bar shows the recovered stage label.
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
       expect(buttonByExactText(container, "Sync Library")).toBeNull();
-      expect(container.querySelector('[data-testid="sync-stage"]')?.textContent)
-        .toContain("Fetching library");
+      expect(container.querySelector('[data-testid="sync-stage"]')?.textContent).toContain("Fetching library");
     });
 
     it("logs the failure when getSyncStatus rejects on mount", async () => {
@@ -551,9 +514,7 @@ describe("MainPage", () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to query sync status"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to query sync status"));
       // Falls back to the idle UI — the Sync Library button stays available.
       expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
       logSpy.mockRestore();
@@ -564,9 +525,7 @@ describe("MainPage", () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load sync stats"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to load sync stats"));
       logSpy.mockRestore();
     });
 
@@ -575,9 +534,7 @@ describe("MainPage", () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to test connection"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to test connection"));
       logSpy.mockRestore();
     });
 
@@ -586,9 +543,7 @@ describe("MainPage", () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load settings"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to load settings"));
       logSpy.mockRestore();
     });
   });
@@ -649,7 +604,10 @@ describe("MainPage", () => {
   describe("ConnectionIndicator", () => {
     it("connected=null (testConnection never resolves) renders 'Checking...' + Spinner", async () => {
       vi.mocked(backend.testConnection).mockImplementation(
-        () => new Promise(() => { /* never */ }),
+        () =>
+          new Promise(() => {
+            /* never */
+          }),
       );
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -677,10 +635,7 @@ describe("MainPage", () => {
   // E. Module helpers — exercised via rendered output
   // ===========================================================================
   describe("formatBytes (via active download progress remaining text)", () => {
-    async function renderWithActiveDownload(
-      bytes: number,
-      total: number,
-    ): Promise<HTMLElement> {
+    async function renderWithActiveDownload(bytes: number, total: number): Promise<HTMLElement> {
       const item: DownloadItem = {
         rom_id: 1,
         rom_name: "Test ROM",
@@ -695,7 +650,10 @@ describe("MainPage", () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       // mount useEffect resolves, then advance the 1000ms downloadPollRef so
       // local `downloads` state populates from the store.
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1100);
       });
@@ -727,10 +685,7 @@ describe("MainPage", () => {
     });
 
     it("renders bytes in GB range with 2 decimals", async () => {
-      const c = await renderWithActiveDownload(
-        Math.round(1.5 * 1024 * 1024 * 1024),
-        2 * 1024 * 1024 * 1024,
-      );
+      const c = await renderWithActiveDownload(Math.round(1.5 * 1024 * 1024 * 1024), 2 * 1024 * 1024 * 1024);
       const remaining = c.querySelector('[data-testid="progress-remaining"]');
       expect(remaining?.textContent).toContain("1.50 GB");
       expect(remaining?.textContent).toContain("2.00 GB");
@@ -745,9 +700,7 @@ describe("MainPage", () => {
 
   describe("formatLastSync (via Last sync field)", () => {
     function lastSyncText(container: HTMLElement): string | null {
-      const labels = Array.from(
-        container.querySelectorAll('[data-testid="field-label"]'),
-      );
+      const labels = Array.from(container.querySelectorAll('[data-testid="field-label"]'));
       const idx = labels.findIndex((n) => n.textContent === "Last sync");
       if (idx < 0) return null;
       // Field's children contains the <span> for the value text.
@@ -840,9 +793,7 @@ describe("MainPage", () => {
 
     it("renders 'Everything is up to date.' when no diffs", async () => {
       const c = await renderPreview({});
-      const descs = Array.from(
-        c.querySelectorAll('[data-testid="field-desc"]'),
-      ).map((n) => n.textContent);
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       expect(descs).toContain("Everything is up to date.");
     });
 
@@ -852,9 +803,7 @@ describe("MainPage", () => {
         changed_count: 1,
         remove_count: 2,
       });
-      const descs = Array.from(
-        c.querySelectorAll('[data-testid="field-desc"]'),
-      ).map((n) => n.textContent);
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       expect(descs.some((d) => d?.includes("ROMs: 3 added, 1 updated, 2 removed"))).toBe(true);
     });
 
@@ -866,9 +815,7 @@ describe("MainPage", () => {
           removed_count: 1,
         },
       });
-      const descs = Array.from(
-        c.querySelectorAll('[data-testid="field-desc"]'),
-      ).map((n) => n.textContent);
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       expect(descs.some((d) => d?.includes("Platforms: 2 added, 1 removed"))).toBe(true);
     });
 
@@ -880,9 +827,7 @@ describe("MainPage", () => {
           removed: ["C"],
         },
       });
-      const descs = Array.from(
-        c.querySelectorAll('[data-testid="field-desc"]'),
-      ).map((n) => n.textContent);
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       expect(descs.some((d) => d?.includes("Collections: 2 added, 1 removed"))).toBe(true);
     });
 
@@ -892,9 +837,7 @@ describe("MainPage", () => {
         changed_count: 0,
         remove_count: 0,
       });
-      const descs = Array.from(
-        c.querySelectorAll('[data-testid="field-desc"]'),
-      ).map((n) => n.textContent);
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       // Should render "ROMs: 1 added" — no "updated" or "removed" tokens.
       const romsLine = descs.find((d) => d?.startsWith("ROMs:"));
       expect(romsLine).toBe("ROMs: 1 added");
@@ -917,8 +860,7 @@ describe("MainPage", () => {
       const op = container.querySelector('[data-testid="sync-stage"]');
       expect(op?.textContent).toContain("Applying shortcuts");
       // The caption's step span carries the coarse "step/totalSteps" counter.
-      expect(container.querySelector('[data-testid="sync-step"]')?.textContent)
-        .toContain("2/5");
+      expect(container.querySelector('[data-testid="sync-step"]')?.textContent).toContain("2/5");
       // Determinate: 2/5 * 100 = 40.
       expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("40");
       expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
@@ -1427,9 +1369,9 @@ describe("MainPage", () => {
 
     it("clicking the Fix button opens the ConfirmModal via showModal", async () => {
       const container = await renderWithWarning();
-      const fixBtn = Array.from(
-        container.querySelectorAll('[data-testid="dialog-button"]'),
-      ).find((b) => b.textContent === "Fix") as HTMLButtonElement | undefined;
+      const fixBtn = Array.from(container.querySelectorAll('[data-testid="dialog-button"]')).find(
+        (b) => b.textContent === "Fix",
+      ) as HTMLButtonElement | undefined;
       expect(fixBtn).not.toBeUndefined();
       fireEvent.click(fixBtn!);
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
@@ -1447,9 +1389,9 @@ describe("MainPage", () => {
         message: "Done",
       });
       const container = await renderWithWarning();
-      const fixBtn = Array.from(
-        container.querySelectorAll('[data-testid="dialog-button"]'),
-      ).find((b) => b.textContent === "Fix") as HTMLButtonElement | undefined;
+      const fixBtn = Array.from(container.querySelectorAll('[data-testid="dialog-button"]')).find(
+        (b) => b.textContent === "Fix",
+      ) as HTMLButtonElement | undefined;
       fireEvent.click(fixBtn!);
       const props = lastConfirmModalProps<{ onOK?: () => void | Promise<void> }>();
       await act(async () => {
@@ -1464,9 +1406,9 @@ describe("MainPage", () => {
         message: "Could not write",
       });
       const container = await renderWithWarning();
-      const fixBtn = Array.from(
-        container.querySelectorAll('[data-testid="dialog-button"]'),
-      ).find((b) => b.textContent === "Fix") as HTMLButtonElement | undefined;
+      const fixBtn = Array.from(container.querySelectorAll('[data-testid="dialog-button"]')).find(
+        (b) => b.textContent === "Fix",
+      ) as HTMLButtonElement | undefined;
       fireEvent.click(fixBtn!);
       const props = lastConfirmModalProps<{ onOK?: () => void | Promise<void> }>();
       await act(async () => {
@@ -1479,9 +1421,9 @@ describe("MainPage", () => {
     it("onOK rejection is silently swallowed (warning stays, no crash)", async () => {
       vi.mocked(backend.fixRetroarchInputDriver).mockRejectedValue(new Error("perm"));
       const container = await renderWithWarning();
-      const fixBtn = Array.from(
-        container.querySelectorAll('[data-testid="dialog-button"]'),
-      ).find((b) => b.textContent === "Fix") as HTMLButtonElement | undefined;
+      const fixBtn = Array.from(container.querySelectorAll('[data-testid="dialog-button"]')).find(
+        (b) => b.textContent === "Fix",
+      ) as HTMLButtonElement | undefined;
       fireEvent.click(fixBtn!);
       const props = lastConfirmModalProps<{ onOK?: () => void | Promise<void> }>();
       await act(async () => {
@@ -1552,7 +1494,10 @@ describe("MainPage", () => {
         ]);
         const onNavigate = vi.fn();
         const { container } = render(<MainPage onNavigate={onNavigate} />);
-        await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+        });
         // downloadPollRef ticks at 1000ms — advance one tick to populate state.
         await act(async () => {
           await vi.advanceTimersByTimeAsync(1100);
@@ -1584,7 +1529,10 @@ describe("MainPage", () => {
 
     async function renderAndTick(): Promise<HTMLElement> {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1100);
       });
@@ -1593,9 +1541,7 @@ describe("MainPage", () => {
 
     it("hidden when no downloads in the store", async () => {
       const container = await renderAndTick();
-      const titles = Array.from(
-        container.querySelectorAll('[data-testid="panel-title"]'),
-      ).map((n) => n.textContent);
+      const titles = Array.from(container.querySelectorAll('[data-testid="panel-title"]')).map((n) => n.textContent);
       expect(titles).not.toContain("Downloads");
     });
 
@@ -1613,17 +1559,42 @@ describe("MainPage", () => {
         },
       ]);
       const container = await renderAndTick();
-      const titles = Array.from(
-        container.querySelectorAll('[data-testid="panel-title"]'),
-      ).map((n) => n.textContent);
+      const titles = Array.from(container.querySelectorAll('[data-testid="panel-title"]')).map((n) => n.textContent);
       expect(titles).toContain("Downloads");
     });
 
     it("shows '+N more downloading' when more than 2 active downloads", async () => {
       setDownloads([
-        { rom_id: 1, rom_name: "A", platform_name: "X", file_name: "a", status: "downloading", progress: 0, bytes_downloaded: 0, total_bytes: 1024 },
-        { rom_id: 2, rom_name: "B", platform_name: "X", file_name: "b", status: "downloading", progress: 0, bytes_downloaded: 0, total_bytes: 1024 },
-        { rom_id: 3, rom_name: "C", platform_name: "X", file_name: "c", status: "downloading", progress: 0, bytes_downloaded: 0, total_bytes: 1024 },
+        {
+          rom_id: 1,
+          rom_name: "A",
+          platform_name: "X",
+          file_name: "a",
+          status: "downloading",
+          progress: 0,
+          bytes_downloaded: 0,
+          total_bytes: 1024,
+        },
+        {
+          rom_id: 2,
+          rom_name: "B",
+          platform_name: "X",
+          file_name: "b",
+          status: "downloading",
+          progress: 0,
+          bytes_downloaded: 0,
+          total_bytes: 1024,
+        },
+        {
+          rom_id: 3,
+          rom_name: "C",
+          platform_name: "X",
+          file_name: "c",
+          status: "downloading",
+          progress: 0,
+          bytes_downloaded: 0,
+          total_bytes: 1024,
+        },
       ]);
       const container = await renderAndTick();
       expect(container.textContent).toContain("+1 more downloading");
@@ -1631,8 +1602,26 @@ describe("MainPage", () => {
 
     it("shows 'N completed' count for finished items", async () => {
       setDownloads([
-        { rom_id: 1, rom_name: "A", platform_name: "X", file_name: "a", status: "completed", progress: 100, bytes_downloaded: 100, total_bytes: 100 },
-        { rom_id: 2, rom_name: "B", platform_name: "X", file_name: "b", status: "failed", progress: 0, bytes_downloaded: 0, total_bytes: 100 },
+        {
+          rom_id: 1,
+          rom_name: "A",
+          platform_name: "X",
+          file_name: "a",
+          status: "completed",
+          progress: 100,
+          bytes_downloaded: 100,
+          total_bytes: 100,
+        },
+        {
+          rom_id: 2,
+          rom_name: "B",
+          platform_name: "X",
+          file_name: "b",
+          status: "failed",
+          progress: 0,
+          bytes_downloaded: 0,
+          total_bytes: 100,
+        },
       ]);
       const container = await renderAndTick();
       expect(container.textContent).toContain("2 completed");
@@ -1789,7 +1778,10 @@ describe("MainPage", () => {
       // The button must be gone (replaced by Cancel Sync) immediately.
       let resolveStart: (v: { success: boolean; message: string }) => void = () => {};
       vi.mocked(backend.startSync).mockImplementation(
-        () => new Promise((res) => { resolveStart = res; }),
+        () =>
+          new Promise((res) => {
+            resolveStart = res;
+          }),
       );
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -1832,4 +1824,3 @@ describe("MainPage", () => {
     });
   });
 });
-

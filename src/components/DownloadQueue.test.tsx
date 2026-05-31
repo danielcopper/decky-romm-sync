@@ -23,10 +23,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { DownloadQueue } from "./DownloadQueue";
 import * as backend from "../api/backend";
-import {
-  setDownloads,
-  getDownloadState,
-} from "../utils/downloadStore";
+import { setDownloads, getDownloadState } from "../utils/downloadStore";
 import type { DownloadItem } from "../types";
 
 // Local @decky/ui mock adds ProgressBarWithInfo (not in the global stub) and
@@ -34,17 +31,11 @@ import type { DownloadItem } from "../types";
 vi.mock("@decky/ui", async () => {
   type AnyProps = Record<string, unknown> & { children?: unknown };
   const { createElement: ce } = await import("react");
-  const passthrough = (tag: string) => (p: AnyProps) =>
-    ce(tag, p, p.children as never);
+  const passthrough = (tag: string) => (p: AnyProps) => ce(tag, p, p.children as never);
   return {
-    PanelSection: (p: AnyProps & { title?: unknown }) =>
-      ce("section", { title: p.title }, p.children as never),
+    PanelSection: (p: AnyProps & { title?: unknown }) => ce("section", { title: p.title }, p.children as never),
     PanelSectionRow: passthrough("div"),
-    ButtonItem: ({
-      children,
-      onClick,
-      disabled,
-    }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       ce("button", { onClick, disabled }, children as never),
     Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
       ce(
@@ -65,21 +56,9 @@ vi.mock("@decky/ui", async () => {
         "div",
         { "data-testid": "progress" },
         ce("span", { "data-testid": "progress-op" }, p.sOperationText as never),
-        ce(
-          "span",
-          { "data-testid": "progress-remaining" },
-          p.sTimeRemaining as never,
-        ),
-        ce(
-          "span",
-          { "data-testid": "progress-progress" },
-          String(p.nProgress),
-        ),
-        ce(
-          "span",
-          { "data-testid": "progress-indeterminate" },
-          String(p.indeterminate),
-        ),
+        ce("span", { "data-testid": "progress-remaining" }, p.sTimeRemaining as never),
+        ce("span", { "data-testid": "progress-progress" }, String(p.nProgress)),
+        ce("span", { "data-testid": "progress-indeterminate" }, String(p.indeterminate)),
       ),
   };
 });
@@ -100,23 +79,13 @@ function makeItem(overrides: Partial<DownloadItem> = {}): DownloadItem {
   };
 }
 
-function buttonByText(
-  container: HTMLElement,
-  text: string,
-): HTMLButtonElement | null {
-  const btn = Array.from(container.querySelectorAll("button")).find((b) =>
-    (b.textContent ?? "").includes(text),
-  );
+function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | null {
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes(text));
   return (btn as HTMLButtonElement | undefined) ?? null;
 }
 
-function buttonByExactText(
-  container: HTMLElement,
-  text: string,
-): HTMLButtonElement | null {
-  const btn = Array.from(container.querySelectorAll("button")).find(
-    (b) => b.textContent === text,
-  );
+function buttonByExactText(container: HTMLElement, text: string): HTMLButtonElement | null {
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === text);
   return (btn as HTMLButtonElement | undefined) ?? null;
 }
 
@@ -232,9 +201,7 @@ describe("DownloadQueue", () => {
 
       // After unmount, clearInterval must have been called with the id we
       // captured from setInterval.
-      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(
-        callsBeforeUnmount,
-      );
+      expect(clearIntervalSpy.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
       expect(clearIntervalSpy).toHaveBeenCalledWith(expectedId);
 
       setIntervalSpy.mockRestore();
@@ -307,8 +274,7 @@ describe("DownloadQueue", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500);
       });
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent)
-        .toBe("Queued (Genesis)");
+      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Queued (Genesis)");
     });
 
     it("if no cleared rom_id matches, cleared Set stays the same instance (no needless re-set)", async () => {
@@ -374,8 +340,7 @@ describe("DownloadQueue", () => {
         await Promise.resolve();
       });
       // Component still rendered normally — the catch swallowed cleanly.
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent)
-        .toBe("Cancellable (Genesis)");
+      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Cancellable (Genesis)");
     });
   });
 
@@ -410,26 +375,23 @@ describe("DownloadQueue", () => {
       await flushMount();
 
       // Before clearing: all three finished Fields render.
-      const labelsBefore = Array.from(
-        container.querySelectorAll('[data-testid="field-label"]'),
-      ).map((n) => n.textContent);
-      expect(labelsBefore).toEqual(
-        expect.arrayContaining(["Done", "Broke", "Stopped"]),
+      const labelsBefore = Array.from(container.querySelectorAll('[data-testid="field-label"]')).map(
+        (n) => n.textContent,
       );
+      expect(labelsBefore).toEqual(expect.arrayContaining(["Done", "Broke", "Stopped"]));
 
       await act(async () => {
         fireEvent.click(buttonByExactText(container, "Clear Completed")!);
       });
 
       // After clearing: finished Fields are gone; active progress bar remains.
-      const labelsAfter = Array.from(
-        container.querySelectorAll('[data-testid="field-label"]'),
-      ).map((n) => n.textContent);
+      const labelsAfter = Array.from(container.querySelectorAll('[data-testid="field-label"]')).map(
+        (n) => n.textContent,
+      );
       expect(labelsAfter).not.toContain("Done");
       expect(labelsAfter).not.toContain("Broke");
       expect(labelsAfter).not.toContain("Stopped");
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent)
-        .toBe("Active (Genesis)");
+      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Active (Genesis)");
       // Clear Completed button is gone (no finished items remain).
       expect(buttonByExactText(container, "Clear Completed")).toBeNull();
     });
@@ -443,9 +405,7 @@ describe("DownloadQueue", () => {
       vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [] });
       const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
-      const labels = Array.from(
-        container.querySelectorAll('[data-testid="field-label"]'),
-      ).map((n) => n.textContent);
+      const labels = Array.from(container.querySelectorAll('[data-testid="field-label"]')).map((n) => n.textContent);
       expect(labels).toContain("No downloads");
     });
 
@@ -463,19 +423,10 @@ describe("DownloadQueue", () => {
       const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
       // 512 / 2048 * 100 = 25
-      expect(
-        container.querySelector('[data-testid="progress-progress"]')?.textContent,
-      ).toBe("25");
-      expect(
-        container.querySelector('[data-testid="progress-indeterminate"]')
-          ?.textContent,
-      ).toBe("false");
-      expect(
-        container.querySelector('[data-testid="progress-remaining"]')?.textContent,
-      ).toBe("512 B / 2.0 KB");
-      expect(
-        container.querySelector('[data-testid="progress-op"]')?.textContent,
-      ).toBe("Det (Genesis)");
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("25");
+      expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
+      expect(container.querySelector('[data-testid="progress-remaining"]')?.textContent).toBe("512 B / 2.0 KB");
+      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Det (Genesis)");
     });
 
     it("active item with total_bytes === 0: nProgress=undefined, indeterminate=true, sTimeRemaining = formatBytes(bytes_downloaded)", async () => {
@@ -492,16 +443,9 @@ describe("DownloadQueue", () => {
       const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
       // String(undefined) → "undefined".
-      expect(
-        container.querySelector('[data-testid="progress-progress"]')?.textContent,
-      ).toBe("undefined");
-      expect(
-        container.querySelector('[data-testid="progress-indeterminate"]')
-          ?.textContent,
-      ).toBe("true");
-      expect(
-        container.querySelector('[data-testid="progress-remaining"]')?.textContent,
-      ).toBe("700 B");
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("undefined");
+      expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("true");
+      expect(container.querySelector('[data-testid="progress-remaining"]')?.textContent).toBe("700 B");
     });
 
     it("finished list: completed → 'Completed — <bytes>'", async () => {
@@ -611,37 +555,27 @@ describe("DownloadQueue", () => {
 
     it("0 bytes → '0 B'", async () => {
       const c = await renderCompleted(0);
-      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe(
-        "Completed — 0 B",
-      );
+      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe("Completed — 0 B");
     });
 
     it("< 1024 → '<n> B'", async () => {
       const c = await renderCompleted(512);
-      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe(
-        "Completed — 512 B",
-      );
+      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe("Completed — 512 B");
     });
 
     it("exactly 1024 → '1.0 KB'", async () => {
       const c = await renderCompleted(1024);
-      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe(
-        "Completed — 1.0 KB",
-      );
+      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe("Completed — 1.0 KB");
     });
 
     it("MB range → 'X.X MB'", async () => {
       const c = await renderCompleted(5 * 1024 * 1024);
-      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe(
-        "Completed — 5.0 MB",
-      );
+      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe("Completed — 5.0 MB");
     });
 
     it("GB range → 'X.XX GB'", async () => {
       const c = await renderCompleted(Math.round(1.5 * 1024 * 1024 * 1024));
-      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe(
-        "Completed — 1.50 GB",
-      );
+      expect(c.querySelector('[data-testid="field-desc"]')?.textContent).toBe("Completed — 1.50 GB");
     });
   });
 
@@ -659,5 +593,4 @@ describe("DownloadQueue", () => {
       expect(onBack).toHaveBeenCalledTimes(1);
     });
   });
-
 });

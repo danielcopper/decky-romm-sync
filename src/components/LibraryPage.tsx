@@ -25,7 +25,13 @@ import {
   setSystemCore,
   debugLog,
 } from "../api/backend";
-import type { PlatformSyncSetting, CollectionSyncSetting, CollectionKind, CollectionScope, FirmwarePlatformExt } from "../types";
+import type {
+  PlatformSyncSetting,
+  CollectionSyncSetting,
+  CollectionKind,
+  CollectionScope,
+  FirmwarePlatformExt,
+} from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
 
@@ -57,9 +63,7 @@ function filterCollectionsBySubTab(
 ): CollectionSyncSetting[] {
   switch (subTab) {
     case "my":
-      return collections.filter(
-        (c) => c.kind === "user" && (includeFavoritesInMy || !c.is_favorite),
-      );
+      return collections.filter((c) => c.kind === "user" && (includeFavoritesInMy || !c.is_favorite));
     case "smart":
       return collections.filter((c) => c.kind === "smart");
     case "franchise":
@@ -72,11 +76,20 @@ function favoritesDescription(romCount: number): string {
   return `Includes ${romCount} favorited games`;
 }
 
-function getBiosSummary(requiredCount: number, requiredDone: number, allRequiredDone: boolean, optionalMissing: number, done: number, total: number, allDone: boolean) {
+function getBiosSummary(
+  requiredCount: number,
+  requiredDone: number,
+  allRequiredDone: boolean,
+  optionalMissing: number,
+  done: number,
+  total: number,
+  allDone: boolean,
+) {
   if (requiredCount > 0 && allRequiredDone) {
     return {
       summaryLabel: `${requiredDone} / ${requiredCount} required`,
-      summaryDescription: optionalMissing > 0 ? `All required ready (${optionalMissing} optional missing)` : "All required ready",
+      summaryDescription:
+        optionalMissing > 0 ? `All required ready (${optionalMissing} optional missing)` : "All required ready",
     };
   }
   if (requiredCount > 0) {
@@ -164,17 +177,16 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   useEffect(() => {
     if (activeTab === "collections" && !collectionsLoaded.current) {
       collectionsLoaded.current = true;
-      Promise.all([
-        getCollections(),
-        getSettings(),
-      ]).then(([collResult, settingsResult]) => {
-        if (collResult.success) {
-          setCollections(collResult.collections);
-        } else {
-          setCollectionsError(true);
-        }
-        setPlatformGroups(!!settingsResult.collection_create_platform_groups);
-      }).catch(() => setCollectionsError(true))
+      Promise.all([getCollections(), getSettings()])
+        .then(([collResult, settingsResult]) => {
+          if (collResult.success) {
+            setCollections(collResult.collections);
+          } else {
+            setCollectionsError(true);
+          }
+          setPlatformGroups(!!settingsResult.collection_create_platform_groups);
+        })
+        .catch(() => setCollectionsError(true))
         .finally(() => setCollectionsLoading(false));
     }
   }, [activeTab]);
@@ -213,15 +225,11 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
 
   // --- Platforms tab handlers ---
   const handleToggle = async (id: number, enabled: boolean) => {
-    setSyncPlatforms((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, sync_enabled: enabled } : p))
-    );
+    setSyncPlatforms((prev) => prev.map((p) => (p.id === id ? { ...p, sync_enabled: enabled } : p)));
     try {
       await savePlatformSync(id, enabled);
     } catch {
-      setSyncPlatforms((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, sync_enabled: !enabled } : p))
-      );
+      setSyncPlatforms((prev) => prev.map((p) => (p.id === id ? { ...p, sync_enabled: !enabled } : p)));
     }
   };
 
@@ -237,14 +245,12 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
 
   // --- Collections tab handlers ---
   const handleCollectionToggle = async (id: string, kind: CollectionKind, enabled: boolean) => {
-    setCollections((prev) =>
-      prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: enabled } : c))
-    );
+    setCollections((prev) => prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: enabled } : c)));
     try {
       await saveCollectionSync(id, kind, enabled);
     } catch {
       setCollections((prev) =>
-        prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: !enabled } : c))
+        prev.map((c) => (c.id === id && c.kind === kind ? { ...c, sync_enabled: !enabled } : c)),
       );
     }
   };
@@ -253,7 +259,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     const previous = collections.map((c) => ({ ...c }));
     // Optimistically flip only the entries in the active sub-tab.
     setCollections((prev) =>
-      prev.map((c) => (filterCollectionsBySubTab([c], scope).length > 0 ? { ...c, sync_enabled: enabled } : c))
+      prev.map((c) => (filterCollectionsBySubTab([c], scope).length > 0 ? { ...c, sync_enabled: enabled } : c)),
     );
     try {
       await setAllCollectionsSync(enabled, scope);
@@ -318,12 +324,22 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     return (
       <>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => { detach(handleSetAll(true)); }}>
+          <ButtonItem
+            layout="below"
+            onClick={() => {
+              detach(handleSetAll(true));
+            }}
+          >
             Enable All
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => { detach(handleSetAll(false)); }}>
+          <ButtonItem
+            layout="below"
+            onClick={() => {
+              detach(handleSetAll(false));
+            }}
+          >
             Disable All
           </ButtonItem>
         </PanelSectionRow>
@@ -333,7 +349,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               label={platform.name}
               description={`${platform.rom_count} ROMs`}
               checked={platform.sync_enabled}
-              onChange={(value: boolean) => { detach(handleToggle(platform.id, value)); }}
+              onChange={(value: boolean) => {
+                detach(handleToggle(platform.id, value));
+              }}
             />
           </PanelSectionRow>
         ))}
@@ -346,7 +364,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     if (collectionsLoading) {
       return (
         <PanelSection title="Collections">
-          <PanelSectionRow><Spinner /></PanelSectionRow>
+          <PanelSectionRow>
+            <Spinner />
+          </PanelSectionRow>
         </PanelSection>
       );
     }
@@ -386,9 +406,15 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               checked={platformGroups}
               onChange={(value: boolean) => {
                 setPlatformGroups(value);
-                detach((async () => {
-                  try { await saveCollectionPlatformGroups(value); } catch { setPlatformGroups(!value); }
-                })());
+                detach(
+                  (async () => {
+                    try {
+                      await saveCollectionPlatformGroups(value);
+                    } catch {
+                      setPlatformGroups(!value);
+                    }
+                  })(),
+                );
               }}
             />
           </PanelSectionRow>
@@ -398,15 +424,14 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                 label="Sync RomM favorites"
                 description={favoritesDescription(favoritesCollection.rom_count)}
                 checked={favoritesCollection.sync_enabled}
-                onChange={(value: boolean) => { detach(handleCollectionToggle(favoritesCollection.id, favoritesCollection.kind, value)); }}
+                onChange={(value: boolean) => {
+                  detach(handleCollectionToggle(favoritesCollection.id, favoritesCollection.kind, value));
+                }}
               />
             </PanelSectionRow>
           )}
         </PanelSection>
-        <Focusable
-          flow-children="horizontal"
-          style={{ display: "flex", gap: "4px", padding: "0 16px 12px" }}
-        >
+        <Focusable flow-children="horizontal" style={{ display: "flex", gap: "4px", padding: "0 16px 12px" }}>
           {SUB_TAB_ORDER.map((sub) => (
             <DialogButton
               key={sub}
@@ -425,19 +450,20 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
         </Focusable>
         <PanelSection title={sectionTitle}>
           <PanelSectionRow>
-            <Focusable
-              flow-children="horizontal"
-              style={{ display: "flex", gap: "8px" }}
-            >
+            <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px" }}>
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
-                onClick={() => { detach(handleSetAllCollections(true, activeSubTab)); }}
+                onClick={() => {
+                  detach(handleSetAllCollections(true, activeSubTab));
+                }}
               >
                 Enable All
               </DialogButton>
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
-                onClick={() => { detach(handleSetAllCollections(false, activeSubTab)); }}
+                onClick={() => {
+                  detach(handleSetAllCollections(false, activeSubTab));
+                }}
               >
                 Disable All
               </DialogButton>
@@ -454,7 +480,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                   label={collection.name}
                   description={`${collection.rom_count} ROMs`}
                   checked={collection.sync_enabled}
-                  onChange={(value: boolean) => { detach(handleCollectionToggle(collection.id, collection.kind, value)); }}
+                  onChange={(value: boolean) => {
+                    detach(handleCollectionToggle(collection.id, collection.kind, value));
+                  }}
                 />
               </PanelSectionRow>
             ))
@@ -483,7 +511,15 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     const optionalMissing = platform.files.filter((f) => f.classification === "optional" && !f.downloaded).length;
 
     const needsAttention = platform.has_games && !allRequiredDone;
-    const { summaryLabel, summaryDescription } = getBiosSummary(requiredCount, requiredDone, allRequiredDone, optionalMissing, done, total, allDone);
+    const { summaryLabel, summaryDescription } = getBiosSummary(
+      requiredCount,
+      requiredDone,
+      allRequiredDone,
+      optionalMissing,
+      done,
+      total,
+      allDone,
+    );
     const hasRequiredMissing = requiredCount > 0 && !allRequiredDone;
     const hasOptionalMissing = optionalMissing > 0;
 
@@ -493,10 +529,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
         title={`${platform.platform_slug}${needsAttention ? " — BIOS needed" : ""}`}
       >
         <PanelSectionRow>
-          <Field
-            label={summaryLabel}
-            description={summaryDescription}
-          />
+          <Field label={summaryLabel} description={summaryDescription} />
         </PanelSectionRow>
         {platform.available_cores && platform.available_cores.length > 1 && (
           <PanelSectionRow>
@@ -508,42 +541,57 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                   label: c.is_default ? `${c.label} (default)` : c.label,
                 })),
               ]}
-              selectedOption={platform.active_core_label || platform.available_cores.find((c) => c.is_default)?.label || ""}
+              selectedOption={
+                platform.active_core_label || platform.available_cores.find((c) => c.is_default)?.label || ""
+              }
               onChange={(option: { data: string }) => {
-                detach((async () => {
-                  const defaultCore = platform.available_cores?.find((c) => c.is_default);
-                  const label = option.data === defaultCore?.label ? "" : option.data;
-                  detach(debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`));
-                  try {
-                    const result = await setSystemCore(platform.platform_slug, label);
-                    detach(debugLog(`setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`));
-                    if (result.success) {
-                      await refreshBios();
-                      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platform.platform_slug } }));
+                detach(
+                  (async () => {
+                    const defaultCore = platform.available_cores?.find((c) => c.is_default);
+                    const label = option.data === defaultCore?.label ? "" : option.data;
+                    detach(
+                      debugLog(
+                        `setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`,
+                      ),
+                    );
+                    try {
+                      const result = await setSystemCore(platform.platform_slug, label);
+                      detach(
+                        debugLog(
+                          `setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`,
+                        ),
+                      );
+                      if (result.success) {
+                        await refreshBios();
+                        globalThis.dispatchEvent(
+                          new CustomEvent("romm_data_changed", {
+                            detail: { type: "core_changed", platform_slug: platform.platform_slug },
+                          }),
+                        );
+                      }
+                    } catch (e) {
+                      detach(debugLog(`setSystemCore: error: ${e}`));
                     }
-                  } catch (e) {
-                    detach(debugLog(`setSystemCore: error: ${e}`));
-                  }
-                })());
+                  })(),
+                );
               }}
             />
           </PanelSectionRow>
         )}
         {platform.active_core_label && (!platform.available_cores || platform.available_cores.length <= 1) && (
           <PanelSectionRow>
-            <Field
-              label="Core"
-              description={platform.active_core_label}
-            />
+            <Field label="Core" description={platform.active_core_label} />
           </PanelSectionRow>
         )}
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={() => setExpanded((prev) => ({
-              ...prev,
-              [platform.platform_slug]: !prev[platform.platform_slug],
-            }))}
+            onClick={() =>
+              setExpanded((prev) => ({
+                ...prev,
+                [platform.platform_slug]: !prev[platform.platform_slug],
+              }))
+            }
           >
             {isExpanded ? "Hide Files" : `Show Files (${total})`}
           </ButtonItem>
@@ -566,14 +614,16 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                   <Field
                     label={
                       <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <span style={{
-                          display: "inline-block",
-                          width: "8px",
-                          height: "8px",
-                          borderRadius: "50%",
-                          backgroundColor: dotColor,
-                          flexShrink: 0,
-                        }} />
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: "8px",
+                            height: "8px",
+                            borderRadius: "50%",
+                            backgroundColor: dotColor,
+                            flexShrink: 0,
+                          }}
+                        />
                         {`${file.description || file.file_name} (${file.classification})`}
                       </span>
                     }
@@ -600,7 +650,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              onClick={() => { detach(handleDownloadRequired(platform.platform_slug)); }}
+              onClick={() => {
+                detach(handleDownloadRequired(platform.platform_slug));
+              }}
               disabled={isDownloading}
             >
               {isDownloading ? "Downloading..." : "Download Required"}
@@ -611,7 +663,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              onClick={() => { detach(handleDownloadAll(platform.platform_slug)); }}
+              onClick={() => {
+                detach(handleDownloadAll(platform.platform_slug));
+              }}
               disabled={isDownloading}
             >
               {isDownloading ? "Downloading..." : "Download All"}
@@ -637,41 +691,48 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
-      <Focusable
-        flow-children="horizontal"
-        style={{ display: "flex", gap: "4px", padding: "0 16px 12px" }}
-      >
+      <Focusable flow-children="horizontal" style={{ display: "flex", gap: "4px", padding: "0 16px 12px" }}>
         <DialogButton
-          style={{ flex: 1, minWidth: 0, padding: "10px 0", opacity: activeTab === "platforms" ? 1 : 0.5, borderBottom: activeTab === "platforms" ? "2px solid #1a9fff" : "2px solid transparent" }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: "10px 0",
+            opacity: activeTab === "platforms" ? 1 : 0.5,
+            borderBottom: activeTab === "platforms" ? "2px solid #1a9fff" : "2px solid transparent",
+          }}
           onClick={() => setActiveTab("platforms")}
         >
           Platforms
         </DialogButton>
         <DialogButton
-          style={{ flex: 1, minWidth: 0, padding: "10px 0", opacity: activeTab === "collections" ? 1 : 0.5, borderBottom: activeTab === "collections" ? "2px solid #1a9fff" : "2px solid transparent" }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: "10px 0",
+            opacity: activeTab === "collections" ? 1 : 0.5,
+            borderBottom: activeTab === "collections" ? "2px solid #1a9fff" : "2px solid transparent",
+          }}
           onClick={handleCollectionsTabClick}
         >
           Collections
         </DialogButton>
         <DialogButton
-          style={{ flex: 1, minWidth: 0, padding: "10px 0", opacity: activeTab === "bios" ? 1 : 0.5, borderBottom: activeTab === "bios" ? "2px solid #1a9fff" : "2px solid transparent" }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: "10px 0",
+            opacity: activeTab === "bios" ? 1 : 0.5,
+            borderBottom: activeTab === "bios" ? "2px solid #1a9fff" : "2px solid transparent",
+          }}
           onClick={() => setActiveTab("bios")}
         >
           BIOS
         </DialogButton>
       </Focusable>
 
-      {activeTab === "platforms" && (
-        <PanelSection title="Platforms">
-          {renderPlatformsContent()}
-        </PanelSection>
-      )}
+      {activeTab === "platforms" && <PanelSection title="Platforms">{renderPlatformsContent()}</PanelSection>}
 
-      {activeTab === "collections" && (
-        <>
-          {renderCollectionsContent()}
-        </>
-      )}
+      {activeTab === "collections" && <>{renderCollectionsContent()}</>}
 
       {activeTab === "bios" && (
         <>

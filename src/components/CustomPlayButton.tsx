@@ -46,7 +46,16 @@ import { showSyncConflictModal } from "./SyncConflictModal";
 import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent, SyncConflict } from "../types";
 import { detach } from "../utils/detach";
 
-type PlayButtonState = "loading" | "not_romm" | "download" | "conflict" | "syncing" | "play" | "launching" | "dl_complete" | "uninstalling";
+type PlayButtonState =
+  | "loading"
+  | "not_romm"
+  | "download"
+  | "conflict"
+  | "syncing"
+  | "play"
+  | "launching"
+  | "dl_complete"
+  | "uninstalling";
 
 async function handleConflicts(conflicts: SyncConflict[]): Promise<"cancel" | "resolved"> {
   // Backend now emits exactly one conflict type (sync_conflict). Walk them
@@ -71,17 +80,18 @@ function lerpColor(a: [number, number, number], b: [number, number, number], t: 
 }
 
 // Download button blue gradient stops
-const BLUE_LEFT: [number, number, number] = [26, 159, 255];   // #1a9fff
-const BLUE_RIGHT: [number, number, number] = [0, 120, 212];   // #0078d4
+const BLUE_LEFT: [number, number, number] = [26, 159, 255]; // #1a9fff
+const BLUE_RIGHT: [number, number, number] = [0, 120, 212]; // #0078d4
 // Play button visible green (computed from gradient + backgroundSize 330% + backgroundPosition 25%)
-const GREEN_LEFT: [number, number, number] = [80, 200, 47];   // #50c82f
-const GREEN_RIGHT: [number, number, number] = [24, 177, 78];  // #18b14e
+const GREEN_LEFT: [number, number, number] = [80, 200, 47]; // #50c82f
+const GREEN_RIGHT: [number, number, number] = [24, 177, 78]; // #18b14e
 
 function formatProgress(downloaded: number, total: number): string {
   // Show "x / y MB" with unit only on the total
   if (total < 1024) return `${downloaded} / ${total} B`;
   if (total < 1024 * 1024) return `${(downloaded / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} KB`;
-  if (total < 1024 * 1024 * 1024) return `${(downloaded / (1024 * 1024)).toFixed(1)} / ${(total / (1024 * 1024)).toFixed(1)} MB`;
+  if (total < 1024 * 1024 * 1024)
+    return `${(downloaded / (1024 * 1024)).toFixed(1)} / ${(total / (1024 * 1024)).toFixed(1)} MB`;
   return `${(downloaded / (1024 * 1024 * 1024)).toFixed(2)} / ${(total / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
@@ -104,6 +114,9 @@ function showLaunchConfirmation(title: string, message: string): Promise<boolean
   });
 }
 
+// S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops
+// Prettier from relocating the trailing comment into the body (which would break the suppression).
+// prettier-ignore
 export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — handlePlay gate chain; decomposed into gate-chain helpers in #389. Remaining cc is inherent to gate logic.
   const [state, setState] = useState<PlayButtonState>("loading");
   const [romId, setRomId] = useState<number | null>(null);
@@ -119,7 +132,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   useEffect(() => {
     const cls = basicAppDetailsSectionStylerClasses?.PlaySection;
     if (cls) hideNativePlaySection(cls);
-    return () => { showNativePlaySection(); };
+    return () => {
+      showNativePlaySection();
+    };
   }, []);
 
   // Clear transition timers (dl_complete→play, uninstalling→download) on unmount
@@ -172,7 +187,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
 
     detach(init());
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [appId]);
 
   // Listen for download events
@@ -220,7 +237,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       const romId = (e as CustomEvent).detail?.rom_id;
       if (romId !== romIdRef.current) return;
       // Don't override uninstalling animation if we triggered it ourselves
-      setState((prev) => prev === "uninstalling" ? prev : "download");
+      setState((prev) => (prev === "uninstalling" ? prev : "download"));
       setActionPending(false);
     };
     globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
@@ -316,7 +333,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // Detects emulator core change since last launch; if changed, surfaces the
   // core-change confirm modal. Returns true to proceed, false to bail.
   const confirmCoreChangeIfNeeded = async (rid: number): Promise<boolean> => {
-    const coreCheck = await checkCoreChange(rid).catch((): { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string } => ({ changed: false }));
+    const coreCheck = await checkCoreChange(rid).catch(
+      (): { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string } => ({
+        changed: false,
+      }),
+    );
     if (!coreCheck.changed) return true;
     return showCoreChangeModal(
       coreCheck.old_label ?? coreCheck.old_core ?? "Unknown",
@@ -347,7 +368,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
       ]);
 
-      detach(debugLog(`CustomPlayButton: preLaunchSync result: synced=${result.synced} conflicts=${result.conflicts?.length ?? 0} success=${result.success}`));
+      detach(
+        debugLog(
+          `CustomPlayButton: preLaunchSync result: synced=${result.synced} conflicts=${result.conflicts?.length ?? 0} success=${result.success}`,
+        ),
+      );
 
       if (result.conflicts && result.conflicts.length > 0) {
         const conflictResult = await handleConflicts(result.conflicts);
@@ -383,6 +408,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
   // Coordinator: runs each pre-launch gate in sequence, bailing on the first
   // cancel. All branch-specific UI lives in the helpers above.
+  // S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops
+  // Prettier from relocating the trailing comment into the body (which would break the suppression).
+  // prettier-ignore
   const handlePlay = async () => { // NOSONAR(typescript:S3776) — gate chain coordinator; decomposed into gate helpers in #389. Remaining cc is inherent to gate logic.
     if (state === "syncing" || state === "launching") return; // debounce
     const overview = appStore.GetAppOverviewByAppID(appId);
@@ -489,7 +517,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const showDropdownMenu = (e: MouseEvent) => {
     showContextMenu(
       <Menu label="RomM Actions">
-        <MenuItem key="uninstall" tone="destructive" onClick={() => { detach(handleUninstall()); }}>
+        <MenuItem
+          key="uninstall"
+          tone="destructive"
+          onClick={() => {
+            detach(handleUninstall());
+          }}
+        >
           Uninstall
         </MenuItem>
       </Menu>,
@@ -541,11 +575,15 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // "Ready!" state — must match the Play button exactly (same classes + Green tint)
     return (
       <Focusable
-        className={[appActionButtonClasses?.PlayButtonContainer, appActionButtonClasses?.Green].filter(Boolean).join(" ")}
+        className={[appActionButtonClasses?.PlayButtonContainer, appActionButtonClasses?.Green]
+          .filter(Boolean)
+          .join(" ")}
         style={btnContainerStyle}
       >
         <DialogButton
-          className={[appActionButtonClasses?.PlayButton, "romm-btn-play", "romm-dl-complete-flash"].filter(Boolean).join(" ")}
+          className={[appActionButtonClasses?.PlayButton, "romm-btn-play", "romm-dl-complete-flash"]
+            .filter(Boolean)
+            .join(" ")}
           style={{
             ...mainBtnStyle,
             borderRadius: "2px",
@@ -561,9 +599,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   }
 
   if (state === "download") {
-    const t = dlProgress && dlProgress.totalBytes > 0
-      ? dlProgress.bytesDownloaded / dlProgress.totalBytes
-      : 0;
+    const t = dlProgress && dlProgress.totalBytes > 0 ? dlProgress.bytesDownloaded / dlProgress.totalBytes : 0;
     const downloading = actionPending && dlProgress;
 
     // Fill color shifts from blue to green as download progresses
@@ -572,9 +608,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       : "linear-gradient(to right, #1a9fff, #0078d4)";
 
     // Pulse color shifts from blue to green with progress
-    const pulseColor = downloading
-      ? lerpColor(BLUE_LEFT, GREEN_LEFT, t)
-      : "rgba(26,159,255,0.7)";
+    const pulseColor = downloading ? lerpColor(BLUE_LEFT, GREEN_LEFT, t) : "rgba(26,159,255,0.7)";
 
     let dlLabel: string;
     if (downloading) {
@@ -596,24 +630,22 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
 
     return (
-      <Focusable
-        ref={containerRef}
-        className={appActionButtonClasses?.PlayButtonContainer}
-        style={btnContainerStyle}
-      >
+      <Focusable ref={containerRef} className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
         <DialogButton
-          className={[
-            appActionButtonClasses?.PlayButton,
-            "romm-btn-download",
-            downloading && "romm-dl-active",
-          ].filter(Boolean).join(" ")}
-          style={{
-            ...mainBtnStyle,
-            borderRadius: "2px",
-            background: baseBg,
-            "--romm-pulse-color": pulseColor,
-          } as React.CSSProperties}
-          onClick={() => { detach(handleDownload()); }}
+          className={[appActionButtonClasses?.PlayButton, "romm-btn-download", downloading && "romm-dl-active"]
+            .filter(Boolean)
+            .join(" ")}
+          style={
+            {
+              ...mainBtnStyle,
+              borderRadius: "2px",
+              background: baseBg,
+              "--romm-pulse-color": pulseColor,
+            } as React.CSSProperties
+          }
+          onClick={() => {
+            detach(handleDownload());
+          }}
           disabled={actionPending || isOffline}
         >
           {/* Progress fill bar */}
@@ -634,12 +666,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
   if (state === "uninstalling") {
     return (
-      <Focusable
-        className={appActionButtonClasses?.PlayButtonContainer}
-        style={btnContainerStyle}
-      >
+      <Focusable className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
         <DialogButton
-          className={[appActionButtonClasses?.PlayButton, "romm-btn-download", "romm-dl-uninstall-flash"].filter(Boolean).join(" ")}
+          className={[appActionButtonClasses?.PlayButton, "romm-btn-download", "romm-dl-uninstall-flash"]
+            .filter(Boolean)
+            .join(" ")}
           style={{
             ...mainBtnStyle,
             borderRadius: "2px",
@@ -656,12 +687,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
   if (state === "launching") {
     return (
-      <Focusable
-        className={appActionButtonClasses?.PlayButtonContainer}
-        style={btnContainerStyle}
-      >
+      <Focusable className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
         <DialogButton
-          className={[appActionButtonClasses?.PlayButton, "romm-btn-play", isOffline && "romm-offline"].filter(Boolean).join(" ")}
+          className={[appActionButtonClasses?.PlayButton, "romm-btn-play", isOffline && "romm-offline"]
+            .filter(Boolean)
+            .join(" ")}
           style={{
             ...mainBtnStyle,
             borderRadius: "2px",
@@ -684,12 +714,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
   if (state === "syncing") {
     return (
-      <Focusable
-        className={appActionButtonClasses?.PlayButtonContainer}
-        style={btnContainerStyle}
-      >
+      <Focusable className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
         <DialogButton
-          className={[appActionButtonClasses?.PlayButton, "romm-btn-play", isOffline && "romm-offline"].filter(Boolean).join(" ")}
+          className={[appActionButtonClasses?.PlayButton, "romm-btn-play", isOffline && "romm-offline"]
+            .filter(Boolean)
+            .join(" ")}
           style={{
             ...mainBtnStyle,
             borderRadius: "2px",
@@ -712,11 +741,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
   if (state === "conflict") {
     return (
-      <Focusable
-        ref={containerRef}
-        className={appActionButtonClasses?.PlayButtonContainer}
-        style={btnContainerStyle}
-      >
+      <Focusable ref={containerRef} className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
         <DialogButton
           className={[appActionButtonClasses?.PlayButton, "romm-btn-conflict"].filter(Boolean).join(" ")}
           style={{
@@ -724,7 +749,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
             borderRadius: "2px",
             background: "linear-gradient(to right, #d4a72c, #b8941f)",
           }}
-          onClick={() => { detach(handleResolveConflict()); }}
+          onClick={() => {
+            detach(handleResolveConflict());
+          }}
         >
           Resolve Conflict
         </DialogButton>
@@ -742,11 +769,15 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   return (
     <Focusable
       ref={containerRef}
-      className={[appActionButtonClasses?.PlayButtonContainer, !isOffline && appActionButtonClasses?.Green].filter(Boolean).join(" ")}
+      className={[appActionButtonClasses?.PlayButtonContainer, !isOffline && appActionButtonClasses?.Green]
+        .filter(Boolean)
+        .join(" ")}
       style={btnContainerStyle}
     >
       <DialogButton
-        className={[appActionButtonClasses?.PlayButton, "romm-btn-play", isOffline && "romm-offline"].filter(Boolean).join(" ")}
+        className={[appActionButtonClasses?.PlayButton, "romm-btn-play", isOffline && "romm-offline"]
+          .filter(Boolean)
+          .join(" ")}
         style={{
           ...mainBtnStyle,
           borderRadius: "2px 0 0 2px",
@@ -754,7 +785,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           backgroundPosition: "25%",
           backgroundSize: "330% 100%",
         }}
-        onClick={() => { detach(handlePlay()); }}
+        onClick={() => {
+          detach(handlePlay());
+        }}
         onFocus={scrollToTop}
       >
         Play
@@ -769,7 +802,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         onFocus={scrollToTop}
       >
         <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M1 1.5L6 6.5L11 1.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M1 1.5L6 6.5L11 1.5"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
       </DialogButton>
     </Focusable>

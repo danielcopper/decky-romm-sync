@@ -131,9 +131,7 @@ describe("refreshBiosInBackground", () => {
     vi.mocked(backend.getBiosStatus).mockResolvedValueOnce({
       bios_status: {
         active_core_label: "Mupen64Plus-Next",
-        available_cores: [
-          { core_so: "x.so", label: "Mupen64Plus-Next", is_default: true },
-        ],
+        available_cores: [{ core_so: "x.so", label: "Mupen64Plus-Next", is_default: true }],
       },
       bios_level: "ok",
       bios_label: "BIOS OK",

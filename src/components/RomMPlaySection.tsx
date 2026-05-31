@@ -49,12 +49,7 @@ import {
 import type { AvailableCore, BiosStatus, SaveStatus } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
-import {
-  applySaveSyncDisplay,
-  extractBiosInfo,
-  resolveSaveSyncLabel,
-  timeoutMs,
-} from "../utils/playSection";
+import { applySaveSyncDisplay, extractBiosInfo, resolveSaveSyncLabel, timeoutMs } from "../utils/playSection";
 import {
   refreshAchievementsInBackground,
   refreshActiveSlotInBackground,
@@ -146,7 +141,9 @@ async function loadCached(
     // Only mark as applied after success so transient failures allow retry on next visit
     if (!artworkApplied.has(appId)) {
       applyArtwork(romId, appId)
-        .then(() => { artworkApplied.add(appId); })
+        .then(() => {
+          artworkApplied.add(appId);
+        })
         .catch((e) => debugLog(`Auto-artwork error: ${e}`));
     }
 
@@ -179,6 +176,9 @@ async function loadCached(
   }
 }
 
+// S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops
+// Prettier from relocating the trailing comment into the body (which would break the suppression).
+// prettier-ignore
 export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — React FC body; decomposed in #392. Holds Steam menu + achievements + save-sync row.
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
@@ -223,7 +223,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
-    const handleSaveSyncSettingsChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>) => {
+    const handleSaveSyncSettingsChange = async (
+      detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>,
+    ) => {
       const enabled = detail.save_sync_enabled;
       if (enabled) {
         const rid = romIdRef.current;
@@ -265,24 +267,41 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       if (!romId) return;
       // If event specifies a rom_id, skip if it's not for this game
       if (detail.rom_id && romIdRef.current && detail.rom_id !== romIdRef.current) return;
-      const saveStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romId).catch((): SaveStatus | null => null);
-      const { status: saveSyncStatus, label: saveSyncLabel } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
-      setInfo((prev) => ({ ...prev, saveSyncStatus, saveSyncLabel, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
+      const saveStatus: SaveStatus | null =
+        detail.save_status ?? (await getSaveStatus(romId).catch((): SaveStatus | null => null));
+      const { status: saveSyncStatus, label: saveSyncLabel } = applySaveSyncDisplay(
+        saveStatus?.save_sync_display,
+        saveStatus,
+      );
+      setInfo((prev) => ({
+        ...prev,
+        saveSyncStatus,
+        saveSyncLabel,
+        activeSlot: saveStatus && "active_slot" in saveStatus ? (saveStatus.active_slot ?? null) : prev.activeSlot,
+      }));
     };
 
     const onDataChanged = (e: Event) => {
-      detach((async () => {
-        try {
-          const detail = (e as CustomEvent).detail;
-          switch (detail?.type) {
-            case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
-            case "core_changed": await handleCoreChange(); break;
-            case "save_sync": await handleSaveSyncChange(detail); break;
+      detach(
+        (async () => {
+          try {
+            const detail = (e as CustomEvent).detail;
+            switch (detail?.type) {
+              case "save_sync_settings":
+                await handleSaveSyncSettingsChange(detail);
+                break;
+              case "core_changed":
+                await handleCoreChange();
+                break;
+              case "save_sync":
+                await handleSaveSyncChange(detail);
+                break;
+            }
+          } catch (err) {
+            detach(debugLog(`RomMPlaySection: onDataChanged error: ${err}`));
           }
-        } catch (err) {
-          detach(debugLog(`RomMPlaySection: onDataChanged error: ${err}`));
-        }
-      })());
+        })(),
+      );
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
@@ -304,11 +323,18 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         const saveStatus = await getSaveStatus(romId);
         if (isCancelled) return;
         const hasConflict = hasAnySaveConflict(saveStatus);
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
-          detail: { type: "save_sync", rom_id: romId, has_conflict: hasConflict },
-        }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync", rom_id: romId, has_conflict: hasConflict },
+          }),
+        );
         const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
-        setInfo((prev) => ({ ...prev, saveSyncStatus: ss, saveSyncLabel: sl, activeSlot: saveStatus && "active_slot" in saveStatus ? saveStatus.active_slot ?? null : prev.activeSlot }));
+        setInfo((prev) => ({
+          ...prev,
+          saveSyncStatus: ss,
+          saveSyncLabel: sl,
+          activeSlot: saveStatus && "active_slot" in saveStatus ? (saveStatus.active_slot ?? null) : prev.activeSlot,
+        }));
       } catch (e) {
         detach(debugLog(`RomMPlaySection: background save check error: ${e}`));
       }
@@ -347,19 +373,22 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       }
     };
     detach(check());
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [info.saveSyncEnabled]);
 
   // Helper: create an info item with header and value (Steam's two-line pattern)
   const infoItem = (key: string, header: string, value: string, extraClass?: string) =>
-    createElement("div", {
-      key,
-      className: `romm-info-item ${extraClass || ""}`.trim(),
-    },
+    createElement(
+      "div",
+      {
+        key,
+        className: `romm-info-item ${extraClass || ""}`.trim(),
+      },
       createElement("div", { className: "romm-info-header" }, header),
       createElement("div", { className: "romm-info-value" }, value),
     );
-
 
   // --- Gear button action handlers ---
 
@@ -383,21 +412,21 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       );
       if (coverResult.success) {
         // Notify the game info panel so it can re-render the cover image.
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
-          detail: { type: "cover_refreshed", rom_id: romId },
-        }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "cover_refreshed", rom_id: romId },
+          }),
+        );
       } else {
         detach(debugLog(`refreshCoverArtwork failed: ${coverResult.reason} — ${coverResult.message}`));
       }
 
       // Step 2: resolve which SGDB game id to use. The backend either picks
       // one automatically (RomM/IGDB) or hands back manual candidates.
-      const resolution = await getSgdbResolution(romId).catch(
-        (e): null => {
-          detach(debugLog(`getSgdbResolution rejected: ${e}`));
-          return null;
-        },
-      );
+      const resolution = await getSgdbResolution(romId).catch((e): null => {
+        detach(debugLog(`getSgdbResolution rejected: ${e}`));
+        return null;
+      });
       if (!resolution) {
         toaster.toast({ title: "RomM Sync", body: "Failed to refresh artwork" });
         return;
@@ -443,7 +472,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     try {
       await getRomMetadata(info.romId);
       toaster.toast({ title: "RomM Sync", body: "Metadata refreshed" });
-      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: info.romId } }));
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", { detail: { type: "metadata", rom_id: info.romId } }),
+      );
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Failed to refresh metadata" });
     } finally {
@@ -469,7 +500,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         }
         if (c > 0) label += `, ${c} conflict(s) need resolution`;
         toaster.toast({ title: "RomM Sync", body: `Saves synced (${label})` });
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: info.romId } }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: info.romId } }),
+        );
         // Refresh save sync status — last_sync_check_at was just set by the backend
         setInfo((prev) => ({ ...prev, saveSyncStatus: "synced" as const, saveSyncLabel: "Just now" }));
       } else {
@@ -489,7 +522,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       const result = await downloadAllFirmware(info.platformSlug);
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `BIOS downloaded (${result.downloaded ?? 0} files)` });
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: info.platformSlug } }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: info.platformSlug } }),
+        );
         // Refresh BIOS status — getBiosStatus ships pre-computed level/label so we don't re-derive.
         if (info.romId) {
           const refreshed = await getBiosStatus(info.romId).catch(() => ({
@@ -539,28 +574,33 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     showModal(
       createElement(ConfirmModal, {
         strTitle: "Delete Local Saves",
-        strDescription: "This will delete local save files for this game. Make sure saves are synced to RomM first — the next sync will re-download them from the server.",
+        strDescription:
+          "This will delete local save files for this game. Make sure saves are synced to RomM first — the next sync will re-download them from the server.",
         strOKButtonText: "Delete",
         strCancelButtonText: "Cancel",
         onOK: () => {
-          detach((async () => {
-            setActionPending("deletesaves");
-            try {
-              const result = await deleteLocalSaves(romId);
-              if (result.success) {
-                toaster.toast({ title: "RomM Sync", body: result.message });
-                // Directly update PlaySection status — no local saves remain
-                setInfo((prev) => ({ ...prev, saveSyncStatus: "none" as const, saveSyncLabel: "No saves" }));
-                globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-              } else {
-                toaster.toast({ title: "RomM Sync", body: result.message || "Failed to delete saves" });
+          detach(
+            (async () => {
+              setActionPending("deletesaves");
+              try {
+                const result = await deleteLocalSaves(romId);
+                if (result.success) {
+                  toaster.toast({ title: "RomM Sync", body: result.message });
+                  // Directly update PlaySection status — no local saves remain
+                  setInfo((prev) => ({ ...prev, saveSyncStatus: "none" as const, saveSyncLabel: "No saves" }));
+                  globalThis.dispatchEvent(
+                    new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }),
+                  );
+                } else {
+                  toaster.toast({ title: "RomM Sync", body: result.message || "Failed to delete saves" });
+                }
+              } catch {
+                toaster.toast({ title: "RomM Sync", body: "Failed to delete saves" });
+              } finally {
+                setActionPending(null);
               }
-            } catch {
-              toaster.toast({ title: "RomM Sync", body: "Failed to delete saves" });
-            } finally {
-              setActionPending(null);
-            }
-          })());
+            })(),
+          );
         },
       }),
     );
@@ -599,7 +639,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         }
         // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)
         invalidateCachedGameDetail(appId);
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: info.platformSlug } }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: info.platformSlug } }),
+        );
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
       }
@@ -610,11 +652,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   const showCoreMenu = (e: Event) => {
     showContextMenu(
-      createElement(Menu, { label: "Emulator Core" },
-        createElement(MenuItem, { key: "core-compat", disabled: true },
+      createElement(
+        Menu,
+        { label: "Emulator Core" },
+        createElement(
+          MenuItem,
+          { key: "core-compat", disabled: true },
           "Switching cores may affect save compatibility",
         ),
-        createElement(MenuItem, { key: "core-retrodeck-bug", disabled: true },
+        createElement(
+          MenuItem,
+          { key: "core-retrodeck-bug", disabled: true },
           "\u26a0 Per-game switch not applied (RetroDECK bug) — use QAM for system-wide",
         ),
         createElement(MenuSeparator, { key: "core-sep" }),
@@ -622,10 +670,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           // Always send the core label — even for the default core.
           // Clearing the override (empty string) would fall back to the platform
           // override, not the ES-DE default, which is confusing.
-          return createElement(MenuItem, {
-            key: `core-${c.core_so}`,
-            onClick: () => { detach(handleChangeGameCore(c.label)); },
-          }, `${c.label}${c.is_default ? " (default)" : ""}${info.activeCoreLabel === c.label ? " \u2713" : ""}`);
+          return createElement(
+            MenuItem,
+            {
+              key: `core-${c.core_so}`,
+              onClick: () => {
+                detach(handleChangeGameCore(c.label));
+              },
+            },
+            `${c.label}${c.is_default ? " (default)" : ""}${info.activeCoreLabel === c.label ? " \u2713" : ""}`,
+          );
         }),
       ),
       getEventTarget(e),
@@ -634,14 +688,66 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   const showRomMMenu = (e: Event) => {
     showContextMenu(
-      createElement(Menu, { label: "RomM Actions" },
-        createElement(MenuItem, { key: "refresh-artwork", onClick: () => { detach(handleRefreshArtwork()); } }, "Refresh Artwork"),
-        createElement(MenuItem, { key: "refresh-metadata", onClick: () => { detach(handleRefreshMetadata()); } }, "Refresh Metadata"),
-        createElement(MenuItem, { key: "sync-saves", onClick: () => { detach(handleSyncSaves()); } }, "Sync Save Files"),
-        createElement(MenuItem, { key: "download-bios", onClick: () => { detach(handleDownloadBios()); } }, "Download BIOS"),
+      createElement(
+        Menu,
+        { label: "RomM Actions" },
+        createElement(
+          MenuItem,
+          {
+            key: "refresh-artwork",
+            onClick: () => {
+              detach(handleRefreshArtwork());
+            },
+          },
+          "Refresh Artwork",
+        ),
+        createElement(
+          MenuItem,
+          {
+            key: "refresh-metadata",
+            onClick: () => {
+              detach(handleRefreshMetadata());
+            },
+          },
+          "Refresh Metadata",
+        ),
+        createElement(
+          MenuItem,
+          {
+            key: "sync-saves",
+            onClick: () => {
+              detach(handleSyncSaves());
+            },
+          },
+          "Sync Save Files",
+        ),
+        createElement(
+          MenuItem,
+          {
+            key: "download-bios",
+            onClick: () => {
+              detach(handleDownloadBios());
+            },
+          },
+          "Download BIOS",
+        ),
         createElement(MenuSeparator, { key: "sep" }),
-        createElement(MenuItem, { key: "delete-saves", tone: "destructive", onClick: handleDeleteSaves }, "Delete Local Saves"),
-        createElement(MenuItem, { key: "uninstall", tone: "destructive", onClick: () => { detach(handleUninstall()); } }, "Uninstall"),
+        createElement(
+          MenuItem,
+          { key: "delete-saves", tone: "destructive", onClick: handleDeleteSaves },
+          "Delete Local Saves",
+        ),
+        createElement(
+          MenuItem,
+          {
+            key: "uninstall",
+            tone: "destructive",
+            onClick: () => {
+              detach(handleUninstall());
+            },
+          },
+          "Uninstall",
+        ),
       ),
       getEventTarget(e),
     );
@@ -649,10 +755,19 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   const showSteamMenu = (e: Event) => {
     showContextMenu(
-      createElement(Menu, { label: "Steam" },
-        createElement(MenuItem, { key: "properties", onClick: () => {
-          SteamClient.Apps.OpenAppSettingsDialog(appId, "general");
-        } }, "Properties"),
+      createElement(
+        Menu,
+        { label: "Steam" },
+        createElement(
+          MenuItem,
+          {
+            key: "properties",
+            onClick: () => {
+              SteamClient.Apps.OpenAppSettingsDialog(appId, "general");
+            },
+          },
+          "Properties",
+        ),
       ),
       getEventTarget(e),
     );
@@ -674,17 +789,25 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Offline indicator (first — most prominent)
   if (connectionState === "offline") {
     infoItems.push(
-      createElement("div", {
-        key: "offline-indicator",
-        className: "romm-info-item",
-      },
-        createElement("div", { className: "romm-info-header" },
+      createElement(
+        "div",
+        {
+          key: "offline-indicator",
+          className: "romm-info-item",
+        },
+        createElement(
+          "div",
+          { className: "romm-info-header" },
           createElement(FaExclamationTriangle, { size: 12, color: "#ff8800" }),
         ),
-        createElement("div", {
-          className: "romm-info-value",
-          style: { color: "#ff8800" },
-        }, "RomM offline"),
+        createElement(
+          "div",
+          {
+            className: "romm-info-value",
+            style: { color: "#ff8800" },
+          },
+          "RomM offline",
+        ),
       ),
     );
   }
@@ -702,9 +825,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Achievements badge (only when RA data available)
   if (info.raId) {
     const hasEarned = info.achievementEarned > 0;
-    const countLabel = info.achievementTotal > 0
-      ? `${info.achievementEarned}/${info.achievementTotal}`
-      : `${info.achievementEarned}`;
+    const countLabel =
+      info.achievementTotal > 0 ? `${info.achievementEarned}/${info.achievementTotal}` : `${info.achievementEarned}`;
 
     // Generate sparkle dots at random fixed positions (only when earned > 0)
     // Positions are deterministic per-index so they don't shift on re-render
@@ -717,36 +839,48 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     ];
     const sparkleDurs = [2.4, 3.5, 2.8, 3.8, 3.1];
     const sparkleDelays = [0, 0.9, 0.3, 1.6, 1.1];
-    const sparkleDots = hasEarned ? sparklePositions.map((pos, i) =>
-      createElement("span", {
-        key: `sparkle-${pos.top}-${pos.left}`,
-        className: "romm-sparkle-dot",
-        style: {
-          "--romm-sparkle-top": pos.top,
-          "--romm-sparkle-left": pos.left,
-          "--romm-sparkle-delay": `${sparkleDelays[i]}s`,
-          "--romm-sparkle-dur": `${sparkleDurs[i]}s`,
-        } satisfies CSSPropertiesWithVars,
-      }),
-    ) : [];
+    const sparkleDots = hasEarned
+      ? sparklePositions.map((pos, i) =>
+          createElement("span", {
+            key: `sparkle-${pos.top}-${pos.left}`,
+            className: "romm-sparkle-dot",
+            style: {
+              "--romm-sparkle-top": pos.top,
+              "--romm-sparkle-left": pos.left,
+              "--romm-sparkle-delay": `${sparkleDelays[i]}s`,
+              "--romm-sparkle-dur": `${sparkleDurs[i]}s`,
+            } satisfies CSSPropertiesWithVars,
+          }),
+        )
+      : [];
 
     infoItems.push(
-      createElement("div", {
-        key: "achievements",
-        className: "romm-info-item romm-cheevo-badge",
-        onClick: () => {
-          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+      createElement(
+        "div",
+        {
+          key: "achievements",
+          className: "romm-info-item romm-cheevo-badge",
+          onClick: () => {
+            globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+          },
         },
-      },
         createElement("div", { className: "romm-info-header" }, "ACHIEVEMENTS"),
-        createElement("div", {
-          className: "romm-cheevo-badge-sparkle",
-        },
+        createElement(
+          "div",
+          {
+            className: "romm-cheevo-badge-sparkle",
+          },
           // Trophy icon with sparkle container
-          createElement("span", { style: { position: "relative", display: "inline-block" } },
-            createElement("span", {
-              className: hasEarned ? "romm-cheevo-trophy" : "romm-cheevo-trophy-none",
-            }, "\uD83C\uDFC6"),
+          createElement(
+            "span",
+            { style: { position: "relative", display: "inline-block" } },
+            createElement(
+              "span",
+              {
+                className: hasEarned ? "romm-cheevo-trophy" : "romm-cheevo-trophy-none",
+              },
+              "\uD83C\uDFC6",
+            ),
             hasEarned ? createElement("span", { className: "romm-sparkle-container" }, ...sparkleDots) : null,
           ),
           createElement("span", { className: "romm-cheevo-count" }, countLabel),
@@ -758,14 +892,20 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Save Sync moved to dedicated tab — show legacy slot warning only
   if (info.activeSlot == null && info.saveSyncEnabled) {
     infoItems.push(
-      createElement("div", {
-        key: "legacy-slot-warning",
-        className: "romm-info-item",
-      },
+      createElement(
+        "div",
+        {
+          key: "legacy-slot-warning",
+          className: "romm-info-item",
+        },
         createElement("div", { className: "romm-info-header" }, "SAVE SYNC"),
-        createElement("div", {
-          style: { fontSize: "11px", color: "#ff8800", marginTop: "4px" },
-        }, "\u26A0 Legacy save slot"),
+        createElement(
+          "div",
+          {
+            style: { fontSize: "11px", color: "#ff8800", marginTop: "4px" },
+          },
+          "\u26A0 Legacy save slot",
+        ),
       ),
     );
   }
@@ -774,19 +914,23 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   if (info.biosNeeded && info.biosStatus && info.biosStatus !== "ok") {
     const biosColor = info.biosStatus === "partial" ? "#d4a72c" : "#d94126";
     infoItems.push(
-      createElement("div", {
-        key: "bios",
-        className: "romm-info-item",
-        onClick: () => {
-          globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+      createElement(
+        "div",
+        {
+          key: "bios",
+          className: "romm-info-item",
+          onClick: () => {
+            globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+          },
+          style: { cursor: "pointer" },
         },
-        style: { cursor: "pointer" },
-      },
         createElement("div", { className: "romm-info-header" }, "BIOS"),
-        createElement("div", {
-          className: "romm-info-value",
-          style: { display: "flex", alignItems: "center", gap: "6px" },
-        },
+        createElement(
+          "div",
+          {
+            className: "romm-info-value",
+            style: { display: "flex", alignItems: "center", gap: "6px" },
+          },
           createElement("span", {
             className: "romm-status-dot",
             style: { backgroundColor: biosColor },
@@ -797,72 +941,86 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     );
   }
 
-  return createElement(Focusable, {
-    "data-romm": "true",
-    className: `romm-play-section-row ${basicAppDetailsSectionStylerClasses?.PlaySection || ""}`.trim(),
-    "flow-children": "right",
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "20px",
-      padding: "16px 2.8vw",
-      background: "rgba(14, 20, 27, 0.33)",
-      boxSizing: "border-box",
-    },
-  },
-    // Play button on the left
-    createElement(CustomPlayButton, { appId }),
-    // Info items row
-    createElement("div", {
-      className: "romm-info-items",
+  return createElement(
+    Focusable,
+    {
+      "data-romm": "true",
+      className: `romm-play-section-row ${basicAppDetailsSectionStylerClasses?.PlaySection || ""}`.trim(),
+      "flow-children": "right",
       style: {
         display: "flex",
         alignItems: "center",
         gap: "20px",
-        flexWrap: "nowrap",
-        overflow: "hidden",
+        padding: "16px 2.8vw",
+        background: "rgba(14, 20, 27, 0.33)",
+        boxSizing: "border-box",
       },
     },
+    // Play button on the left
+    createElement(CustomPlayButton, { appId }),
+    // Info items row
+    createElement(
+      "div",
+      {
+        className: "romm-info-items",
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: "20px",
+          flexWrap: "nowrap",
+          overflow: "hidden",
+        },
+      },
       ...infoItems,
     ),
     // Gear icon buttons pushed to the far right
-    createElement("div", {
-      style: {
-        marginLeft: "auto",
-        display: "flex",
-        alignItems: "center",
-        gap: "8px",
-        flexShrink: 0,
+    createElement(
+      "div",
+      {
+        style: {
+          marginLeft: "auto",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flexShrink: 0,
+        },
       },
-    },
       // RomM actions button
-      createElement(DialogButton, {
-        className: "romm-gear-btn",
-        onClick: showRomMMenu,
-        onFocus: scrollToTop,
-        title: "RomM Actions",
-      },
+      createElement(
+        DialogButton,
+        {
+          className: "romm-gear-btn",
+          onClick: showRomMMenu,
+          onFocus: scrollToTop,
+          title: "RomM Actions",
+        },
         createElement(FaGamepad, { size: 18, color: "#553e98" }),
       ),
       // Core selection button (only when multiple cores available)
-      ...(info.availableCores.length > 1 ? [
-        createElement(DialogButton, {
-          key: "core-btn",
-          className: "romm-gear-btn",
-          onClick: showCoreMenu,
-          onFocus: scrollToTop,
-          title: "Emulator Core",
-        },
-          createElement(FaMicrochip, { size: 18, color: info.activeCoreIsDefault ? "#8f98a0" : "#d4a72c" }),
-        ),
-      ] : []),
+      ...(info.availableCores.length > 1
+        ? [
+            createElement(
+              DialogButton,
+              {
+                key: "core-btn",
+                className: "romm-gear-btn",
+                onClick: showCoreMenu,
+                onFocus: scrollToTop,
+                title: "Emulator Core",
+              },
+              createElement(FaMicrochip, { size: 18, color: info.activeCoreIsDefault ? "#8f98a0" : "#d4a72c" }),
+            ),
+          ]
+        : []),
       // Steam properties button
-      createElement(DialogButton, {
-        className: "romm-gear-btn",
-        onClick: showSteamMenu,
-        onFocus: scrollToTop,
-        title: "Steam Properties",
-      },
+      createElement(
+        DialogButton,
+        {
+          className: "romm-gear-btn",
+          onClick: showSteamMenu,
+          onFocus: scrollToTop,
+          title: "Steam Properties",
+        },
         createElement(FaCog, { size: 18, color: "#8f98a0" }),
       ),
     ),

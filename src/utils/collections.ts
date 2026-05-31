@@ -48,7 +48,9 @@ export async function createOrUpdateCollections(
     }
 
     const hostname = await getHostname();
-    logInfo(`Creating/updating collections for platforms: ${Object.keys(platformAppIds).join(", ")} (hostname: ${hostname})`);
+    logInfo(
+      `Creating/updating collections for platforms: ${Object.keys(platformAppIds).join(", ")} (hostname: ${hostname})`,
+    );
 
     const entries = Object.entries(platformAppIds);
     let idx = 0;
@@ -59,9 +61,7 @@ export async function createOrUpdateCollections(
       const overviews = getOverviews(appIds);
 
       try {
-        const existing = collectionStore.userCollections.find(
-          (c) => c.displayName === collectionName
-        );
+        const existing = collectionStore.userCollections.find((c) => c.displayName === collectionName);
 
         if (existing) {
           logInfo(`Updating collection "${collectionName}" with ${appIds.length} apps`);
@@ -109,9 +109,7 @@ export async function createOrUpdateRomMCollections(
       const overviews = getOverviews(appIds);
 
       try {
-        const existing = collectionStore.userCollections.find(
-          (c) => c.displayName === collectionName
-        );
+        const existing = collectionStore.userCollections.find((c) => c.displayName === collectionName);
 
         if (existing) {
           logInfo(`Updating RomM collection "${collectionName}" with ${appIds.length} apps`);
@@ -148,18 +146,14 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
     const legacyName = `RomM: ${platformName}`;
 
     // Delete the machine-scoped collection
-    const scoped = collectionStore.userCollections.find(
-      (c) => c.displayName === scopedName
-    );
+    const scoped = collectionStore.userCollections.find((c) => c.displayName === scopedName);
     if (scoped) {
       logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
       await scoped.Delete();
     }
 
     // Also clean up legacy collection (without hostname suffix) if it exists
-    const legacy = collectionStore.userCollections.find(
-      (c) => c.displayName === legacyName
-    );
+    const legacy = collectionStore.userCollections.find((c) => c.displayName === legacyName);
     if (legacy) {
       logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
       await legacy.Delete();

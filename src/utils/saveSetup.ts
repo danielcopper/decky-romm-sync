@@ -104,10 +104,7 @@ export interface WizardSetupDeps {
  *  fetch effect. Routes server_unreachable to a held-wizard error banner,
  *  auto_confirm_default through a backend confirm, and everything else into
  *  the per-slot picker by calling `setInfo`. */
-export async function applyWizardInitialSetupResult(
-  result: SaveSetupInfo,
-  deps: WizardSetupDeps,
-): Promise<void> {
+export async function applyWizardInitialSetupResult(result: SaveSetupInfo, deps: WizardSetupDeps): Promise<void> {
   if (result.recommended_action === "server_unreachable") {
     // Hold the wizard — auto-confirming default with an unknown server state
     // could overwrite real server saves the user already had on first
@@ -146,10 +143,7 @@ export interface WizardRetryDeps {
  *  server_unreachable handling of the initial fetch but skips the auto-confirm
  *  branch — retry is user-initiated and never auto-fires a destructive
  *  setup. */
-export function applyWizardRetrySetupResult(
-  result: SaveSetupInfo,
-  deps: WizardRetryDeps,
-): void {
+export function applyWizardRetrySetupResult(result: SaveSetupInfo, deps: WizardRetryDeps): void {
   if (result.recommended_action === "server_unreachable") {
     deps.setError(SERVER_UNREACHABLE_WIZARD_MESSAGE);
     deps.setLoading(false);

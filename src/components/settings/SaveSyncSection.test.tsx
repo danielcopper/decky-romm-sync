@@ -15,7 +15,10 @@ interface ToggleFieldProps {
   checked?: boolean;
   onChange?: (value: boolean) => void;
 }
-interface DropdownOption { data: unknown; label: string }
+interface DropdownOption {
+  data: unknown;
+  label: string;
+}
 interface DropdownItemProps {
   label?: string;
   rgOptions?: DropdownOption[];
@@ -26,10 +29,8 @@ const toggleCaptured: { items: ToggleFieldProps[] } = { items: [] };
 const dropdownCaptured: { items: DropdownItemProps[] } = { items: [] };
 
 vi.mock("@decky/ui", () => ({
-  PanelSection: (p: AnyProps) =>
-    createElement("section", {}, p.children as never),
-  PanelSectionRow: (p: AnyProps) =>
-    createElement("div", {}, p.children as never),
+  PanelSection: (p: AnyProps) => createElement("section", {}, p.children as never),
+  PanelSectionRow: (p: AnyProps) => createElement("div", {}, p.children as never),
   Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
     createElement(
       "div",
@@ -40,7 +41,11 @@ vi.mock("@decky/ui", () => ({
     ),
   DialogButton: ({ children, onClick }: AnyProps & { onClick?: () => void }) =>
     createElement("button", { onClick }, children as never),
-  ButtonItem: ({ children, onClick, disabled }: AnyProps & {
+  ButtonItem: ({
+    children,
+    onClick,
+    disabled,
+  }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
   }) => createElement("button", { onClick, disabled }, children as never),
@@ -109,9 +114,7 @@ describe("SaveSyncSection", () => {
 
   describe("loading state", () => {
     it("renders 'Loading...' when saveSyncSettings is null", () => {
-      const { getAllByTestId } = render(
-        <SaveSyncSection {...defaultProps({ saveSyncSettings: null })} />,
-      );
+      const { getAllByTestId } = render(<SaveSyncSection {...defaultProps({ saveSyncSettings: null })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Loading...");
       // No toggle when loading.
@@ -121,11 +124,7 @@ describe("SaveSyncSection", () => {
 
   describe("master toggle", () => {
     it("renders the Enable Save Sync toggle reflecting saveSyncSettings.save_sync_enabled", () => {
-      render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ save_sync_enabled: false }) })}
-        />,
-      );
+      render(<SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ save_sync_enabled: false }) })} />);
       const masterToggle = toggleCaptured.items.find((t) => t.label === "Enable Save Sync");
       expect(masterToggle?.checked).toBe(false);
     });
@@ -140,20 +139,14 @@ describe("SaveSyncSection", () => {
 
     it("renders the 'Save sync is disabled' field when disabled", () => {
       const { getAllByTestId } = render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ save_sync_enabled: false }) })}
-        />,
+        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ save_sync_enabled: false }) })} />,
       );
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Save sync is disabled");
     });
 
     it("hides sub-controls when save_sync_enabled is false", () => {
-      render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ save_sync_enabled: false }) })}
-        />,
-      );
+      render(<SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ save_sync_enabled: false }) })} />);
       // Only the master toggle present.
       expect(toggleCaptured.items).toHaveLength(1);
       // No dropdown, no Sync All button.
@@ -178,9 +171,7 @@ describe("SaveSyncSection", () => {
 
     it("renders the device name when deviceInfo is provided", () => {
       const { container } = render(
-        <SaveSyncSection
-          {...defaultProps({ deviceInfo: { device_id: "d1", device_name: "Steam Deck" } })}
-        />,
+        <SaveSyncSection {...defaultProps({ deviceInfo: { device_id: "d1", device_name: "Steam Deck" } })} />,
       );
       expect(container.textContent).toContain('Registered as "Steam Deck"');
     });
@@ -235,9 +226,7 @@ describe("SaveSyncSection", () => {
 
     it("shows '(no slot)' when default_slot is empty", () => {
       const { container } = render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: "" }) })}
-        />,
+        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: "" }) })} />,
       );
       expect(container.textContent).toContain("(no slot)");
     });
@@ -261,9 +250,7 @@ describe("SaveSyncSection", () => {
 
     it("passes an empty string to the modal when default_slot is null", () => {
       const { getByText } = render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })}
-        />,
+        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })} />,
       );
       fireEvent.click(getByText("Edit"));
       expect(lastShownModalProps()?.value).toBe("");
@@ -292,9 +279,7 @@ describe("SaveSyncSection", () => {
 
     it("is rendered when default_slot is null (null !== 'default')", () => {
       const { getByText } = render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })}
-        />,
+        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })} />,
       );
       expect(getByText("Reset to default")).toBeInTheDocument();
     });
@@ -308,18 +293,14 @@ describe("SaveSyncSection", () => {
 
     it("renders when default_slot is null", () => {
       const { container } = render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })}
-        />,
+        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })} />,
       );
       expect(container.textContent).toContain("Legacy mode (no slot)");
     });
 
     it("renders when default_slot is the empty string", () => {
       const { container } = render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: "" }) })}
-        />,
+        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: "" }) })} />,
       );
       expect(container.textContent).toContain("Legacy mode (no slot)");
     });
@@ -333,11 +314,7 @@ describe("SaveSyncSection", () => {
     });
 
     it("reflects autocleanup_limit as selectedOption", () => {
-      render(
-        <SaveSyncSection
-          {...defaultProps({ saveSyncSettings: makeSettings({ autocleanup_limit: 20 }) })}
-        />,
-      );
+      render(<SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ autocleanup_limit: 20 }) })} />);
       const dd = dropdownCaptured.items.find((d) => d.label === "Save History Limit");
       expect(dd?.selectedOption).toBe(20);
     });
@@ -376,9 +353,7 @@ describe("SaveSyncSection", () => {
 
   describe("syncStatus row", () => {
     it("renders the status Field when non-empty", () => {
-      const { getAllByTestId } = render(
-        <SaveSyncSection {...defaultProps({ syncStatus: "Synced 3 files ✓" })} />,
-      );
+      const { getAllByTestId } = render(<SaveSyncSection {...defaultProps({ syncStatus: "Synced 3 files ✓" })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Synced 3 files ✓");
     });

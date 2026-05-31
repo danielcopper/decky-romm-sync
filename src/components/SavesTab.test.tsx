@@ -5,12 +5,7 @@ import { SavesTab } from "./SavesTab";
 import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
 import { getRommConnectionState } from "../utils/connectionState";
-import type {
-  SaveStatus,
-  SaveSlotSummary,
-  SaveFileStatus,
-  SwitchSlotResponse,
-} from "../types";
+import type { SaveStatus, SaveSlotSummary, SaveFileStatus, SwitchSlotResponse } from "../types";
 // Type-only — vi.mock("./saves/SlotPanel", ...) below replaces the runtime
 // implementation, but the prop interface comes from the real component so
 // captured-prop assertions stay in sync as SlotPanel evolves.
@@ -42,8 +37,7 @@ vi.mock("../utils/connectionState", () => ({
 // SavesTab only cares that it gets rendered with an onSubmit, which we capture
 // via showModal.mock.calls[N][0].props.onSubmit.
 vi.mock("./saves/NewSlotModal", () => ({
-  NewSlotModal: (_p: NewSlotModalProps) =>
-    createElement("div", { "data-testid": "new-slot-modal" }),
+  NewSlotModal: (_p: NewSlotModalProps) => createElement("div", { "data-testid": "new-slot-modal" }),
 }));
 
 // Stub SlotPanel — its own tests cover expand/collapse/activate/delete.
@@ -161,18 +155,14 @@ describe("SavesTab", () => {
 
   describe("loading state", () => {
     it("renders the loading message when slotsLoading is true", () => {
-      const { container, queryByTestId } = render(
-        <SavesTab {...defaultProps({ slotsLoading: true })} />,
-      );
+      const { container, queryByTestId } = render(<SavesTab {...defaultProps({ slotsLoading: true })} />);
       expect(container.textContent).toContain("Loading slots...");
       expect(queryByTestId("slot-panel-default")).toBeNull();
     });
 
     it("still renders the offline banner alongside the loading message", () => {
       vi.mocked(getRommConnectionState).mockReturnValue("offline");
-      const { container } = render(
-        <SavesTab {...defaultProps({ slotsLoading: true })} />,
-      );
+      const { container } = render(<SavesTab {...defaultProps({ slotsLoading: true })} />);
       expect(container.textContent).toContain("Loading slots...");
       expect(container.textContent).toContain("RomM is offline");
     });
@@ -194,9 +184,7 @@ describe("SavesTab", () => {
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).not.toContain("RomM is offline");
       act(() => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));
       });
       expect(container.textContent).toContain("RomM is offline");
     });
@@ -206,9 +194,7 @@ describe("SavesTab", () => {
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).toContain("RomM is offline");
       act(() => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_connection_changed", { detail: { state: "connected" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "connected" } }));
       });
       expect(container.textContent).not.toContain("RomM is offline");
     });
@@ -236,9 +222,7 @@ describe("SavesTab", () => {
 
   describe("legacy-mode warning + files section", () => {
     it("renders the legacy warning when activeSlot is null", () => {
-      const { container } = render(
-        <SavesTab {...defaultProps({ activeSlot: null })} />,
-      );
+      const { container } = render(<SavesTab {...defaultProps({ activeSlot: null })} />);
       expect(container.textContent).toContain("This game uses legacy mode");
     });
 
@@ -251,11 +235,7 @@ describe("SavesTab", () => {
       const status = makeSaveStatus({
         files: [makeSaveFile({ filename: "a.srm" }), makeSaveFile({ filename: "b.srm" })],
       });
-      const { queryByTestId } = render(
-        <SavesTab
-          {...defaultProps({ activeSlot: null, saveStatus: status })}
-        />,
-      );
+      const { queryByTestId } = render(<SavesTab {...defaultProps({ activeSlot: null, saveStatus: status })} />);
       expect(queryByTestId("save-file-row-a.srm")).not.toBeNull();
       expect(queryByTestId("save-file-row-b.srm")).not.toBeNull();
     });
@@ -273,9 +253,7 @@ describe("SavesTab", () => {
     });
 
     it("renders the empty state when activeSlot is null and saveStatus is null", () => {
-      const { container } = render(
-        <SavesTab {...defaultProps({ activeSlot: null, saveStatus: null })} />,
-      );
+      const { container } = render(<SavesTab {...defaultProps({ activeSlot: null, saveStatus: null })} />);
       expect(container.textContent).toContain("No save files tracked yet");
     });
 
@@ -302,11 +280,7 @@ describe("SavesTab", () => {
         <SavesTab
           {...defaultProps({
             activeSlot: "b",
-            availableSlots: [
-              makeSlot({ slot: "c" }),
-              makeSlot({ slot: "a" }),
-              makeSlot({ slot: "b" }),
-            ],
+            availableSlots: [makeSlot({ slot: "c" }), makeSlot({ slot: "a" }), makeSlot({ slot: "b" })],
           })}
         />,
       );
@@ -449,9 +423,7 @@ describe("SavesTab", () => {
       await act(async () => {
         await lastConfirmModalProps()?.onOK?.();
       });
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("legacy switch failed"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("legacy switch failed"));
       expect(onSlotSwitched).not.toHaveBeenCalled();
     });
 
@@ -465,9 +437,7 @@ describe("SavesTab", () => {
       await act(async () => {
         await lastConfirmModalProps()?.onOK?.();
       });
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("legacy switch error"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("legacy switch error"));
     });
   });
 
@@ -501,9 +471,7 @@ describe("SavesTab", () => {
           await newSlotModalSubmit()?.("blocked");
           await vi.advanceTimersByTimeAsync(0);
         });
-        expect(container.textContent).toContain(
-          "Sync your saves first — local changes haven't been uploaded",
-        );
+        expect(container.textContent).toContain("Sync your saves first — local changes haven't been uploaded");
       } finally {
         vi.useRealTimers();
       }
@@ -522,15 +490,11 @@ describe("SavesTab", () => {
           await newSlotModalSubmit()?.("blocked");
           await vi.advanceTimersByTimeAsync(0);
         });
-        expect(container.textContent).toContain(
-          "Sync your saves first — local changes haven't been uploaded",
-        );
+        expect(container.textContent).toContain("Sync your saves first — local changes haven't been uploaded");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(5001);
         });
-        expect(container.textContent).not.toContain(
-          "Sync your saves first — local changes haven't been uploaded",
-        );
+        expect(container.textContent).not.toContain("Sync your saves first — local changes haven't been uploaded");
       } finally {
         vi.useRealTimers();
       }
@@ -549,9 +513,7 @@ describe("SavesTab", () => {
           await newSlotModalSubmit()?.("offline");
           await vi.advanceTimersByTimeAsync(0);
         });
-        expect(container.textContent).toContain(
-          "Can't switch — RomM server is not reachable",
-        );
+        expect(container.textContent).toContain("Can't switch — RomM server is not reachable");
       } finally {
         vi.useRealTimers();
       }
@@ -586,9 +548,7 @@ describe("SavesTab", () => {
           await newSlotModalSubmit()?.("named");
           await vi.advanceTimersByTimeAsync(0);
         });
-        expect(container.textContent).toContain(
-          "An error occurred while creating the slot",
-        );
+        expect(container.textContent).toContain("An error occurred while creating the slot");
       } finally {
         vi.useRealTimers();
       }
@@ -604,15 +564,11 @@ describe("SavesTab", () => {
           await newSlotModalSubmit()?.("named");
           await vi.advanceTimersByTimeAsync(0);
         });
-        expect(container.textContent).toContain(
-          "An error occurred while creating the slot",
-        );
+        expect(container.textContent).toContain("An error occurred while creating the slot");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(5001);
         });
-        expect(container.textContent).not.toContain(
-          "An error occurred while creating the slot",
-        );
+        expect(container.textContent).not.toContain("An error occurred while creating the slot");
       } finally {
         vi.useRealTimers();
       }
@@ -655,9 +611,7 @@ describe("SavesTab", () => {
 
   describe("event dispatch — version restored + slot deleted", () => {
     it("dispatches romm_data_changed when a child SlotPanel calls onVersionRestored", () => {
-      render(
-        <SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />,
-      );
+      render(<SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />);
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {
@@ -681,11 +635,7 @@ describe("SavesTab", () => {
       // forces a remount which resets SlotPanel-local state — that effect is
       // verified manually in integration testing, not asserted here.
       const slots = [makeSlot({ slot: "a" }), makeSlot({ slot: "b" })];
-      render(
-        <SavesTab
-          {...defaultProps({ activeSlot: "a", availableSlots: slots })}
-        />,
-      );
+      render(<SavesTab {...defaultProps({ activeSlot: "a", availableSlots: slots })} />);
       const initialCount = capturedSlotPanelProps.length;
       expect(initialCount).toBe(2);
       act(() => {
@@ -695,9 +645,7 @@ describe("SavesTab", () => {
     });
 
     it("dispatches romm_data_changed when a child SlotPanel calls onSlotDeleted", () => {
-      render(
-        <SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />,
-      );
+      render(<SavesTab {...defaultProps({ availableSlots: [makeSlot()] })} />);
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {

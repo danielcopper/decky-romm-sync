@@ -24,8 +24,7 @@ describe("MigrationBlockedCard", () => {
     expect(capturedWarningCard).toHaveLength(1);
     expect(capturedWarningCard[0]).toEqual({
       title: "RetroDECK Migration Required",
-      message:
-        "Open the plugin QAM to migrate files or dismiss the migration before playing.",
+      message: "Open the plugin QAM to migrate files or dismiss the migration before playing.",
       compact: false,
     });
   });

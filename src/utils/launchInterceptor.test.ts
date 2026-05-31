@@ -157,9 +157,7 @@ describe("launchInterceptor", () => {
 
   describe("allow action (regression)", () => {
     it("neither cancels nor toasts when verdict.action is 'allow'", async () => {
-      vi.mocked(backend.evaluateLaunch).mockResolvedValueOnce(
-        makeVerdict({ action: "allow" }),
-      );
+      vi.mocked(backend.evaluateLaunch).mockResolvedValueOnce(makeVerdict({ action: "allow" }));
 
       registerLaunchInterceptor();
       const handler = captureHandler();

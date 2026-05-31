@@ -36,23 +36,25 @@ vi.mock("@decky/ui", () => {
   // slot modal (CustomSlotModal owns its own state and is mounted via RTL).
   // Modals passed *through* showModal still expose their onOK via the captured
   // showModal mock-call element — confirmModalPropsAt(...) handles that path.
-  const ConfirmModal = (
-    p: AnyProps & { onOK?: () => void | Promise<void> },
-  ) =>
-    createElement("div", { "data-testid": "confirm-modal" },
-      createElement("button", {
-        "data-testid": "confirm-modal-ok",
-        onClick: () => { detach(Promise.resolve(p.onOK?.())); },
-      }, "OK"),
+  const ConfirmModal = (p: AnyProps & { onOK?: () => void | Promise<void> }) =>
+    createElement(
+      "div",
+      { "data-testid": "confirm-modal" },
+      createElement(
+        "button",
+        {
+          "data-testid": "confirm-modal-ok",
+          onClick: () => {
+            detach(Promise.resolve(p.onOK?.()));
+          },
+        },
+        "OK",
+      ),
       p.children as never,
     );
   return {
     ConfirmModal,
-    DialogButton: ({
-      children,
-      onClick,
-      disabled,
-    }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    DialogButton: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       createElement("button", { onClick, disabled }, children as never),
     TextField: (p: TextFieldProps) =>
       createElement("input", {
@@ -113,7 +115,10 @@ function defaultProps(
 }
 
 // Wait one microtask cycle so the initial fetchInfo() useEffect resolves.
-const flushAsync = () => act(async () => { await Promise.resolve(); });
+const flushAsync = () =>
+  act(async () => {
+    await Promise.resolve();
+  });
 
 describe("SlotSetupWizard", () => {
   beforeEach(() => {
@@ -153,8 +158,10 @@ describe("SlotSetupWizard", () => {
       render(<SlotSetupWizard {...defaultProps({ romId: 99, onComplete })} />);
       await flushAsync();
       expect(vi.mocked(applyWizardInitialSetupResult)).toHaveBeenCalledTimes(1);
-      const [forwardedResult, deps] = vi.mocked(applyWizardInitialSetupResult).mock
-        .calls[0] as [SaveSetupInfo, WizardSetupDeps];
+      const [forwardedResult, deps] = vi.mocked(applyWizardInitialSetupResult).mock.calls[0] as [
+        SaveSetupInfo,
+        WizardSetupDeps,
+      ];
       expect(forwardedResult).toBe(info);
       expect(deps.romId).toBe(99);
       expect(deps.confirmSlotChoice).toBe(backend.confirmSlotChoice);
@@ -195,8 +202,10 @@ describe("SlotSetupWizard", () => {
       expect(vi.mocked(backend.getSaveSetupInfo)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(backend.getSaveSetupInfo)).toHaveBeenLastCalledWith(11);
       expect(vi.mocked(applyWizardRetrySetupResult)).toHaveBeenCalledTimes(1);
-      const [forwardedResult, deps] = vi.mocked(applyWizardRetrySetupResult).mock
-        .calls[0] as [SaveSetupInfo, WizardRetryDeps];
+      const [forwardedResult, deps] = vi.mocked(applyWizardRetrySetupResult).mock.calls[0] as [
+        SaveSetupInfo,
+        WizardRetryDeps,
+      ];
       expect(forwardedResult).toBe(retryInfo);
       expect(typeof deps.setError).toBe("function");
       expect(typeof deps.setLoading).toBe("function");
@@ -221,9 +230,9 @@ describe("SlotSetupWizard", () => {
 
   describe("confirming state", () => {
     it("renders 'Setting up...' when confirming is true and there's no error", async () => {
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_result, deps) => { deps.setConfirming(true); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_result, deps) => {
+        deps.setConfirming(true);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("Setting up...");
@@ -246,13 +255,11 @@ describe("SlotSetupWizard", () => {
     it("shows the 'Server has saves' copy when there are no local saves and the server has slots", async () => {
       const info = makeSetupInfo({
         has_local_saves: false,
-        server_slots: [
-          { slot: "default", saves: [], count: 1, latest_updated_at: "2026-01-01T00:00:00Z" },
-        ],
+        server_slots: [{ slot: "default", saves: [], count: 1, latest_updated_at: "2026-01-01T00:00:00Z" }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("Server has saves");
@@ -262,18 +269,14 @@ describe("SlotSetupWizard", () => {
       const info = makeSetupInfo({
         has_local_saves: true,
         local_files: [{ filename: "a.srm", size: 100 }],
-        server_slots: [
-          { slot: "default", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "default", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
-      expect(container.textContent).toContain(
-        "You have local saves and the server has saves too.",
-      );
+      expect(container.textContent).toContain("You have local saves and the server has saves too.");
     });
 
     it("falls through to 'Choose a save slot to get started' for the local-only case", async () => {
@@ -282,9 +285,9 @@ describe("SlotSetupWizard", () => {
         local_files: [{ filename: "a.srm", size: 100 }],
         server_slots: [],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("Choose a save slot to get started.");
@@ -300,9 +303,9 @@ describe("SlotSetupWizard", () => {
           { filename: "big.srm", size: 5 * 1024 * 1024 },
         ],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("tiny.srm");
@@ -315,9 +318,9 @@ describe("SlotSetupWizard", () => {
 
     it("renders the 'No local saves found' empty state when there are no local files", async () => {
       const info = makeSetupInfo({ local_files: [] });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("No local saves found");
@@ -337,9 +340,9 @@ describe("SlotSetupWizard", () => {
           { slot: "beta", saves: [], count: 1, latest_updated_at: null },
         ],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container, getAllByText } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("alpha");
@@ -353,9 +356,9 @@ describe("SlotSetupWizard", () => {
 
     it("renders the 'No saves on server' empty state when server_slots is empty", async () => {
       const info = makeSetupInfo({ server_slots: [] });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("No saves on server");
@@ -363,13 +366,11 @@ describe("SlotSetupWizard", () => {
 
     it("displays a null slot as '(no slot)'", async () => {
       const info = makeSetupInfo({
-        server_slots: [
-          { slot: null, saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: null, saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("(no slot)");
@@ -377,13 +378,11 @@ describe("SlotSetupWizard", () => {
 
     it("displays an empty-string slot as '(no slot)'", async () => {
       const info = makeSetupInfo({
-        server_slots: [
-          { slot: "", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("(no slot)");
@@ -394,13 +393,11 @@ describe("SlotSetupWizard", () => {
       // happy-dom's Date accepts arbitrary strings (NaN date), so this asserts
       // the path renders without throwing — exact format is locale-dependent.
       const info = makeSetupInfo({
-        server_slots: [
-          { slot: "x", saves: [], count: 1, latest_updated_at: "not-a-date" },
-        ],
+        server_slots: [{ slot: "x", saves: [], count: 1, latest_updated_at: "not-a-date" }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("1 file");
@@ -411,17 +408,13 @@ describe("SlotSetupWizard", () => {
     it("calls confirmSlotChoice with the slot value and triggers onComplete on success", async () => {
       const info = makeSetupInfo({
         default_slot: "default",
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const onComplete = vi.fn();
-      const { getByText } = render(
-        <SlotSetupWizard {...defaultProps({ romId: 5, onComplete })} />,
-      );
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 5, onComplete })} />);
       await flushAsync();
 
       await act(async () => {
@@ -436,16 +429,12 @@ describe("SlotSetupWizard", () => {
     it("falls back to the defaultSlot when the server slot is null", async () => {
       const info = makeSetupInfo({
         default_slot: "fallback",
-        server_slots: [
-          { slot: null, saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: null, saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
-      const { getByText } = render(
-        <SlotSetupWizard {...defaultProps({ romId: 5 })} />,
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 5 })} />);
       await flushAsync();
 
       await act(async () => {
@@ -458,21 +447,17 @@ describe("SlotSetupWizard", () => {
 
     it("surfaces a failed confirmSlotChoice via the inline error", async () => {
       const info = makeSetupInfo({
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       vi.mocked(backend.confirmSlotChoice).mockResolvedValue({
         success: false,
         message: "Slot already exists",
       });
       const onComplete = vi.fn();
-      const { container, getByText } = render(
-        <SlotSetupWizard {...defaultProps({ onComplete })} />,
-      );
+      const { container, getByText } = render(<SlotSetupWizard {...defaultProps({ onComplete })} />);
       await flushAsync();
 
       await act(async () => {
@@ -486,13 +471,11 @@ describe("SlotSetupWizard", () => {
 
     it("falls back to a generic 'Slot confirmation failed' when the response carries no message", async () => {
       const info = makeSetupInfo({
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       vi.mocked(backend.confirmSlotChoice).mockResolvedValue({
         success: false,
         message: "",
@@ -510,13 +493,11 @@ describe("SlotSetupWizard", () => {
 
     it("surfaces a thrown confirmSlotChoice and logs via logError", async () => {
       const info = makeSetupInfo({
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       vi.mocked(backend.confirmSlotChoice).mockRejectedValue(new Error("network down"));
       const { container, getByText } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
@@ -535,13 +516,11 @@ describe("SlotSetupWizard", () => {
     it("renders the 'Use slot' button when the default is not in server_slots", async () => {
       const info = makeSetupInfo({
         default_slot: "fresh",
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("Use slot");
@@ -552,13 +531,11 @@ describe("SlotSetupWizard", () => {
     it("hides the 'Use slot' button when the default IS in server_slots", async () => {
       const info = makeSetupInfo({
         default_slot: "alpha",
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).not.toContain("Use slot");
@@ -568,16 +545,12 @@ describe("SlotSetupWizard", () => {
     it("triggers handleConfirm(defaultSlot) when the 'Use slot' button is clicked", async () => {
       const info = makeSetupInfo({
         default_slot: "fresh",
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
-      const { container } = render(
-        <SlotSetupWizard {...defaultProps({ romId: 9 })} />,
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { container } = render(<SlotSetupWizard {...defaultProps({ romId: 9 })} />);
       await flushAsync();
 
       // The default-slot button text uses lsquo + rsquo around the slot name.
@@ -599,9 +572,9 @@ describe("SlotSetupWizard", () => {
   describe("Custom slot modal", () => {
     it("opens the CustomSlotModal (titled 'Custom Slot Name') when 'Custom slot...' is clicked", async () => {
       const info = makeSetupInfo({ server_slots: [] });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { getByText } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
 
@@ -625,12 +598,10 @@ describe("SlotSetupWizard", () => {
       // outer onClick's closure captured an empty customSlot. The CustomSlotModal
       // FC now owns its own input state, so the typed value reaches handleConfirm.
       const info = makeSetupInfo({ server_slots: [] });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
-      const { getByText } = render(
-        <SlotSetupWizard {...defaultProps({ romId: 21 })} />,
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 21 })} />);
       await flushAsync();
 
       fireEvent.click(getByText("Custom slot..."));
@@ -654,12 +625,10 @@ describe("SlotSetupWizard", () => {
 
     it("trims whitespace around the typed slot before passing it to handleConfirm", async () => {
       const info = makeSetupInfo({ server_slots: [] });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
-      const { getByText } = render(
-        <SlotSetupWizard {...defaultProps({ romId: 3 })} />,
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 3 })} />);
       await flushAsync();
 
       fireEvent.click(getByText("Custom slot..."));
@@ -681,9 +650,9 @@ describe("SlotSetupWizard", () => {
 
     it("opens the legacy-mode ConfirmModal when the user OKs with an empty input", async () => {
       const info = makeSetupInfo({ server_slots: [] });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       const { getByText } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
 
@@ -709,12 +678,10 @@ describe("SlotSetupWizard", () => {
 
     it("calls handleConfirm('') when the user types whitespace and OKs the nested legacy-mode confirm", async () => {
       const info = makeSetupInfo({ server_slots: [] });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
-      const { getByText } = render(
-        <SlotSetupWizard {...defaultProps({ romId: 7 })} />,
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 7 })} />);
       await flushAsync();
 
       fireEvent.click(getByText("Custom slot..."));
@@ -747,16 +714,17 @@ describe("SlotSetupWizard", () => {
       // buttons aren't rendered at all.
       const info = makeSetupInfo({
         default_slot: "fresh",
-        server_slots: [
-          { slot: "alpha", saves: [], count: 1, latest_updated_at: null },
-        ],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
       });
-      vi.mocked(applyWizardInitialSetupResult).mockImplementation(
-        async (_r, deps) => { deps.setInfo(info); },
-      );
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
       // confirmSlotChoice never resolves — leaves confirming=true after click.
       vi.mocked(backend.confirmSlotChoice).mockImplementation(
-        () => new Promise(() => { /* never resolves */ }),
+        () =>
+          new Promise(() => {
+            /* never resolves */
+          }),
       );
       const { container, getByText } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();

@@ -52,10 +52,7 @@ function deepTreeDump(node: any, depth: number, index: number, prefix: string): 
   if (node == null || typeof node !== "object") return;
 
   const indent = "  ".repeat(depth);
-  const typeName =
-    node?.type?.name ||
-    node?.type?.displayName ||
-    resolveTypeName(node);
+  const typeName = node?.type?.name || node?.type?.displayName || resolveTypeName(node);
   const key = node?.key ?? "null";
   const className = (node?.props?.className || "").substring(0, 60) || "(none)";
   const childrenRaw = node?.props?.children;
@@ -68,7 +65,11 @@ function deepTreeDump(node: any, depth: number, index: number, prefix: string): 
     childCount = 1;
   }
 
-  detach(debugLog(`${prefix}${indent}[${depth}:${index}] type=${typeName} key=${key} cls=${className} children=${childCount}`));
+  detach(
+    debugLog(
+      `${prefix}${indent}[${depth}:${index}] type=${typeName} key=${key} cls=${className} children=${childCount}`,
+    ),
+  );
 
   // Recurse into children
   if (Array.isArray(childrenRaw)) {
@@ -89,9 +90,7 @@ function findInsertionPoint(ret: any): any {
   return findInReactTree(
     ret,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
-    (x: any) =>
-      Array.isArray(x?.props?.children) &&
-      x?.props?.className?.includes(appDetailsClasses.InnerContainer),
+    (x: any) => Array.isArray(x?.props?.children) && x?.props?.className?.includes(appDetailsClasses.InnerContainer),
   );
 }
 
@@ -151,7 +150,9 @@ function dumpTree(container: any, appId: number): void {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
       (x: any) => x?.props?.className?.includes?.(bpsClass),
     );
-    detach(debugLog(`findInReactTree(basicAppDetailsSectionStylerClasses.PlaySection): ${bpsFound ? "FOUND" : "NOT FOUND"}`));
+    detach(
+      debugLog(`findInReactTree(basicAppDetailsSectionStylerClasses.PlaySection): ${bpsFound ? "FOUND" : "NOT FOUND"}`),
+    );
   }
 
   detach(debugLog(`===== END DEEP TREE DUMP =====`));
@@ -199,8 +200,7 @@ export function registerGameDetailPatch() {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Steam internal React tree; runtime shape is dynamic, no upstream types ship
               (x: any) => x?.props?.overview?.appid,
             );
-            const appId: number | undefined =
-              overviewNode?.props?.overview?.appid;
+            const appId: number | undefined = overviewNode?.props?.overview?.appid;
 
             if (!appId) {
               return ret;
@@ -239,17 +239,28 @@ export function registerGameDetailPatch() {
                 // Wrap in a container with the native AppDetailsOverviewPanel
                 // CSS class so it participates in InnerContainer's flex layout
                 // and scroll system the same way the native panel does.
-                const rommWrapper = createElement("div", {
-                  key: "romm-play-section",
-                  className: appDetailsClasses?.AppDetailsOverviewPanel || "",
-                  "data-romm": "true",
-                }, rommPlaySection, rommInfoPanel);
+                const rommWrapper = createElement(
+                  "div",
+                  {
+                    key: "romm-play-section",
+                    className: appDetailsClasses?.AppDetailsOverviewPanel || "",
+                    "data-romm": "true",
+                  },
+                  rommPlaySection,
+                  rommInfoPanel,
+                );
 
                 if (nativeOverviewIdx >= 0) {
-                  detach(debugLog(`gameDetailPatch: replacing AppDetailsOverviewPanel at index ${nativeOverviewIdx} with RomM wrapper (cls=${appDetailsClasses?.AppDetailsOverviewPanel})`));
+                  detach(
+                    debugLog(
+                      `gameDetailPatch: replacing AppDetailsOverviewPanel at index ${nativeOverviewIdx} with RomM wrapper (cls=${appDetailsClasses?.AppDetailsOverviewPanel})`,
+                    ),
+                  );
                   children.splice(nativeOverviewIdx, 1, rommWrapper);
                 } else {
-                  detach(debugLog(`gameDetailPatch: AppDetailsOverviewPanel not found, inserting RomM wrapper at index 1`));
+                  detach(
+                    debugLog(`gameDetailPatch: AppDetailsOverviewPanel not found, inserting RomM wrapper at index 1`),
+                  );
                   children.splice(1, 0, rommWrapper);
                 }
               }

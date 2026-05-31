@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  resolveSaveSyncLabel,
-  applySaveSyncDisplay,
-  extractBiosInfo,
-  timeoutMs,
-} from "./playSection";
+import { resolveSaveSyncLabel, applySaveSyncDisplay, extractBiosInfo, timeoutMs } from "./playSection";
 import type { BiosStatus, SaveStatus, SaveSyncDisplay } from "../types";
 
 describe("resolveSaveSyncLabel", () => {

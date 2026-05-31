@@ -25,9 +25,7 @@ describe("VersionErrorCard component", () => {
   });
 
   it("delegates to WarningCard with the version-error title + message (default compact=false)", () => {
-    const { queryByTestId } = render(
-      <VersionErrorCard message="RomM 4.7.0 too old" />,
-    );
+    const { queryByTestId } = render(<VersionErrorCard message="RomM 4.7.0 too old" />);
     expect(queryByTestId("warning-card")).not.toBeNull();
     expect(capturedWarningCard).toHaveLength(1);
     expect(capturedWarningCard[0]).toEqual({

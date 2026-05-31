@@ -114,9 +114,13 @@ vi.mock("@decky/ui", async () => {
   const { createElement: ce } = await import("react");
   return {
     basicAppDetailsSectionStylerClasses: { PlaySection: "play-section-cls" },
-    ConfirmModal: (p: AnyProps) =>
-      ce("div", { "data-testid": "confirm-modal" }, p.children as never),
-    DialogButton: ({ children, onClick, disabled, title }: AnyProps & {
+    ConfirmModal: (p: AnyProps) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
+    DialogButton: ({
+      children,
+      onClick,
+      disabled,
+      title,
+    }: AnyProps & {
       onClick?: (e: unknown) => void;
       disabled?: boolean;
       title?: string;
@@ -133,12 +137,13 @@ vi.mock("@decky/ui", async () => {
       ),
     Focusable: (p: AnyProps) => ce("div", p, p.children as never),
     Menu: (p: AnyProps & { label?: string }) =>
-      ce(
-        "div",
-        { "data-testid": "menu", "data-menu-label": p.label },
-        p.children as never,
-      ),
-    MenuItem: ({ children, onClick, disabled, tone }: AnyProps & {
+      ce("div", { "data-testid": "menu", "data-menu-label": p.label }, p.children as never),
+    MenuItem: ({
+      children,
+      onClick,
+      disabled,
+      tone,
+    }: AnyProps & {
       onClick?: () => void;
       disabled?: boolean;
       tone?: string;
@@ -187,10 +192,7 @@ type MenuItemElement = ReactElement<MenuItemProps>;
 function getMenuItemsFromElement(el: ReactElement): MenuItemElement[] {
   const children = (el.props as { children?: unknown }).children;
   const arr = Array.isArray(children) ? children.flat(Infinity) : [children];
-  return arr.filter(
-    (c): c is MenuItemElement =>
-      typeof c === "object" && c !== null && "props" in (c as object),
-  );
+  return arr.filter((c): c is MenuItemElement => typeof c === "object" && c !== null && "props" in (c as object));
 }
 
 // Render the modal element captured by `showModal` so we can drive its
@@ -230,12 +232,8 @@ describe("RomMPlaySection", () => {
       activeCoreIsDefault: true,
       availableCores: [],
     });
-    vi.mocked(playSectionUtils.resolveSaveSyncLabel).mockReturnValue(
-      "synced label",
-    );
-    vi.mocked(playSectionUtils.timeoutMs).mockImplementation(
-      () => new Promise(() => {}),
-    );
+    vi.mocked(playSectionUtils.resolveSaveSyncLabel).mockReturnValue("synced label");
+    vi.mocked(playSectionUtils.timeoutMs).mockImplementation(() => new Promise(() => {}));
 
     // Steam globals — appStore for the synchronous overview read.
     stubAppStore({ [testAppId]: {} });
@@ -438,14 +436,10 @@ describe("RomMPlaySection", () => {
     });
 
     it("logs via debugLog when getCachedGameDetail rejects", async () => {
-      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(
-        new Error("boom"),
-      );
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("boom"));
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("loadCached error"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("loadCached error"));
     });
 
     it("logs 'Auto-artwork error' via debugLog when SteamClient.SetCustomArtworkForApp rejects on auto-apply", async () => {
@@ -470,9 +464,7 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       await flushAsync();
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("Auto-artwork error"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("Auto-artwork error"));
     });
 
     it("logs 'Background metadata fetch error' via debugLog when background getRomMetadata rejects", async () => {
@@ -616,9 +608,7 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({ body: "Failed to refresh artwork" }),
       );
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("getSgdbResolution rejected"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("getSgdbResolution rejected"));
       // No modal opened on failure.
       expect(vi.mocked(showModal)).not.toHaveBeenCalled();
     });
@@ -639,13 +629,9 @@ describe("RomMPlaySection", () => {
       try {
         render(<RomMPlaySection appId={testAppId} />);
         await flushAsync();
-        expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith(
-          "connected",
-        );
+        expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("connected");
         // First "checking" then "connected".
-        const states = listener.mock.calls.map(
-          (c) => (c[0] as CustomEvent).detail.state,
-        );
+        const states = listener.mock.calls.map((c) => (c[0] as CustomEvent).detail.state);
         expect(states).toContain("checking");
         expect(states).toContain("connected");
       } finally {
@@ -660,9 +646,7 @@ describe("RomMPlaySection", () => {
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith(
-        "offline",
-      );
+      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
     });
 
     it("on error_code=version_error → calls setVersionError and stays offline", async () => {
@@ -673,36 +657,24 @@ describe("RomMPlaySection", () => {
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setVersionError)).toHaveBeenCalledWith(
-        "Update required",
-      );
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith(
-        "offline",
-      );
+      expect(vi.mocked(connectionState.setVersionError)).toHaveBeenCalledWith("Update required");
+      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
     });
 
     it("on testConnection throw → catch sets 'offline'", async () => {
       vi.mocked(backend.testConnection).mockRejectedValue(new Error("net"));
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith(
-        "offline",
-      );
+      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
     });
 
     it("on timeout (timeoutMs rejects first) → catch sets 'offline'", async () => {
-      vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(
-        Promise.reject(new Error("timeout")),
-      );
+      vi.mocked(playSectionUtils.timeoutMs).mockReturnValue(Promise.reject(new Error("timeout")));
       // testConnection never resolves — race goes to timeoutMs.
-      vi.mocked(backend.testConnection).mockImplementation(
-        () => new Promise(() => {}),
-      );
+      vi.mocked(backend.testConnection).mockImplementation(() => new Promise(() => {}));
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith(
-        "offline",
-      );
+      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
     });
 
     it("dispatches romm_data_changed with has_conflict when connected + save_sync_enabled", async () => {
@@ -761,9 +733,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.getSaveStatus).mockRejectedValue(new Error("savesfail"));
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("background save check error"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("background save check error"));
     });
   });
 
@@ -1063,9 +1033,7 @@ describe("RomMPlaySection", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("onDataChanged error"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
     });
 
     it("save_sync rom_id absent and no romIdRef → early return", async () => {
@@ -1185,9 +1153,7 @@ describe("RomMPlaySection", () => {
         // SGDB resolution step still runs (graceful fall-through)
         expect(vi.mocked(backend.getSgdbResolution)).toHaveBeenCalledWith(77);
         // debugLog surfaced the failure reason + message
-        expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-          expect.stringContaining("not_synced"),
-        );
+        expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("not_synced"));
         // No cover_refreshed event on failure
         const ev = listener.mock.calls
           .map((c) => c[0] as CustomEvent)
@@ -1219,9 +1185,7 @@ describe("RomMPlaySection", () => {
         await items[0]!.props.onClick?.();
       });
       // Non-vacuous catch assertion: debugLog observed the rejection.
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("refreshCoverArtwork rejected"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("refreshCoverArtwork rejected"));
       // SGDB resolution step still runs
       expect(vi.mocked(backend.getSgdbResolution)).toHaveBeenCalledWith(77);
     });
@@ -1285,12 +1249,8 @@ describe("RomMPlaySection", () => {
           await items[1]!.props.onClick?.();
         });
         expect(vi.mocked(backend.getRomMetadata)).toHaveBeenCalledWith(42);
-        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-          expect.objectContaining({ body: "Metadata refreshed" }),
-        );
-        const ev = listener.mock.calls
-          .map((c) => c[0] as CustomEvent)
-          .find((e) => e.detail.type === "metadata");
+        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Metadata refreshed" }));
+        const ev = listener.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.detail.type === "metadata");
         expect(ev?.detail).toEqual({ type: "metadata", rom_id: 42 });
       } finally {
         globalThis.removeEventListener("romm_data_changed", listener);
@@ -1416,9 +1376,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[2]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Server refused" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Server refused" }));
     });
 
     it("failure with empty message → falls back to 'Save sync failed'", async () => {
@@ -1432,9 +1390,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[2]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Save sync failed" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Save sync failed" }));
     });
 
     it("throw → toasts 'Save sync failed'", async () => {
@@ -1444,9 +1400,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[2]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Save sync failed" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Save sync failed" }));
     });
   });
 
@@ -1495,9 +1449,7 @@ describe("RomMPlaySection", () => {
         expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
           expect.objectContaining({ body: "BIOS downloaded (3 files)" }),
         );
-        const biosEv = listener.mock.calls
-          .map((c) => c[0] as CustomEvent)
-          .find((e) => e.detail.type === "bios");
+        const biosEv = listener.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.detail.type === "bios");
         expect(biosEv?.detail).toMatchObject({
           type: "bios",
           platform_slug: "ps1",
@@ -1536,9 +1488,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[3]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "no internet" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "no internet" }));
     });
 
     it("failure with empty message → falls back to 'BIOS download failed'", async () => {
@@ -1551,9 +1501,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[3]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "BIOS download failed" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "BIOS download failed" }));
     });
 
     it("throw → toasts 'BIOS download failed'", async () => {
@@ -1563,9 +1511,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[3]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "BIOS download failed" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "BIOS download failed" }));
     });
 
     it("no platformSlug → early return, no fetch", async () => {
@@ -1624,9 +1570,7 @@ describe("RomMPlaySection", () => {
         expect(vi.mocked(backend.removeRom)).toHaveBeenCalledWith(42);
         const ev = listener.mock.calls[0]?.[0] as CustomEvent;
         expect(ev.detail).toEqual({ rom_id: 42 });
-        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-          expect.objectContaining({ body: "Mario uninstalled" }),
-        );
+        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Mario uninstalled" }));
       } finally {
         globalThis.removeEventListener("romm_rom_uninstalled", listener);
       }
@@ -1642,9 +1586,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[items.length - 1]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "ROM uninstalled" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "ROM uninstalled" }));
     });
 
     it("failure → surfaces result.message", async () => {
@@ -1657,9 +1599,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[items.length - 1]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "locked" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "locked" }));
     });
 
     it("failure with empty message → falls back to 'Uninstall failed'", async () => {
@@ -1672,9 +1612,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[items.length - 1]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Uninstall failed" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Uninstall failed" }));
     });
 
     it("throw → toasts 'Uninstall failed'", async () => {
@@ -1684,9 +1622,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[items.length - 1]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Uninstall failed" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Uninstall failed" }));
     });
   });
 
@@ -1737,12 +1673,8 @@ describe("RomMPlaySection", () => {
           await props?.onOK?.();
         });
         expect(vi.mocked(backend.deleteLocalSaves)).toHaveBeenCalledWith(42);
-        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-          expect.objectContaining({ body: "Deleted 4" }),
-        );
-        const ev = listener.mock.calls
-          .map((c) => c[0] as CustomEvent)
-          .find((e) => e.detail.type === "save_sync");
+        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Deleted 4" }));
+        const ev = listener.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.detail.type === "save_sync");
         expect(ev?.detail).toEqual({ type: "save_sync", rom_id: 42 });
       } finally {
         globalThis.removeEventListener("romm_data_changed", listener);
@@ -1760,9 +1692,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await props?.onOK?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "perm denied" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "perm denied" }));
     });
 
     it("OK failure with empty message → 'Failed to delete saves'", async () => {
@@ -1868,20 +1798,10 @@ describe("RomMPlaySection", () => {
         await act(async () => {
           await blastEm.props.onClick?.();
         });
-        expect(vi.mocked(backend.setGameCore)).toHaveBeenCalledWith(
-          "snes",
-          "./mario.sfc",
-          "BlastEm",
-        );
-        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-          expect.objectContaining({ body: "Core set to BlastEm" }),
-        );
-        expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(
-          testAppId,
-        );
-        const ev = listener.mock.calls
-          .map((c) => c[0] as CustomEvent)
-          .find((e) => e.detail.type === "core_changed");
+        expect(vi.mocked(backend.setGameCore)).toHaveBeenCalledWith("snes", "./mario.sfc", "BlastEm");
+        expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Core set to BlastEm" }));
+        expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
+        const ev = listener.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.detail.type === "core_changed");
         expect(ev?.detail).toMatchObject({
           type: "core_changed",
           platform_slug: "snes",
@@ -1904,9 +1824,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await coreItems[3]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "unsupported core" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "unsupported core" }));
     });
 
     it("setGameCore failure with empty message → 'Failed to set core'", async () => {
@@ -1922,9 +1840,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await coreItems[3]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Failed to set core" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Failed to set core" }));
     });
 
     it("setGameCore throw → 'Failed to set core'", async () => {
@@ -1937,9 +1853,7 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await coreItems[3]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Failed to set core" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Failed to set core" }));
     });
 
     it("missing platformSlug or romFile → no-op", async () => {
@@ -2039,9 +1953,7 @@ describe("RomMPlaySection", () => {
       act(() => {
         items[0]!.props.onClick?.();
       });
-      expect(
-        vi.mocked(SteamClient.Apps.OpenAppSettingsDialog),
-      ).toHaveBeenCalledWith(testAppId, "general");
+      expect(vi.mocked(SteamClient.Apps.OpenAppSettingsDialog)).toHaveBeenCalledWith(testAppId, "general");
     });
   });
 
@@ -2087,9 +1999,7 @@ describe("RomMPlaySection", () => {
         ra_id: 12345,
         achievement_summary: { earned: 3, total: 50, earned_hardcore: 0 },
       });
-      const { container, getByText } = render(
-        <RomMPlaySection appId={testAppId} />,
-      );
+      const { container, getByText } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(container.textContent).toContain("ACHIEVEMENTS");
       const listener = vi.fn();
@@ -2115,13 +2025,11 @@ describe("RomMPlaySection", () => {
         save_sync_enabled: true,
         save_sync_display: { status: "none", label: "No saves", last_sync_check_at: null },
       });
-      vi.mocked(sectionRefresh.refreshActiveSlotInBackground).mockImplementation(
-        (_romId, _cancelled, setter) => {
-          act(() => {
-            setter((prev) => ({ ...prev, activeSlot: null }));
-          });
-        },
-      );
+      vi.mocked(sectionRefresh.refreshActiveSlotInBackground).mockImplementation((_romId, _cancelled, setter) => {
+        act(() => {
+          setter((prev) => ({ ...prev, activeSlot: null }));
+        });
+      });
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(container.textContent).toContain("Legacy save slot");
@@ -2148,9 +2056,7 @@ describe("RomMPlaySection", () => {
         activeCoreIsDefault: true,
         availableCores: [],
       });
-      const { container, getByText } = render(
-        <RomMPlaySection appId={testAppId} />,
-      );
+      const { container, getByText } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(container.textContent).toContain("BIOS");
       const listener = vi.fn();
@@ -2202,9 +2108,7 @@ describe("RomMPlaySection", () => {
           server_count: 0,
           local_count: 0,
           all_downloaded: true,
-          available_cores: [
-            { core_so: "x.so", label: "OnlyOne", is_default: true },
-          ],
+          available_cores: [{ core_so: "x.so", label: "OnlyOne", is_default: true }],
         },
         bios_level: "ok",
         bios_label: "OK",
@@ -2215,9 +2119,7 @@ describe("RomMPlaySection", () => {
         biosLabel: "OK",
         activeCoreLabel: "OnlyOne",
         activeCoreIsDefault: true,
-        availableCores: [
-          { core_so: "x.so", label: "OnlyOne", is_default: true },
-        ],
+        availableCores: [{ core_so: "x.so", label: "OnlyOne", is_default: true }],
       });
       const { queryByTitle } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
@@ -2240,9 +2142,7 @@ function isMenuItem(c: MenuItemElement): boolean {
 
 async function openRomMMenuAndGetItems(_appId: number): Promise<MenuItemElement[]> {
   // Find the RomM Actions button via title attribute.
-  const btn = document.querySelector(
-    'button[title="RomM Actions"]',
-  ) as HTMLButtonElement | null;
+  const btn = document.querySelector('button[title="RomM Actions"]') as HTMLButtonElement | null;
   if (!btn) throw new Error("RomM Actions button not found");
   vi.mocked(showContextMenu).mockClear();
   act(() => {
@@ -2255,9 +2155,7 @@ async function openRomMMenuAndGetItems(_appId: number): Promise<MenuItemElement[
 }
 
 async function openCoreMenuAndGetItems(_appId: number): Promise<MenuItemElement[]> {
-  const btn = document.querySelector(
-    'button[title="Emulator Core"]',
-  ) as HTMLButtonElement | null;
+  const btn = document.querySelector('button[title="Emulator Core"]') as HTMLButtonElement | null;
   if (!btn) throw new Error("Emulator Core button not found");
   vi.mocked(showContextMenu).mockClear();
   act(() => {

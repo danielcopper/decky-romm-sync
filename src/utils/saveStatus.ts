@@ -10,8 +10,6 @@ import type { SyncConflict } from "../types";
  * Accepts any object with an optional `conflicts` array, so it works with `SaveStatus`,
  * `CachedGameDetail.save_status`, and `save_status_updated` emit-event payloads.
  */
-export function hasAnySaveConflict(
-  status: { conflicts?: SyncConflict[] | null } | null | undefined,
-): boolean {
+export function hasAnySaveConflict(status: { conflicts?: SyncConflict[] | null } | null | undefined): boolean {
   return (status?.conflicts?.length ?? 0) > 0;
 }

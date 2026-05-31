@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  findScrollParent,
-  findOutermostScrollParent,
-  scrollToTop,
-  scrollFocusedToCenter,
-} from "./scrollHelpers";
+import { findScrollParent, findOutermostScrollParent, scrollToTop, scrollFocusedToCenter } from "./scrollHelpers";
 
 /**
  * happy-dom does not compute layout. Set `scrollHeight` / `clientHeight` and
@@ -165,7 +160,8 @@ describe("scrollToTop", () => {
     vi.runAllTimers();
 
     expect(scrollTo).not.toHaveBeenCalled();
-  });});
+  });
+});
 
 describe("scrollFocusedToCenter", () => {
   beforeEach(() => vi.useFakeTimers());

@@ -22,13 +22,19 @@ export function infoRow(
   valueColor = "#c7cdd3",
 ): ReturnType<typeof createElement> | null {
   if (value == null || value === "") return null;
-  return createElement("div", {
-    key,
-    style: { display: "flex", alignItems: "flex-start", fontSize: "11px", marginTop: "2px" },
-  },
-    createElement("span", {
-      style: { color: "#697075", width: LABEL_WIDTH, flexShrink: 0 },
-    }, label),
+  return createElement(
+    "div",
+    {
+      key,
+      style: { display: "flex", alignItems: "flex-start", fontSize: "11px", marginTop: "2px" },
+    },
+    createElement(
+      "span",
+      {
+        style: { color: "#697075", width: LABEL_WIDTH, flexShrink: 0 },
+      },
+      label,
+    ),
     createElement("div", { style: { color: valueColor, flex: 1, minWidth: 0 } }, value),
   );
 }
@@ -46,19 +52,31 @@ export function renderSaveFileRow(
   // Header value pieces (right-aligned meta: size + status)
   const headerMeta: (ReturnType<typeof createElement> | null)[] = [];
   if (f.local_size != null) {
-    headerMeta.push(createElement("span", {
-      key: "size",
-      style: { fontSize: "11px", color: "#8f98a0" },
-    }, formatBytes(f.local_size)));
+    headerMeta.push(
+      createElement(
+        "span",
+        {
+          key: "size",
+          style: { fontSize: "11px", color: "#8f98a0" },
+        },
+        formatBytes(f.local_size),
+      ),
+    );
   }
-  headerMeta.push(createElement("span", {
-    key: "status",
-    className: "romm-save-status-label",
-    style: { color, fontSize: "11px", fontWeight: 600 },
-  }, label));
+  headerMeta.push(
+    createElement(
+      "span",
+      {
+        key: "status",
+        className: "romm-save-status-label",
+        style: { color, fontSize: "11px", fontWeight: 600 },
+      },
+      label,
+    ),
+  );
 
   // Last synced value: "just now · <attribution> ✓" — see formatAttributionSegment
-  const lastSyncedPieces: string[] = [syncTime ? (formatRelativeTime(syncTime) || "Never") : "Never"];
+  const lastSyncedPieces: string[] = [syncTime ? formatRelativeTime(syncTime) || "Never" : "Never"];
   const attrSegment = formatAttributionSegment(f.uploaded_by_us, lastSyncer?.device_name);
   if (attrSegment !== null) lastSyncedPieces.push(attrSegment);
   if (f.is_current === false) {
@@ -71,64 +89,92 @@ export function renderSaveFileRow(
   if (f.server_save_id != null) {
     const headerParts: string[] = [`#${f.server_save_id}`];
     if (f.server_emulator) headerParts.push(f.server_emulator);
-    serverValueLines.push(createElement("div", {
-      key: "srv-head",
-      style: { color: "#c7cdd3" },
-    }, headerParts.join(" · ")));
+    serverValueLines.push(
+      createElement(
+        "div",
+        {
+          key: "srv-head",
+          style: { color: "#c7cdd3" },
+        },
+        headerParts.join(" · "),
+      ),
+    );
     if (f.server_file_name) {
-      serverValueLines.push(createElement("div", {
-        key: "srv-fn",
-        style: { color: "#8f98a0", fontFamily: "monospace", wordBreak: "break-all" as const, marginTop: "1px" },
-      }, f.server_file_name));
+      serverValueLines.push(
+        createElement(
+          "div",
+          {
+            key: "srv-fn",
+            style: { color: "#8f98a0", fontFamily: "monospace", wordBreak: "break-all" as const, marginTop: "1px" },
+          },
+          f.server_file_name,
+        ),
+      );
     }
   }
 
-  return createElement(DialogButton, {
-    key: f.filename,
-    style: {
-      background: "transparent",
-      border: "none",
-      padding: "8px 0",
-      textAlign: "left" as const,
-      width: "100%",
-      cursor: "default",
-      display: "block",
-    },
-    noFocusRing: false,
-    onFocus: scrollFocusedToCenter,
-  },
-    // Header row: filename (left) + size + status badge (right)
-    createElement("div", {
+  return createElement(
+    DialogButton,
+    {
+      key: f.filename,
       style: {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "8px",
-        marginBottom: "4px",
+        background: "transparent",
+        border: "none",
+        padding: "8px 0",
+        textAlign: "left" as const,
+        width: "100%",
+        cursor: "default",
+        display: "block",
       },
+      noFocusRing: false,
+      onFocus: scrollFocusedToCenter,
     },
-      createElement("div", {
+    // Header row: filename (left) + size + status badge (right)
+    createElement(
+      "div",
+      {
         style: {
-          fontSize: "13px",
-          color: "#dcdedf",
-          fontWeight: 600,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap" as const,
-          flex: 1,
-          minWidth: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "8px",
+          marginBottom: "4px",
         },
-      }, f.filename),
-      createElement("div", {
-        style: { display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 },
-      }, ...headerMeta),
+      },
+      createElement(
+        "div",
+        {
+          style: {
+            fontSize: "13px",
+            color: "#dcdedf",
+            fontWeight: 600,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap" as const,
+            flex: 1,
+            minWidth: 0,
+          },
+        },
+        f.filename,
+      ),
+      createElement(
+        "div",
+        {
+          style: { display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 },
+        },
+        ...headerMeta,
+      ),
     ),
 
     // Conflict banner (prominent)
     conflictActive
-      ? createElement("div", {
-          style: { fontSize: "11px", color: "#d94126", fontWeight: 600, marginTop: "2px", marginBottom: "2px" },
-        }, "Conflict detected — resolve from the sync action")
+      ? createElement(
+          "div",
+          {
+            style: { fontSize: "11px", color: "#d94126", fontWeight: 600, marginTop: "2px", marginBottom: "2px" },
+          },
+          "Conflict detected — resolve from the sync action",
+        )
       : null,
 
     // Info rows
@@ -146,9 +192,13 @@ export function renderSaveFileRow(
       ? infoRow(
           "path",
           "Local path:",
-          createElement("span", {
-            style: { fontFamily: "monospace", wordBreak: "break-all" as const },
-          }, f.local_path),
+          createElement(
+            "span",
+            {
+              style: { fontFamily: "monospace", wordBreak: "break-all" as const },
+            },
+            f.local_path,
+          ),
           "#5a6066",
         )
       : null,

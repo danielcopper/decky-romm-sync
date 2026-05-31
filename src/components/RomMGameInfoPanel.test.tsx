@@ -165,37 +165,25 @@ describe("RomMGameInfoPanel", () => {
     vi.mocked(useVersionError).mockReturnValue(null);
 
     // Re-stub migrationStore impls (resetAllMocks wiped them).
-    vi.mocked(migrationStore.getMigrationState).mockImplementation(
-      () => currentMigrationState,
-    );
-    vi.mocked(migrationStore.setMigrationStatus).mockImplementation(
-      (s: MigrationStatus) => {
-        currentMigrationState = s;
-        migrationListeners.forEach((fn) => fn());
-      },
-    );
-    vi.mocked(migrationStore.onMigrationChange).mockImplementation(
-      (cb: () => void) => {
-        migrationListeners.push(cb);
-        return () => {
-          const i = migrationListeners.indexOf(cb);
-          if (i >= 0) migrationListeners.splice(i, 1);
-        };
-      },
-    );
+    vi.mocked(migrationStore.getMigrationState).mockImplementation(() => currentMigrationState);
+    vi.mocked(migrationStore.setMigrationStatus).mockImplementation((s: MigrationStatus) => {
+      currentMigrationState = s;
+      migrationListeners.forEach((fn) => fn());
+    });
+    vi.mocked(migrationStore.onMigrationChange).mockImplementation((cb: () => void) => {
+      migrationListeners.push(cb);
+      return () => {
+        const i = migrationListeners.indexOf(cb);
+        if (i >= 0) migrationListeners.splice(i, 1);
+      };
+    });
     // Re-stub saveSortMigrationStore impls.
-    vi.mocked(
-      saveSortMigrationStore.getSaveSortMigrationState,
-    ).mockImplementation(() => currentSaveSortState);
-    vi.mocked(
-      saveSortMigrationStore.setSaveSortMigrationStatus,
-    ).mockImplementation((s: SaveSortMigrationStatus) => {
+    vi.mocked(saveSortMigrationStore.getSaveSortMigrationState).mockImplementation(() => currentSaveSortState);
+    vi.mocked(saveSortMigrationStore.setSaveSortMigrationStatus).mockImplementation((s: SaveSortMigrationStatus) => {
       currentSaveSortState = s;
       saveSortListeners.forEach((fn) => fn());
     });
-    vi.mocked(
-      saveSortMigrationStore.onSaveSortMigrationChange,
-    ).mockImplementation((cb: () => void) => {
+    vi.mocked(saveSortMigrationStore.onSaveSortMigrationChange).mockImplementation((cb: () => void) => {
       saveSortListeners.push(cb);
       return () => {
         const i = saveSortListeners.indexOf(cb);
@@ -288,9 +276,7 @@ describe("RomMGameInfoPanel", () => {
     it("renders 'Loading...' before loadData resolves", () => {
       // getCachedGameDetail returns a never-resolving promise so the initial
       // loading state stays visible.
-      vi.mocked(cachedStore.getCachedGameDetail).mockReturnValue(
-        new Promise(() => {}),
-      );
+      vi.mocked(cachedStore.getCachedGameDetail).mockReturnValue(new Promise(() => {}));
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       expect(container.textContent).toContain("Loading...");
     });
@@ -408,14 +394,10 @@ describe("RomMGameInfoPanel", () => {
     });
 
     it("logs via debugLog when getCachedGameDetail rejects (outer catch)", async () => {
-      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(
-        new Error("boom"),
-      );
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("boom"));
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("loadData error"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("loadData error"));
     });
 
     it("routes the slot refresh through applyRefreshSlotResult on success", async () => {
@@ -450,9 +432,7 @@ describe("RomMGameInfoPanel", () => {
         metadata: {} as never,
         stale_fields: [],
       });
-      vi.mocked(backend.isSaveTrackingConfigured).mockRejectedValue(
-        new Error("net"),
-      );
+      vi.mocked(backend.isSaveTrackingConfigured).mockRejectedValue(new Error("net"));
       vi.mocked(backend.getSaveSlots).mockResolvedValue({
         success: true,
         slots: [],
@@ -473,33 +453,23 @@ describe("RomMGameInfoPanel", () => {
   describe("refreshMigrationState on mount", () => {
     it("calls setMigrationStatus + setSaveSortMigrationStatus on success", async () => {
       const { setMigrationStatus } = await import("../utils/migrationStore");
-      const { setSaveSortMigrationStatus } = await import(
-        "../utils/saveSortMigrationStore"
-      );
+      const { setSaveSortMigrationStatus } = await import("../utils/saveSortMigrationStore");
       vi.mocked(backend.refreshMigrationState).mockResolvedValue({
         retrodeck: { pending: false },
         save_sort: { pending: true } as SaveSortMigrationStatus,
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      expect(setMigrationStatus).toHaveBeenCalledWith(
-        expect.objectContaining({ pending: false }),
-      );
-      expect(setSaveSortMigrationStatus).toHaveBeenCalledWith(
-        expect.objectContaining({ pending: true }),
-      );
+      expect(setMigrationStatus).toHaveBeenCalledWith(expect.objectContaining({ pending: false }));
+      expect(setSaveSortMigrationStatus).toHaveBeenCalledWith(expect.objectContaining({ pending: true }));
     });
 
     it("calls logError when refreshMigrationState rejects", async () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
-      vi.mocked(backend.refreshMigrationState).mockRejectedValue(
-        new Error("boom"),
-      );
+      vi.mocked(backend.refreshMigrationState).mockRejectedValue(new Error("boom"));
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to refresh migration state"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to refresh migration state"));
       logSpy.mockRestore();
     });
   });
@@ -541,9 +511,7 @@ describe("RomMGameInfoPanel", () => {
         platform_slug: "snes",
         installed_at: "2024-01-01",
       });
-      const { container, queryByText } = render(
-        <RomMGameInfoPanel appId={testAppId} />,
-      );
+      const { container, queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       // Initially installed → ROM File section visible
       expect(queryByText("ROM File")).not.toBeNull();
@@ -603,16 +571,12 @@ describe("RomMGameInfoPanel", () => {
         configured: true,
         active_slot: null,
       });
-      const { queryByTestId } = render(
-        <RomMGameInfoPanel appId={testAppId} />,
-      );
+      const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       // Initially info tab → no saves-tab rendered
       expect(queryByTestId("saves-tab")).toBeNull();
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
       });
       expect(queryByTestId("saves-tab")).not.toBeNull();
@@ -629,9 +593,7 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       const before = container.textContent;
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: {} }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: {} }));
         await Promise.resolve();
       });
       expect(container.textContent).toBe(before);
@@ -754,17 +716,13 @@ describe("RomMGameInfoPanel", () => {
       });
       // Rejection didn't crash the panel and didn't surface debugLog
       // (the inline .catch swallows).
-      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
-        expect.stringContaining("onDataChanged error"),
-      );
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
       // Fallback observable: saveSyncEnabled stays true (SAVES tab still
       // rendered) AND saveStatus is set to the null fallback. Switch to
       // saves tab to capture SavesTab props.
       expect(container.textContent).toContain("SAVES");
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
       });
       const latest = capturedSavesTab[capturedSavesTab.length - 1];
@@ -832,9 +790,7 @@ describe("RomMGameInfoPanel", () => {
       // `setState((prev) => ({ ..., saveStatus: updatedStatus, ... }))` is
       // dropped, this assertion fails.
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
       });
       const latest = capturedSavesTab[capturedSavesTab.length - 1];
@@ -899,9 +855,7 @@ describe("RomMGameInfoPanel", () => {
       });
       // The outer try/catch did NOT fire (inline .catch swallowed the
       // rejection and produced null).
-      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
-        expect.stringContaining("onDataChanged error"),
-      );
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
     });
 
     it("bios: detail.platform_slug provided → calls checkPlatformBios; updates biosStatus when needs_bios=true", async () => {
@@ -967,9 +921,7 @@ describe("RomMGameInfoPanel", () => {
       // produced { needs_bios: false }, which means biosStatus stays null
       // (the handler's setState resolves the ternary to null) and the
       // BIOS tab remains hidden.
-      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
-        expect.stringContaining("onDataChanged error"),
-      );
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
       expect(container.textContent).not.toContain("BIOS");
     });
 
@@ -1004,9 +956,7 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(
-        testAppId,
-      );
+      expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
       expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalled();
       // biosStatus now non-null → BIOS tab visible. Removing the
       // handler's `setState((prev) => ({ ..., biosStatus }))` line
@@ -1015,9 +965,7 @@ describe("RomMGameInfoPanel", () => {
       // Switch to the BIOS tab and assert the new active_core_label
       // reached the rendered Emulator column.
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         await Promise.resolve();
       });
       expect(container.textContent).toContain("FROM_CORE_CHANGED");
@@ -1059,17 +1007,13 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       // Outer catch did NOT fire …
-      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
-        expect.stringContaining("onDataChanged error"),
-      );
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
       // … and biosStatus is unchanged from the initial value (BIOS tab
       // still visible and the INITIAL_CORE label still reaches the BIOS
       // section after a tab switch).
       expect(view.container.textContent).toContain("BIOS");
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         await Promise.resolve();
       });
       expect(view.container.textContent).toContain("INITIAL_CORE");
@@ -1134,9 +1078,7 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       // Outer try/catch did NOT fire.
-      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
-        expect.stringContaining("onDataChanged error"),
-      );
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
     });
 
     it("unknown detail.type → no-op (no fetches, no throw)", async () => {
@@ -1163,9 +1105,7 @@ describe("RomMGameInfoPanel", () => {
       // await throws and the outer try/catch in onDataChanged surfaces it.
       await mountWithRomId(99);
       vi.mocked(backend.debugLog).mockClear();
-      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(
-        new Error("handler-boom"),
-      );
+      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValueOnce(new Error("handler-boom"));
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
@@ -1175,9 +1115,7 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("onDataChanged error"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
     });
   });
 
@@ -1211,9 +1149,7 @@ describe("RomMGameInfoPanel", () => {
         metadata: {} as never,
         stale_fields: [],
       });
-      const { queryByTestId } = render(
-        <RomMGameInfoPanel appId={testAppId} />,
-      );
+      const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       expect(queryByTestId("migration-blocked-card")).toBeNull();
       await act(async () => {
@@ -1232,16 +1168,12 @@ describe("RomMGameInfoPanel", () => {
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      expect(container.textContent).not.toContain(
-        "RetroArch save sorting changed",
-      );
+      expect(container.textContent).not.toContain("RetroArch save sorting changed");
       await act(async () => {
         currentSaveSortState = { pending: true };
         saveSortListeners.forEach((fn) => fn());
       });
-      expect(container.textContent).toContain(
-        "RetroArch save sorting changed",
-      );
+      expect(container.textContent).toContain("RetroArch save sorting changed");
     });
   });
 
@@ -1470,9 +1402,7 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(container.textContent).toContain(
-        "No achievements found for this game",
-      );
+      expect(container.textContent).toContain("No achievements found for this game");
     });
 
     it("achievements tab: achievementsLoading=true → 'Loading achievements...'", async () => {
@@ -1485,9 +1415,7 @@ describe("RomMGameInfoPanel", () => {
       });
       // Hold the achievement promises so achievementsLoading stays true.
       vi.mocked(backend.getAchievements).mockReturnValue(new Promise(() => {}));
-      vi.mocked(backend.getAchievementProgress).mockReturnValue(
-        new Promise(() => {}),
-      );
+      vi.mocked(backend.getAchievementProgress).mockReturnValue(new Promise(() => {}));
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await act(async () => {
@@ -1522,9 +1450,7 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load achievements"),
-      );
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("Failed to load achievements"));
     });
 
     it("achievements tab: no refetch on second activation (achievementsLoadedRef guard)", async () => {
@@ -1557,9 +1483,7 @@ describe("RomMGameInfoPanel", () => {
       expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledTimes(1);
       // Switch away …
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "info" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "info" } }));
         await Promise.resolve();
       });
       // … and back. Guard should prevent a second fetch.
@@ -1599,9 +1523,7 @@ describe("RomMGameInfoPanel", () => {
       // First activation → lazy-load fires getSaveSlots (in addition to
       // the mount-time refreshSlotState call already absorbed above).
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1610,16 +1532,12 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(backend.getSaveSlots).mockClear();
       // Switch away …
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "info" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "info" } }));
         await Promise.resolve();
       });
       // … and back. Guard should prevent a second fetch.
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1638,14 +1556,10 @@ describe("RomMGameInfoPanel", () => {
         configured: false,
         active_slot: null,
       });
-      const { queryByTestId } = render(
-        <RomMGameInfoPanel appId={testAppId} />,
-      );
+      const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
       });
       expect(queryByTestId("slot-setup-wizard")).not.toBeNull();
@@ -1664,14 +1578,10 @@ describe("RomMGameInfoPanel", () => {
         configured: true,
         active_slot: "main",
       });
-      const { queryByTestId } = render(
-        <RomMGameInfoPanel appId={testAppId} />,
-      );
+      const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
       });
       expect(queryByTestId("saves-tab")).not.toBeNull();
@@ -1694,9 +1604,7 @@ describe("RomMGameInfoPanel", () => {
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
       });
       const props = capturedSavesTab[capturedSavesTab.length - 1];
@@ -1746,14 +1654,10 @@ describe("RomMGameInfoPanel", () => {
         configured: false,
         active_slot: null,
       });
-      const { queryByTestId } = render(
-        <RomMGameInfoPanel appId={testAppId} />,
-      );
+      const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
         await Promise.resolve();
       });
       expect(queryByTestId("slot-setup-wizard")).not.toBeNull();
@@ -1800,9 +1704,7 @@ describe("RomMGameInfoPanel", () => {
           required_count: 2,
           required_downloaded: 1,
           active_core_label: "Snes9x",
-          available_cores: [
-            { core_so: "snes9x_libretro", label: "Snes9x", is_default: true },
-          ],
+          available_cores: [{ core_so: "snes9x_libretro", label: "Snes9x", is_default: true }],
           files: [
             {
               file_name: "bios.smc",
@@ -1826,9 +1728,7 @@ describe("RomMGameInfoPanel", () => {
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         await Promise.resolve();
       });
       expect(container.textContent).toContain("Emulator");
@@ -1940,9 +1840,7 @@ describe("RomMGameInfoPanel", () => {
       const view = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         await Promise.resolve();
       });
       return view;
@@ -2007,9 +1905,7 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       // Active core label spread from cache reaches the BIOS tab.
       await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }),
-        );
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         await Promise.resolve();
       });
       expect(container.textContent).toContain("MyCore");
@@ -2123,9 +2019,7 @@ describe("RomMGameInfoPanel", () => {
       // Catch swallowed; no cover img.
       expect(container.innerHTML).not.toContain("data:image/png;base64,");
       // And the mount didn't surface debugLog.
-      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
-        expect.stringContaining("loadData error"),
-      );
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("loadData error"));
     });
 
     it("background installed-rom fetch rejection → installedRom stays null (silent .catch)", async () => {
@@ -2144,9 +2038,7 @@ describe("RomMGameInfoPanel", () => {
       // And the rejection didn't bubble to loadData's outer catch (the
       // inline .catch swallowed it). Removing the inline `.catch(() => {})`
       // from refreshInstalledRomInBackground makes this assertion fail.
-      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(
-        expect.stringContaining("loadData error"),
-      );
+      expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("loadData error"));
     });
 
     it("background metadata fetch rejection → metadata stays at cached value (silent .catch)", async () => {
@@ -2178,9 +2070,7 @@ describe("RomMGameInfoPanel", () => {
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      expect(container.textContent).not.toContain(
-        "RetroArch save sorting changed",
-      );
+      expect(container.textContent).not.toContain("RetroArch save sorting changed");
     });
 
     it("renders when saveSortPending=true at mount", async () => {
@@ -2199,9 +2089,7 @@ describe("RomMGameInfoPanel", () => {
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      expect(container.textContent).toContain(
-        "RetroArch save sorting changed",
-      );
+      expect(container.textContent).toContain("RetroArch save sorting changed");
     });
   });
 });

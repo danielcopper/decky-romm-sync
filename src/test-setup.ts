@@ -43,7 +43,7 @@ vi.stubGlobal("collectionStore", { userCollections: [] });
 vi.mock("@decky/api", async () => {
   const bus = await import("./test-utils/decky-api-mock");
   return {
-    callable: <T,>(_name: string) => vi.fn().mockResolvedValue(undefined) as unknown as T,
+    callable: <T>(_name: string) => vi.fn().mockResolvedValue(undefined) as unknown as T,
     toaster: { toast: vi.fn() },
     definePlugin: (fn: unknown) => fn,
     addEventListener: bus.mockAddEventListener,
@@ -60,19 +60,19 @@ vi.mock("@decky/api", async () => {
 // per-file mock hoisting wins over this global stub.
 vi.mock("@decky/ui", () => {
   type AnyProps = Record<string, unknown> & { children?: unknown };
-  const passthrough = (tag: string) => (props: AnyProps) =>
-    createElement(tag, props, props.children as never);
+  const passthrough = (tag: string) => (props: AnyProps) => createElement(tag, props, props.children as never);
   return {
     ConfirmModal: passthrough("div"),
     ModalRoot: passthrough("div"),
     DialogButton: ({ children, onClick, disabled }: AnyProps & { disabled?: boolean }) =>
       createElement("button", { onClick, disabled }, children as never),
-    DialogButtonPrimary: ({ children, onClick }: AnyProps) =>
-      createElement("button", { onClick }, children as never),
+    DialogButtonPrimary: ({ children, onClick }: AnyProps) => createElement("button", { onClick }, children as never),
     ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       createElement("button", { onClick, disabled }, children as never),
     Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
-      createElement("div", { "data-testid": "field" },
+      createElement(
+        "div",
+        { "data-testid": "field" },
         createElement("span", { "data-testid": "field-label" }, p.label as never),
         createElement("span", { "data-testid": "field-desc" }, p.description as never),
         p.children as never,
@@ -138,8 +138,7 @@ vi.mock("@decky/ui", () => {
     showModal: vi.fn(),
     showContextMenu: vi.fn(),
     Menu: passthrough("div"),
-    MenuItem: ({ children, onClick }: AnyProps) =>
-      createElement("button", { onClick }, children as never),
+    MenuItem: ({ children, onClick }: AnyProps) => createElement("button", { onClick }, children as never),
     Router: { CloseSideMenus: vi.fn(), Navigate: vi.fn() },
     // findSP locates Steam's <SteamRoot> iframe document for stylesheet
     // injection. Tests run in happy-dom — no Steam, no iframe — so the

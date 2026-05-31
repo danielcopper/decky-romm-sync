@@ -10,9 +10,7 @@ describe("WarningCard", () => {
   });
 
   it("applies compact padding when compact=true", () => {
-    const { container } = render(
-      <WarningCard title="t" message="m" compact />,
-    );
+    const { container } = render(<WarningCard title="t" message="m" compact />);
     const root = container.firstChild as HTMLElement;
     expect(root).toHaveStyle({ padding: "24px 16px" });
   });

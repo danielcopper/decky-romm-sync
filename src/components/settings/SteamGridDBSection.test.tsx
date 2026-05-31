@@ -11,10 +11,8 @@ import { showModal } from "@decky/ui";
 //    can be asserted via container.textContent.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 vi.mock("@decky/ui", () => ({
-  PanelSection: (p: AnyProps) =>
-    createElement("section", {}, p.children as never),
-  PanelSectionRow: (p: AnyProps) =>
-    createElement("div", {}, p.children as never),
+  PanelSection: (p: AnyProps) => createElement("section", {}, p.children as never),
+  PanelSectionRow: (p: AnyProps) => createElement("div", {}, p.children as never),
   Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
     createElement(
       "div",
@@ -23,11 +21,19 @@ vi.mock("@decky/ui", () => ({
       createElement("span", { "data-testid": "field-desc" }, p.description as never),
       p.children as never,
     ),
-  DialogButton: ({ children, onClick, disabled }: AnyProps & {
+  DialogButton: ({
+    children,
+    onClick,
+    disabled,
+  }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
   }) => createElement("button", { onClick, disabled, "data-role": "dialog" }, children as never),
-  ButtonItem: ({ children, onClick, disabled }: AnyProps & {
+  ButtonItem: ({
+    children,
+    onClick,
+    disabled,
+  }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
   }) => createElement("button", { onClick, disabled, "data-role": "item" }, children as never),
@@ -66,9 +72,7 @@ describe("SteamGridDBSection", () => {
 
   describe("api key field", () => {
     it("renders masked '••••' description when a key is set", () => {
-      const { getAllByTestId } = render(
-        <SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored" })} />,
-      );
+      const { getAllByTestId } = render(<SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored" })} />);
       const descs = getAllByTestId("field-desc").map((el) => el.textContent);
       expect(descs).toContain("••••");
     });
@@ -81,9 +85,7 @@ describe("SteamGridDBSection", () => {
 
     it("opens a TextInputModal when Edit is clicked, prefilled empty and password-typed", () => {
       const onSubmitKey = vi.fn();
-      const { getByText } = render(
-        <SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored", onSubmitKey })} />,
-      );
+      const { getByText } = render(<SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored", onSubmitKey })} />);
       fireEvent.click(getByText("Edit"));
       const props = lastShownModalProps();
       expect(props).not.toBeNull();
@@ -110,18 +112,14 @@ describe("SteamGridDBSection", () => {
     });
 
     it("is enabled when a key is set and not verifying", () => {
-      const { getByText } = render(
-        <SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored" })} />,
-      );
+      const { getByText } = render(<SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored" })} />);
       const btn = getByText("Verify Key");
       expect(btn).not.toBeDisabled();
     });
 
     it("fires onVerifyKey when clicked", () => {
       const onVerifyKey = vi.fn();
-      const { getByText } = render(
-        <SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored", onVerifyKey })} />,
-      );
+      const { getByText } = render(<SteamGridDBSection {...defaultProps({ sgdbApiKey: "stored", onVerifyKey })} />);
       fireEvent.click(getByText("Verify Key"));
       expect(onVerifyKey).toHaveBeenCalledTimes(1);
     });
@@ -136,9 +134,7 @@ describe("SteamGridDBSection", () => {
 
   describe("status row", () => {
     it("renders a status Field when sgdbStatus is non-empty", () => {
-      const { getAllByTestId } = render(
-        <SteamGridDBSection {...defaultProps({ sgdbStatus: "Valid key ✓" })} />,
-      );
+      const { getAllByTestId } = render(<SteamGridDBSection {...defaultProps({ sgdbStatus: "Valid key ✓" })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Valid key ✓");
     });

@@ -23,11 +23,13 @@ vi.mock("@decky/ui", () => ({
     captured.strTitle = p.strTitle;
     return createElement("div", { "data-testid": "confirm-modal" }, p.children as never);
   },
-  TextField: (p: AnyProps & {
-    value?: string;
-    bIsPassword?: boolean;
-    onChange?: (e: { target: { value: string } }) => void;
-  }) => {
+  TextField: (
+    p: AnyProps & {
+      value?: string;
+      bIsPassword?: boolean;
+      onChange?: (e: { target: { value: string } }) => void;
+    },
+  ) => {
     captured.textFieldPassword = p.bIsPassword;
     return createElement("input", {
       value: p.value ?? "",
@@ -136,9 +138,7 @@ describe("TextInputModal", () => {
     });
 
     it("writes pendingEdits.password when field='password'", () => {
-      render(
-        <TextInputModal label="Pwd" value="" field="password" bIsPassword onSubmit={vi.fn()} />,
-      );
+      render(<TextInputModal label="Pwd" value="" field="password" bIsPassword onSubmit={vi.fn()} />);
       const input = document.querySelector("input") as HTMLInputElement;
       fireEvent.change(input, { target: { value: "s3cret" } });
       captured.onOK?.();

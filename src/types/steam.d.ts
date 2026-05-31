@@ -1,11 +1,6 @@
 declare var SteamClient: {
   Apps: {
-    AddShortcut(
-      appName: string,
-      exePath: string,
-      startDir: string,
-      launchArgs: string,
-    ): Promise<number>;
+    AddShortcut(appName: string, exePath: string, startDir: string, launchArgs: string): Promise<number>;
     RemoveShortcut(appId: number): void;
     SetShortcutName(appId: number, name: string): void;
     SetShortcutExe(appId: number, exePath: string): void;
@@ -19,10 +14,7 @@ declare var SteamClient: {
       assetType: number,
     ): Promise<void>;
     ClearCustomArtworkForApp(appId: number, assetType: number): Promise<void>;
-    RegisterForAppDetails(
-      appId: number,
-      callback: (details: SteamAppDetails) => void,
-    ): { unregister: () => void };
+    RegisterForAppDetails(appId: number, callback: (details: SteamAppDetails) => void): { unregister: () => void };
     RunGame(gameId: string | number, launchId: string, param2: number, param3: number): void;
     TerminateApp(appId: number, force: boolean): void;
     RegisterForGameActionStart(

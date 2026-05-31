@@ -18,10 +18,8 @@ interface ToggleFieldProps {
 const toggleCaptured: { items: ToggleFieldProps[] } = { items: [] };
 
 vi.mock("@decky/ui", () => ({
-  PanelSection: (p: AnyProps) =>
-    createElement("section", {}, p.children as never),
-  PanelSectionRow: (p: AnyProps) =>
-    createElement("div", {}, p.children as never),
+  PanelSection: (p: AnyProps) => createElement("section", {}, p.children as never),
+  PanelSectionRow: (p: AnyProps) => createElement("div", {}, p.children as never),
   Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
     createElement(
       "div",
@@ -32,7 +30,11 @@ vi.mock("@decky/ui", () => ({
     ),
   DialogButton: ({ children, onClick }: AnyProps & { onClick?: () => void }) =>
     createElement("button", { onClick }, children as never),
-  ButtonItem: ({ children, onClick, disabled }: AnyProps & {
+  ButtonItem: ({
+    children,
+    onClick,
+    disabled,
+  }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
   }) => createElement("button", { onClick, disabled }, children as never),
@@ -94,9 +96,7 @@ describe("ConnectionSection", () => {
     });
 
     it("shows the configured URL in the description", () => {
-      const { getAllByTestId } = render(
-        <ConnectionSection {...defaultProps({ url: "http://romm.local" })} />,
-      );
+      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ url: "http://romm.local" })} />);
       const descs = getAllByTestId("field-desc").map((el) => el.textContent);
       expect(descs).toContain("http://romm.local");
     });
@@ -125,9 +125,7 @@ describe("ConnectionSection", () => {
     });
 
     it("shows the username when set", () => {
-      const { getAllByTestId } = render(
-        <ConnectionSection {...defaultProps({ username: "daniel" })} />,
-      );
+      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ username: "daniel" })} />);
       const descs = getAllByTestId("field-desc").map((el) => el.textContent);
       expect(descs).toContain("daniel");
     });
@@ -148,16 +146,12 @@ describe("ConnectionSection", () => {
 
   describe("shared-account warning", () => {
     it("is hidden for a personal username", () => {
-      const { container } = render(
-        <ConnectionSection {...defaultProps({ username: "daniel" })} />,
-      );
+      const { container } = render(<ConnectionSection {...defaultProps({ username: "daniel" })} />);
       expect(container.textContent).not.toContain("Shared account detected");
     });
 
     it("renders for a known shared-account username", () => {
-      const { container } = render(
-        <ConnectionSection {...defaultProps({ username: "admin" })} />,
-      );
+      const { container } = render(<ConnectionSection {...defaultProps({ username: "admin" })} />);
       expect(container.textContent).toContain("Shared account detected");
       expect(container.textContent).toContain('"admin"');
     });
@@ -171,9 +165,7 @@ describe("ConnectionSection", () => {
     });
 
     it("shows '••••' when a password is set", () => {
-      const { getAllByTestId } = render(
-        <ConnectionSection {...defaultProps({ password: "stored" })} />,
-      );
+      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ password: "stored" })} />);
       const descs = getAllByTestId("field-desc").map((el) => el.textContent);
       expect(descs).toContain("••••");
     });
@@ -216,21 +208,13 @@ describe("ConnectionSection", () => {
     });
 
     it("reflects allowInsecureSsl in checked state", () => {
-      render(
-        <ConnectionSection
-          {...defaultProps({ url: "https://romm.local", allowInsecureSsl: true })}
-        />,
-      );
+      render(<ConnectionSection {...defaultProps({ url: "https://romm.local", allowInsecureSsl: true })} />);
       expect(toggleCaptured.items[0]?.checked).toBe(true);
     });
 
     it("dispatches onAllowInsecureSslChange when toggled", () => {
       const onAllowInsecureSslChange = vi.fn();
-      render(
-        <ConnectionSection
-          {...defaultProps({ url: "https://romm.local", onAllowInsecureSslChange })}
-        />,
-      );
+      render(<ConnectionSection {...defaultProps({ url: "https://romm.local", onAllowInsecureSslChange })} />);
       toggleCaptured.items[0]?.onChange?.(true);
       expect(onAllowInsecureSslChange).toHaveBeenCalledWith(true);
     });
@@ -239,9 +223,7 @@ describe("ConnectionSection", () => {
   describe("Test Connection button", () => {
     it("fires onTestConnection when clicked", () => {
       const onTestConnection = vi.fn();
-      const { getByText } = render(
-        <ConnectionSection {...defaultProps({ onTestConnection })} />,
-      );
+      const { getByText } = render(<ConnectionSection {...defaultProps({ onTestConnection })} />);
       fireEvent.click(getByText("Test Connection"));
       expect(onTestConnection).toHaveBeenCalledTimes(1);
     });
@@ -254,9 +236,7 @@ describe("ConnectionSection", () => {
 
   describe("status row", () => {
     it("renders the status Field when non-empty", () => {
-      const { getAllByTestId } = render(
-        <ConnectionSection {...defaultProps({ status: "Connected ✓" })} />,
-      );
+      const { getAllByTestId } = render(<ConnectionSection {...defaultProps({ status: "Connected ✓" })} />);
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toContain("Connected ✓");
     });

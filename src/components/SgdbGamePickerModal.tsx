@@ -19,22 +19,9 @@
  */
 
 import { FC, useState } from "react";
-import {
-  ConfirmModal,
-  DialogButton,
-  Focusable,
-  GamepadButton,
-  TextField,
-  Spinner,
-  type GamepadEvent,
-} from "@decky/ui";
+import { ConfirmModal, DialogButton, Focusable, GamepadButton, TextField, Spinner, type GamepadEvent } from "@decky/ui";
 import { toaster } from "@decky/api";
-import {
-  searchSgdbGames,
-  applySgdbGameId,
-  debugLog,
-  type SgdbCandidate,
-} from "../api/backend";
+import { searchSgdbGames, applySgdbGameId, debugLog, type SgdbCandidate } from "../api/backend";
 import { applyArtwork } from "../utils/artwork";
 import { scrollToTop, scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
@@ -98,12 +85,8 @@ const Tile: FC<{
         No preview
       </div>
     )}
-    <div style={{ fontSize: "12px", color: "#fff", textAlign: "center", lineHeight: "1.2" }}>
-      {title}
-    </div>
-    {subtitle ? (
-      <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)" }}>{subtitle}</div>
-    ) : null}
+    <div style={{ fontSize: "12px", color: "#fff", textAlign: "center", lineHeight: "1.2" }}>{title}</div>
+    {subtitle ? <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.55)" }}>{subtitle}</div> : null}
   </DialogButton>
 );
 
@@ -126,12 +109,10 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     setSearching(true);
     setSearchError(null);
     try {
-      const res = await searchSgdbGames(term).catch(
-        (e): { success: boolean; games: SgdbCandidate[] } => {
-          detach(debugLog(`SgdbGamePickerModal: searchSgdbGames rejected: ${e}`));
-          return { success: false, games: [] };
-        },
-      );
+      const res = await searchSgdbGames(term).catch((e): { success: boolean; games: SgdbCandidate[] } => {
+        detach(debugLog(`SgdbGamePickerModal: searchSgdbGames rejected: ${e}`));
+        return { success: false, games: [] };
+      });
       if (res.success) {
         setResults(res.games);
         if (res.games.length === 0) {
@@ -150,12 +131,10 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
     if (applying) return;
     setApplying(true);
     try {
-      const result = await applySgdbGameId(romId, selectedId).catch(
-        (e): { success: boolean } => {
-          detach(debugLog(`SgdbGamePickerModal: applySgdbGameId rejected: ${e}`));
-          return { success: false };
-        },
-      );
+      const result = await applySgdbGameId(romId, selectedId).catch((e): { success: boolean } => {
+        detach(debugLog(`SgdbGamePickerModal: applySgdbGameId rejected: ${e}`));
+        return { success: false };
+      });
       if (!result.success) {
         toaster.toast({ title: "RomM Sync", body: "Failed to apply artwork selection" });
         return;
@@ -209,10 +188,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
           No SteamGridDB match was found automatically — search by name and pick the right game.
         </div>
 
-        <Focusable
-          flow-children="row"
-          style={{ display: "flex", gap: "8px", alignItems: "center" }}
-        >
+        <Focusable flow-children="row" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
           <div style={{ flex: 1 }}>
             <TextField
               focusOnMount={true}
@@ -223,7 +199,9 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
             />
           </div>
           <DialogButton
-            onClick={() => { detach(runSearch()); }}
+            onClick={() => {
+              detach(runSearch());
+            }}
             onFocus={scrollToTop}
             disabled={searching}
             style={{ width: "120px", height: "40px" }}
@@ -240,9 +218,7 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
           </div>
         ) : null}
 
-        {searchError ? (
-          <div style={{ fontSize: "12px", color: "#ff8800" }}>{searchError}</div>
-        ) : null}
+        {searchError ? <div style={{ fontSize: "12px", color: "#ff8800" }}>{searchError}</div> : null}
 
         {results.length > 0 ? (
           <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.5)" }}>
@@ -261,7 +237,9 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
                 thumbUrl={game.thumb_url}
                 title={game.name}
                 subtitle={game.release_year == null ? undefined : String(game.release_year)}
-                onSelect={() => { detach(applySelection(game.id)); }}
+                onSelect={() => {
+                  detach(applySelection(game.id));
+                }}
                 onFocus={scrollFocusedToCenter}
                 disabled={applying}
               />

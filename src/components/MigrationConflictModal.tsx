@@ -7,11 +7,7 @@ interface MigrationConflictModalProps {
   onChoice: (strategy: "overwrite" | "skip") => void;
 }
 
-export const MigrationConflictModal: FC<MigrationConflictModalProps> = ({
-  conflictCount,
-  closeModal,
-  onChoice,
-}) => (
+export const MigrationConflictModal: FC<MigrationConflictModalProps> = ({ conflictCount, closeModal, onChoice }) => (
   <ModalRoot closeModal={closeModal}>
     <div style={{ padding: "16px", minWidth: "320px" }}>
       <div style={{ fontSize: "16px", fontWeight: "bold", color: "#fff", marginBottom: "8px" }}>
@@ -21,10 +17,20 @@ export const MigrationConflictModal: FC<MigrationConflictModalProps> = ({
         {conflictCount} file(s) already exist at the destination.
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        <DialogButton onClick={() => { closeModal?.(); onChoice("overwrite"); }}>
+        <DialogButton
+          onClick={() => {
+            closeModal?.();
+            onChoice("overwrite");
+          }}
+        >
           Overwrite
         </DialogButton>
-        <DialogButton onClick={() => { closeModal?.(); onChoice("skip"); }}>
+        <DialogButton
+          onClick={() => {
+            closeModal?.();
+            onChoice("skip");
+          }}
+        >
           Skip
         </DialogButton>
         <DialogButton onClick={() => closeModal?.()} style={{ opacity: 0.5 }}>

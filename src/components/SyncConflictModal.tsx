@@ -48,32 +48,38 @@ const SyncConflictModal: FC<SyncConflictModalProps> = ({
   return (
     <ModalRoot closeModal={isLoading ? undefined : onCancel}>
       <div style={{ padding: "16px", minWidth: "360px" }}>
-        <div style={{
-          fontSize: "16px",
-          fontWeight: "bold",
-          marginBottom: "4px",
-          color: "#fff",
-        }}>
+        <div
+          style={{
+            fontSize: "16px",
+            fontWeight: "bold",
+            marginBottom: "4px",
+            color: "#fff",
+          }}
+        >
           Save conflict for {conflict.filename}
         </div>
-        <div style={{
-          fontSize: "12px",
-          color: "rgba(255, 255, 255, 0.6)",
-          marginBottom: "16px",
-          lineHeight: "1.4",
-        }}>
-          Both your local save and the server save have changed since the last
-          sync. Pick which version to keep — the other will be overwritten.
+        <div
+          style={{
+            fontSize: "12px",
+            color: "rgba(255, 255, 255, 0.6)",
+            marginBottom: "16px",
+            lineHeight: "1.4",
+          }}
+        >
+          Both your local save and the server save have changed since the last sync. Pick which version to keep — the
+          other will be overwritten.
         </div>
 
         {/* Local save block */}
-        <div style={{
-          padding: "10px",
-          background: "rgba(76, 175, 80, 0.15)",
-          borderRadius: "4px",
-          border: "1px solid rgba(76, 175, 80, 0.3)",
-          marginBottom: "10px",
-        }}>
+        <div
+          style={{
+            padding: "10px",
+            background: "rgba(76, 175, 80, 0.15)",
+            borderRadius: "4px",
+            border: "1px solid rgba(76, 175, 80, 0.3)",
+            marginBottom: "10px",
+          }}
+        >
           <div style={{ fontSize: "12px", fontWeight: "bold", color: "#81c784", marginBottom: "6px" }}>
             Your local save
           </div>
@@ -81,23 +87,22 @@ const SyncConflictModal: FC<SyncConflictModalProps> = ({
             {formatSize(conflict.local_size)} · modified {formatTimestamp(conflict.local_mtime)}
           </div>
           <div style={{ marginTop: "8px" }}>
-            <DialogButton
-              onClick={() => handleResolve("keep_local")}
-              disabled={isLoading}
-            >
+            <DialogButton onClick={() => handleResolve("keep_local")} disabled={isLoading}>
               Keep Local
             </DialogButton>
           </div>
         </div>
 
         {/* Server save block */}
-        <div style={{
-          padding: "10px",
-          background: "rgba(33, 150, 243, 0.15)",
-          borderRadius: "4px",
-          border: "1px solid rgba(33, 150, 243, 0.3)",
-          marginBottom: "10px",
-        }}>
+        <div
+          style={{
+            padding: "10px",
+            background: "rgba(33, 150, 243, 0.15)",
+            borderRadius: "4px",
+            border: "1px solid rgba(33, 150, 243, 0.3)",
+            marginBottom: "10px",
+          }}
+        >
           <div style={{ fontSize: "12px", fontWeight: "bold", color: "#64b5f6", marginBottom: "6px" }}>
             Server save (id={conflict.server_save_id})
           </div>
@@ -105,18 +110,15 @@ const SyncConflictModal: FC<SyncConflictModalProps> = ({
             {formatSize(conflict.server_size)} · uploaded {formatTimestamp(conflict.server_updated_at)}
           </div>
           <div style={{ marginTop: "8px" }}>
-            <DialogButton
-              onClick={() => handleResolve("use_server")}
-              disabled={isLoading}
-            >
+            <DialogButton onClick={() => handleResolve("use_server")} disabled={isLoading}>
               Use Server
             </DialogButton>
           </div>
         </div>
 
-        {errorMessage
-          ? (
-            <div style={{
+        {errorMessage ? (
+          <div
+            style={{
               padding: "8px 10px",
               background: "rgba(244, 67, 54, 0.15)",
               borderRadius: "4px",
@@ -125,18 +127,14 @@ const SyncConflictModal: FC<SyncConflictModalProps> = ({
               fontSize: "12px",
               color: "#ef9a9a",
               lineHeight: "1.4",
-            }}>
-              {errorMessage}
-            </div>
-          )
-          : null}
+            }}
+          >
+            {errorMessage}
+          </div>
+        ) : null}
 
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <DialogButton
-            onClick={onCancel}
-            disabled={isLoading}
-            style={{ opacity: 0.7 }}
-          >
+          <DialogButton onClick={onCancel} disabled={isLoading} style={{ opacity: 0.7 }}>
             Cancel
           </DialogButton>
         </div>
@@ -163,12 +161,7 @@ const SyncConflictModalHost: FC<SyncConflictModalHostProps> = ({ conflict, close
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const result = await resolveSyncConflict(
-        conflict.rom_id,
-        conflict.filename,
-        conflict.server_save_id,
-        action,
-      );
+      const result = await resolveSyncConflict(conflict.rom_id, conflict.filename, conflict.server_save_id, action);
       if (!result.success) {
         if (result.error_code === "stale_conflict") {
           const staleMsg =
@@ -218,12 +211,8 @@ const SyncConflictModalHost: FC<SyncConflictModalHostProps> = ({ conflict, close
  * user picks an action (or cancels). Used by CustomPlayButton during pre-launch
  * sync and by sessionManager when post-exit sync surfaces conflicts.
  */
-export function showSyncConflictModal(
-  conflict: SyncConflict,
-): Promise<SyncConflictResolution> {
+export function showSyncConflictModal(conflict: SyncConflict): Promise<SyncConflictResolution> {
   return new Promise<SyncConflictResolution>((resolve) => {
-    showModal(
-      <SyncConflictModalHost conflict={conflict} onDone={resolve} />,
-    );
+    showModal(<SyncConflictModalHost conflict={conflict} onDone={resolve} />);
   });
 }

@@ -9,10 +9,13 @@ import type { SlotSaveFile } from "../../types";
 // disabled, which masks the prop-driven disable behavior we want to assert.
 type AnyProps = Record<string, unknown> & { children?: unknown };
 vi.mock("@decky/ui", () => {
-  const passthrough = (tag: string) => (props: AnyProps) =>
-    createElement(tag, props, props.children as never);
+  const passthrough = (tag: string) => (props: AnyProps) => createElement(tag, props, props.children as never);
   return {
-    DialogButton: ({ children, onClick, disabled }: AnyProps & {
+    DialogButton: ({
+      children,
+      onClick,
+      disabled,
+    }: AnyProps & {
       onClick?: () => void;
       disabled?: boolean;
     }) => createElement("button", { onClick, disabled }, children as never),
@@ -59,9 +62,7 @@ describe("InactiveSlotBody", () => {
   });
 
   it("renders 'No saves in this slot' when slotFiles is an empty array", () => {
-    const { container } = render(
-      <InactiveSlotBody {...defaultProps({ slotFiles: [] })} />,
-    );
+    const { container } = render(<InactiveSlotBody {...defaultProps({ slotFiles: [] })} />);
     expect(container.textContent).toContain("No saves in this slot");
   });
 
@@ -69,10 +70,7 @@ describe("InactiveSlotBody", () => {
     const { container } = render(
       <InactiveSlotBody
         {...defaultProps({
-          slotFiles: [
-            makeFile({ id: 1, filename: "a.srm" }),
-            makeFile({ id: 2, filename: "b.srm" }),
-          ],
+          slotFiles: [makeFile({ id: 1, filename: "a.srm" }), makeFile({ id: 2, filename: "b.srm" })],
         })}
       />,
     );
@@ -86,9 +84,7 @@ describe("InactiveSlotBody", () => {
   });
 
   it("button label says 'Switching...' when switching is true", () => {
-    const { getByText, queryByText } = render(
-      <InactiveSlotBody {...defaultProps({ switching: true })} />,
-    );
+    const { getByText, queryByText } = render(<InactiveSlotBody {...defaultProps({ switching: true })} />);
     expect(getByText("Switching...")).toBeInTheDocument();
     expect(queryByText("Activate Slot")).toBeNull();
   });
@@ -99,24 +95,18 @@ describe("InactiveSlotBody", () => {
   });
 
   it("button label says 'Deleting...' when deleting is true", () => {
-    const { getByText, queryByText } = render(
-      <InactiveSlotBody {...defaultProps({ deleting: true })} />,
-    );
+    const { getByText, queryByText } = render(<InactiveSlotBody {...defaultProps({ deleting: true })} />);
     expect(getByText("Deleting...")).toBeInTheDocument();
     expect(queryByText("Delete Slot")).toBeNull();
   });
 
   it("disables Activate when switching is true", () => {
-    const { getByText } = render(
-      <InactiveSlotBody {...defaultProps({ switching: true })} />,
-    );
+    const { getByText } = render(<InactiveSlotBody {...defaultProps({ switching: true })} />);
     expect(getByText("Switching...")).toBeDisabled();
   });
 
   it("disables Activate when isOffline is true", () => {
-    const { getByText } = render(
-      <InactiveSlotBody {...defaultProps({ isOffline: true })} />,
-    );
+    const { getByText } = render(<InactiveSlotBody {...defaultProps({ isOffline: true })} />);
     expect(getByText("Activate Slot")).toBeDisabled();
   });
 
@@ -126,41 +116,31 @@ describe("InactiveSlotBody", () => {
   });
 
   it("disables Delete when deleting is true", () => {
-    const { getByText } = render(
-      <InactiveSlotBody {...defaultProps({ deleting: true })} />,
-    );
+    const { getByText } = render(<InactiveSlotBody {...defaultProps({ deleting: true })} />);
     expect(getByText("Deleting...")).toBeDisabled();
   });
 
   it("disables Delete when switching is true (in-flight switch blocks delete)", () => {
-    const { getByText } = render(
-      <InactiveSlotBody {...defaultProps({ switching: true })} />,
-    );
+    const { getByText } = render(<InactiveSlotBody {...defaultProps({ switching: true })} />);
     expect(getByText("Delete Slot")).toBeDisabled();
   });
 
   it("calls handleActivate when Activate is clicked", () => {
     const handleActivate = vi.fn();
-    const { getByText } = render(
-      <InactiveSlotBody {...defaultProps({ handleActivate })} />,
-    );
+    const { getByText } = render(<InactiveSlotBody {...defaultProps({ handleActivate })} />);
     fireEvent.click(getByText("Activate Slot"));
     expect(handleActivate).toHaveBeenCalledTimes(1);
   });
 
   it("calls handleDelete when Delete is clicked", () => {
     const handleDelete = vi.fn();
-    const { getByText } = render(
-      <InactiveSlotBody {...defaultProps({ handleDelete })} />,
-    );
+    const { getByText } = render(<InactiveSlotBody {...defaultProps({ handleDelete })} />);
     fireEvent.click(getByText("Delete Slot"));
     expect(handleDelete).toHaveBeenCalledTimes(1);
   });
 
   it("shows offline hint when isOffline is true", () => {
-    const { container } = render(
-      <InactiveSlotBody {...defaultProps({ isOffline: true })} />,
-    );
+    const { container } = render(<InactiveSlotBody {...defaultProps({ isOffline: true })} />);
     expect(container.textContent).toContain("Offline — slot switching unavailable");
   });
 
@@ -170,9 +150,7 @@ describe("InactiveSlotBody", () => {
   });
 
   it("shows switchError line when switchError is set", () => {
-    const { container } = render(
-      <InactiveSlotBody {...defaultProps({ switchError: "Something went wrong" })} />,
-    );
+    const { container } = render(<InactiveSlotBody {...defaultProps({ switchError: "Something went wrong" })} />);
     expect(container.textContent).toContain("Something went wrong");
   });
 

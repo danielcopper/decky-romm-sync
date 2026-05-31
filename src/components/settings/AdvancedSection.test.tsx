@@ -6,7 +6,10 @@ import { AdvancedSection } from "./AdvancedSection";
 // DropdownItem isn't in the global @decky/ui stub. Capture rgOptions +
 // selectedOption + onChange so we can drive the onChange callback and assert
 // the wiring without rendering a real Steam Dropdown.
-interface DropdownOption { data: unknown; label: string }
+interface DropdownOption {
+  data: unknown;
+  label: string;
+}
 interface DropdownItemProps {
   label?: string;
   rgOptions?: DropdownOption[];
@@ -17,8 +20,7 @@ const captured: { items: DropdownItemProps[] } = { items: [] };
 
 vi.mock("@decky/ui", () => {
   type AnyProps = Record<string, unknown> & { children?: unknown };
-  const passthrough = (tag: string) => (p: AnyProps) =>
-    createElement(tag, {}, p.children as never);
+  const passthrough = (tag: string) => (p: AnyProps) => createElement(tag, {}, p.children as never);
   return {
     PanelSection: passthrough("section"),
     PanelSectionRow: passthrough("div"),
@@ -39,12 +41,7 @@ describe("AdvancedSection", () => {
     expect(captured.items).toHaveLength(1);
     const item = captured.items[0];
     expect(item?.label).toBe("Log Level");
-    expect(item?.rgOptions?.map((o) => o.data)).toEqual([
-      "error",
-      "warn",
-      "info",
-      "debug",
-    ]);
+    expect(item?.rgOptions?.map((o) => o.data)).toEqual(["error", "warn", "info", "debug"]);
   });
 
   it("forwards the current logLevel as selectedOption", () => {

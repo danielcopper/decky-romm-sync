@@ -52,7 +52,7 @@ export function scrollFocusedToCenter(e: FocusLike): void {
     if (scrollParent) {
       const elRect = el.getBoundingClientRect();
       const spRect = scrollParent.getBoundingClientRect();
-      const targetScroll = scrollParent.scrollTop + (elRect.top - spRect.top) - (spRect.height / 2) + (elRect.height / 2);
+      const targetScroll = scrollParent.scrollTop + (elRect.top - spRect.top) - spRect.height / 2 + elRect.height / 2;
       scrollParent.scrollTo({ top: targetScroll, behavior: "smooth" });
     }
   }, 50);

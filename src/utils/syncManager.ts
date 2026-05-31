@@ -27,10 +27,7 @@ export function requestSyncCancel(): void {
  * shortcut when one is present, otherwise create a new shortcut. Returns
  * ``undefined`` if no appId could be resolved (creation failed).
  */
-async function resolveShortcutAppId(
-  item: SyncAddItem,
-  existing: Map<number, number>,
-): Promise<number | undefined> {
+async function resolveShortcutAppId(item: SyncAddItem, existing: Map<number, number>): Promise<number | undefined> {
   const existingAppId = existing.get(item.rom_id);
   if (existingAppId) {
     SteamClient.Apps.SetShortcutName(existingAppId, item.name);
@@ -142,7 +139,9 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       const artworkTargets: ArtworkTarget[] = [];
 
       const total = data.shortcuts.length;
-      logInfo(`sync_apply_unit received: ${data.unit_type}=${data.unit_name} (${data.unit_index + 1}/${data.total_units}), ${total} shortcuts`);
+      logInfo(
+        `sync_apply_unit received: ${data.unit_type}=${data.unit_name} (${data.unit_index + 1}/${data.total_units}), ${total} shortcuts`,
+      );
 
       updateSyncProgress({
         running: true,

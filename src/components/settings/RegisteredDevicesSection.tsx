@@ -37,29 +37,32 @@ export const RegisteredDevicesSection: FC<RegisteredDevicesSectionProps> = ({
           <Field label="No devices registered" />
         </PanelSectionRow>
       )}
-      {!devicesLoading && !devicesError && registeredDevices !== null && registeredDevices.map((device, i) => {
-        const parts: string[] = [
-          `${device.client ?? "unknown client"} v${device.client_version ?? "?"}`,
-          ...(device.platform ? [device.platform] : []),
-          `last seen ${formatRelativeTime(device.last_seen)}`,
-          `ID ${String(device.id ?? "").slice(0, 8) || "—"}`,
-        ];
-        return (
-          <PanelSectionRow key={device.id || `idx-${i}`}>
-            <Field
-              label={
-                <span>
-                  {device.name ?? "(unnamed)"}
-                  {device.is_current_device && (
-                    <span style={{ color: "#6ab04c", marginLeft: "8px", fontSize: "12px" }}>(this device)</span>
-                  )}
-                </span>
-              }
-              description={parts.join(" · ")}
-            />
-          </PanelSectionRow>
-        );
-      })}
+      {!devicesLoading &&
+        !devicesError &&
+        registeredDevices !== null &&
+        registeredDevices.map((device, i) => {
+          const parts: string[] = [
+            `${device.client ?? "unknown client"} v${device.client_version ?? "?"}`,
+            ...(device.platform ? [device.platform] : []),
+            `last seen ${formatRelativeTime(device.last_seen)}`,
+            `ID ${String(device.id ?? "").slice(0, 8) || "—"}`,
+          ];
+          return (
+            <PanelSectionRow key={device.id || `idx-${i}`}>
+              <Field
+                label={
+                  <span>
+                    {device.name ?? "(unnamed)"}
+                    {device.is_current_device && (
+                      <span style={{ color: "#6ab04c", marginLeft: "8px", fontSize: "12px" }}>(this device)</span>
+                    )}
+                  </span>
+                }
+                description={parts.join(" · ")}
+              />
+            </PanelSectionRow>
+          );
+        })}
     </PanelSection>
   );
 };

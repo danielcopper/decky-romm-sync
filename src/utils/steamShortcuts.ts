@@ -21,9 +21,7 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
   for (let i = 0; i < appIds.length; i += CONCURRENCY) {
     const batch = appIds.slice(i, i + CONCURRENCY);
     const entries = await Promise.all(
-      batch.map((appId) =>
-        getLaunchOptions(appId).then((launchOptions) => ({ appId, launchOptions }))
-      )
+      batch.map((appId) => getLaunchOptions(appId).then((launchOptions) => ({ appId, launchOptions }))),
     );
     for (const { appId, launchOptions } of entries) {
       if (launchOptions?.includes(ROMM_MARKER)) {
@@ -66,12 +64,7 @@ export async function addShortcut(data: SyncAddItem): Promise<number | null> {
   try {
     // AddShortcut ignores most params (confirmed by MoonDeck plugin) —
     // must use Set* calls after creation to apply name, exe, startDir, launchOptions.
-    const appId = await SteamClient.Apps.AddShortcut(
-      data.name,
-      data.exe,
-      "",
-      "",
-    );
+    const appId = await SteamClient.Apps.AddShortcut(data.name, data.exe, "", "");
 
     if (!appId) return null;
 

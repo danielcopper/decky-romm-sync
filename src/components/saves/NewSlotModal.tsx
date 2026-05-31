@@ -12,12 +12,16 @@ export const NewSlotModal: FC<{
   onSubmit: (name: string) => void;
 }> = ({ closeModal, onSubmit }) => {
   const [value, setValue] = useState("");
-  return createElement(ConfirmModal, {
-    closeModal,
-    onOK: () => { onSubmit(value.trim()); },
-    strTitle: "New Save Slot",
-    bDisableBackgroundDismiss: true,
-  },
+  return createElement(
+    ConfirmModal,
+    {
+      closeModal,
+      onOK: () => {
+        onSubmit(value.trim());
+      },
+      strTitle: "New Save Slot",
+      bDisableBackgroundDismiss: true,
+    },
     createElement(TextField, {
       focusOnMount: true,
       label: "Slot Name",

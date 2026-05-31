@@ -67,10 +67,7 @@ export const SaveSyncSection: FC<SaveSyncSectionProps> = ({
             <>
               {deviceInfo && (
                 <PanelSectionRow>
-                  <Field
-                    label="Device"
-                    description={`Registered as "${deviceInfo.device_name}"`}
-                  />
+                  <Field label="Device" description={`Registered as "${deviceInfo.device_name}"`} />
                 </PanelSectionRow>
               )}
               <PanelSectionRow>
@@ -94,23 +91,24 @@ export const SaveSyncSection: FC<SaveSyncSectionProps> = ({
                   label="Default Save Slot"
                   description={`${saveSyncSettings.default_slot || "(no slot)"} — applies to new games and games without a per-game slot override`}
                 >
-                  <DialogButton onClick={() => showModal(
-                    <TextInputModal
-                      label="Default Save Slot"
-                      value={saveSyncSettings.default_slot ?? ""}
-                      onSubmit={onDefaultSlotSubmit}
-                    />
-                  )}>
+                  <DialogButton
+                    onClick={() =>
+                      showModal(
+                        <TextInputModal
+                          label="Default Save Slot"
+                          value={saveSyncSettings.default_slot ?? ""}
+                          onSubmit={onDefaultSlotSubmit}
+                        />,
+                      )
+                    }
+                  >
                     Edit
                   </DialogButton>
                 </Field>
               </PanelSectionRow>
               {saveSyncSettings.default_slot !== "default" && (
                 <PanelSectionRow>
-                  <ButtonItem
-                    layout="below"
-                    onClick={onResetDefaultSlot}
-                  >
+                  <ButtonItem layout="below" onClick={onResetDefaultSlot}>
                     Reset to default
                   </ButtonItem>
                 </PanelSectionRow>

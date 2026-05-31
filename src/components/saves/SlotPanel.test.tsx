@@ -24,7 +24,11 @@ vi.mock("@decky/ui", () => {
   const ConfirmModal = (p: AnyProps) => createElement("div", {}, p.children as never);
   return {
     ConfirmModal,
-    DialogButton: ({ children, onClick, disabled }: AnyProps & {
+    DialogButton: ({
+      children,
+      onClick,
+      disabled,
+    }: AnyProps & {
       onClick?: () => void;
       disabled?: boolean;
     }) => createElement("button", { onClick, disabled }, children as never),
@@ -105,9 +109,7 @@ describe("SlotPanel", () => {
     });
 
     it("renders expanded when defaultExpanded is true", () => {
-      const { container } = render(
-        <SlotPanel {...defaultProps({ defaultExpanded: true })} />,
-      );
+      const { container } = render(<SlotPanel {...defaultProps({ defaultExpanded: true })} />);
       expect(container.textContent).toContain("▾");
     });
 
@@ -141,9 +143,7 @@ describe("SlotPanel", () => {
     });
 
     it("does NOT call getSlotSaves when expanding an active slot", async () => {
-      const { container } = render(
-        <SlotPanel {...defaultProps({ isActive: true, saveStatus: makeStatus() })} />,
-      );
+      const { container } = render(<SlotPanel {...defaultProps({ isActive: true, saveStatus: makeStatus() })} />);
       const header = container.querySelector("button");
       if (!header) throw new Error("no header");
       fireEvent.click(header);
@@ -281,9 +281,7 @@ describe("SlotPanel", () => {
       });
 
       const onSlotSwitched = vi.fn();
-      const { container, getByText } = render(
-        <SlotPanel {...defaultProps({ onSlotSwitched })} />,
-      );
+      const { container, getByText } = render(<SlotPanel {...defaultProps({ onSlotSwitched })} />);
       fireEvent.click(container.querySelector("button")!); // expand
       await flushAsync();
       fireEvent.click(getByText("Activate Slot"));
@@ -316,9 +314,7 @@ describe("SlotPanel", () => {
           await vi.advanceTimersByTimeAsync(0);
           await vi.advanceTimersByTimeAsync(0);
         });
-        expect(container.textContent).toContain(
-          "Sync your saves first — local changes haven't been uploaded",
-        );
+        expect(container.textContent).toContain("Sync your saves first — local changes haven't been uploaded");
       } finally {
         vi.useRealTimers();
       }
@@ -346,16 +342,12 @@ describe("SlotPanel", () => {
           await vi.advanceTimersByTimeAsync(0);
           await vi.advanceTimersByTimeAsync(0);
         });
-        expect(container.textContent).toContain(
-          "Sync your saves first — local changes haven't been uploaded",
-        );
+        expect(container.textContent).toContain("Sync your saves first — local changes haven't been uploaded");
         // The 5s clear timer fires
         await act(async () => {
           await vi.advanceTimersByTimeAsync(5001);
         });
-        expect(container.textContent).not.toContain(
-          "Sync your saves first — local changes haven't been uploaded",
-        );
+        expect(container.textContent).not.toContain("Sync your saves first — local changes haven't been uploaded");
       } finally {
         vi.useRealTimers();
       }
@@ -532,9 +524,7 @@ describe("SlotPanel", () => {
       await flushAsync();
       await flushAsync();
       const modalProps = lastConfirmModalProps();
-      expect(modalProps?.strDescription).toContain(
-        "remove slot 'default' from your local configuration",
-      );
+      expect(modalProps?.strDescription).toContain("remove slot 'default' from your local configuration");
       expect(modalProps?.strDescription).toContain("1 tracked file will be unlinked");
     });
 
@@ -564,9 +554,7 @@ describe("SlotPanel", () => {
 
       await lastConfirmModalProps()?.onOK?.();
       await flushAsync();
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "couldn't reach server" }),
-      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "couldn't reach server" }));
       expect(onSlotDeleted).not.toHaveBeenCalled();
     });
 
@@ -621,18 +609,14 @@ describe("SlotPanel", () => {
 
   describe("badges and summary line", () => {
     it("renders the 'local' source badge for source=local", () => {
-      const { container } = render(
-        <SlotPanel {...defaultProps({ slot: makeSummary({ source: "local" }) })} />,
-      );
+      const { container } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ source: "local" }) })} />);
       const badge = container.querySelector(".romm-slot-badge-local");
       expect(badge).not.toBeNull();
       expect(badge?.textContent).toBe("local");
     });
 
     it("renders the 'server' source badge for source=server", () => {
-      const { container } = render(
-        <SlotPanel {...defaultProps({ slot: makeSummary({ source: "server" }) })} />,
-      );
+      const { container } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ source: "server" }) })} />);
       const badge = container.querySelector(".romm-slot-badge-server");
       expect(badge).not.toBeNull();
       expect(badge?.textContent).toBe("server");
@@ -650,41 +634,31 @@ describe("SlotPanel", () => {
       const { container, rerender } = render(<SlotPanel {...defaultProps()} />);
       expect(container.querySelector(".romm-slot-sync-summary")).toBeNull();
       // Active with empty files: "No saves found" text appears
-      rerender(
-        <SlotPanel {...defaultProps({ isActive: true, saveStatus: makeStatus() })} />,
-      );
+      rerender(<SlotPanel {...defaultProps({ isActive: true, saveStatus: makeStatus() })} />);
       const summary = container.querySelector(".romm-slot-sync-summary");
       expect(summary).not.toBeNull();
       expect(summary?.textContent).toBe("No saves found");
     });
 
     it("renders the slot count using slot.count when inactive and no slot files loaded", () => {
-      const { container } = render(
-        <SlotPanel {...defaultProps({ slot: makeSummary({ count: 5 }) })} />,
-      );
+      const { container } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ count: 5 }) })} />);
       expect(container.textContent).toContain("5 saves");
     });
 
     it("uses singular 'save' wording for count === 1", () => {
-      const { container } = render(
-        <SlotPanel {...defaultProps({ slot: makeSummary({ count: 1 }) })} />,
-      );
+      const { container } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ count: 1 }) })} />);
       expect(container.textContent).toContain("1 save");
       expect(container.textContent).not.toContain("1 saves");
     });
   });
 
   it("renders '(no slot)' for an empty slot name", () => {
-    const { container } = render(
-      <SlotPanel {...defaultProps({ slot: makeSummary({ slot: "" }) })} />,
-    );
+    const { container } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ slot: "" }) })} />);
     expect(container.textContent).toContain("(no slot)");
   });
 
   it("loads and renders inactive slot files when expanded", async () => {
-    const files: SlotSaveFile[] = [
-      { id: 1, filename: "remote-a.srm", size: 1024, updated_at: "", emulator: "mgba" },
-    ];
+    const files: SlotSaveFile[] = [{ id: 1, filename: "remote-a.srm", size: 1024, updated_at: "", emulator: "mgba" }];
     vi.mocked(backend.getSlotSaves).mockResolvedValue({
       success: true,
       slot: "default",

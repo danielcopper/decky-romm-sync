@@ -1,11 +1,5 @@
 import { useState, useEffect, FC } from "react";
-import {
-  PanelSection,
-  PanelSectionRow,
-  ButtonItem,
-  ConfirmModal,
-  showModal,
-} from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, ConfirmModal, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 import {
   getSettings,
@@ -28,7 +22,12 @@ import {
   logError,
 } from "../api/backend";
 import type { SaveSortMigrationStatus, RegisteredDevice } from "../types";
-import { getSaveSortMigrationState, setSaveSortMigrationStatus as setStoreSaveSortStatus, clearSaveSortMigration, onSaveSortMigrationChange } from "../utils/saveSortMigrationStore";
+import {
+  getSaveSortMigrationState,
+  setSaveSortMigrationStatus as setStoreSaveSortStatus,
+  clearSaveSortMigration,
+  onSaveSortMigrationChange,
+} from "../utils/saveSortMigrationStore";
 import { scrollToTop } from "../utils/scrollHelpers";
 import type { SaveSyncSettings as SaveSyncSettingsType, RetroArchInputCheck } from "../types";
 import { pendingEdits } from "./settings/TextInputModal";
@@ -86,22 +85,24 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const [logLevel, setLogLevel] = useState("warn");
 
   useEffect(() => {
-    getSettings().then((s) => {
-      // Apply any pending edits that survived a remount, fall back to backend values
-      setUrl(pendingEdits.url ?? s.romm_url);
-      setUsername(pendingEdits.username ?? s.romm_user);
-      setPassword(pendingEdits.password ?? s.romm_pass_masked);
-      setAllowInsecureSsl(s.romm_allow_insecure_ssl ?? false);
-      setSgdbApiKey(s.sgdb_api_key_masked);
-      setSteamInputMode(s.steam_input_mode || "default");
-      setLogLevel(s.log_level ?? "warn");
-      if (s.retroarch_input_check) {
-        setRetroarchWarning(s.retroarch_input_check);
-      }
-    }).catch((e) => {
-      logError(`Failed to load settings: ${e}`);
-      setStatus("Failed to load settings");
-    });
+    getSettings()
+      .then((s) => {
+        // Apply any pending edits that survived a remount, fall back to backend values
+        setUrl(pendingEdits.url ?? s.romm_url);
+        setUsername(pendingEdits.username ?? s.romm_user);
+        setPassword(pendingEdits.password ?? s.romm_pass_masked);
+        setAllowInsecureSsl(s.romm_allow_insecure_ssl ?? false);
+        setSgdbApiKey(s.sgdb_api_key_masked);
+        setSteamInputMode(s.steam_input_mode || "default");
+        setLogLevel(s.log_level ?? "warn");
+        if (s.retroarch_input_check) {
+          setRetroarchWarning(s.retroarch_input_check);
+        }
+      })
+      .catch((e) => {
+        logError(`Failed to load settings: ${e}`);
+        setStatus("Failed to load settings");
+      });
 
     // Load save sync settings and conflicts
     getSaveSyncSettings()
@@ -120,15 +121,19 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       })
       .catch((e) => logError(`Failed to load save sync settings: ${e}`));
 
-    getSaveSortMigrationStatus().then((s) => {
-      if (s.pending) {
-        setStoreSaveSortStatus(s);
-        setSaveSortMigration(s);
-      }
-    }).catch(() => {});
+    getSaveSortMigrationStatus()
+      .then((s) => {
+        if (s.pending) {
+          setStoreSaveSortStatus(s);
+          setSaveSortMigration(s);
+        }
+      })
+      .catch(() => {});
 
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
-    return () => { unsubSaveSort(); };
+    return () => {
+      unsubSaveSort();
+    };
   }, []);
 
   function loadDevices() {
@@ -186,9 +191,11 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     try {
       await updateSaveSyncSettings(updated);
       if ("save_sync_enabled" in partial) {
-        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
-          detail: { type: "save_sync_settings", save_sync_enabled: updated.save_sync_enabled },
-        }));
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync_settings", save_sync_enabled: updated.save_sync_enabled },
+          }),
+        );
         if (updated.save_sync_enabled) {
           loadDevices();
         } else {
@@ -208,8 +215,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       const result = await syncAllSaves();
       setSyncStatus(result.message);
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
-
-
     } catch {
       setSyncStatus("Sync failed");
     }
@@ -225,8 +230,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
           "Before enabling, please back up your local save files. " +
           "They are stored in your RetroArch/RetroDECK saves directory.\n\n" +
           "IMPORTANT: Save sync requires RetroArch's save sorting to be set to " +
-          "\"Sort Saves into Folders by Content Directory = ON\" and " +
-          "\"Sort Saves into Folders by Core Name = OFF\" (RetroDECK default). " +
+          '"Sort Saves into Folders by Content Directory = ON" and ' +
+          '"Sort Saves into Folders by Core Name = OFF" (RetroDECK default). ' +
           "If you changed these settings, save sync will not find your save files.\n\n" +
           "Also make sure you are not using this on a shared RomM account " +
           "(e.g. admin, romm, guest) - unless you know what you are doing. " +
@@ -235,7 +240,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         }
         strOKButtonText="I am sure"
         strCancelButtonText="Cancel"
-        onOK={() => { detach(handleSaveSyncSettingChange({ save_sync_enabled: true })); }}
+        onOK={() => {
+          detach(handleSaveSyncSettingChange({ save_sync_enabled: true }));
+        }}
         onCancel={() => {
           setSaveSyncToggleKey((k) => k + 1);
         }}
@@ -248,6 +255,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   };
 
   const handleToggleSaveSync = (value: boolean) => {
+    // NOSONAR sits on the if-statement line; prettier-ignore keeps the one-liner intact so the
+    // suppression isn't relocated to the closing brace (which would break it).
+    // prettier-ignore
     if (value) { handleEnableSaveSync(); } else { handleDisableSaveSync(); } // NOSONAR — enable shows confirmation modal
   };
 
@@ -262,7 +272,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         strOKButtonText="Clear Slot"
         strCancelButtonText="Cancel"
         onOK={() => {
-          setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: null } : prev);
+          setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: null } : prev));
           detach(handleSaveSyncSettingChange({ default_slot: null }));
         }}
       />,
@@ -317,14 +327,14 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const handleDefaultSlotSubmit = (value: string) => {
     const trimmed = value.trim();
     if (trimmed) {
-      setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: trimmed } : prev);
+      setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: trimmed } : prev));
       detach(handleSaveSyncSettingChange({ default_slot: trimmed }));
     } else {
       confirmClearDefaultSlot();
     }
   };
   const handleResetDefaultSlot = () => {
-    setSaveSyncSettings((prev) => prev ? { ...prev, default_slot: "default" } : prev);
+    setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: "default" } : prev));
     detach(handleSaveSyncSettingChange({ default_slot: "default" }));
   };
 
@@ -385,7 +395,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     try {
       await dismissSaveSortMigration();
       clearSaveSortMigration();
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   };
 
   return (
@@ -407,8 +419,12 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
           migration={saveSortMigration}
           migrating={saveSortMigrating}
           result={saveSortResult}
-          onMigrate={() => { detach(handleMigrateSaveSort()); }}
-          onDismiss={() => { detach(handleDismissSaveSort()); }}
+          onMigrate={() => {
+            detach(handleMigrateSaveSort());
+          }}
+          onDismiss={() => {
+            detach(handleDismissSaveSort());
+          }}
         />
       )}
       <ConnectionSection
@@ -422,14 +438,20 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         onUsernameSubmit={handleUsernameSubmit}
         onPasswordSubmit={handlePasswordSubmit}
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
-        onTestConnection={() => { detach(handleTest()); }}
+        onTestConnection={() => {
+          detach(handleTest());
+        }}
       />
       <SteamGridDBSection
         sgdbApiKey={sgdbApiKey}
         sgdbStatus={sgdbStatus}
         sgdbVerifying={sgdbVerifying}
-        onSubmitKey={(value: string) => { detach(handleSgdbKeySubmit(value)); }}
-        onVerifyKey={() => { detach(handleSgdbVerify()); }}
+        onSubmitKey={(value: string) => {
+          detach(handleSgdbKeySubmit(value));
+        }}
+        onVerifyKey={() => {
+          detach(handleSgdbVerify());
+        }}
       />
       <SaveSyncSection
         saveSyncSettings={saveSyncSettings}
@@ -438,10 +460,14 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         syncing={syncing}
         syncStatus={syncStatus}
         onToggleSaveSync={handleToggleSaveSync}
-        onSettingChange={(partial) => { detach(handleSaveSyncSettingChange(partial)); }}
+        onSettingChange={(partial) => {
+          detach(handleSaveSyncSettingChange(partial));
+        }}
         onDefaultSlotSubmit={handleDefaultSlotSubmit}
         onResetDefaultSlot={handleResetDefaultSlot}
-        onSyncAll={() => { detach(handleSyncAll()); }}
+        onSyncAll={() => {
+          detach(handleSyncAll());
+        }}
       />
       {saveSyncEnabled && (devicesLoading || registeredDevices !== null) && (
         <RegisteredDevicesSection
@@ -457,13 +483,14 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         retroarchFixStatus={retroarchFixStatus}
         loading={loading}
         onModeChange={handleSteamInputModeChange}
-        onApplyMode={() => { detach(handleApplySteamInput()); }}
-        onFixInputDriver={() => { detach(handleFixInputDriver()); }}
+        onApplyMode={() => {
+          detach(handleApplySteamInput());
+        }}
+        onFixInputDriver={() => {
+          detach(handleFixInputDriver());
+        }}
       />
-      <AdvancedSection
-        logLevel={logLevel}
-        onLogLevelChange={handleLogLevelChange}
-      />
+      <AdvancedSection logLevel={logLevel} onLogLevelChange={handleLogLevelChange} />
     </>
   );
 };

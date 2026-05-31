@@ -62,12 +62,16 @@ const CustomSlotModal: FC<{
   onSubmit: (name: string) => void;
 }> = ({ closeModal, onSubmit }) => {
   const [value, setValue] = useState("");
-  return createElement(ConfirmModal, {
-    closeModal,
-    strTitle: "Custom Slot Name",
-    bDisableBackgroundDismiss: true,
-    onOK: () => { onSubmit(value.trim()); },
-  },
+  return createElement(
+    ConfirmModal,
+    {
+      closeModal,
+      strTitle: "Custom Slot Name",
+      bDisableBackgroundDismiss: true,
+      onOK: () => {
+        onSubmit(value.trim());
+      },
+    },
     createElement(TextField, {
       focusOnMount: true,
       label: "Slot Name",
@@ -113,7 +117,9 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
     };
 
     detach(fetchInfo());
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [romId]);
 
   const handleConfirm = async (slot: string) => {
@@ -140,9 +146,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
     return (
       <div style={{ padding: "12px 0" }}>
         <div className="romm-panel-section-title">Save Slot Setup</div>
-        <div className="romm-panel-muted">
-          {confirming ? "Setting up..." : "Loading save information..."}
-        </div>
+        <div className="romm-panel-muted">{confirming ? "Setting up..." : "Loading save information..."}</div>
       </div>
     );
   }
@@ -161,7 +165,10 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             setLoading(true);
             getSaveSetupInfo(romId).then(
               (result) => applyWizardRetrySetupResult(result, { setError, setLoading, setInfo }),
-              (e) => { setError(`Failed: ${e}`); setLoading(false); },
+              (e) => {
+                setError(`Failed: ${e}`);
+                setLoading(false);
+              },
             );
           }}
         >
@@ -244,7 +251,9 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           <DialogButton
             className="romm-wizard-btn"
             style={btnStyle}
-            onClick={() => { detach(handleConfirm(s.slot ?? defaultSlot)); }}
+            onClick={() => {
+              detach(handleConfirm(s.slot ?? defaultSlot));
+            }}
             onFocus={scrollFocusedToCenter}
           >
             Track
@@ -274,7 +283,9 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
         <DialogButton
           className="romm-wizard-btn romm-wizard-btn-primary"
           style={btnPrimaryStyle}
-          onClick={() => { detach(handleConfirm(defaultSlot)); }}
+          onClick={() => {
+            detach(handleConfirm(defaultSlot));
+          }}
           onFocus={scrollFocusedToCenter}
         >
           Use slot &lsquo;{defaultSlot}&rsquo;
@@ -301,7 +312,9 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
                     createElement(ConfirmModal, {
                       strTitle: "Use Legacy Mode?",
                       strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
-                      onOK: () => { detach(handleConfirm("")); },
+                      onOK: () => {
+                        detach(handleConfirm(""));
+                      },
                     }),
                   );
                 }
@@ -317,10 +330,10 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
 
   return (
     <div style={{ padding: "12px 0" }}>
-      <div className="romm-panel-section-title" style={{ marginBottom: "4px" }}>Save Slot Setup</div>
-      {error && (
-        <div style={{ color: "#d4513f", fontSize: "12px", marginBottom: "8px" }}>{error}</div>
-      )}
+      <div className="romm-panel-section-title" style={{ marginBottom: "4px" }}>
+        Save Slot Setup
+      </div>
+      {error && <div style={{ color: "#d4513f", fontSize: "12px", marginBottom: "8px" }}>{error}</div>}
       <div className="romm-panel-muted" style={{ fontSize: "12px", marginBottom: "12px" }}>
         {getWizardDescription(info)}
       </div>

@@ -36,10 +36,24 @@ import {
 } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
-import type { RomMetadata, InstalledRom, BiosStatus, SaveStatus, SyncConflict, Achievement, AchievementProgress, EarnedAchievement, SaveSlotSummary } from "../types";
+import type {
+  RomMetadata,
+  InstalledRom,
+  BiosStatus,
+  SaveStatus,
+  SyncConflict,
+  Achievement,
+  AchievementProgress,
+  EarnedAchievement,
+  SaveSlotSummary,
+} from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
-import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
+import {
+  getSaveSortMigrationState,
+  onSaveSortMigrationChange,
+  setSaveSortMigrationStatus,
+} from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { applyLoadSlotsResult, applyRefreshSlotResult } from "../utils/slotState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
@@ -95,10 +109,7 @@ function pickBiosColor(done: number, total: number): string {
 }
 
 /** Refresh slot configuration and available slots — extracted to reduce nesting depth. */
-function refreshSlotState(
-  romId: number,
-  setter: React.Dispatch<React.SetStateAction<PanelState>>,
-): void {
+function refreshSlotState(romId: number, setter: React.Dispatch<React.SetStateAction<PanelState>>): void {
   isSaveTrackingConfigured(romId)
     .then((result) => setter((prev) => ({ ...prev, slotConfirmed: result.configured })))
     .catch(() => {});
@@ -113,11 +124,13 @@ function refreshInstalledRomInBackground(
   cancelled: () => boolean,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
-  return getInstalledRom(romId).then((installed) => {
-    if (!cancelled() && installed) {
-      setter((prev) => ({ ...prev, installedRom: installed }));
-    }
-  }).catch(() => {});
+  return getInstalledRom(romId)
+    .then((installed) => {
+      if (!cancelled() && installed) {
+        setter((prev) => ({ ...prev, installedRom: installed }));
+      }
+    })
+    .catch(() => {});
 }
 
 /** Fire-and-forget cover-art fetch — kept at module scope to avoid nesting. */
@@ -126,11 +139,13 @@ function refreshCoverArtInBackground(
   cancelled: () => boolean,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
-  return getArtworkBase64(romId).then((result) => {
-    if (!cancelled() && result.base64) {
-      setter((prev) => ({ ...prev, coverBase64: result.base64 }));
-    }
-  }).catch(() => {});
+  return getArtworkBase64(romId)
+    .then((result) => {
+      if (!cancelled() && result.base64) {
+        setter((prev) => ({ ...prev, coverBase64: result.base64 }));
+      }
+    })
+    .catch(() => {});
 }
 
 /** Fire-and-forget metadata fetch — kept at module scope to avoid nesting. */
@@ -139,11 +154,13 @@ function refreshMetadataInBackground(
   cancelled: () => boolean,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
-  return getRomMetadata(romId).then((meta) => {
-    if (!cancelled() && meta) {
-      setter((prev) => ({ ...prev, metadata: meta }));
-    }
-  }).catch(() => {});
+  return getRomMetadata(romId)
+    .then((meta) => {
+      if (!cancelled() && meta) {
+        setter((prev) => ({ ...prev, metadata: meta }));
+      }
+    })
+    .catch(() => {});
 }
 
 /** Build a `BiosStatus` from a cached game detail's `bios_status` field. */
@@ -277,6 +294,9 @@ async function loadData(
   }
 }
 
+// S3776 is raised on the declaration line, so its NOSONAR must stay there. prettier-ignore stops
+// Prettier from relocating the trailing comment into the body (which would break the suppression).
+// prettier-ignore
 export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — React FC fan-out; decomposed in #387/#391/Phase 7. Further split scatters handlers.
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
@@ -313,7 +333,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   useEffect(() => {
     const unsub = onMigrationChange(() => setMigration(getMigrationState()));
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortPending(getSaveSortMigrationState().pending));
-    return () => { unsub(); unsubSaveSort(); };
+    return () => {
+      unsub();
+      unsubSaveSort();
+    };
   }, []);
 
   useEffect(() => {
@@ -341,7 +364,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
-    const handleSaveSyncSettingsChange = async (detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>) => {
+    const handleSaveSyncSettingsChange = async (
+      detail: Extract<RommDataChangedDetail, { type: "save_sync_settings" }>,
+    ) => {
       const enabled = detail.save_sync_enabled;
       if (!enabled) {
         setState((prev) => ({ ...prev, saveSyncEnabled: false }));
@@ -363,7 +388,8 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       if (detail.rom_id && detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
       if (!romId) return;
-      const updatedStatus: SaveStatus | null = detail.save_status ?? await getSaveStatus(romId).catch((): SaveStatus | null => null);
+      const updatedStatus: SaveStatus | null =
+        detail.save_status ?? (await getSaveStatus(romId).catch((): SaveStatus | null => null));
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
       setState((prev) => ({
         ...prev,
@@ -415,22 +441,36 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     };
 
     const onDataChanged = (e: Event) => {
-      detach((async () => {
-        try {
-          const detail = (e as CustomEvent).detail;
-          if (!romIdRef.current) return;
-          switch (detail?.type) {
-            case "save_sync_settings": await handleSaveSyncSettingsChange(detail); break;
-            case "save_sync": await handleSaveSyncChange(detail); break;
-            case "bios": await handleBiosChange(detail); break;
-            case "core_changed": await handleCoreChange(); break;
-            case "metadata": await handleMetadataChange(detail); break;
-            case "cover_refreshed": await handleCoverRefreshed(detail); break;
+      detach(
+        (async () => {
+          try {
+            const detail = (e as CustomEvent).detail;
+            if (!romIdRef.current) return;
+            switch (detail?.type) {
+              case "save_sync_settings":
+                await handleSaveSyncSettingsChange(detail);
+                break;
+              case "save_sync":
+                await handleSaveSyncChange(detail);
+                break;
+              case "bios":
+                await handleBiosChange(detail);
+                break;
+              case "core_changed":
+                await handleCoreChange();
+                break;
+              case "metadata":
+                await handleMetadataChange(detail);
+                break;
+              case "cover_refreshed":
+                await handleCoverRefreshed(detail);
+                break;
+            }
+          } catch (err) {
+            detach(debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`));
           }
-        } catch (err) {
-          detach(debugLog(`RomMGameInfoPanel: onDataChanged error: ${err}`));
-        }
-      })());
+        })(),
+      );
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
@@ -448,7 +488,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     };
   }, [appId]);
 
-
   // Lazy-load achievements when the achievements tab becomes active
   const achievementsLoadedRef = useRef(false);
   useEffect(() => {
@@ -462,10 +501,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
     async function loadAchievements() {
       try {
-        const [listResult, progressResult] = await Promise.all([
-          getAchievements(romId),
-          getAchievementProgress(romId),
-        ]);
+        const [listResult, progressResult] = await Promise.all([getAchievements(romId), getAchievementProgress(romId)]);
         if (cancelled) return;
         setState((prev) => ({
           ...prev,
@@ -483,7 +519,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     }
 
     detach(loadAchievements());
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [state.activeTab, state.raId, state.romId]);
 
   const slotsLoadedRef = useRef(false);
@@ -500,7 +538,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         if (!state.romId) return;
         const result = await getSaveSlots(state.romId);
         if (cancelled) return;
-        applyLoadSlotsResult<PanelState>(result, setState, slotsLoadedRef, (msg) => { detach(debugLog(msg)); });
+        applyLoadSlotsResult<PanelState>(result, setState, slotsLoadedRef, (msg) => {
+          detach(debugLog(msg));
+        });
       } catch (e) {
         detach(debugLog(`Failed to load save slots: ${e}`));
         if (!cancelled) {
@@ -511,14 +551,18 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     }
 
     detach(loadSlots());
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [state.activeTab, state.saveSyncEnabled, state.romId]);
 
   // --- Render helpers ---
 
   /** A labeled info row: LABEL on the left, value on the right */
   const infoRow = (key: string, label: string, value: string) =>
-    createElement("div", { key, className: "romm-panel-info-row" },
+    createElement(
+      "div",
+      { key, className: "romm-panel-info-row" },
       createElement("span", { className: "romm-panel-label" }, label),
       createElement("span", { className: "romm-panel-value" }, value),
     );
@@ -528,52 +572,48 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
    *  Styled to look like a content section, not a button.
    *  Steam's outer scroll container auto-scrolls to focused elements. */
   const section = (key: string, title: string | null, ...children: (ReturnType<typeof createElement> | null)[]) =>
-    createElement(DialogButton, {
-      key,
-      className: "romm-panel-section",
-      style: {
-        background: "transparent",
-        border: "none",
-        padding: "12px 0",
-        textAlign: "left" as const,
-        width: "100%",
-        cursor: "default",
-        display: "block",
+    createElement(
+      DialogButton,
+      {
+        key,
+        className: "romm-panel-section",
+        style: {
+          background: "transparent",
+          border: "none",
+          padding: "12px 0",
+          textAlign: "left" as const,
+          width: "100%",
+          cursor: "default",
+          display: "block",
+        },
+        noFocusRing: false,
+        onFocus: scrollFocusedToCenter,
       },
-      noFocusRing: false,
-      onFocus: scrollFocusedToCenter,
-    },
       title ? createElement("div", { className: "romm-panel-section-title" }, title) : null,
       ...children.filter(Boolean),
     );
 
   // --- Version mismatch — replace entire panel with polished error card ---
   if (versionError) {
-    return createElement(
-      "div",
-      { "data-romm": "true" },
-      createElement(VersionErrorCard, { message: versionError }),
-    );
+    return createElement("div", { "data-romm": "true" }, createElement(VersionErrorCard, { message: versionError }));
   }
 
   // --- Pending RetroDECK migration — block the page until resolved ---
   if (migration.pending) {
-    return createElement(
-      "div",
-      { "data-romm": "true" },
-      createElement(MigrationBlockedCard, {}),
-    );
+    return createElement("div", { "data-romm": "true" }, createElement(MigrationBlockedCard, {}));
   }
 
   // --- Loading state ---
   // Use minHeight so Steam's scroll container allocates enough space
   // before async data loads and expands the panel.
   if (state.loading) {
-    return createElement("div", {
-      "data-romm": "true",
-      className: "romm-panel-container",
-      style: { minHeight: "500px" },
-    },
+    return createElement(
+      "div",
+      {
+        "data-romm": "true",
+        className: "romm-panel-container",
+        style: { minHeight: "500px" },
+      },
       createElement("div", { className: "romm-panel-loading" }, "Loading..."),
     );
   }
@@ -591,16 +631,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
   // The RomM game name (distinct from the Steam shortcut hero title, which can differ).
   if (state.romName) {
-    gameInfoChildren.push(
-      createElement("div", { key: "rom-name", className: "romm-panel-rom-name" }, state.romName),
-    );
+    gameInfoChildren.push(createElement("div", { key: "rom-name", className: "romm-panel-rom-name" }, state.romName));
   }
 
   if (meta) {
     if (meta.summary) {
-      gameInfoChildren.push(
-        createElement("div", { key: "summary", className: "romm-panel-summary" }, meta.summary),
-      );
+      gameInfoChildren.push(createElement("div", { key: "summary", className: "romm-panel-summary" }, meta.summary));
     }
 
     // Platform after description
@@ -614,12 +650,14 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
     if (meta.genres && meta.genres.length > 0) {
       gameInfoChildren.push(
-        createElement("div", { key: "genres", className: "romm-panel-info-row" },
+        createElement(
+          "div",
+          { key: "genres", className: "romm-panel-info-row" },
           createElement("span", { className: "romm-panel-label" }, "Genres"),
-          createElement("div", { className: "romm-panel-tags" },
-            ...meta.genres.map((g) =>
-              createElement("span", { key: g, className: "romm-panel-tag" }, g),
-            ),
+          createElement(
+            "div",
+            { className: "romm-panel-tags" },
+            ...meta.genres.map((g) => createElement("span", { key: g, className: "romm-panel-tag" }, g)),
           ),
         ),
       );
@@ -646,16 +684,21 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     gameInfoChildren.push(infoRow("platform", "Platform", state.platformName));
   }
 
-  const gameInfoContent = gameInfoChildren.length > 0
-    ? gameInfoChildren
-    : [createElement("div", { key: "no-meta", className: "romm-panel-muted" }, "No metadata available")];
+  const gameInfoContent =
+    gameInfoChildren.length > 0
+      ? gameInfoChildren
+      : [createElement("div", { key: "no-meta", className: "romm-panel-muted" }, "No metadata available")];
 
   const gameInfoSection = state.coverBase64
-    ? section("game-info", null,
-        createElement("div", {
-          key: "game-info-row",
-          style: { display: "flex", gap: "16px", alignItems: "flex-start" },
-        },
+    ? section(
+        "game-info",
+        null,
+        createElement(
+          "div",
+          {
+            key: "game-info-row",
+            style: { display: "flex", gap: "16px", alignItems: "flex-start" },
+          },
           createElement("img", {
             key: "cover",
             src: `data:image/png;base64,${state.coverBase64}`,
@@ -667,11 +710,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     : section("game-info", null, ...gameInfoContent);
 
   // --- ROM File section (only when installed) ---
-  const romFileSection = state.installed && state.installedRom
-    ? section("rom-file", "ROM File",
-        infoRow("filename", "Filename", state.installedRom.file_name),
-      )
-    : null;
+  const romFileSection =
+    state.installed && state.installedRom
+      ? section("rom-file", "ROM File", infoRow("filename", "Filename", state.installedRom.file_name))
+      : null;
 
   // --- BIOS & Core section (two-column layout when platform needs BIOS) ---
   let biosSection: ReturnType<typeof createElement> | null = null;
@@ -686,9 +728,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     let biosLabel: string;
     if (reqCount != null && reqDone != null) {
       biosColor = pickBiosColor(reqDone, reqCount);
-      biosLabel = reqDone >= reqCount
-        ? `All required ready (${localCount}/${serverCount})`
-        : `${reqDone}/${reqCount} required files ready`;
+      biosLabel =
+        reqDone >= reqCount
+          ? `All required ready (${localCount}/${serverCount})`
+          : `${reqDone}/${reqCount} required files ready`;
     } else {
       if (bios.all_downloaded) {
         biosColor = "#5ba32b";
@@ -706,11 +749,17 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     const biosColumn: (ReturnType<typeof createElement> | null)[] = [];
 
     biosColumn.push(
-      createElement("div", { key: "bios-title", className: "romm-panel-section-title", style: { marginBottom: "8px" } }, "BIOS"),
-      createElement("div", {
-        key: "bios-row",
-        className: "romm-panel-status-inline",
-      },
+      createElement(
+        "div",
+        { key: "bios-title", className: "romm-panel-section-title", style: { marginBottom: "8px" } },
+        "BIOS",
+      ),
+      createElement(
+        "div",
+        {
+          key: "bios-row",
+          className: "romm-panel-status-inline",
+        },
         createElement("span", {
           className: "romm-status-dot",
           style: { backgroundColor: biosColor },
@@ -757,28 +806,42 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
             const label = coreLabelMap[coreSo] || coreSo.replace(/_libretro$/, "");
             const suffix = coreData.required ? " (required)" : " (optional)";
             coreLines.push(
-              createElement("div", {
-                key: `core-${coreSo}`,
-                style: { color: "rgba(255, 255, 255, 0.5)", fontSize: "12px" },
-              }, `${label}${suffix}`),
+              createElement(
+                "div",
+                {
+                  key: `core-${coreSo}`,
+                  style: { color: "rgba(255, 255, 255, 0.5)", fontSize: "12px" },
+                },
+                `${label}${suffix}`,
+              ),
             );
           }
         }
 
-        return createElement("div", { key: f.file_name, className: "romm-panel-file-row" },
+        return createElement(
+          "div",
+          { key: f.file_name, className: "romm-panel-file-row" },
           createElement("span", {
             key: "dot",
             className: "romm-status-dot",
             style: { backgroundColor: dotColor },
           }),
-          createElement("span", { key: "name", className: "romm-panel-file-name" },
-            f.description || f.file_name,
-          ),
+          createElement("span", { key: "name", className: "romm-panel-file-name" }, f.description || f.file_name),
           coreLines.length > 0
-            ? createElement("div", {
-                key: "cores",
-                style: { flexBasis: "100%", display: "flex", flexDirection: "column" as const, gap: "2px", marginLeft: "18px" },
-              }, ...coreLines)
+            ? createElement(
+                "div",
+                {
+                  key: "cores",
+                  style: {
+                    flexBasis: "100%",
+                    display: "flex",
+                    flexDirection: "column" as const,
+                    gap: "2px",
+                    marginLeft: "18px",
+                  },
+                },
+                ...coreLines,
+              )
             : null,
         );
       });
@@ -786,18 +849,20 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // Add unknown count note if any
       if (unknownCount > 0) {
         fileElements.push(
-          createElement("div", {
-            key: "unknown-note",
-            className: "romm-panel-file-row",
-            style: { color: "rgba(255, 255, 255, 0.4)", fontSize: "12px", marginTop: "8px" },
-          }, `+ ${unknownCount} other file${unknownCount === 1 ? "" : "s"} on server (not required by any known core)`),
+          createElement(
+            "div",
+            {
+              key: "unknown-note",
+              className: "romm-panel-file-row",
+              style: { color: "rgba(255, 255, 255, 0.4)", fontSize: "12px", marginTop: "8px" },
+            },
+            `+ ${unknownCount} other file${unknownCount === 1 ? "" : "s"} on server (not required by any known core)`,
+          ),
         );
       }
 
       biosColumn.push(
-        createElement("div", { key: "bios-file-list", className: "romm-panel-file-list" },
-          ...fileElements,
-        ),
+        createElement("div", { key: "bios-file-list", className: "romm-panel-file-list" }, ...fileElements),
       );
     }
 
@@ -805,7 +870,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     const coreColumn: (ReturnType<typeof createElement> | null)[] = [];
 
     coreColumn.push(
-      createElement("div", { key: "core-title", className: "romm-panel-section-title", style: { marginBottom: "8px" } }, "Emulator"),
+      createElement(
+        "div",
+        { key: "core-title", className: "romm-panel-section-title", style: { marginBottom: "8px" } },
+        "Emulator",
+      ),
     );
 
     if (bios.active_core_label) {
@@ -814,13 +883,21 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       coreColumn.push(infoRow("core", "Active Core", "Default"));
     }
 
-    biosSection = section("bios-core", null,
-      createElement("div", {
-        key: "bios-core-columns",
-        style: { display: "flex", gap: "24px" },
-      },
+    biosSection = section(
+      "bios-core",
+      null,
+      createElement(
+        "div",
+        {
+          key: "bios-core-columns",
+          style: { display: "flex", gap: "24px" },
+        },
         createElement("div", { key: "bios-col", style: { flex: 1, minWidth: 0 } }, ...biosColumn.filter(Boolean)),
-        createElement("div", { key: "core-col", style: { flexShrink: 0, minWidth: "120px" } }, ...coreColumn.filter(Boolean)),
+        createElement(
+          "div",
+          { key: "core-col", style: { flexShrink: 0, minWidth: "120px" } },
+          ...coreColumn.filter(Boolean),
+        ),
       ),
     );
   }
@@ -833,27 +910,35 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     { id: "bios", label: "BIOS", visible: !!state.biosStatus },
   ];
 
-  const tabBar = createElement(Focusable, {
-    className: "romm-tab-bar",
-    "flow-children": "right",
-    "data-romm": "true",
-  },
-    ...tabs.filter((t) => t.visible).map((t) =>
-      createElement(DialogButton, {
-        key: `tab-${t.id}`,
-        className: `romm-tab ${state.activeTab === t.id ? "romm-tab-active" : ""}`,
-        onClick: () => setState((prev) => ({ ...prev, activeTab: t.id })),
-        style: {
-          background: "transparent",
-          border: "none",
-          borderBottom: state.activeTab === t.id ? "2px solid #1a9fff" : "2px solid transparent",
-          padding: "10px 16px",
-          minWidth: "auto",
-          width: "auto",
-        },
-        noFocusRing: false,
-      }, t.label),
-    ),
+  const tabBar = createElement(
+    Focusable,
+    {
+      className: "romm-tab-bar",
+      "flow-children": "right",
+      "data-romm": "true",
+    },
+    ...tabs
+      .filter((t) => t.visible)
+      .map((t) =>
+        createElement(
+          DialogButton,
+          {
+            key: `tab-${t.id}`,
+            className: `romm-tab ${state.activeTab === t.id ? "romm-tab-active" : ""}`,
+            onClick: () => setState((prev) => ({ ...prev, activeTab: t.id })),
+            style: {
+              background: "transparent",
+              border: "none",
+              borderBottom: state.activeTab === t.id ? "2px solid #1a9fff" : "2px solid transparent",
+              padding: "10px 16px",
+              minWidth: "auto",
+              width: "auto",
+            },
+            noFocusRing: false,
+          },
+          t.label,
+        ),
+      ),
   );
 
   // --- Achievements tab content ---
@@ -862,7 +947,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     if (state.achievementsLoading) {
       achievementsContent = createElement("div", { className: "romm-panel-loading" }, "Loading achievements...");
     } else if (state.achievements.length === 0) {
-      achievementsContent = createElement("div", { className: "romm-panel-muted" }, "No achievements found for this game");
+      achievementsContent = createElement(
+        "div",
+        { className: "romm-panel-muted" },
+        "No achievements found for this game",
+      );
     } else {
       const progress = state.achievementProgress;
       const earned = progress?.earned ?? 0;
@@ -870,7 +959,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
       // Build map from badge_id -> earned data (id in earned_achievements is badge_id)
       const earnedMap = new Map<string, EarnedAchievement>();
-      for (const ea of (progress?.earned_achievements ?? [])) {
+      for (const ea of progress?.earned_achievements ?? []) {
         earnedMap.set(ea.id, ea);
       }
 
@@ -902,42 +991,38 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
           top: `${Math.round(rng(i * 3) * 100)}%`,
           left: `${Math.round(rng(i * 3 + 1) * 100)}%`,
           dur: 2.2 + rng(i * 3 + 2) * 1.8, // 2.2–4.0s
-          delay: rng(i * 7 + 5) * 2,      // 0–2.0s
+          delay: rng(i * 7 + 5) * 2, // 0–2.0s
         }));
       };
 
       const renderCheevoRow = (a: Achievement) => {
         const earnedData = earnedMap.get(a.badge_id);
         const isEarned = !!earnedData;
-        const isHardcore = !!(earnedData?.date_hardcore);
+        const isHardcore = !!earnedData?.date_hardcore;
 
-        const rowClasses = [
-          "romm-cheevo-row",
-          isEarned ? "romm-cheevo-row-earned" : "",
-        ].filter(Boolean).join(" ");
+        const rowClasses = ["romm-cheevo-row", isEarned ? "romm-cheevo-row-earned" : ""].filter(Boolean).join(" ");
 
-        const imgClasses = [
-          "romm-cheevo-badge-img",
-          isHardcore ? "romm-cheevo-badge-img-hc" : "",
-        ].filter(Boolean).join(" ");
+        const imgClasses = ["romm-cheevo-badge-img", isHardcore ? "romm-cheevo-badge-img-hc" : ""]
+          .filter(Boolean)
+          .join(" ");
 
         // Date column for earned achievements — show both normal and HC dates
         const dateChildren: ReturnType<typeof createElement>[] = [];
         if (earnedData?.date) {
           dateChildren.push(
-            createElement("span", { key: "date", className: "romm-cheevo-date" },
-              formatCheevoDate(earnedData.date)),
+            createElement("span", { key: "date", className: "romm-cheevo-date" }, formatCheevoDate(earnedData.date)),
           );
         }
         if (isHardcore && earnedData?.date_hardcore) {
           dateChildren.push(
-            createElement("span", {
-              key: "hc-row",
-              style: { display: "inline-flex", alignItems: "center", gap: "4px" },
-            },
+            createElement(
+              "span",
+              {
+                key: "hc-row",
+                style: { display: "inline-flex", alignItems: "center", gap: "4px" },
+              },
               createElement("span", { className: "romm-cheevo-hc-badge" }, "HC"),
-              createElement("span", { className: "romm-cheevo-date" },
-                formatCheevoDate(earnedData.date_hardcore)),
+              createElement("span", { className: "romm-cheevo-date" }, formatCheevoDate(earnedData.date_hardcore)),
             ),
           );
         }
@@ -945,14 +1030,18 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         // Badge image — wrapped with sparkle container for HC achievements
         const imgEl = createElement("img", {
           className: imgClasses,
-          src: isEarned ? a.badge_url : (a.badge_url_lock || a.badge_url),
+          src: isEarned ? a.badge_url : a.badge_url_lock || a.badge_url,
           style: isEarned ? {} : { filter: "grayscale(0.7) opacity(0.6)" },
         });
 
         const badgeElement = isHardcore
-          ? createElement("div", { className: "romm-cheevo-img-wrap" },
+          ? createElement(
+              "div",
+              { className: "romm-cheevo-img-wrap" },
               imgEl,
-              createElement("span", { className: "romm-cheevo-img-sparkles" },
+              createElement(
+                "span",
+                { className: "romm-cheevo-img-sparkles" },
                 ...makeHcSparkles(a.ra_id).map((sp) =>
                   createElement("span", {
                     key: `hc-sp-${sp.top}-${sp.left}`,
@@ -969,37 +1058,42 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
             )
           : imgEl;
 
-        return createElement(DialogButton, {
-          key: `cheevo-${a.ra_id}`,
-          className: rowClasses,
-          noFocusRing: false,
-          onFocus: scrollFocusedToCenter,
-          style: {
-            background: "transparent",
-            border: "none",
-            padding: 0,
-            textAlign: "left" as const,
-            cursor: "default",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
+        return createElement(
+          DialogButton,
+          {
+            key: `cheevo-${a.ra_id}`,
+            className: rowClasses,
+            noFocusRing: false,
+            onFocus: scrollFocusedToCenter,
+            style: {
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              textAlign: "left" as const,
+              cursor: "default",
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+            },
           },
-        },
           badgeElement,
-          createElement("div", { className: "romm-cheevo-details" },
+          createElement(
+            "div",
+            { className: "romm-cheevo-details" },
             createElement("div", { className: "romm-cheevo-title" }, a.title),
             createElement("div", { className: "romm-cheevo-desc" }, a.description),
             a.num_awarded > 0
-              ? createElement("div", { className: "romm-cheevo-rarity" },
-                  `${a.num_awarded} players earned this`)
+              ? createElement("div", { className: "romm-cheevo-rarity" }, `${a.num_awarded} players earned this`)
               : null,
           ),
-          dateChildren.length > 0
-            ? createElement("div", { className: "romm-cheevo-dates" }, ...dateChildren)
-            : null,
-          createElement("div", {
-            className: `romm-cheevo-points ${isEarned ? "" : "romm-cheevo-points-locked"}`,
-          }, `${a.points} pts`),
+          dateChildren.length > 0 ? createElement("div", { className: "romm-cheevo-dates" }, ...dateChildren) : null,
+          createElement(
+            "div",
+            {
+              className: `romm-cheevo-points ${isEarned ? "" : "romm-cheevo-points-locked"}`,
+            },
+            `${a.points} pts`,
+          ),
         );
       };
 
@@ -1007,12 +1101,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
 
       // Summary bar
       cheevoChildren.push(
-        createElement("div", { key: "summary", className: "romm-cheevo-summary" },
-          createElement("span", { className: "romm-cheevo-summary-text" },
-            `${earned} / ${total} Achievements`),
+        createElement(
+          "div",
+          { key: "summary", className: "romm-cheevo-summary" },
+          createElement("span", { className: "romm-cheevo-summary-text" }, `${earned} / ${total} Achievements`),
           progress?.earned_hardcore
-            ? createElement("span", { className: "romm-cheevo-summary-sub" },
-                `${progress.earned_hardcore} hardcore`)
+            ? createElement("span", { className: "romm-cheevo-summary-sub" }, `${progress.earned_hardcore} hardcore`)
             : null,
         ),
       );
@@ -1020,7 +1114,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // Progress bar
       const pct = total > 0 ? (earned / total) * 100 : 0;
       cheevoChildren.push(
-        createElement("div", { key: "progress-bar", className: "romm-cheevo-progress-bar" },
+        createElement(
+          "div",
+          { key: "progress-bar", className: "romm-cheevo-progress-bar" },
           createElement("div", {
             className: "romm-cheevo-progress-fill",
             style: { width: `${pct}%` },
@@ -1031,8 +1127,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // Earned section
       if (earnedList.length > 0) {
         cheevoChildren.push(
-          createElement("div", { key: "earned-title", className: "romm-cheevo-section-title" },
-            `Earned (${earnedList.length})`),
+          createElement(
+            "div",
+            { key: "earned-title", className: "romm-cheevo-section-title" },
+            `Earned (${earnedList.length})`,
+          ),
         );
         earnedList.forEach((a) => cheevoChildren.push(renderCheevoRow(a)));
       }
@@ -1040,8 +1139,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // Locked section
       if (lockedList.length > 0) {
         cheevoChildren.push(
-          createElement("div", { key: "locked-title", className: "romm-cheevo-section-title" },
-            `Locked (${lockedList.length})`),
+          createElement(
+            "div",
+            { key: "locked-title", className: "romm-cheevo-section-title" },
+            `Locked (${lockedList.length})`,
+          ),
         );
         lockedList.forEach((a) => cheevoChildren.push(renderCheevoRow(a)));
       }
@@ -1051,32 +1153,39 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   }
 
   const saveSortWarning = saveSortPending
-    ? createElement("div", {
-        key: "save-sort-warning",
-        style: {
-          padding: "8px 12px",
-          marginBottom: "12px",
-          backgroundColor: "rgba(212, 167, 44, 0.15)",
-          borderLeft: "3px solid #d4a72c",
-          borderRadius: "4px",
+    ? createElement(
+        "div",
+        {
+          key: "save-sort-warning",
+          style: {
+            padding: "8px 12px",
+            marginBottom: "12px",
+            backgroundColor: "rgba(212, 167, 44, 0.15)",
+            borderLeft: "3px solid #d4a72c",
+            borderRadius: "4px",
+          },
         },
-      },
-        createElement("div", {
-          style: { fontSize: "13px", fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" },
-        }, "\u26A0\uFE0F RetroArch save sorting changed"),
-        createElement("div", {
-          style: { fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" },
-        }, "Save file paths may be incorrect. Go to Settings to migrate."),
+        createElement(
+          "div",
+          {
+            style: { fontSize: "13px", fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" },
+          },
+          "\u26A0\uFE0F RetroArch save sorting changed",
+        ),
+        createElement(
+          "div",
+          {
+            style: { fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" },
+          },
+          "Save file paths may be incorrect. Go to Settings to migrate.",
+        ),
       )
     : null;
 
   // --- Determine active tab content ---
   let activeTabContent: ReturnType<typeof createElement> | null = null;
   if (state.activeTab === "info") {
-    activeTabContent = createElement("div", { key: "tab-info" },
-      gameInfoSection,
-      romFileSection,
-    );
+    activeTabContent = createElement("div", { key: "tab-info" }, gameInfoSection, romFileSection);
   } else if (state.activeTab === "achievements") {
     // Don't wrap in section() — that creates ONE giant focusable element.
     // Individual rows are now DialogButtons, enabling focus-driven scrolling.
@@ -1088,9 +1197,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         onComplete: () => {
           // Refresh: mark as configured and reload save status
           setState((prev) => ({ ...prev, slotConfirmed: true }));
-          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
-            detail: { type: "save_sync", rom_id: state.romId },
-          }));
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "save_sync", rom_id: state.romId },
+            }),
+          );
         },
       });
     } else {
@@ -1108,9 +1219,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
             saveStatus: newStatus,
             conflicts: newStatus.conflicts ?? [],
           }));
-          globalThis.dispatchEvent(new CustomEvent("romm_data_changed", {
-            detail: { type: "save_sync", rom_id: state.romId },
-          }));
+          globalThis.dispatchEvent(
+            new CustomEvent("romm_data_changed", {
+              detail: { type: "save_sync", rom_id: state.romId },
+            }),
+          );
         },
       });
     }
@@ -1118,14 +1231,18 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     activeTabContent = biosSection;
   }
 
-  return createElement("div", { "data-romm": "true" },
+  return createElement(
+    "div",
+    { "data-romm": "true" },
     saveSortWarning,
     tabBar,
-    createElement(Focusable, {
-      noFocusRing: true,
-      className: "romm-tab-content",
-      style: { paddingBottom: "48px" },
-    },
+    createElement(
+      Focusable,
+      {
+        noFocusRing: true,
+        className: "romm-tab-content",
+        style: { paddingBottom: "48px" },
+      },
       activeTabContent,
     ),
   );

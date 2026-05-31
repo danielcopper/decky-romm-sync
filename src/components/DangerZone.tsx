@@ -34,9 +34,20 @@ import type { RegistryPlatform } from "../types";
 import { detach } from "../utils/detach";
 
 const DEFAULT_WHITELIST_PATTERNS: string[] = [
-  "retrodeck", "moonlight", "chiaki", "chrome", "chromium",
-  "firefox", "vivaldi", "heroic", "lutris", "bottles",
-  "protonup", "emudeck", "desktop mode", "return to gaming mode",
+  "retrodeck",
+  "moonlight",
+  "chiaki",
+  "chrome",
+  "chromium",
+  "firefox",
+  "vivaldi",
+  "heroic",
+  "lutris",
+  "bottles",
+  "protonup",
+  "emudeck",
+  "desktop mode",
+  "return to gaming mode",
   "nonsteamlaunchers",
 ];
 
@@ -69,13 +80,28 @@ const PlatformActionModal: FC<{
         Actions for {platform.name}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        <DialogButton onClick={() => { closeModal?.(); onRemoveShortcuts(); }}>
+        <DialogButton
+          onClick={() => {
+            closeModal?.();
+            onRemoveShortcuts();
+          }}
+        >
           Remove Shortcuts ({platform.count} game{platform.count === 1 ? "" : "s"})
         </DialogButton>
-        <DialogButton onClick={() => { closeModal?.(); onDeleteSaves(); }}>
+        <DialogButton
+          onClick={() => {
+            closeModal?.();
+            onDeleteSaves();
+          }}
+        >
           Delete Save Files
         </DialogButton>
-        <DialogButton onClick={() => { closeModal?.(); onDeleteBios(); }}>
+        <DialogButton
+          onClick={() => {
+            closeModal?.();
+            onDeleteBios();
+          }}
+        >
           Delete BIOS Files
         </DialogButton>
         <DialogButton onClick={() => closeModal?.()} style={{ opacity: 0.5 }}>
@@ -139,16 +165,18 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         strOKButtonText: "Delete Save Files",
         strCancelButtonText: "Cancel",
         onOK: () => {
-          detach((async () => {
-            setActionStatus(`Deleting ${p.name} saves...`);
-            try {
-              const result = await deletePlatformSaves(p.slug);
-              setActionStatus(result.message);
-              globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
-            } catch {
-              setActionStatus("Failed to delete saves");
-            }
-          })());
+          detach(
+            (async () => {
+              setActionStatus(`Deleting ${p.name} saves...`);
+              try {
+                const result = await deletePlatformSaves(p.slug);
+                setActionStatus(result.message);
+                globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync" } }));
+              } catch {
+                setActionStatus("Failed to delete saves");
+              }
+            })(),
+          );
         },
       }),
     );
@@ -229,10 +257,14 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             showModal(
               <PlatformActionModal
                 platform={p}
-                onRemoveShortcuts={() => { detach(handleRemoveShortcuts(p)); }}
+                onRemoveShortcuts={() => {
+                  detach(handleRemoveShortcuts(p));
+                }}
                 onDeleteSaves={() => handleDeleteSaves(p)}
-                onDeleteBios={() => { detach(handleDeleteBios(p)); }}
-              />
+                onDeleteBios={() => {
+                  detach(handleDeleteBios(p));
+                }}
+              />,
             );
           }}
         >
@@ -246,10 +278,17 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     <>
       <PanelSection title="Remove Shortcuts">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => { detach(handleRemoveAllRomm()); }}>
-            {confirmRemoveAllRomm
-              ? <span style={{ color: "#ff8800" }}>Confirm: remove all RomM shortcuts?</span>
-              : "Remove All RomM Shortcuts"}
+          <ButtonItem
+            layout="below"
+            onClick={() => {
+              detach(handleRemoveAllRomm());
+            }}
+          >
+            {confirmRemoveAllRomm ? (
+              <span style={{ color: "#ff8800" }}>Confirm: remove all RomM shortcuts?</span>
+            ) : (
+              "Remove All RomM Shortcuts"
+            )}
           </ButtonItem>
         </PanelSectionRow>
         {status && (
@@ -270,15 +309,28 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
 
       <PanelSection title="Installed ROMs">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => { detach(handleUninstallAll()); }}>
-            {confirmUninstall
-              ? <span style={{ color: "#ff8800" }}>Confirm: delete all ROM files?</span>
-              : "Uninstall All Installed ROMs"}
+          <ButtonItem
+            layout="below"
+            onClick={() => {
+              detach(handleUninstallAll());
+            }}
+          >
+            {confirmUninstall ? (
+              <span style={{ color: "#ff8800" }}>Confirm: delete all ROM files?</span>
+            ) : (
+              "Uninstall All Installed ROMs"
+            )}
           </ButtonItem>
         </PanelSectionRow>
         {confirmUninstall && (
           <PanelSectionRow>
-            <Field label={<span style={{ color: "#ff8800" }}>This will delete all downloaded ROM files. Shortcuts remain so you can re-download later.</span>} />
+            <Field
+              label={
+                <span style={{ color: "#ff8800" }}>
+                  This will delete all downloaded ROM files. Shortcuts remain so you can re-download later.
+                </span>
+              }
+            />
           </PanelSectionRow>
         )}
         {uninstallStatus && (
@@ -314,16 +366,12 @@ const WhitelistSection: FC<WhitelistSectionProps> = ({
   const [whitelistSearch, setWhitelistSearch] = useState("");
 
   const filteredApps = useMemo(
-    () => whitelistSearch
-      ? nonSteamApps.filter((app) => fuzzyMatch(whitelistSearch, app.name))
-      : nonSteamApps,
-    [nonSteamApps, whitelistSearch]
+    () => (whitelistSearch ? nonSteamApps.filter((app) => fuzzyMatch(whitelistSearch, app.name)) : nonSteamApps),
+    [nonSteamApps, whitelistSearch],
   );
 
   const handleToggle = (app: NonSteamApp, checked: boolean) => {
-    const matchingPattern = DEFAULT_WHITELIST_PATTERNS.find(
-      (p) => app.name.toLowerCase().includes(p)
-    );
+    const matchingPattern = DEFAULT_WHITELIST_PATTERNS.find((p) => app.name.toLowerCase().includes(p));
     let newDisabled = [...disabledDefaults];
     let newCustom = [...customNames];
 
@@ -430,7 +478,7 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
   };
 
   const retrodeckAtRisk = nonSteamApps.some(
-    (a) => !whitelistedIds.has(a.appId) && a.name.toLowerCase().includes("retrodeck")
+    (a) => !whitelistedIds.has(a.appId) && a.name.toLowerCase().includes("retrodeck"),
   );
 
   const handleRemoveAll = async () => {
@@ -456,11 +504,17 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
 
   const removeButtonLabel = () => {
     if (confirmRetrodeck) {
-      return <span style={{ color: "#ff4444", fontWeight: "bold" }}>!! RETRODECK WILL BE REMOVED !! Click to confirm</span>;
+      return (
+        <span style={{ color: "#ff4444", fontWeight: "bold" }}>!! RETRODECK WILL BE REMOVED !! Click to confirm</span>
+      );
     }
     if (confirmRemoveAll) {
       if (retrodeckAtRisk) {
-        return <span style={{ color: "#ff8800" }}>WARNING: RetroDECK not protected! Remove {nonSteamApps.length - whitelistedIds.size} games?</span>;
+        return (
+          <span style={{ color: "#ff8800" }}>
+            WARNING: RetroDECK not protected! Remove {nonSteamApps.length - whitelistedIds.size} games?
+          </span>
+        );
       }
       return `Are you sure? Remove ${nonSteamApps.length - whitelistedIds.size} games (${whitelistedIds.size} whitelisted)?`;
     }
@@ -478,13 +532,24 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
       ) : (
         <>
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => { detach(handleRemoveAll()); }}>
+            <ButtonItem
+              layout="below"
+              onClick={() => {
+                detach(handleRemoveAll());
+              }}
+            >
               {removeButtonLabel()}
             </ButtonItem>
           </PanelSectionRow>
           {confirmRetrodeck && (
             <PanelSectionRow>
-              <Field label={<span style={{ color: "#ff4444" }}>RetroDECK is NOT in the whitelist and will be permanently removed!</span>} />
+              <Field
+                label={
+                  <span style={{ color: "#ff4444" }}>
+                    RetroDECK is NOT in the whitelist and will be permanently removed!
+                  </span>
+                }
+              />
             </PanelSectionRow>
           )}
           <WhitelistSection
@@ -517,7 +582,7 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
 
   const activeDefaults = useMemo(
     () => DEFAULT_WHITELIST_PATTERNS.filter((p) => !disabledDefaults.includes(p)),
-    [disabledDefaults]
+    [disabledDefaults],
   );
 
   const whitelistedIds = useMemo(() => {
@@ -580,11 +645,13 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial async data loads on mount are the standard React pattern; the rule is overzealous here
     refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
     loadNonSteamApps();
-    getWhitelistSettings().then((s) => {
-      setDisabledDefaults(s.disabled_defaults);
-      setCustomNames(s.custom_names);
-      setSettingsLoaded(true);
-    }).catch((e) => logError(`Failed to load whitelist settings: ${e}`));
+    getWhitelistSettings()
+      .then((s) => {
+        setDisabledDefaults(s.disabled_defaults);
+        setCustomNames(s.custom_names);
+        setSettingsLoaded(true);
+      })
+      .catch((e) => logError(`Failed to load whitelist settings: ${e}`));
   }, []);
 
   const persistWhitelist = (newDisabled: string[], newCustom: string[]) => {

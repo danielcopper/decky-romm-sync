@@ -31,8 +31,6 @@ describe("isSharedAccount", () => {
 
 describe("SHARED_ACCOUNT_NAMES", () => {
   it("contains the expected canonical shared-account names", () => {
-    expect(SHARED_ACCOUNT_NAMES).toEqual(
-      new Set(["admin", "romm", "user", "guest", "root"]),
-    );
+    expect(SHARED_ACCOUNT_NAMES).toEqual(new Set(["admin", "romm", "user", "guest", "root"]));
   });
 });

@@ -11,9 +11,12 @@
 
 import { vi } from "vitest";
 
-type OverviewLike = Partial<Pick<SteamAppOverview,
-  "appid" | "display_name" | "strDisplayName" | "rt_last_time_played" | "minutes_playtime_forever"
->>;
+type OverviewLike = Partial<
+  Pick<
+    SteamAppOverview,
+    "appid" | "display_name" | "strDisplayName" | "rt_last_time_played" | "minutes_playtime_forever"
+  >
+>;
 
 export function stubCollectionStore(appIds: number[]): void {
   vi.stubGlobal("collectionStore", {

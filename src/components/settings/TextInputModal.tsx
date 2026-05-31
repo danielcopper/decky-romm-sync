@@ -32,7 +32,12 @@ export const TextInputModal: FC<TextInputModalProps> = ({
   return (
     <ConfirmModal
       closeModal={closeModal}
-      onOK={() => { if (field) { pendingEdits[field] = value; } onSubmit(value); }}
+      onOK={() => {
+        if (field) {
+          pendingEdits[field] = value;
+        }
+        onSubmit(value);
+      }}
       strTitle={label}
       bDisableBackgroundDismiss={true}
     >

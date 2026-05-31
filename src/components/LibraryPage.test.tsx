@@ -32,12 +32,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { LibraryPage } from "./LibraryPage";
 import * as backend from "../api/backend";
-import type {
-  PlatformSyncSetting,
-  CollectionSyncSetting,
-  FirmwarePlatformExt,
-  PluginSettings,
-} from "../types";
+import type { PlatformSyncSetting, CollectionSyncSetting, FirmwarePlatformExt, PluginSettings } from "../types";
 
 // scrollToTop is a no-op in happy-dom; mock for cleanliness.
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -59,24 +54,17 @@ const capturedDropdowns: CapturedDropdown[] = [];
 vi.mock("@decky/ui", async () => {
   const { createElement: ce } = await import("react");
   type AnyProps = Record<string, unknown> & { children?: unknown };
-  const passthrough = (tag: string) => (p: AnyProps) =>
-    ce(tag, {}, p.children as never);
+  const passthrough = (tag: string) => (p: AnyProps) => ce(tag, {}, p.children as never);
   return {
     PanelSection: (p: AnyProps & { title?: unknown }) =>
       ce(
         "section",
         { "data-testid": "panel-section", "data-title": typeof p.title === "string" ? p.title : undefined },
-        typeof p.title === "string"
-          ? ce("h2", { "data-testid": "panel-title" }, p.title)
-          : null,
+        typeof p.title === "string" ? ce("h2", { "data-testid": "panel-title" }, p.title) : null,
         p.children as never,
       ),
     PanelSectionRow: passthrough("div"),
-    ButtonItem: ({
-      children,
-      onClick,
-      disabled,
-    }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+    ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       ce("button", { onClick, disabled }, children as never),
     Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
       ce(
@@ -86,10 +74,7 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "field-desc" }, p.description as never),
       ),
     Focusable: passthrough("div"),
-    DialogButton: ({
-      children,
-      onClick,
-    }: AnyProps & { onClick?: () => void }) =>
+    DialogButton: ({ children, onClick }: AnyProps & { onClick?: () => void }) =>
       ce("button", { onClick }, children as never),
     DropdownItem: (p: CapturedDropdown) => {
       capturedDropdowns.push(p);
@@ -99,12 +84,14 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "dropdown-label" }, p.label as never),
       );
     },
-    ToggleField: (p: AnyProps & {
-      checked?: boolean;
-      onChange?: (v: boolean) => void;
-      label?: unknown;
-      description?: unknown;
-    }) =>
+    ToggleField: (
+      p: AnyProps & {
+        checked?: boolean;
+        onChange?: (v: boolean) => void;
+        label?: unknown;
+        description?: unknown;
+      },
+    ) =>
       ce(
         "div",
         {
@@ -116,8 +103,7 @@ vi.mock("@decky/ui", async () => {
           type: "checkbox",
           "data-testid": "toggle-input",
           checked: p.checked ?? false,
-          onChange: (e: { target: { checked: boolean } }) =>
-            p.onChange?.(e.target.checked),
+          onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
         }),
         typeof p.label === "string" ? p.label : null,
       ),
@@ -146,9 +132,7 @@ function defaultSettings(): PluginSettings {
   };
 }
 
-function makePlatform(
-  overrides: Partial<PlatformSyncSetting> = {},
-): PlatformSyncSetting {
+function makePlatform(overrides: Partial<PlatformSyncSetting> = {}): PlatformSyncSetting {
   return {
     id: 1,
     name: "Genesis",
@@ -159,9 +143,7 @@ function makePlatform(
   };
 }
 
-function makeCollection(
-  overrides: Partial<CollectionSyncSetting> = {},
-): CollectionSyncSetting {
+function makeCollection(overrides: Partial<CollectionSyncSetting> = {}): CollectionSyncSetting {
   return {
     id: "c1",
     name: "Favs",
@@ -173,9 +155,7 @@ function makeCollection(
   };
 }
 
-function makeBiosPlatform(
-  overrides: Partial<FirmwarePlatformExt> = {},
-): FirmwarePlatformExt {
+function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): FirmwarePlatformExt {
   return {
     platform_slug: "snes",
     files: [],
@@ -307,10 +287,7 @@ describe("LibraryPage", () => {
     it("renders a ToggleField per platform when getPlatforms succeeds", async () => {
       vi.mocked(backend.getPlatforms).mockResolvedValue({
         success: true,
-        platforms: [
-          makePlatform({ id: 1, name: "Genesis" }),
-          makePlatform({ id: 2, name: "SNES" }),
-        ],
+        platforms: [makePlatform({ id: 1, name: "Genesis" }), makePlatform({ id: 2, name: "SNES" })],
       });
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -369,9 +346,7 @@ describe("LibraryPage", () => {
       });
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
-      const toggleInputs = container.querySelectorAll<HTMLInputElement>(
-        "[data-testid=\"toggle-input\"]",
-      );
+      const toggleInputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
       // Only one platform → one toggle for that platform
       const platformToggle = toggleInputs[0]!;
       expect(platformToggle.checked).toBe(false);
@@ -382,9 +357,7 @@ describe("LibraryPage", () => {
       });
 
       expect(vi.mocked(backend.savePlatformSync)).toHaveBeenCalledWith(7, true);
-      const afterClick = container.querySelectorAll<HTMLInputElement>(
-        "[data-testid=\"toggle-input\"]",
-      )[0]!;
+      const afterClick = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]')[0]!;
       expect(afterClick.checked).toBe(true);
     });
 
@@ -396,9 +369,7 @@ describe("LibraryPage", () => {
       vi.mocked(backend.savePlatformSync).mockRejectedValue(new Error("nope"));
       const { container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
-      const toggleInput = container.querySelectorAll<HTMLInputElement>(
-        "[data-testid=\"toggle-input\"]",
-      )[0]!;
+      const toggleInput = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]')[0]!;
 
       await act(async () => {
         fireEvent.click(toggleInput);
@@ -410,9 +381,7 @@ describe("LibraryPage", () => {
       });
 
       // CATCH-REJECTION assert: rolled back to false
-      const reverted = container.querySelectorAll<HTMLInputElement>(
-        "[data-testid=\"toggle-input\"]",
-      )[0]!;
+      const reverted = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]')[0]!;
       expect(reverted.checked).toBe(false);
     });
   });
@@ -424,10 +393,7 @@ describe("LibraryPage", () => {
     it("enables all platforms optimistically and calls setAllPlatformsSync(true)", async () => {
       vi.mocked(backend.getPlatforms).mockResolvedValue({
         success: true,
-        platforms: [
-          makePlatform({ id: 1, sync_enabled: false }),
-          makePlatform({ id: 2, sync_enabled: false }),
-        ],
+        platforms: [makePlatform({ id: 1, sync_enabled: false }), makePlatform({ id: 2, sync_enabled: false })],
       });
       const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -438,9 +404,7 @@ describe("LibraryPage", () => {
       });
 
       expect(vi.mocked(backend.setAllPlatformsSync)).toHaveBeenCalledWith(true);
-      const inputs = container.querySelectorAll<HTMLInputElement>(
-        "[data-testid=\"toggle-input\"]",
-      );
+      const inputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
       expect(inputs[0]?.checked).toBe(true);
       expect(inputs[1]?.checked).toBe(true);
     });
@@ -448,10 +412,7 @@ describe("LibraryPage", () => {
     it("disables all platforms optimistically and calls setAllPlatformsSync(false)", async () => {
       vi.mocked(backend.getPlatforms).mockResolvedValue({
         success: true,
-        platforms: [
-          makePlatform({ id: 1, sync_enabled: true }),
-          makePlatform({ id: 2, sync_enabled: true }),
-        ],
+        platforms: [makePlatform({ id: 1, sync_enabled: true }), makePlatform({ id: 2, sync_enabled: true })],
       });
       const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -460,9 +421,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.setAllPlatformsSync)).toHaveBeenCalledWith(false);
-      const inputs = container.querySelectorAll<HTMLInputElement>(
-        "[data-testid=\"toggle-input\"]",
-      );
+      const inputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
       expect(inputs[0]?.checked).toBe(false);
       expect(inputs[1]?.checked).toBe(false);
     });
@@ -470,10 +429,7 @@ describe("LibraryPage", () => {
     it("restores the previous snapshot when setAllPlatformsSync rejects", async () => {
       vi.mocked(backend.getPlatforms).mockResolvedValue({
         success: true,
-        platforms: [
-          makePlatform({ id: 1, sync_enabled: true }),
-          makePlatform({ id: 2, sync_enabled: false }),
-        ],
+        platforms: [makePlatform({ id: 1, sync_enabled: true }), makePlatform({ id: 2, sync_enabled: false })],
       });
       vi.mocked(backend.setAllPlatformsSync).mockRejectedValue(new Error("x"));
       const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
@@ -485,9 +441,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       // CATCH-REJECTION assert: snapshot restored
-      const inputs = container.querySelectorAll<HTMLInputElement>(
-        "[data-testid=\"toggle-input\"]",
-      );
+      const inputs = container.querySelectorAll<HTMLInputElement>('[data-testid="toggle-input"]');
       expect(inputs[0]?.checked).toBe(true);
       expect(inputs[1]?.checked).toBe(false);
     });
@@ -500,9 +454,7 @@ describe("LibraryPage", () => {
     it("populates collections + platformGroups from Promise.all on success", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [
-          makeCollection({ id: "u1", name: "MyColl", kind: "user", is_favorite: false }),
-        ],
+        collections: [makeCollection({ id: "u1", name: "MyColl", kind: "user", is_favorite: false })],
       });
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
@@ -518,7 +470,7 @@ describe("LibraryPage", () => {
       expect(container.textContent).toContain("MyColl");
       // platformGroups true → the renamed toggle is checked.
       const platformGroupsToggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Show collection games in platform groups\"] input",
+        '[data-label="Show collection games in platform groups"] input',
       );
       expect(platformGroupsToggle?.checked).toBe(true);
     });
@@ -540,7 +492,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const platformGroupsToggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Show collection games in platform groups\"] input",
+        '[data-label="Show collection games in platform groups"] input',
       );
       expect(platformGroupsToggle?.checked).toBe(false);
     });
@@ -595,7 +547,9 @@ describe("LibraryPage", () => {
     it("optimistically toggles a collection and calls saveCollectionSync with kind", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "abc", name: "MyColl", sync_enabled: false, kind: "user", is_favorite: false })],
+        collections: [
+          makeCollection({ id: "abc", name: "MyColl", sync_enabled: false, kind: "user", is_favorite: false }),
+        ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -605,29 +559,23 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       // Find the collection toggle by label (default sub-tab "my" → user collection visible).
-      const collectionToggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"MyColl\"] input",
-      )!;
+      const collectionToggle = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       expect(collectionToggle.checked).toBe(false);
       await act(async () => {
         fireEvent.click(collectionToggle);
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith(
-        "abc",
-        "user",
-        true,
-      );
-      const after = container.querySelector<HTMLInputElement>(
-        "[data-label=\"MyColl\"] input",
-      )!;
+      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith("abc", "user", true);
+      const after = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       expect(after.checked).toBe(true);
     });
 
     it("passes kind='smart' for smart collections", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "sc1", name: "Filter A", sync_enabled: false, kind: "smart", is_favorite: false })],
+        collections: [
+          makeCollection({ id: "sc1", name: "Filter A", sync_enabled: false, kind: "smart", is_favorite: false }),
+        ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -641,24 +589,20 @@ describe("LibraryPage", () => {
         fireEvent.click(getByText("Smart"));
         await Promise.resolve();
       });
-      const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Filter A\"] input",
-      )!;
+      const toggle = container.querySelector<HTMLInputElement>('[data-label="Filter A"] input')!;
       await act(async () => {
         fireEvent.click(toggle);
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith(
-        "sc1",
-        "smart",
-        true,
-      );
+      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith("sc1", "smart", true);
     });
 
     it("reverts on saveCollectionSync rejection", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "abc", name: "MyColl", kind: "user", is_favorite: false, sync_enabled: false })],
+        collections: [
+          makeCollection({ id: "abc", name: "MyColl", kind: "user", is_favorite: false, sync_enabled: false }),
+        ],
       });
       vi.mocked(backend.saveCollectionSync).mockRejectedValue(new Error("nope"));
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -668,18 +612,14 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"MyColl\"] input",
-      )!;
+      const toggle = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       await act(async () => {
         fireEvent.click(toggle);
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
       });
-      const reverted = container.querySelector<HTMLInputElement>(
-        "[data-label=\"MyColl\"] input",
-      )!;
+      const reverted = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       // CATCH-REJECTION assert: rolled back to original false
       expect(reverted.checked).toBe(false);
     });
@@ -705,18 +645,13 @@ describe("LibraryPage", () => {
         fireEvent.click(getByText("Enable All"));
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(
-        true,
-        "my",
-      );
+      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "my");
     });
 
     it("calls setAllCollectionsSync(true, 'smart') when Smart sub-tab is active", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [
-          makeCollection({ id: "s1", name: "S1", sync_enabled: false, kind: "smart", is_favorite: false }),
-        ],
+        collections: [makeCollection({ id: "s1", name: "S1", sync_enabled: false, kind: "smart", is_favorite: false })],
       });
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -733,10 +668,7 @@ describe("LibraryPage", () => {
         fireEvent.click(getByText("Enable All"));
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(
-        true,
-        "smart",
-      );
+      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "smart");
     });
 
     it("restores the previous collections snapshot on setAllCollectionsSync rejection", async () => {
@@ -747,12 +679,8 @@ describe("LibraryPage", () => {
           makeCollection({ id: "b", name: "B", kind: "user", is_favorite: false, sync_enabled: false }),
         ],
       });
-      vi.mocked(backend.setAllCollectionsSync).mockRejectedValue(
-        new Error("boom"),
-      );
-      const { container, getByText } = render(
-        <LibraryPage onBack={vi.fn()} />,
-      );
+      vi.mocked(backend.setAllCollectionsSync).mockRejectedValue(new Error("boom"));
+      const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
         fireEvent.click(getByText("Collections"));
@@ -766,8 +694,8 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       // CATCH-REJECTION assert: restored a=true, b=false
-      const a = container.querySelector<HTMLInputElement>("[data-label=\"A\"] input");
-      const b = container.querySelector<HTMLInputElement>("[data-label=\"B\"] input");
+      const a = container.querySelector<HTMLInputElement>('[data-label="A"] input');
+      const b = container.querySelector<HTMLInputElement>('[data-label="B"] input');
       expect(a?.checked).toBe(true);
       expect(b?.checked).toBe(false);
     });
@@ -785,15 +713,13 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Show collection games in platform groups\"] input",
+        '[data-label="Show collection games in platform groups"] input',
       )!;
       await act(async () => {
         fireEvent.click(toggle);
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.saveCollectionPlatformGroups)).toHaveBeenCalledWith(
-        true,
-      );
+      expect(vi.mocked(backend.saveCollectionPlatformGroups)).toHaveBeenCalledWith(true);
     });
 
     it("reverts platformGroups state when saveCollectionPlatformGroups rejects", async () => {
@@ -801,9 +727,7 @@ describe("LibraryPage", () => {
         success: true,
         collections: [makeCollection({ id: "c1" })],
       });
-      vi.mocked(backend.saveCollectionPlatformGroups).mockRejectedValue(
-        new Error("x"),
-      );
+      vi.mocked(backend.saveCollectionPlatformGroups).mockRejectedValue(new Error("x"));
       const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
@@ -812,7 +736,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Show collection games in platform groups\"] input",
+        '[data-label="Show collection games in platform groups"] input',
       )!;
       await act(async () => {
         fireEvent.click(toggle);
@@ -822,7 +746,7 @@ describe("LibraryPage", () => {
       });
       // CATCH-REJECTION assert: rolled back to false
       const after = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Show collection games in platform groups\"] input",
+        '[data-label="Show collection games in platform groups"] input',
       )!;
       expect(after.checked).toBe(false);
     });
@@ -877,8 +801,8 @@ describe("LibraryPage", () => {
       });
       // UserOne renders in My; SmartOne does not. FavOne renders only via the
       // top-level Sync RomM favorites toggle, not in the visible-list area.
-      expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
-      expect(container.querySelector("[data-label=\"SmartOne\"]")).toBeNull();
+      expect(container.querySelector('[data-label="UserOne"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="SmartOne"]')).toBeNull();
     });
 
     it("switching sub-tab filters the visible collection set", async () => {
@@ -898,16 +822,16 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       // Default = My → UserOne visible, SmartOne hidden.
-      expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
-      expect(container.querySelector("[data-label=\"SmartOne\"]")).toBeNull();
+      expect(container.querySelector('[data-label="UserOne"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="SmartOne"]')).toBeNull();
 
       // Switch to Smart.
       await act(async () => {
         fireEvent.click(getByText("Smart"));
         await Promise.resolve();
       });
-      expect(container.querySelector("[data-label=\"SmartOne\"]")).not.toBeNull();
-      expect(container.querySelector("[data-label=\"UserOne\"]")).toBeNull();
+      expect(container.querySelector('[data-label="SmartOne"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="UserOne"]')).toBeNull();
     });
 
     it("renders the section header with the visible-count for the active sub-tab", async () => {
@@ -982,7 +906,7 @@ describe("LibraryPage", () => {
         fireEvent.click(getByText("Smart"));
         await Promise.resolve();
       });
-      expect(container.querySelector("[data-label=\"SmartOne\"]")).not.toBeNull();
+      expect(container.querySelector('[data-label="SmartOne"]')).not.toBeNull();
 
       // Leave the Collections tab and come back; sub-tab should reset to My.
       await act(async () => {
@@ -993,8 +917,8 @@ describe("LibraryPage", () => {
         fireEvent.click(getByText("Collections"));
         await Promise.resolve();
       });
-      expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
-      expect(container.querySelector("[data-label=\"SmartOne\"]")).toBeNull();
+      expect(container.querySelector('[data-label="UserOne"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="SmartOne"]')).toBeNull();
     });
   });
 
@@ -1006,7 +930,14 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 1, sync_enabled: false }),
+          makeCollection({
+            id: "f1",
+            name: "Faves",
+            kind: "user",
+            is_favorite: true,
+            rom_count: 1,
+            sync_enabled: false,
+          }),
         ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -1016,21 +947,15 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const favToggle = container.querySelector<HTMLElement>(
-        "[data-label=\"Sync RomM favorites\"]",
-      );
+      const favToggle = container.querySelector<HTMLElement>('[data-label="Sync RomM favorites"]');
       expect(favToggle).not.toBeNull();
-      expect(favToggle?.getAttribute("data-description")).toBe(
-        "Includes 1 favorited game",
-      );
+      expect(favToggle?.getAttribute("data-description")).toBe("Includes 1 favorited game");
     });
 
     it("renders the plural description for N>1 favorited games", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [
-          makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 7 }),
-        ],
+        collections: [makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 7 })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1039,20 +964,14 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const favToggle = container.querySelector<HTMLElement>(
-        "[data-label=\"Sync RomM favorites\"]",
-      );
-      expect(favToggle?.getAttribute("data-description")).toBe(
-        "Includes 7 favorited games",
-      );
+      const favToggle = container.querySelector<HTMLElement>('[data-label="Sync RomM favorites"]');
+      expect(favToggle?.getAttribute("data-description")).toBe("Includes 7 favorited games");
     });
 
     it("renders the plural description for 0 favorited games", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [
-          makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 0 }),
-        ],
+        collections: [makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 0 })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1061,19 +980,22 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const favToggle = container.querySelector<HTMLElement>(
-        "[data-label=\"Sync RomM favorites\"]",
-      );
-      expect(favToggle?.getAttribute("data-description")).toBe(
-        "Includes 0 favorited games",
-      );
+      const favToggle = container.querySelector<HTMLElement>('[data-label="Sync RomM favorites"]');
+      expect(favToggle?.getAttribute("data-description")).toBe("Includes 0 favorited games");
     });
 
     it("clicking the favorites toggle calls saveCollectionSync with the favorites id and kind=user", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "favid", name: "Faves", kind: "user", is_favorite: true, rom_count: 5, sync_enabled: false }),
+          makeCollection({
+            id: "favid",
+            name: "Faves",
+            kind: "user",
+            is_favorite: true,
+            rom_count: 5,
+            sync_enabled: false,
+          }),
         ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -1083,25 +1005,26 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Sync RomM favorites\"] input",
-      )!;
+      const toggle = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input')!;
       await act(async () => {
         fireEvent.click(toggle);
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith(
-        "favid",
-        "user",
-        true,
-      );
+      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith("favid", "user", true);
     });
 
     it("reverts the favorites toggle on saveCollectionSync rejection", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "favid", name: "Faves", kind: "user", is_favorite: true, rom_count: 5, sync_enabled: false }),
+          makeCollection({
+            id: "favid",
+            name: "Faves",
+            kind: "user",
+            is_favorite: true,
+            rom_count: 5,
+            sync_enabled: false,
+          }),
         ],
       });
       vi.mocked(backend.saveCollectionSync).mockRejectedValue(new Error("nope"));
@@ -1112,18 +1035,14 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const toggle = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Sync RomM favorites\"] input",
-      )!;
+      const toggle = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input')!;
       await act(async () => {
         fireEvent.click(toggle);
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
       });
-      const reverted = container.querySelector<HTMLInputElement>(
-        "[data-label=\"Sync RomM favorites\"] input",
-      )!;
+      const reverted = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input')!;
       // CATCH-REJECTION assert: rolled back to original false
       expect(reverted.checked).toBe(false);
     });
@@ -1131,9 +1050,7 @@ describe("LibraryPage", () => {
     it("omits the favorites toggle when no favorites collection exists", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [
-          makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
-        ],
+        collections: [makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1142,9 +1059,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(
-        container.querySelector("[data-label=\"Sync RomM favorites\"]"),
-      ).toBeNull();
+      expect(container.querySelector('[data-label="Sync RomM favorites"]')).toBeNull();
     });
 
     it("falls back to listing favorites in the My sub-tab when more than one exists (with console warning)", async () => {
@@ -1166,13 +1081,11 @@ describe("LibraryPage", () => {
           await Promise.resolve();
         });
         // Toggle hidden — single-toggle UI can't represent multiple favorites.
-        expect(
-          container.querySelector("[data-label=\"Sync RomM favorites\"]"),
-        ).toBeNull();
+        expect(container.querySelector('[data-label="Sync RomM favorites"]')).toBeNull();
         // Both favorites surface in My (alongside the regular user collection).
-        expect(container.querySelector("[data-label=\"FavA\"]")).not.toBeNull();
-        expect(container.querySelector("[data-label=\"FavB\"]")).not.toBeNull();
-        expect(container.querySelector("[data-label=\"UserOne\"]")).not.toBeNull();
+        expect(container.querySelector('[data-label="FavA"]')).not.toBeNull();
+        expect(container.querySelector('[data-label="FavB"]')).not.toBeNull();
+        expect(container.querySelector('[data-label="UserOne"]')).not.toBeNull();
         expect(warn).toHaveBeenCalledTimes(1);
       } finally {
         warn.mockRestore();
@@ -1275,9 +1188,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       // CATCH-REJECTION assert: rendered with the interpolated Error
-      expect(container.textContent).toContain(
-        "Failed to fetch firmware status: Error: network",
-      );
+      expect(container.textContent).toContain("Failed to fetch firmware status: Error: network");
     });
 
     it("renders the no-firmware empty state when platforms list is empty", async () => {
@@ -1465,9 +1376,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.downloadRequiredFirmware)).toHaveBeenCalledWith(
-        "snes",
-      );
+      expect(vi.mocked(backend.downloadRequiredFirmware)).toHaveBeenCalledWith("snes");
       expect(vi.mocked(backend.getFirmwareStatus)).toHaveBeenCalledTimes(2);
     });
 
@@ -1476,9 +1385,7 @@ describe("LibraryPage", () => {
         success: true,
         platforms: [biosPlatformWithMissingRequired()],
       });
-      vi.mocked(backend.downloadRequiredFirmware).mockRejectedValue(
-        new Error("io"),
-      );
+      vi.mocked(backend.downloadRequiredFirmware).mockRejectedValue(new Error("io"));
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
@@ -1978,9 +1885,7 @@ describe("LibraryPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-            ],
+            available_cores: [{ core_so: "snes9x.so", label: "snes9x", is_default: true }],
           }),
         ],
       });
@@ -2096,10 +2001,7 @@ describe("LibraryPage", () => {
           label: "mesen-s",
         });
       });
-      expect(vi.mocked(backend.setSystemCore)).toHaveBeenCalledWith(
-        "snes",
-        "mesen-s",
-      );
+      expect(vi.mocked(backend.setSystemCore)).toHaveBeenCalledWith("snes", "mesen-s");
     });
 
     it("does NOT refresh BIOS or dispatch the event when setSystemCore returns success=false", async () => {
@@ -2174,9 +2076,7 @@ describe("LibraryPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-            ],
+            available_cores: [{ core_so: "snes9x.so", label: "snes9x", is_default: true }],
             active_core_label: "snes9x",
           }),
         ],

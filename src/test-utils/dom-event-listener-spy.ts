@@ -37,20 +37,12 @@ export function installDomEventListenerSpy(): void {
   originalRemove = globalThis.removeEventListener.bind(globalThis);
   counts.clear();
 
-  globalThis.addEventListener = ((
-    name: string,
-    listener: AnyListener,
-    options?: boolean | AddEventListenerOptions,
-  ) => {
+  globalThis.addEventListener = ((name: string, listener: AnyListener, options?: boolean | AddEventListenerOptions) => {
     counts.set(name, (counts.get(name) ?? 0) + 1);
     originalAdd!(name, listener, options);
   }) as typeof globalThis.addEventListener;
 
-  globalThis.removeEventListener = ((
-    name: string,
-    listener: AnyListener,
-    options?: boolean | EventListenerOptions,
-  ) => {
+  globalThis.removeEventListener = ((name: string, listener: AnyListener, options?: boolean | EventListenerOptions) => {
     const current = counts.get(name) ?? 0;
     if (current > 0) counts.set(name, current - 1);
     originalRemove!(name, listener, options);

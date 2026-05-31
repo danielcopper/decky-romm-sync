@@ -75,10 +75,7 @@ export function mockRemoveEventListener<Args extends unknown[] = []>(
  * Listener exceptions propagate — a test that wants to assert on error
  * handling should arrange for the listener to swallow its own throw.
  */
-export function emitDeckyEvent<Args extends unknown[] = []>(
-  name: string,
-  ...args: Args
-): void {
+export function emitDeckyEvent<Args extends unknown[] = []>(name: string, ...args: Args): void {
   const bucket = listeners.get(name);
   if (!bucket) return;
   // Snapshot first so a listener that removes itself during dispatch doesn't

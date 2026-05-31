@@ -1,23 +1,9 @@
 import { FC, useEffect, useState } from "react";
-import {
-  PanelSection,
-  PanelSectionRow,
-  ButtonItem,
-  Field,
-  ConfirmModal,
-  showModal,
-} from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, Field, ConfirmModal, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
-import {
-  migrateRetroDeckFiles,
-  dismissRetrodeckMigration,
-} from "../api/backend";
+import { migrateRetroDeckFiles, dismissRetrodeckMigration } from "../api/backend";
 import type { MigrationStatus } from "../types";
-import {
-  getMigrationState,
-  onMigrationChange,
-  clearMigration,
-} from "../utils/migrationStore";
+import { getMigrationState, onMigrationChange, clearMigration } from "../utils/migrationStore";
 import { MigrationConflictModal } from "./MigrationConflictModal";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
@@ -50,7 +36,9 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
         showModal(
           <MigrationConflictModal
             conflictCount={result.conflict_count ?? 0}
-            onChoice={(s) => { detach(runMigration(s)); }}
+            onChoice={(s) => {
+              detach(runMigration(s));
+            }}
           />,
         );
         return;
@@ -69,7 +57,9 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
     setMigrating(false);
   };
 
-  const handleMigrate = () => { detach(runMigration(null)); };
+  const handleMigrate = () => {
+    detach(runMigration(null));
+  };
 
   const handleDismiss = () => {
     showModal(
@@ -83,20 +73,22 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
         strOKButtonText="Dismiss"
         strCancelButtonText="Cancel"
         onOK={() => {
-          detach((async () => {
-            try {
-              const result = await dismissRetrodeckMigration();
-              if (result.success) {
-                clearMigration();
-                toaster.toast({
-                  title: "RomM Sync",
-                  body: "Migration dismissed.",
-                });
+          detach(
+            (async () => {
+              try {
+                const result = await dismissRetrodeckMigration();
+                if (result.success) {
+                  clearMigration();
+                  toaster.toast({
+                    title: "RomM Sync",
+                    body: "Migration dismissed.",
+                  });
+                }
+              } catch {
+                setMigrateResult("Dismiss failed");
               }
-            } catch {
-              setMigrateResult("Dismiss failed");
-            }
-          })());
+            })(),
+          );
         }}
       />,
     );
@@ -130,8 +122,8 @@ export const MigrationBlockedPage: FC<MigrationBlockedPageProps> = ({ migration 
             To: {migration.new_path ?? "unknown"}
           </div>
           <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.9)" }}>
-            {migration.roms_count ?? 0} ROM(s), {migration.bios_count ?? 0} BIOS,{" "}
-            {migration.saves_count ?? 0} save(s) to migrate
+            {migration.roms_count ?? 0} ROM(s), {migration.bios_count ?? 0} BIOS, {migration.saves_count ?? 0} save(s)
+            to migrate
           </div>
         </div>
       </PanelSectionRow>

@@ -23,10 +23,7 @@ vi.mock("../utils/collections", () => ({
   clearAllRomMCollections: vi.fn(),
 }));
 vi.mock("../utils/formatters", () => ({
-  formatUninstallStatus: vi.fn(
-    (removed: number, errors: number) =>
-      `Removed ${removed}, ${errors} errors`,
-  ),
+  formatUninstallStatus: vi.fn((removed: number, errors: number) => `Removed ${removed}, ${errors} errors`),
 }));
 
 // flushAsync: drain the mount-time useEffect chain. DangerZone fires three
@@ -163,9 +160,7 @@ describe("DangerZone", () => {
     });
 
     it("falls back to empty platforms when getRegistryPlatforms rejects", async () => {
-      vi.mocked(backend.getRegistryPlatforms).mockRejectedValue(
-        new Error("net"),
-      );
+      vi.mocked(backend.getRegistryPlatforms).mockRejectedValue(new Error("net"));
       const { container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       expect(container.textContent).toContain("No synced platforms");
@@ -173,7 +168,10 @@ describe("DangerZone", () => {
 
     it("shows the loading Spinner before refreshPlatforms resolves", () => {
       vi.mocked(backend.getRegistryPlatforms).mockImplementation(
-        () => new Promise(() => { /* stall */ }),
+        () =>
+          new Promise(() => {
+            /* stall */
+          }),
       );
       const { queryAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       // initial render runs before any effect — but useEffect fires before
@@ -182,16 +180,12 @@ describe("DangerZone", () => {
     });
 
     it("logs the failure when getWhitelistSettings rejects on mount", async () => {
-      vi.mocked(backend.getWhitelistSettings).mockRejectedValue(
-        new Error("offline"),
-      );
+      vi.mocked(backend.getWhitelistSettings).mockRejectedValue(new Error("offline"));
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       // The .catch((e) => logError(...)) on the mount-time load must fire.
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load whitelist settings"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to load whitelist settings"));
       logSpy.mockRestore();
     });
   });
@@ -199,14 +193,10 @@ describe("DangerZone", () => {
   describe("loadNonSteamApps", () => {
     it("warns and clears the list when collectionStore is undefined", async () => {
       vi.stubGlobal("collectionStore", undefined);
-      const logSpy = vi
-        .spyOn(backend, "logWarn")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
       const { container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("collectionStore not available"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("collectionStore not available"));
       expect(container.textContent).toContain("No non-steam games found");
       logSpy.mockRestore();
     });
@@ -216,14 +206,10 @@ describe("DangerZone", () => {
         deckDesktopApps: undefined,
         userCollections: [],
       });
-      const logSpy = vi
-        .spyOn(backend, "logWarn")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
       const { container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("deckDesktopApps.apps not available"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("deckDesktopApps.apps not available"));
       expect(container.textContent).toContain("No non-steam games found");
       logSpy.mockRestore();
     });
@@ -242,9 +228,7 @@ describe("DangerZone", () => {
       const { getByText, getAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       // logInfo fires with size — confirms enumeration ran.
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("deckDesktopApps.apps size: 3"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("deckDesktopApps.apps size: 3"));
       // Open the whitelist so the per-app ToggleField rows render. The
       // toggle <div> wraps the input + label text node; the parent's
       // textContent gives us the visible label per row.
@@ -296,7 +280,9 @@ describe("DangerZone", () => {
       vi.stubGlobal("collectionStore", {
         deckDesktopApps: {
           apps: {
-            get size() { return 1; },
+            get size() {
+              return 1;
+            },
             keys() {
               throw new Error("iteration boom");
             },
@@ -304,14 +290,10 @@ describe("DangerZone", () => {
         },
         userCollections: [],
       });
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       const { container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to enumerate non-steam games"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to enumerate non-steam games"));
       // After catch, the list remains empty.
       expect(container.textContent).toContain("No non-steam games found");
       logSpy.mockRestore();
@@ -404,9 +386,7 @@ describe("DangerZone", () => {
 
     it("surfaces 'Failed to remove shortcuts' via the actionStatus Field on rejection", async () => {
       setupOnePlatform();
-      vi.mocked(backend.removePlatformShortcuts).mockRejectedValue(
-        new Error("boom"),
-      );
+      vi.mocked(backend.removePlatformShortcuts).mockRejectedValue(new Error("boom"));
       const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Super Nintendo (2)"));
@@ -465,9 +445,7 @@ describe("DangerZone", () => {
         strDescription?: string;
         strOKButtonText?: string;
       }>();
-      expect(confirm?.strTitle).toBe(
-        "Delete all save files for Super Nintendo?",
-      );
+      expect(confirm?.strTitle).toBe("Delete all save files for Super Nintendo?");
       expect(confirm?.strDescription).toContain("local save file");
       expect(confirm?.strOKButtonText).toBe("Delete Save Files");
     });
@@ -522,9 +500,7 @@ describe("DangerZone", () => {
 
     it("surfaces 'Failed to delete saves' on rejection", async () => {
       setupOnePlatform();
-      vi.mocked(backend.deletePlatformSaves).mockRejectedValue(
-        new Error("io"),
-      );
+      vi.mocked(backend.deletePlatformSaves).mockRejectedValue(new Error("io"));
       const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Super Nintendo (1)"));
@@ -596,9 +572,7 @@ describe("DangerZone", () => {
       await flushAsync();
       // First click — arms confirm.
       fireEvent.click(getByText("Remove All RomM Shortcuts"));
-      expect(container.textContent).toContain(
-        "Confirm: remove all RomM shortcuts?",
-      );
+      expect(container.textContent).toContain("Confirm: remove all RomM shortcuts?");
       expect(vi.mocked(backend.removeAllShortcuts)).not.toHaveBeenCalled();
 
       // Second click — runs the removal.
@@ -648,12 +622,8 @@ describe("DangerZone", () => {
 
       fireEvent.click(getByText("Uninstall All Installed ROMs"));
       // Warning Field and confirm-state button label both visible.
-      expect(container.textContent).toContain(
-        "Confirm: delete all ROM files?",
-      );
-      expect(container.textContent).toContain(
-        "This will delete all downloaded ROM files",
-      );
+      expect(container.textContent).toContain("Confirm: delete all ROM files?");
+      expect(container.textContent).toContain("This will delete all downloaded ROM files");
       expect(vi.mocked(backend.uninstallAllRoms)).not.toHaveBeenCalled();
 
       await act(async () => {
@@ -672,8 +642,7 @@ describe("DangerZone", () => {
       const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Uninstall All Installed ROMs"));
-      const refreshBefore = vi.mocked(backend.getRegistryPlatforms).mock.calls
-        .length;
+      const refreshBefore = vi.mocked(backend.getRegistryPlatforms).mock.calls.length;
       await act(async () => {
         fireEvent.click(getByText("Confirm: delete all ROM files?"));
         await Promise.resolve();
@@ -683,9 +652,7 @@ describe("DangerZone", () => {
       // confirmUninstall reset → button label returns to original.
       expect(container.textContent).toContain("Uninstall All Installed ROMs");
       // refreshPlatforms still ran after catch.
-      expect(
-        vi.mocked(backend.getRegistryPlatforms).mock.calls.length,
-      ).toBeGreaterThan(refreshBefore);
+      expect(vi.mocked(backend.getRegistryPlatforms).mock.calls.length).toBeGreaterThan(refreshBefore);
     });
 
     it("counts errors via formatUninstallStatus when errors.length > 0", async () => {
@@ -727,18 +694,14 @@ describe("DangerZone", () => {
       // rendering the modal — instead, render the modal element directly.
       const platformAModalEl = vi.mocked(showModal).mock.calls[firstModal]?.[0];
       // Use textContent by rendering the modal in its own tree.
-      const { container: containerA } = render(
-        platformAModalEl as ReactElement,
-      );
+      const { container: containerA } = render(platformAModalEl as ReactElement);
       expect(containerA.textContent).toContain("Remove Shortcuts (1 game)");
       expect(containerA.textContent).not.toContain("Remove Shortcuts (1 games)");
 
       fireEvent.click(getByText("PlatB (2)"));
       const secondIdx = vi.mocked(showModal).mock.calls.length - 1;
       const platformBModalEl = vi.mocked(showModal).mock.calls[secondIdx]?.[0];
-      const { container: containerB } = render(
-        platformBModalEl as ReactElement,
-      );
+      const { container: containerB } = render(platformBModalEl as ReactElement);
       expect(containerB.textContent).toContain("Remove Shortcuts (2 games)");
     });
 
@@ -752,13 +715,10 @@ describe("DangerZone", () => {
       const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
       const closeModal = vi.fn();
       // Render the modal with our own closeModal so we can assert it fired.
-      const cloned = createElement(
-        (modalEl as ReactElement).type,
-        {
-          ...(modalEl as ReactElement<Record<string, unknown>>).props,
-          closeModal,
-        },
-      );
+      const cloned = createElement((modalEl as ReactElement).type, {
+        ...(modalEl as ReactElement<Record<string, unknown>>).props,
+        closeModal,
+      });
       const { getByText: getByTextModal } = render(cloned);
       fireEvent.click(getByTextModal("Cancel"));
       expect(closeModal).toHaveBeenCalledTimes(1);
@@ -791,9 +751,7 @@ describe("DangerZone", () => {
       const { container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       // Firefox auto-protected → 1 remaining + 1 excluded.
-      expect(container.textContent).toContain(
-        "Remove 1 Non-Steam Games (1 excluded)",
-      );
+      expect(container.textContent).toContain("Remove 1 Non-Steam Games (1 excluded)");
     });
   });
 
@@ -808,17 +766,11 @@ describe("DangerZone", () => {
       await flushAsync();
       fireEvent.click(getByText("Remove 2 Non-Steam Games"));
       // After first click — confirm copy without retrodeck warning.
-      expect(container.textContent).toContain(
-        "Are you sure? Remove 2 games (0 whitelisted)?",
-      );
-      expect(
-        vi.mocked(SteamClient.Apps.RemoveShortcut),
-      ).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Are you sure? Remove 2 games (0 whitelisted)?");
+      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
 
       await act(async () => {
-        fireEvent.click(
-          getByText("Are you sure? Remove 2 games (0 whitelisted)?"),
-        );
+        fireEvent.click(getByText("Are you sure? Remove 2 games (0 whitelisted)?"));
         await Promise.resolve();
       });
       expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).toHaveBeenCalledWith(1);
@@ -834,9 +786,7 @@ describe("DangerZone", () => {
       await flushAsync();
       fireEvent.click(getByText("Remove 1 Non-Steam Games"));
       await act(async () => {
-        fireEvent.click(
-          getByText("Are you sure? Remove 1 games (0 whitelisted)?"),
-        );
+        fireEvent.click(getByText("Are you sure? Remove 1 games (0 whitelisted)?"));
         await Promise.resolve();
       });
       expect(container.textContent).toContain("Removed 1 non-steam game");
@@ -861,32 +811,18 @@ describe("DangerZone", () => {
 
       // First click — generic confirm with retrodeck warning copy.
       fireEvent.click(getByText("Remove 2 Non-Steam Games"));
-      expect(container.textContent).toContain(
-        "WARNING: RetroDECK not protected! Remove 2 games?",
-      );
-      expect(
-        vi.mocked(SteamClient.Apps.RemoveShortcut),
-      ).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("WARNING: RetroDECK not protected! Remove 2 games?");
+      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
 
       // Second click — RETRODECK warning escalation.
-      fireEvent.click(
-        getByText("WARNING: RetroDECK not protected! Remove 2 games?"),
-      );
-      expect(container.textContent).toContain(
-        "!! RETRODECK WILL BE REMOVED !!",
-      );
-      expect(container.textContent).toContain(
-        "RetroDECK is NOT in the whitelist and will be permanently removed!",
-      );
-      expect(
-        vi.mocked(SteamClient.Apps.RemoveShortcut),
-      ).not.toHaveBeenCalled();
+      fireEvent.click(getByText("WARNING: RetroDECK not protected! Remove 2 games?"));
+      expect(container.textContent).toContain("!! RETRODECK WILL BE REMOVED !!");
+      expect(container.textContent).toContain("RetroDECK is NOT in the whitelist and will be permanently removed!");
+      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
 
       // Third click — actually remove.
       await act(async () => {
-        fireEvent.click(
-          getByText(/!! RETRODECK WILL BE REMOVED !!/),
-        );
+        fireEvent.click(getByText(/!! RETRODECK WILL BE REMOVED !!/));
         await Promise.resolve();
       });
       expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).toHaveBeenCalledWith(1);
@@ -898,9 +834,7 @@ describe("DangerZone", () => {
     it("collapsed by default; click reveals search + toggle list", async () => {
       stubCollectionStore([1]);
       stubAppStore({ 1: { strDisplayName: "Some App" } });
-      const { getByText, queryByTestId } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, queryByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       // Before click — no text field or toggle visible.
       expect(queryByTestId("text-field")).toBeNull();
@@ -914,13 +848,14 @@ describe("DangerZone", () => {
 
     it("shows a Spinner when expanded but settings not yet loaded", async () => {
       vi.mocked(backend.getWhitelistSettings).mockImplementation(
-        () => new Promise(() => { /* stall */ }),
+        () =>
+          new Promise(() => {
+            /* stall */
+          }),
       );
       stubCollectionStore([1]);
       stubAppStore({ 1: { strDisplayName: "Some App" } });
-      const { getByText, queryAllByTestId } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, queryAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Configure Whitelist (0 protected)"));
       // Spinner present after expansion.
@@ -940,9 +875,7 @@ describe("DangerZone", () => {
 
     it("filters via fuzzyMatch on TextField input", async () => {
       setupApps();
-      const { getByText, getByTestId, container } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, getByTestId, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Configure Whitelist (1 protected)"));
       // Show 3/3 before filter.
@@ -964,66 +897,44 @@ describe("DangerZone", () => {
 
     it("toggle OFF on default-pattern app adds it to disabledDefaults", async () => {
       setupApps();
-      const { getByText, getAllByTestId } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, getAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Configure Whitelist (1 protected)"));
       // Find the Firefox toggle (the only one already checked) and click it.
-      const inputs = getAllByTestId(
-        "toggle-input",
-      ) as HTMLInputElement[];
+      const inputs = getAllByTestId("toggle-input") as HTMLInputElement[];
       const firefoxInput = inputs.find((i) => i.checked);
       if (!firefoxInput) throw new Error("Firefox toggle not found");
       fireEvent.click(firefoxInput);
-      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenCalledWith(
-        expect.arrayContaining(["firefox"]),
-        [],
-      );
+      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenCalledWith(expect.arrayContaining(["firefox"]), []);
     });
 
     it("toggle ON on non-default app adds it to customNames", async () => {
       setupApps();
-      const { getByText, getAllByTestId } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, getAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Configure Whitelist (1 protected)"));
       // Click an unchecked toggle (Alpha or Beta).
-      const inputs = getAllByTestId(
-        "toggle-input",
-      ) as HTMLInputElement[];
+      const inputs = getAllByTestId("toggle-input") as HTMLInputElement[];
       const alphaInput = inputs.find((i) => !i.checked);
       if (!alphaInput) throw new Error("unchecked toggle not found");
       fireEvent.click(alphaInput);
       // The first unchecked alphabetically would be Alpha.
-      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenCalledWith(
-        [],
-        expect.arrayContaining(["Alpha"]),
-      );
+      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenCalledWith([], expect.arrayContaining(["Alpha"]));
     });
 
     it("logs the failure when updateWhitelistSettings rejects on toggle", async () => {
       setupApps();
-      vi.mocked(backend.updateWhitelistSettings).mockRejectedValue(
-        new Error("disk full"),
-      );
+      vi.mocked(backend.updateWhitelistSettings).mockRejectedValue(new Error("disk full"));
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
-      const { getByText, getAllByTestId } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, getAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Configure Whitelist (1 protected)"));
-      const alphaInput = (
-        getAllByTestId("toggle-input") as HTMLInputElement[]
-      ).find((i) => !i.checked);
+      const alphaInput = (getAllByTestId("toggle-input") as HTMLInputElement[]).find((i) => !i.checked);
       if (!alphaInput) throw new Error("unchecked toggle not found");
       fireEvent.click(alphaInput);
       // The .catch((e) => logError(...)) must surface the rejection.
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to update whitelist settings"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to update whitelist settings"));
       logSpy.mockRestore();
     });
 
@@ -1034,22 +945,15 @@ describe("DangerZone", () => {
         disabled_defaults: [],
         custom_names: ["MyCustom"],
       });
-      const { getByText, getAllByTestId } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, getAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Configure Whitelist (1 protected)"));
-      const inputs = getAllByTestId(
-        "toggle-input",
-      ) as HTMLInputElement[];
+      const inputs = getAllByTestId("toggle-input") as HTMLInputElement[];
       const customInput = inputs.find((i) => i.checked);
       if (!customInput) throw new Error("MyCustom toggle not found");
       fireEvent.click(customInput);
       // Last call should be the toggle (after the click).
-      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenLastCalledWith(
-        [],
-        [],
-      );
+      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenLastCalledWith([], []);
     });
 
     it("toggle ON on default-pattern app already-disabled removes from disabledDefaults", async () => {
@@ -1059,23 +963,16 @@ describe("DangerZone", () => {
         disabled_defaults: ["firefox"],
         custom_names: [],
       });
-      const { getByText, getAllByTestId } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, getAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       // 0 protected since firefox is disabled.
       fireEvent.click(getByText("Configure Whitelist (0 protected)"));
-      const inputs = getAllByTestId(
-        "toggle-input",
-      ) as HTMLInputElement[];
+      const inputs = getAllByTestId("toggle-input") as HTMLInputElement[];
       const firefoxInput = inputs.find((i) => !i.checked);
       if (!firefoxInput) throw new Error("Firefox toggle not found");
       fireEvent.click(firefoxInput);
       // Re-enabling firefox: disabledDefaults filter removes it.
-      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenLastCalledWith(
-        [],
-        [],
-      );
+      expect(vi.mocked(backend.updateWhitelistSettings)).toHaveBeenLastCalledWith([], []);
     });
 
     it("resets RetroDeckSection's confirm state when a toggle changes mid-flow", async () => {
@@ -1084,9 +981,7 @@ describe("DangerZone", () => {
         1: { strDisplayName: "Alpha" },
         2: { strDisplayName: "Beta" },
       });
-      const { getByText, getAllByTestId, container } = render(
-        <DangerZone onBack={vi.fn()} />,
-      );
+      const { getByText, getAllByTestId, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
 
       // Arm confirm.
@@ -1095,9 +990,7 @@ describe("DangerZone", () => {
 
       // Open whitelist and toggle Alpha — resets confirm.
       fireEvent.click(getByText("Configure Whitelist (0 protected)"));
-      const inputs = getAllByTestId(
-        "toggle-input",
-      ) as HTMLInputElement[];
+      const inputs = getAllByTestId("toggle-input") as HTMLInputElement[];
       fireEvent.click(inputs[0]!);
       // Button label should be back to the unconfirmed form.
       expect(container.textContent).not.toContain("Are you sure?");
@@ -1129,13 +1022,10 @@ describe("DangerZone", () => {
       fireEvent.click(getByText("PlatA (1)"));
       const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
       const closeModal = vi.fn();
-      const cloned = createElement(
-        (modalEl as ReactElement).type,
-        {
-          ...(modalEl as ReactElement<Record<string, unknown>>).props,
-          closeModal,
-        },
-      );
+      const cloned = createElement((modalEl as ReactElement).type, {
+        ...(modalEl as ReactElement<Record<string, unknown>>).props,
+        closeModal,
+      });
       const { getByText: getByTextModal } = render(cloned);
       // Click delete saves — fires closeModal + opens the ConfirmModal.
       fireEvent.click(getByTextModal("Delete Save Files"));
@@ -1162,13 +1052,10 @@ describe("DangerZone", () => {
       fireEvent.click(getByText("PlatA (1)"));
       const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
       const closeModal = vi.fn();
-      const cloned = createElement(
-        (modalEl as ReactElement).type,
-        {
-          ...(modalEl as ReactElement<Record<string, unknown>>).props,
-          closeModal,
-        },
-      );
+      const cloned = createElement((modalEl as ReactElement).type, {
+        ...(modalEl as ReactElement<Record<string, unknown>>).props,
+        closeModal,
+      });
       const { getByText: getByTextModal } = render(cloned);
       await act(async () => {
         fireEvent.click(getByTextModal("Remove Shortcuts (1 game)"));
@@ -1193,13 +1080,10 @@ describe("DangerZone", () => {
       fireEvent.click(getByText("PlatA (1)"));
       const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
       const closeModal = vi.fn();
-      const cloned = createElement(
-        (modalEl as ReactElement).type,
-        {
-          ...(modalEl as ReactElement<Record<string, unknown>>).props,
-          closeModal,
-        },
-      );
+      const cloned = createElement((modalEl as ReactElement).type, {
+        ...(modalEl as ReactElement<Record<string, unknown>>).props,
+        closeModal,
+      });
       const { getByText: getByTextModal } = render(cloned);
       await act(async () => {
         fireEvent.click(getByTextModal("Delete BIOS Files"));

@@ -31,19 +31,21 @@ describe("renderServerSaveRow", () => {
   });
 
   it("renders filename + formatted size when size is present", () => {
-    const { container } = render(
-      <div>{renderServerSaveRow(makeFile({ size: 2048 }))}</div>,
-    );
+    const { container } = render(<div>{renderServerSaveRow(makeFile({ size: 2048 }))}</div>);
     expect(container.textContent).toContain("save.srm");
     expect(container.textContent).toContain("2.0 KB");
   });
 
   it("renders filename + size + 'Updated <relative>' when both are present", () => {
     const { container } = render(
-      <div>{renderServerSaveRow(makeFile({
-        size: 1024,
-        updated_at: "2025-06-15T11:30:00Z",
-      }))}</div>,
+      <div>
+        {renderServerSaveRow(
+          makeFile({
+            size: 1024,
+            updated_at: "2025-06-15T11:30:00Z",
+          }),
+        )}
+      </div>,
     );
     expect(container.textContent).toContain("save.srm");
     expect(container.textContent).toContain("1.0 KB");
@@ -51,18 +53,20 @@ describe("renderServerSaveRow", () => {
   });
 
   it("renders only the filename when size is null", () => {
-    const { container } = render(
-      <div>{renderServerSaveRow(makeFile({ size: null, updated_at: "" }))}</div>,
-    );
+    const { container } = render(<div>{renderServerSaveRow(makeFile({ size: null, updated_at: "" }))}</div>);
     expect(container.textContent).toBe("save.srm");
   });
 
   it("renders only filename + Updated when updated_at is set but size is null", () => {
     const { container } = render(
-      <div>{renderServerSaveRow(makeFile({
-        size: null,
-        updated_at: "2025-06-15T11:30:00Z",
-      }))}</div>,
+      <div>
+        {renderServerSaveRow(
+          makeFile({
+            size: null,
+            updated_at: "2025-06-15T11:30:00Z",
+          }),
+        )}
+      </div>,
     );
     expect(container.textContent).toContain("save.srm");
     expect(container.textContent).toContain("Updated 30m ago");

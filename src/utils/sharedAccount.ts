@@ -7,13 +7,7 @@
  */
 
 /** Names that are commonly shared accounts on a self-hosted RomM server. */
-export const SHARED_ACCOUNT_NAMES: ReadonlySet<string> = new Set([
-  "admin",
-  "romm",
-  "user",
-  "guest",
-  "root",
-]);
+export const SHARED_ACCOUNT_NAMES: ReadonlySet<string> = new Set(["admin", "romm", "user", "guest", "root"]);
 
 /**
  * Return true if the username matches a well-known shared-account name.

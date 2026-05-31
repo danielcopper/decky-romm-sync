@@ -39,9 +39,7 @@ vi.mock("@decky/ui", () => {
 });
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
-  const btn = Array.from(container.querySelectorAll("button")).find(
-    (b) => b.textContent === text,
-  );
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === text);
   if (!btn) throw new Error(`button "${text}" not found`);
   return btn as HTMLButtonElement;
 }
@@ -207,9 +205,7 @@ describe("SyncConflictModal", () => {
 
   describe("SyncConflictModalHost — handleResolve stale_conflict branch", () => {
     it("sets the stale-specific errorMessage, logs 'stale:', does NOT resolve promise", async () => {
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockResolvedValue({
         success: false,
         error_code: "stale_conflict",
@@ -227,16 +223,10 @@ describe("SyncConflictModal", () => {
       });
       await flushAsync();
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("stale: out of date"),
-      );
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("resolveSyncConflict(7, stale.srm, keep_local)"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("stale: out of date"));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("resolveSyncConflict(7, stale.srm, keep_local)"));
       // Stale message is set into the host's error state and re-rendered.
-      expect(container.textContent).toContain(
-        "The server save has been updated by another device",
-      );
+      expect(container.textContent).toContain("The server save has been updated by another device");
       // Buttons re-enabled (isLoading flipped back to false).
       expect(buttonByText(container, "Keep Local").disabled).toBe(false);
       // Promise has NOT settled.
@@ -246,9 +236,7 @@ describe("SyncConflictModal", () => {
     });
 
     it("falls back to empty stale message when result.message is missing", async () => {
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockResolvedValue({
         success: false,
         error_code: "stale_conflict",
@@ -271,9 +259,7 @@ describe("SyncConflictModal", () => {
 
   describe("SyncConflictModalHost — handleResolve generic-failure branch", () => {
     it("sets errorMessage to result.message, logs 'failed: <msg>', does NOT resolve", async () => {
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockResolvedValue({
         success: false,
         message: "permission denied",
@@ -290,9 +276,7 @@ describe("SyncConflictModal", () => {
       });
       await flushAsync();
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("failed: permission denied"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("failed: permission denied"));
       expect(container.textContent).toContain("permission denied");
       expect(buttonByText(container, "Keep Local").disabled).toBe(false);
       expect(resolved).not.toHaveBeenCalled();
@@ -301,9 +285,7 @@ describe("SyncConflictModal", () => {
     });
 
     it("falls back to 'Failed to resolve conflict' when result.message is missing", async () => {
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockResolvedValue({
         success: false,
       });
@@ -316,9 +298,7 @@ describe("SyncConflictModal", () => {
       });
       await flushAsync();
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("failed: Failed to resolve conflict"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("failed: Failed to resolve conflict"));
       expect(container.textContent).toContain("Failed to resolve conflict");
       logSpy.mockRestore();
     });
@@ -326,9 +306,7 @@ describe("SyncConflictModal", () => {
 
   describe("SyncConflictModalHost — handleResolve throw branch", () => {
     it("Error rejection: sets errorMessage to err.message, logs 'threw:', isLoading flips back", async () => {
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockRejectedValue(new Error("network boom"));
 
       const conflict = makeConflict({ rom_id: 3, filename: "boom.srm" });
@@ -342,9 +320,7 @@ describe("SyncConflictModal", () => {
       });
       await flushAsync();
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("threw: network boom"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("threw: network boom"));
       expect(container.textContent).toContain("network boom");
       expect(buttonByText(container, "Keep Local").disabled).toBe(false);
       expect(resolved).not.toHaveBeenCalled();
@@ -353,9 +329,7 @@ describe("SyncConflictModal", () => {
     });
 
     it("non-Error rejection: uses String(e); empty string falls back to 'Failed to resolve conflict'", async () => {
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       // Reject with an empty string — String("") === "" which falls back via
       // the `msg || "Failed to resolve conflict"` ternary.
       vi.mocked(backend.resolveSyncConflict).mockRejectedValue("");
@@ -374,9 +348,7 @@ describe("SyncConflictModal", () => {
     });
 
     it("non-Error rejection with non-empty value: uses String(e) verbatim", async () => {
-      const logSpy = vi
-        .spyOn(backend, "logError")
-        .mockImplementation(() => {});
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockRejectedValue("bare string error");
 
       detach(showSyncConflictModal(makeConflict()));
@@ -387,9 +359,7 @@ describe("SyncConflictModal", () => {
       });
       await flushAsync();
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("threw: bare string error"),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("threw: bare string error"));
       expect(container.textContent).toContain("bare string error");
       logSpy.mockRestore();
     });
@@ -400,9 +370,10 @@ describe("SyncConflictModal", () => {
       // Keep the callable pending so isLoading stays true mid-test.
       let resolveCallable: (v: { success: boolean }) => void = () => {};
       vi.mocked(backend.resolveSyncConflict).mockImplementation(
-        () => new Promise((res) => {
-          resolveCallable = res;
-        }),
+        () =>
+          new Promise((res) => {
+            resolveCallable = res;
+          }),
       );
 
       detach(showSyncConflictModal(makeConflict()));
@@ -426,9 +397,10 @@ describe("SyncConflictModal", () => {
     it("ModalRoot.closeModal is undefined while loading (suppresses outside-click close)", async () => {
       let resolveCallable: (v: { success: boolean }) => void = () => {};
       vi.mocked(backend.resolveSyncConflict).mockImplementation(
-        () => new Promise((res) => {
-          resolveCallable = res;
-        }),
+        () =>
+          new Promise((res) => {
+            resolveCallable = res;
+          }),
       );
 
       detach(showSyncConflictModal(makeConflict()));
@@ -438,9 +410,7 @@ describe("SyncConflictModal", () => {
       expect(typeof capturedModalCloseFns[0]).toBe("function");
 
       await act(async () => {
-        fireEvent.click(
-          buttonByText(document.body as HTMLElement, "Keep Local"),
-        );
+        fireEvent.click(buttonByText(document.body as HTMLElement, "Keep Local"));
       });
 
       // After click, React re-rendered with isLoading=true → ModalRoot's
@@ -473,9 +443,10 @@ describe("SyncConflictModal", () => {
     it("loading: Cancel button is disabled (no-op via DOM is unreachable, ModalRoot close is undefined)", async () => {
       let resolveCallable: (v: { success: boolean }) => void = () => {};
       vi.mocked(backend.resolveSyncConflict).mockImplementation(
-        () => new Promise((res) => {
-          resolveCallable = res;
-        }),
+        () =>
+          new Promise((res) => {
+            resolveCallable = res;
+          }),
       );
 
       const resolved = vi.fn();

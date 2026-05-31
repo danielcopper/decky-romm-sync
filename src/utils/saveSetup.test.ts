@@ -63,9 +63,7 @@ describe("resolveSaveSetupOutcome", () => {
   it("requires user choice when the server reports any slots and the wizard is requested", () => {
     const info = makeInfo({
       recommended_action: "show_wizard",
-      server_slots: [
-        { slot: "default", saves: [], count: 1, latest_updated_at: "2026-01-01T00:00:00Z" },
-      ],
+      server_slots: [{ slot: "default", saves: [], count: 1, latest_updated_at: "2026-01-01T00:00:00Z" }],
     });
     expect(resolveSaveSetupOutcome(info)).toEqual({ kind: "needs_user_choice" });
   });
@@ -121,9 +119,7 @@ describe("applyLaunchGateSetupOutcome", () => {
         throw new Error("toast boom");
       }),
     });
-    await expect(
-      applyLaunchGateSetupOutcome({ kind: "server_unreachable" }, deps),
-    ).rejects.toThrow("toast boom");
+    await expect(applyLaunchGateSetupOutcome({ kind: "server_unreachable" }, deps)).rejects.toThrow("toast boom");
   });
 
   it("propagates a dispatchSavesTab exception on needs_user_choice instead of swallowing it", async () => {
@@ -134,9 +130,7 @@ describe("applyLaunchGateSetupOutcome", () => {
         throw new Error("dispatch boom");
       }),
     });
-    await expect(
-      applyLaunchGateSetupOutcome({ kind: "needs_user_choice" }, deps),
-    ).rejects.toThrow("dispatch boom");
+    await expect(applyLaunchGateSetupOutcome({ kind: "needs_user_choice" }, deps)).rejects.toThrow("dispatch boom");
   });
 });
 
@@ -222,9 +216,7 @@ describe("applyWizardInitialSetupResult", () => {
     const deps = makeWizardDeps();
     const result = makeInfo({
       recommended_action: "show_wizard",
-      server_slots: [
-        { slot: "default", saves: [], count: 1, latest_updated_at: "2026-01-01T00:00:00Z" },
-      ],
+      server_slots: [{ slot: "default", saves: [], count: 1, latest_updated_at: "2026-01-01T00:00:00Z" }],
     });
     await applyWizardInitialSetupResult(result, deps);
     expect(deps.setInfo).toHaveBeenCalledWith(result);

@@ -26,9 +26,7 @@ vi.mock("@decky/ui", () => {
 });
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
-  const btn = Array.from(container.querySelectorAll("button")).find(
-    (b) => b.textContent === text,
-  );
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === text);
   if (!btn) throw new Error(`button "${text}" not found`);
   return btn as HTMLButtonElement;
 }
@@ -45,9 +43,7 @@ interface CoreChangeContentProps {
 }
 function lastShownElement(): ReactElement<CoreChangeContentProps> {
   const calls = vi.mocked(showModal).mock.calls;
-  const el = calls[calls.length - 1]?.[0] as
-    | ReactElement<CoreChangeContentProps>
-    | undefined;
+  const el = calls[calls.length - 1]?.[0] as ReactElement<CoreChangeContentProps> | undefined;
   if (!el) throw new Error("showModal was not called");
   return el;
 }

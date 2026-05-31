@@ -58,11 +58,7 @@ export function handleGlobalDownloadFailure(
  * associated rom yet (`romId === null`). The toast is owned by the global
  * handler — this helper intentionally does not toast.
  */
-export function handleButtonDownloadFailure(
-  event: DownloadFailedEvent,
-  romId: number | null,
-  reset: () => void,
-): void {
+export function handleButtonDownloadFailure(event: DownloadFailedEvent, romId: number | null, reset: () => void): void {
   if (romId === null || event.rom_id !== romId) return;
   reset();
 }

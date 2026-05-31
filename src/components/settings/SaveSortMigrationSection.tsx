@@ -28,7 +28,14 @@ export const SaveSortMigrationSection: FC<SaveSortMigrationSectionProps> = ({
   return (
     <PanelSection title="Save Sort Migration">
       <PanelSectionRow>
-        <div style={{ padding: "8px 12px", backgroundColor: "rgba(212, 167, 44, 0.15)", borderLeft: "3px solid #d4a72c", borderRadius: "4px" }}>
+        <div
+          style={{
+            padding: "8px 12px",
+            backgroundColor: "rgba(212, 167, 44, 0.15)",
+            borderLeft: "3px solid #d4a72c",
+            borderRadius: "4px",
+          }}
+        >
           <div style={{ fontSize: "13px", fontWeight: "bold", color: "#d4a72c", marginBottom: "6px" }}>
             {"⚠️"} RetroArch save sorting changed
           </div>
@@ -48,20 +55,12 @@ export const SaveSortMigrationSection: FC<SaveSortMigrationSectionProps> = ({
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          disabled={migrating}
-          onClick={onMigrate}
-        >
+        <ButtonItem layout="below" disabled={migrating} onClick={onMigrate}>
           {migrating ? "Migrating..." : "Migrate Save Files"}
         </ButtonItem>
       </PanelSectionRow>
       <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          disabled={migrating}
-          onClick={onDismiss}
-        >
+        <ButtonItem layout="below" disabled={migrating} onClick={onDismiss}>
           Dismiss (I migrated manually)
         </ButtonItem>
       </PanelSectionRow>

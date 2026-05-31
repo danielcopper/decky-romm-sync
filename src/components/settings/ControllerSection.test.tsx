@@ -8,7 +8,10 @@ import type { RetroArchInputCheck } from "../../types";
 // capture rgOptions + onChange so we can drive the dropdown without a real
 // Steam UI.
 type AnyProps = Record<string, unknown> & { children?: unknown };
-interface DropdownOption { data: unknown; label: string }
+interface DropdownOption {
+  data: unknown;
+  label: string;
+}
 interface DropdownItemProps {
   label?: string;
   rgOptions?: DropdownOption[];
@@ -18,10 +21,8 @@ interface DropdownItemProps {
 const dropdownCaptured: { items: DropdownItemProps[] } = { items: [] };
 
 vi.mock("@decky/ui", () => ({
-  PanelSection: (p: AnyProps) =>
-    createElement("section", {}, p.children as never),
-  PanelSectionRow: (p: AnyProps) =>
-    createElement("div", {}, p.children as never),
+  PanelSection: (p: AnyProps) => createElement("section", {}, p.children as never),
+  PanelSectionRow: (p: AnyProps) => createElement("div", {}, p.children as never),
   Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
     createElement(
       "div",
@@ -29,7 +30,11 @@ vi.mock("@decky/ui", () => ({
       createElement("span", { "data-testid": "field-label" }, p.label as never),
       createElement("span", { "data-testid": "field-desc" }, p.description as never),
     ),
-  ButtonItem: ({ children, onClick, disabled }: AnyProps & {
+  ButtonItem: ({
+    children,
+    onClick,
+    disabled,
+  }: AnyProps & {
     onClick?: () => void;
     disabled?: boolean;
   }) => createElement("button", { onClick, disabled }, children as never),
@@ -83,9 +88,7 @@ describe("ControllerSection", () => {
   describe("apply button", () => {
     it("fires onApplyMode when clicked", () => {
       const onApplyMode = vi.fn();
-      const { getByText } = render(
-        <ControllerSection {...defaultProps({ onApplyMode })} />,
-      );
+      const { getByText } = render(<ControllerSection {...defaultProps({ onApplyMode })} />);
       fireEvent.click(getByText("Apply to All Shortcuts"));
       expect(onApplyMode).toHaveBeenCalledTimes(1);
     });
@@ -134,18 +137,14 @@ describe("ControllerSection", () => {
 
     it("is hidden when retroarchWarning.warning is false", () => {
       const { container } = render(
-        <ControllerSection
-          {...defaultProps({ retroarchWarning: warning({ warning: false }) })}
-        />,
+        <ControllerSection {...defaultProps({ retroarchWarning: warning({ warning: false }) })} />,
       );
       expect(container.textContent).not.toContain("RetroArch input_driver");
     });
 
     it("renders the current input_driver in the warning label", () => {
       const { container } = render(
-        <ControllerSection
-          {...defaultProps({ retroarchWarning: warning({ current: "udev" }) })}
-        />,
+        <ControllerSection {...defaultProps({ retroarchWarning: warning({ current: "udev" }) })} />,
       );
       expect(container.textContent).toContain('RetroArch input_driver: "udev"');
     });
@@ -153,9 +152,7 @@ describe("ControllerSection", () => {
     it("fires onFixInputDriver when the fix button is clicked", () => {
       const onFixInputDriver = vi.fn();
       const { getByText } = render(
-        <ControllerSection
-          {...defaultProps({ retroarchWarning: warning(), onFixInputDriver })}
-        />,
+        <ControllerSection {...defaultProps({ retroarchWarning: warning(), onFixInputDriver })} />,
       );
       fireEvent.click(getByText("Fix input_driver to sdl2"));
       expect(onFixInputDriver).toHaveBeenCalledTimes(1);
@@ -175,9 +172,7 @@ describe("ControllerSection", () => {
     });
 
     it("omits the fix-status Field when retroarchFixStatus is empty", () => {
-      const { getAllByTestId } = render(
-        <ControllerSection {...defaultProps({ retroarchWarning: warning() })} />,
-      );
+      const { getAllByTestId } = render(<ControllerSection {...defaultProps({ retroarchWarning: warning() })} />);
       // Only the warning-label Field, no fix-status Field.
       const labels = getAllByTestId("field-label").map((el) => el.textContent);
       expect(labels).toHaveLength(1);

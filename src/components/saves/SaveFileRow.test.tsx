@@ -65,110 +65,72 @@ describe("renderSaveFileRow", () => {
   afterEach(() => vi.useRealTimers());
 
   it("renders filename", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile(), undefined, null)}</div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile(), undefined, null)}</div>);
     expect(container.textContent).toContain("save.srm");
   });
 
   it("renders 'Synced' status badge for status 'synced'", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "synced" }), undefined, null)}</div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "synced" }), undefined, null)}</div>);
     expect(container.querySelector(".romm-save-status-label")?.textContent).toBe("Synced");
   });
 
   it("renders 'Local changes' badge for status 'upload'", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "upload" }), undefined, null)}</div>,
-    );
-    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe(
-      "Local changes",
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "upload" }), undefined, null)}</div>);
+    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe("Local changes");
   });
 
   it("renders 'Server newer' badge for status 'download'", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "download" }), undefined, null)}</div>,
-    );
-    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe(
-      "Server newer",
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "download" }), undefined, null)}</div>);
+    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe("Server newer");
   });
 
   it("renders 'Conflict' badge for status 'conflict'", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "conflict" }), undefined, null)}</div>,
-    );
-    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe(
-      "Conflict",
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "conflict" }), undefined, null)}</div>);
+    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe("Conflict");
   });
 
   it("renders 'Status unknown' badge for status 'unknown'", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "unknown" }), undefined, null)}</div>,
-    );
-    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe(
-      "Status unknown",
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "unknown" }), undefined, null)}</div>);
+    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe("Status unknown");
   });
 
   it("renders 'Not synced' badge when status is unrecognized and last_sync_at is null", () => {
     const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "weird" as unknown as SaveFileStatus["status"] }), undefined, null)}</div>,
+      <div>
+        {renderSaveFileRow(makeFile({ status: "weird" as unknown as SaveFileStatus["status"] }), undefined, null)}
+      </div>,
     );
-    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe(
-      "Not synced",
-    );
+    expect(container.querySelector(".romm-save-status-label")?.textContent).toBe("Not synced");
   });
 
   it("shows size in the header when local_size is set", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ local_size: 2048 }), undefined, null)}</div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ local_size: 2048 }), undefined, null)}</div>);
     expect(container.textContent).toContain("2.0 KB");
   });
 
   it("omits size when local_size is null", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ local_size: null }), undefined, null)}</div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ local_size: null }), undefined, null)}</div>);
     expect(container.textContent).not.toContain("KB");
     expect(container.textContent).not.toContain(" B");
   });
 
   it("shows the conflict banner when status === 'conflict'", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "conflict" }), undefined, null)}</div>,
-    );
-    expect(container.textContent).toContain(
-      "Conflict detected — resolve from the sync action",
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "conflict" }), undefined, null)}</div>);
+    expect(container.textContent).toContain("Conflict detected — resolve from the sync action");
   });
 
   it("shows the conflict banner when a conflict arg is passed (even with non-conflict status)", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "synced" }), makeConflict(), null)}</div>,
-    );
-    expect(container.textContent).toContain(
-      "Conflict detected — resolve from the sync action",
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "synced" }), makeConflict(), null)}</div>);
+    expect(container.textContent).toContain("Conflict detected — resolve from the sync action");
   });
 
   it("hides the conflict banner when no conflict and status is not 'conflict'", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ status: "synced" }), undefined, null)}</div>,
-    );
-    expect(container.textContent).not.toContain(
-      "Conflict detected — resolve from the sync action",
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ status: "synced" }), undefined, null)}</div>);
+    expect(container.textContent).not.toContain("Conflict detected — resolve from the sync action");
   });
 
   it("renders the last-synced info row with 'Never' when neither check nor file timestamp is set", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ last_sync_at: null }), undefined, null)}</div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ last_sync_at: null }), undefined, null)}</div>);
     expect(container.textContent).toContain("Last synced:");
     expect(container.textContent).toContain("Never");
   });
@@ -176,11 +138,7 @@ describe("renderSaveFileRow", () => {
   it("renders relative time in the last-synced row when last_sync_check_at is set", () => {
     const { container } = render(
       <div>
-        {renderSaveFileRow(
-          makeFile({ status: "synced", last_sync_at: null }),
-          undefined,
-          "2025-06-15T11:30:00Z",
-        )}
+        {renderSaveFileRow(makeFile({ status: "synced", last_sync_at: null }), undefined, "2025-06-15T11:30:00Z")}
       </div>,
     );
     expect(container.textContent).toContain("30m ago");
@@ -188,13 +146,7 @@ describe("renderSaveFileRow", () => {
 
   it("renders the last-updated info row when server_updated_at is set", () => {
     const { container } = render(
-      <div>
-        {renderSaveFileRow(
-          makeFile({ server_updated_at: "2025-06-15T10:00:00Z" }),
-          undefined,
-          null,
-        )}
-      </div>,
+      <div>{renderSaveFileRow(makeFile({ server_updated_at: "2025-06-15T10:00:00Z" }), undefined, null)}</div>,
     );
     expect(container.textContent).toContain("Last updated:");
   });
@@ -207,15 +159,7 @@ describe("renderSaveFileRow", () => {
   });
 
   it("renders the server save sub-block (id-only) when server_save_id is set", () => {
-    const { container } = render(
-      <div>
-        {renderSaveFileRow(
-          makeFile({ server_save_id: 42 }),
-          undefined,
-          null,
-        )}
-      </div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ server_save_id: 42 }), undefined, null)}</div>);
     expect(container.textContent).toContain("Server save:");
     expect(container.textContent).toContain("#42");
   });
@@ -223,11 +167,7 @@ describe("renderSaveFileRow", () => {
   it("renders the server save sub-block (id + emulator) when both are set", () => {
     const { container } = render(
       <div>
-        {renderSaveFileRow(
-          makeFile({ server_save_id: 42, server_emulator: "retroarch-mgba" }),
-          undefined,
-          null,
-        )}
+        {renderSaveFileRow(makeFile({ server_save_id: 42, server_emulator: "retroarch-mgba" }), undefined, null)}
       </div>,
     );
     expect(container.textContent).toContain("#42");
@@ -237,20 +177,14 @@ describe("renderSaveFileRow", () => {
   it("renders the server filename line when server_file_name is set", () => {
     const { container } = render(
       <div>
-        {renderSaveFileRow(
-          makeFile({ server_save_id: 42, server_file_name: "remote_save.srm" }),
-          undefined,
-          null,
-        )}
+        {renderSaveFileRow(makeFile({ server_save_id: 42, server_file_name: "remote_save.srm" }), undefined, null)}
       </div>,
     );
     expect(container.textContent).toContain("remote_save.srm");
   });
 
   it("skips the server save sub-block when server_save_id is null", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ server_save_id: null }), undefined, null)}</div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ server_save_id: null }), undefined, null)}</div>);
     expect(container.textContent).not.toContain("Server save:");
   });
 
@@ -263,9 +197,7 @@ describe("renderSaveFileRow", () => {
   });
 
   it("skips the local-path row when local_path is null", () => {
-    const { container } = render(
-      <div>{renderSaveFileRow(makeFile({ local_path: null }), undefined, null)}</div>,
-    );
+    const { container } = render(<div>{renderSaveFileRow(makeFile({ local_path: null }), undefined, null)}</div>);
     expect(container.textContent).not.toContain("Local path:");
   });
 
@@ -310,11 +242,7 @@ describe("renderSaveFileRow", () => {
   it("appends 'Newer version available on server' when is_current is false", () => {
     const { container } = render(
       <div>
-        {renderSaveFileRow(
-          makeFile({ status: "synced", is_current: false }),
-          undefined,
-          "2025-06-15T11:30:00Z",
-        )}
+        {renderSaveFileRow(makeFile({ status: "synced", is_current: false }), undefined, "2025-06-15T11:30:00Z")}
       </div>,
     );
     expect(container.textContent).toContain("Newer version available on server");

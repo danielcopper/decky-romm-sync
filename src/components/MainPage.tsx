@@ -33,12 +33,24 @@ import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgre
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
-import { getSaveSortMigrationState, onSaveSortMigrationChange, setSaveSortMigrationStatus } from "../utils/saveSortMigrationStore";
+import {
+  getSaveSortMigrationState,
+  onSaveSortMigrationChange,
+  setSaveSortMigrationStatus,
+} from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
-import type { SyncProgress, SyncStage, SyncStats, SyncPreview, SyncPreviewSummary, DownloadItem, MigrationStatus } from "../types";
+import type {
+  SyncProgress,
+  SyncStage,
+  SyncStats,
+  SyncPreview,
+  SyncPreviewSummary,
+  DownloadItem,
+  MigrationStatus,
+} from "../types";
 import { detach } from "../utils/detach";
 
 type Page = "settings" | "library" | "data" | "downloads";
@@ -48,7 +60,10 @@ interface MainPageProps {
 }
 
 function formatChanges(pairs: [number, string][]): string {
-  return pairs.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`).join(", ");
+  return pairs
+    .filter(([n]) => n > 0)
+    .map(([n, label]) => `${n} ${label}`)
+    .join(", ");
 }
 
 const ConnectionIndicator: FC<{ connected: boolean | null }> = ({ connected }) => {
@@ -98,9 +113,7 @@ function stageLabel(stage: SyncProgress["stage"]): string {
 
 function formatProgressText(progress: SyncProgress | null): string {
   if (!progress) return "Syncing...";
-  const step = progress.step && progress.totalSteps
-    ? `[${progress.step}/${progress.totalSteps}] `
-    : "";
+  const step = progress.step && progress.totalSteps ? `[${progress.step}/${progress.totalSteps}] ` : "";
   const msg = progress.message || "Syncing...";
   // Truncate to ~40 chars to prevent multi-line jumping in the QAM panel
   const maxLen = 40 - step.length;
@@ -128,16 +141,26 @@ function formatLastSync(iso: string | null): string {
 
 function formatPreviewDescription(s: SyncPreviewSummary): string {
   const sections: string[] = [];
-  const romChanges = formatChanges([[s.new_count, "added"], [s.changed_count, "updated"], [s.remove_count, "removed"]]);
+  const romChanges = formatChanges([
+    [s.new_count, "added"],
+    [s.changed_count, "updated"],
+    [s.remove_count, "removed"],
+  ]);
   if (romChanges) sections.push(`ROMs: ${romChanges}`);
   const p = s.platform_collection_diff;
   if (p?.has_changes) {
-    const platChanges = formatChanges([[p.added_count, "added"], [p.removed_count, "removed"]]);
+    const platChanges = formatChanges([
+      [p.added_count, "added"],
+      [p.removed_count, "removed"],
+    ]);
     if (platChanges) sections.push(`Platforms: ${platChanges}`);
   }
   const d = s.collection_diff;
   if (d?.has_changes) {
-    const collChanges = formatChanges([[d.added.length, "added"], [d.removed.length, "removed"]]);
+    const collChanges = formatChanges([
+      [d.added.length, "added"],
+      [d.removed.length, "removed"],
+    ]);
     if (collChanges) sections.push(`Collections: ${collChanges}`);
   }
   return sections.length > 0 ? sections.join("; ") : "Everything is up to date.";
@@ -173,16 +196,22 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         setSaveSortMigrationStatus(save_sort);
       })
       .catch((e) => logError(`Failed to refresh migration state: ${e}`));
-    getSyncStats().then(setStats).catch((e) => logError(`Failed to load sync stats: ${e}`));
-    testConnection().then((r) => {
-      setConnected(r.success);
-      setVersionError(r.error_code === "version_error" ? r.message : null);
-    }).catch((e) => logError(`Failed to test connection: ${e}`));
-    getSettings().then((s) => {
-      if (s.retroarch_input_check) {
-        setRetroarchWarning(s.retroarch_input_check);
-      }
-    }).catch((e) => logError(`Failed to load settings: ${e}`));
+    getSyncStats()
+      .then(setStats)
+      .catch((e) => logError(`Failed to load sync stats: ${e}`));
+    testConnection()
+      .then((r) => {
+        setConnected(r.success);
+        setVersionError(r.error_code === "version_error" ? r.message : null);
+      })
+      .catch((e) => logError(`Failed to test connection: ${e}`));
+    getSettings()
+      .then((s) => {
+        if (s.retroarch_input_check) {
+          setRetroarchWarning(s.retroarch_input_check);
+        }
+      })
+      .catch((e) => logError(`Failed to load settings: ${e}`));
 
     // Backend is authoritative for in-flight sync state. Seed the module
     // store from get_sync_status() so a QAM close/reopen recovers the live
@@ -209,7 +238,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         setSyncing(false);
         setLoading(false);
         showTransientStatus(progress.message || "Sync finished");
-        getSyncStats().then(setStats).catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+        getSyncStats()
+          .then(setStats)
+          .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
       }
     });
 
@@ -334,8 +365,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     : undefined;
   const hasFineDetail = !!(syncProgress?.total && syncProgress.message);
 
-  const activeDownloads = downloads.filter(d => d.status === "queued" || d.status === "downloading");
-  const completedDownloads = downloads.filter(d => d.status === "completed" || d.status === "failed" || d.status === "cancelled");
+  const activeDownloads = downloads.filter((d) => d.status === "queued" || d.status === "downloading");
+  const completedDownloads = downloads.filter(
+    (d) => d.status === "completed" || d.status === "failed" || d.status === "cancelled",
+  );
   const hasDownloads = activeDownloads.length > 0 || completedDownloads.length > 0;
 
   if (versionError) {
@@ -348,23 +381,23 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
   let syncBody: ReactNode;
   if (preview) {
-    const hasChanges = preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0
-      || preview.summary.collection_diff?.has_changes
-      || preview.summary.platform_collection_diff?.has_changes;
+    const hasChanges =
+      preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 ||
+      preview.summary.collection_diff?.has_changes ||
+      preview.summary.platform_collection_diff?.has_changes;
     syncBody = (
       <>
         <PanelSectionRow>
-          <Field
-            label="Preview"
-            description={formatPreviewDescription(preview.summary)}
-          />
+          <Field label="Preview" description={formatPreviewDescription(preview.summary)} />
         </PanelSectionRow>
         {hasChanges ? (
           <>
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
-                onClick={() => { detach(handleApply()); }}
+                onClick={() => {
+                  detach(handleApply());
+                }}
                 // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
                 onFocus={scrollToTop}
               >
@@ -372,7 +405,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </ButtonItem>
             </PanelSectionRow>
             <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => { detach(handleDismiss()); }}>
+              <ButtonItem
+                layout="below"
+                onClick={() => {
+                  detach(handleDismiss());
+                }}
+              >
                 Cancel
               </ButtonItem>
             </PanelSectionRow>
@@ -381,7 +419,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
-              onClick={() => { detach(handleDismiss()); }}
+              onClick={() => {
+                detach(handleDismiss());
+              }}
               // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
               onFocus={scrollToTop}
             >
@@ -392,9 +432,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       </>
     );
   } else if (syncing) {
-    const stepText = syncProgress?.totalSteps
-      ? `${syncProgress.step ?? 0}/${syncProgress.totalSteps}`
-      : "";
+    const stepText = syncProgress?.totalSteps ? `${syncProgress.step ?? 0}/${syncProgress.totalSteps}` : "";
     syncBody = (
       <>
         <PanelSectionRow>
@@ -415,10 +453,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               <span data-testid="sync-stage">{stageLabel(syncProgress?.stage)}</span>
               {stepText && <span data-testid="sync-step">{stepText}</span>}
             </div>
-            <ProgressBar
-              indeterminate={coarseFraction === undefined}
-              nProgress={coarseFraction}
-            />
+            <ProgressBar indeterminate={coarseFraction === undefined} nProgress={coarseFraction} />
           </div>
         </PanelSectionRow>
         {hasFineDetail && (
@@ -436,7 +471,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={() => { detach(handleCancel()); }}
+            onClick={() => {
+              detach(handleCancel());
+            }}
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
           >
@@ -451,7 +488,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={() => { detach(handleSync()); }}
+            onClick={() => {
+              detach(handleSync());
+            }}
             disabled={loading || connected === false}
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
@@ -473,17 +512,21 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               layout="below"
               description="Clear cached sync data to re-fetch all platforms"
               onClick={() => {
-                detach((async () => {
-                  try {
-                    const result = await clearSyncCache();
-                    setStatus(result.message);
-                  } catch {
-                    setStatus("Failed to clear sync cache");
-                  }
-                  if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-                  statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
-                  getSyncStats().then(setStats).catch((e) => logError(`Failed to refresh sync stats: ${e}`));
-                })());
+                detach(
+                  (async () => {
+                    try {
+                      const result = await clearSyncCache();
+                      setStatus(result.message);
+                    } catch {
+                      setStatus("Failed to clear sync cache");
+                    }
+                    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+                    statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
+                    getSyncStats()
+                      .then(setStats)
+                      .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+                  })(),
+                );
               }}
               disabled={loading || connected === false}
             >
@@ -499,9 +542,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     <>
       <PanelSection title="Status">
         <PanelSectionRow>
-          <Field
-            label="Connection"
-          >
+          <Field label="Connection">
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               <ConnectionIndicator connected={connected} />
             </div>
@@ -529,31 +570,32 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         )}
         {retroarchWarning?.warning && (
           <PanelSectionRow>
-            <Field
-              label="RetroArch: input_driver issue"
-              description={`Using "${retroarchWarning.current}"`}
-            >
+            <Field label="RetroArch: input_driver issue" description={`Using "${retroarchWarning.current}"`}>
               <DialogButton
-                onClick={() => showModal(
-                  <ConfirmModal
-                    strTitle="Fix RetroArch input_driver?"
-                    strDescription="This will change input_driver to sdl2 in your RetroArch config. Controllers should work better in RetroArch menus after this change."
-                    strOKButtonText="Apply Fix"
-                    strCancelButtonText="Cancel"
-                    onOK={() => {
-                      detach((async () => {
-                        try {
-                          const result = await fixRetroarchInputDriver();
-                          if (result.success) {
-                            setRetroarchWarning(null);
-                          }
-                        } catch {
-                          // ignore
-                        }
-                      })());
-                    }}
-                  />
-                )}
+                onClick={() =>
+                  showModal(
+                    <ConfirmModal
+                      strTitle="Fix RetroArch input_driver?"
+                      strDescription="This will change input_driver to sdl2 in your RetroArch config. Controllers should work better in RetroArch menus after this change."
+                      strOKButtonText="Apply Fix"
+                      strCancelButtonText="Cancel"
+                      onOK={() => {
+                        detach(
+                          (async () => {
+                            try {
+                              const result = await fixRetroarchInputDriver();
+                              if (result.success) {
+                                setRetroarchWarning(null);
+                              }
+                            } catch {
+                              // ignore
+                            }
+                          })(),
+                        );
+                      }}
+                    />,
+                  )
+                }
                 onFocus={scrollToTop}
               >
                 Fix
@@ -564,13 +606,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {saveSortMigration.pending && (
           <>
             <PanelSectionRow>
-              <div style={{
-                padding: "8px 12px",
-                backgroundColor: "rgba(212, 167, 44, 0.15)",
-                borderLeft: "3px solid #d4a72c",
-                borderRadius: "4px",
-                fontSize: "12px",
-              }}>
+              <div
+                style={{
+                  padding: "8px 12px",
+                  backgroundColor: "rgba(212, 167, 44, 0.15)",
+                  borderLeft: "3px solid #d4a72c",
+                  borderRadius: "4px",
+                  fontSize: "12px",
+                }}
+              >
                 <div style={{ fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" }}>
                   {"\u26A0\uFE0F"} RetroArch save sorting changed
                 </div>
@@ -610,7 +654,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 nProgress={item.total_bytes > 0 ? (item.bytes_downloaded / item.total_bytes) * 100 : undefined}
                 indeterminate={item.total_bytes === 0}
                 sOperationText={item.rom_name}
-                sTimeRemaining={item.total_bytes > 0 ? `${formatBytes(item.bytes_downloaded)} / ${formatBytes(item.total_bytes)}` : formatBytes(item.bytes_downloaded)}
+                sTimeRemaining={
+                  item.total_bytes > 0
+                    ? `${formatBytes(item.bytes_downloaded)} / ${formatBytes(item.total_bytes)}`
+                    : formatBytes(item.bytes_downloaded)
+                }
               />
             </PanelSectionRow>
           ))}
