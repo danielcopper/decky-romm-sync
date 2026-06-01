@@ -264,27 +264,11 @@ class SyncReporter:
 
         ADR-0006 two-pass: cover-file RENAME is filesystem I/O so it runs
         FIRST (outside any UoW); the final paths are collected, then one
-        short write UoW upserts every acked ROM via ``Rom.synced`` (+ the
-        ``update_cover_path`` / ``assign_sgdb_id`` / ``assign_ra_id``
-        verbs) AND — in the same iteration, after the Rom is saved —
-        stamps the ROM's cached metadata into ``uow.rom_metadata`` when
-        the acked dict carries a ``metadatum``. Saving the Rom before its
-        metadata satisfies the ``rom_metadata.rom_id → roms(rom_id)`` FK
-        at commit, so a ROM and its metadata land atomically. ``Rom.synced``
-        validates untrusted RomM fields; a ``ValueError`` is caught per-rom
-        so one bad row is skipped while the rest of the unit still commits.
-        The metadata mapping is wrapped in its own per-rom
-        ``(ValueError, TypeError)`` catch so a malformed ``metadatum``
-        skips only that ROM's metadata — the Rom row still commits.
-
-        Read-merge for the plugin-resolved ids (mirrors the
-        ``_merge_optional_id`` contract): the live RomM fetch does not
-        carry a ``sgdb_id`` resolved out-of-band via the IGDB cross-ref
-        cascade (steamgrid) or a re-pick, so ``sgdb_id`` / ``ra_id`` /
-        ``cover_path`` follow "non-None new value wins, else preserve the
-        existing row's value, else None" — a blind upsert would NULL them
-        on the next full re-sync and revert the SGDB art to "needs pick".
-        ``igdb_id`` is RomM-native, so the fetch value always wins.
+        short write UoW upserts every acked ROM via
+        :meth:`_upsert_acked_rom`, which lands each ROM row and its cached
+        metadata atomically. ``acked_roms`` is the live RomM fetch keyed by
+        rom_id so the per-rom upsert can stamp metadata in the same write
+        UoW as the ``roms`` row.
         """
         grid = self._steam_config.grid_dir()
         box = self._sync_state
@@ -304,34 +288,7 @@ class SyncReporter:
         # Pass 2: one write UoW for the whole unit's ROM + metadata upserts.
         with self._uow_factory() as uow:
             for rom_id_str, app_id in rom_id_to_app_id.items():
-                pending = box.pending_sync.get(int(rom_id_str), {})
-                rom_id = int(rom_id_str)
-                existing = uow.roms.get(rom_id)
-                try:
-                    rom = Rom.synced(
-                        rom_id=rom_id,
-                        platform_slug=pending.get("platform_slug", ""),
-                        name=pending.get("name", ""),
-                        fs_name=pending.get("fs_name", ""),
-                        shortcut_app_id=int(app_id),
-                        synced_at=self._clock.now().isoformat(),
-                        igdb_id=pending.get("igdb_id"),
-                    )
-                except ValueError as e:
-                    self._logger.warning(f"Skipping invalid ROM {rom_id_str} during commit: {e}")
-                    continue
-                cover_path = finalized.get(rom_id_str) or (existing.cover_path if existing is not None else None)
-                if cover_path:
-                    rom.update_cover_path(cover_path)
-                sgdb_id = self._merge_optional_id(pending.get("sgdb_id"), existing.sgdb_id if existing else None)
-                if sgdb_id is not None:
-                    rom.assign_sgdb_id(sgdb_id)
-                ra_id = self._merge_optional_id(pending.get("ra_id"), existing.ra_id if existing else None)
-                if ra_id is not None:
-                    rom.assign_ra_id(ra_id)
-                uow.roms.save(rom)
-
-                self._stamp_rom_metadata(uow, rom_id, roms_by_id.get(rom_id))
+                self._upsert_acked_rom(uow, rom_id_str, app_id, finalized, roms_by_id)
 
         steam_input_mode = self._settings.get("steam_input_mode", "default")
         if steam_input_mode != "default" and rom_id_to_app_id:
@@ -341,6 +298,48 @@ class SyncReporter:
                 )
             except Exception as e:
                 self._logger.error(f"Failed to set Steam Input config: {e}")
+
+    def _upsert_acked_rom(self, uow, rom_id_str, app_id, finalized, roms_by_id) -> None:
+        """Upsert one acked ROM + its cached metadata into the open write UoW.
+
+        Builds the ``Rom`` via ``Rom.synced`` (which validates untrusted
+        RomM fields; a ``ValueError`` is caught here so one bad row is
+        skipped while the rest of the unit still commits), read-merges the
+        plugin-resolved ids (``sgdb_id`` / ``ra_id`` / ``cover_path`` follow
+        "non-None new wins, else preserve existing, else None"), saves the
+        Rom, then stamps its cached metadata. Saving the Rom before its
+        metadata satisfies the ``rom_metadata.rom_id → roms(rom_id)`` FK at
+        commit, so a ROM and its metadata land atomically.
+        """
+        box = self._sync_state
+        pending = box.pending_sync.get(int(rom_id_str), {})
+        rom_id = int(rom_id_str)
+        existing = uow.roms.get(rom_id)
+        try:
+            rom = Rom.synced(
+                rom_id=rom_id,
+                platform_slug=pending.get("platform_slug", ""),
+                name=pending.get("name", ""),
+                fs_name=pending.get("fs_name", ""),
+                shortcut_app_id=int(app_id),
+                synced_at=self._clock.now().isoformat(),
+                igdb_id=pending.get("igdb_id"),
+            )
+        except ValueError as e:
+            self._logger.warning(f"Skipping invalid ROM {rom_id_str} during commit: {e}")
+            return
+        cover_path = finalized.get(rom_id_str) or (existing.cover_path if existing is not None else None)
+        if cover_path:
+            rom.update_cover_path(cover_path)
+        sgdb_id = self._merge_optional_id(pending.get("sgdb_id"), existing.sgdb_id if existing else None)
+        if sgdb_id is not None:
+            rom.assign_sgdb_id(sgdb_id)
+        ra_id = self._merge_optional_id(pending.get("ra_id"), existing.ra_id if existing else None)
+        if ra_id is not None:
+            rom.assign_ra_id(ra_id)
+        uow.roms.save(rom)
+
+        self._stamp_rom_metadata(uow, rom_id, roms_by_id.get(rom_id))
 
     def _stamp_rom_metadata(self, uow, rom_id: int, rom: dict | None) -> None:
         """Stamp the ROM's cached metadata into ``uow.rom_metadata`` for this commit.

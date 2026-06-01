@@ -184,17 +184,7 @@ class SyncOrchestrator:
                     step=unit_index,
                     total_steps=total_units,
                 )
-                if unit.type == "platform":
-                    unit_roms, _skipped = await self._fetcher.fetch_platform_unit(unit)
-                    for rom in unit_roms:
-                        platform_rom_ids.add(rom["id"])
-                        synced_rom_ids.add(rom["id"])
-                    all_roms.extend(unit_roms)
-                else:
-                    unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
-                    if all_collection_rom_ids:
-                        collection_memberships[unit.name] = all_collection_rom_ids
-                    all_roms.extend(unit_roms)
+                await self._fetch_preview_unit(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships)
 
             shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir)
             platform_name_set = {u.name for u in work_queue if u.type == "platform"}
@@ -256,6 +246,33 @@ class SyncOrchestrator:
             return {"success": False, "message": _msg, "error_code": _code}
         finally:
             box.sync_state = SyncState.IDLE
+
+    async def _fetch_preview_unit(
+        self,
+        unit: WorkUnit,
+        all_roms: list[dict],
+        platform_rom_ids: set[int],
+        synced_rom_ids: set[int],
+        collection_memberships: dict[str, list[int]],
+    ) -> None:
+        """Fetch one work unit's ROMs and fold them into the preview accumulators.
+
+        Platform units add every ROM to ``platform_rom_ids`` and
+        ``synced_rom_ids``; collection units record their full membership
+        list under the unit name. ``all_roms`` is extended in both cases.
+        Mutates the passed-in accumulators in place.
+        """
+        if unit.type == "platform":
+            unit_roms, _skipped = await self._fetcher.fetch_platform_unit(unit)
+            for rom in unit_roms:
+                platform_rom_ids.add(rom["id"])
+                synced_rom_ids.add(rom["id"])
+            all_roms.extend(unit_roms)
+        else:
+            unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
+            if all_collection_rom_ids:
+                collection_memberships[unit.name] = all_collection_rom_ids
+            all_roms.extend(unit_roms)
 
     async def sync_apply_delta(self, preview_id):
         box = self._sync_state

@@ -21,7 +21,7 @@ The cutover deletes `state.json`. So the launcher must change — it is the one
 **out-of-process** reader of the state being migrated; every in-process reader
 is handled by the service refactor.
 
-#785 proposed making the launcher a pure exec wrapper: bake the resolved path
+Issue #785 proposed making the launcher a pure exec wrapper: bake the resolved path
 into `launch_options` at **download-complete** and have the launcher just `exec`
 what it's handed. Two facts, established by investigation, undercut that as the
 *near-term* design:
@@ -50,7 +50,7 @@ mechanism proves reliable.
 The launcher **keeps resolving the path dynamically at launch**, swapping its
 source from `state.json` to the SQLite database:
 
-```
+```sql
 SELECT file_path FROM rom_installs WHERE rom_id = ?
 ```
 

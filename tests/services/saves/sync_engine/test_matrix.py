@@ -13,6 +13,7 @@ import pytest
 
 from domain.rom_save_state import RomSaveState
 from lib.errors import RommApiError
+from services.saves.sync_engine.matrix import DispatchSink
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -1369,8 +1370,7 @@ class TestHandleUnexpectedError:
             core_so=None,
             default_slot=None,
             server_saves=[],
-            errors=errors,
-            conflicts=conflicts,
+            sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
         assert synced is False
@@ -1416,8 +1416,7 @@ class TestDispatchSyncActionErrorBranches:
             core_so=None,
             default_slot=None,
             server_saves=[],
-            errors=errors,
-            conflicts=conflicts,
+            sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
         assert synced is False

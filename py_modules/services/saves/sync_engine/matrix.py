@@ -66,6 +66,21 @@ class MatrixOutcome:
     server_candidates: list[dict]
 
 
+@dataclass(frozen=True)
+class DispatchSink:
+    """The two output accumulators a single ROM's sync dispatch appends to.
+
+    Holds the mutable ``errors`` and ``conflicts`` lists that
+    :meth:`MatrixExecutor._dispatch_sync_action` (and its sub-dispatchers)
+    append onto. The dataclass itself is frozen — only the referenced lists
+    are mutated — so it threads both sinks through as one argument without
+    becoming a stateful object.
+    """
+
+    errors: list[str]
+    conflicts: list[dict]
+
+
 class MatrixExecutor:
     """Newest-wins matrix executor + per-file sync I/O dispatch.
 
@@ -439,14 +454,14 @@ class MatrixExecutor:
         core_so: str | None,
         default_slot: str | None,
         server_saves: list[dict],
-        errors: list[str],
-        conflicts: list[dict],
+        sink: DispatchSink,
     ) -> bool:
         """Execute one ``SyncAction`` outcome. Returns True if a transfer happened.
 
         Centralises the I/O dispatch so ``sync_rom_saves`` stays declarative.
-        Errors are caught and pushed onto ``errors`` so a single failure can't
-        abort the whole rom-level sync.
+        Errors are caught and pushed onto ``sink.errors`` so a single failure
+        can't abort the whole rom-level sync; conflicts land on
+        ``sink.conflicts``.
         """
         try:
             if isinstance(action, Skip):
@@ -470,7 +485,7 @@ class MatrixExecutor:
                     core_so=core_so,
                     default_slot=default_slot,
                     server_saves=server_saves,
-                    errors=errors,
+                    errors=sink.errors,
                 )
             if isinstance(action, Download):
                 self.do_download_save(
@@ -478,15 +493,15 @@ class MatrixExecutor:
                 )
                 return True
             if isinstance(action, Conflict):
-                conflicts.append(
+                sink.conflicts.append(
                     self.build_sync_conflict_entry(rom_id, filename, action.server_save, local_path, local_hash)
                 )
                 return False
         except RommApiError as e:
             _code, _msg = classify_error(e)
-            errors.append(f"{filename}: {_msg}")
+            sink.errors.append(f"{filename}: {_msg}")
         except Exception as e:
-            self._handle_unexpected_error(e, filename, saves_dir, errors)
+            self._handle_unexpected_error(e, filename, saves_dir, sink.errors)
         return False
 
     def adopt_baseline_hash(self, save_state: RomSaveState, filename: str, local_hash: str) -> None:
@@ -632,6 +647,7 @@ class MatrixExecutor:
 
         errors: list[str] = []
         conflicts: list[dict] = []
+        sink = DispatchSink(errors=errors, conflicts=conflicts)
         synced = 0
 
         pending_migration = self._rom_info.is_save_sort_changed()
@@ -660,8 +676,7 @@ class MatrixExecutor:
                 core_so=core_so,
                 default_slot=default_slot,
                 server_saves=outcome.server_candidates,
-                errors=errors,
-                conflicts=conflicts,
+                sink=sink,
             ):
                 synced += 1
 

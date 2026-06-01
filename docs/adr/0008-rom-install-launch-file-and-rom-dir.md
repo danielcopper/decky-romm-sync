@@ -40,8 +40,8 @@ from the file rows there, never stored. On disk RomM uses folder-per-game for
 multi-file and a bare file for single-file — exactly this plugin's layout. The
 features that would need the richer model are tracked and **not yet actionable**:
 per-file download/resume + WiiU (#140, currently **blocked** on a version-aware
-RomM API gateway #143) and multi-emulator / standalone Eden (#129), where the
-#837 reporter's "base→`roms/`, updates+DLC→`storage/<game>/`" placement lives.
+RomM API gateway #143) and multi-emulator / standalone Eden (#129), where
+the #837 reporter's "base→`roms/`, updates+DLC→`storage/<game>/`" placement lives.
 
 ## Decision
 
