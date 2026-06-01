@@ -144,6 +144,19 @@ class TestFilesReplacedOnReSave:
         assert loaded is not None
         assert loaded.files == {}
 
+    def test_hash_only_baseline_null_tracked_save_id_round_trips(self, uow: SqliteUnitOfWork):
+        # The skip-adopt path (update_baseline_hash) persists a hash with no server
+        # save id; tracked_save_id is nullable so this no longer crashes the whole save.
+        _seed_rom(uow, 5)
+        state = RomSaveState(files={"save.srm": FileSyncState(last_sync_hash="hashOnly")})
+        uow.rom_save_states.save(5, state)
+
+        loaded = uow.rom_save_states.get(5)
+        assert loaded is not None
+        assert loaded.files["save.srm"].tracked_save_id is None
+        assert loaded.files["save.srm"].last_sync_hash == "hashOnly"
+        assert loaded == state
+
 
 class TestMiss:
     def test_get_absent_returns_none(self, uow: SqliteUnitOfWork):

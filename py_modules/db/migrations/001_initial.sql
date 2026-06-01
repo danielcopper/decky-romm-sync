@@ -194,15 +194,17 @@ CREATE TABLE rom_save_states (
 -- rom_save_files — FileSyncState value object: per-file sync baselines.
 -- 1:N child of a ROM's save state. Composite key (rom_id, filename). This is
 -- the relationship the epic always intended to back with a CASCADE FK; here it
--- is one of the per-ROM FKs. NOT NULL on tracked_save_id + last_sync_hash
--- enforces the aggregate's adopt_baseline invariant at the DB level: every
--- tracked file carries both a server save id and a hash baseline.
+-- is one of the per-ROM FKs. NOT NULL on last_sync_hash enforces the aggregate's
+-- invariant that every tracked file carries a non-empty hash baseline;
+-- tracked_save_id is nullable because the skip-adopt path (update_baseline_hash)
+-- records a hash-only baseline with no server save id (only the strict
+-- adopt_baseline path supplies one).
 -- -----------------------------------------------------------------------------
 CREATE TABLE rom_save_files (
     rom_id                      INTEGER NOT NULL REFERENCES roms(rom_id) ON DELETE CASCADE,
     filename                    TEXT    NOT NULL,
-    tracked_save_id             INTEGER NOT NULL,   -- invariant: a tracked file has a server save id
-    last_sync_hash              TEXT    NOT NULL,   -- invariant: ... and a hash baseline
+    tracked_save_id             INTEGER,            -- nullable: the skip-adopt path (update_baseline_hash) records a hash-only baseline with no server save id
+    last_sync_hash              TEXT    NOT NULL,   -- invariant: a tracked file carries a non-empty hash baseline
     last_sync_at                TEXT    NOT NULL DEFAULT '',  -- ISO-8601, or '' = never-synced sentinel (matches aggregate)
     last_sync_server_updated_at TEXT    NOT NULL DEFAULT '',  -- ISO-8601, or '' = never-synced sentinel
     last_sync_server_save_id    INTEGER,
