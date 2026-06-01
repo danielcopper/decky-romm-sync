@@ -84,10 +84,13 @@ class GameDetailService:
         """Build cached save-sync status from the ROM's save state, or None."""
         if save_state is None:
             return None
+        # Every persisted file row carries a non-empty last_sync_hash (NOT NULL in
+        # rom_save_files; both RomSaveState writers reject an empty hash), so a
+        # tracked file is always "synced" here.
         files_list = [
             {
                 "filename": fn,
-                "status": "synced" if fdata.last_sync_hash else "unknown",
+                "status": "synced",
                 "last_sync_at": fdata.last_sync_at or None,
             }
             for fn, fdata in save_state.files.items()

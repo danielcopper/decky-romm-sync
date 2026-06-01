@@ -677,20 +677,6 @@ class TestGetCachedGameDetailSaveStatusConflicts:
         assert result["save_status"]["files"] == []
         assert result["save_status"]["last_sync_check_at"] is None
 
-    @pytest.mark.asyncio
-    async def test_save_status_unknown_when_no_hash(self, plugin, game_detail_service):
-        """A tracked file with no last_sync_hash reports status 'unknown'."""
-        _seed_rom(plugin, 42, app_id=99999, name="Test", platform_slug="gba")
-        _seed_save_state(
-            plugin,
-            42,
-            files={"test.srm": FileSyncState(last_sync_hash=None, last_sync_at="")},
-            last_sync_check_at="2026-01-01T00:00:00Z",
-        )
-        result = game_detail_service.get_cached_game_detail(99999)
-        assert result["save_status"]["files"][0]["status"] == "unknown"
-        assert result["save_status"]["files"][0]["last_sync_at"] is None
-
 
 class TestComputedFields:
     """Test bios_level, bios_label, save_sync_display in response."""

@@ -599,7 +599,7 @@ class TestEmulatorTag:
             svc,
             1,
             RomSaveState(
-                files={"game1.srm": FileSyncState()},
+                files={"game1.srm": FileSyncState(last_sync_hash="h")},
                 active_slot="desktop",
                 slot_confirmed=True,
                 emulator="retroarch-mgba",
@@ -610,7 +610,7 @@ class TestEmulatorTag:
             svc,
             2,
             RomSaveState(
-                files={"game2.srm": FileSyncState()},
+                files={"game2.srm": FileSyncState(last_sync_hash="h")},
                 active_slot="default",
                 slot_confirmed=True,
                 own_upload_ids=[99],
@@ -648,7 +648,7 @@ class TestEmulatorTag:
             svc,
             2,
             RomSaveState(
-                files={"game2.srm": FileSyncState()},
+                files={"game2.srm": FileSyncState(last_sync_hash="h")},
                 active_slot="default",
                 slot_confirmed=True,
                 system="snes",
@@ -1065,7 +1065,7 @@ class TestHasTrackedSave:
     def test_accepts_int_rom_id_casting_to_str_key(self, tmp_path):
         """``rom_id`` is int on the wire; the aggregate is keyed by int rom_id."""
         svc, _ = make_service(tmp_path)
-        _seed_save_state(svc, 99, RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1)}))
+        _seed_save_state(svc, 99, RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")}))
         assert svc.has_tracked_save(99) is True
         # Wrong rom_id misses cleanly.
         assert svc.has_tracked_save(100) is False

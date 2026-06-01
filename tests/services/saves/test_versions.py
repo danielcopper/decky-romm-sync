@@ -28,7 +28,7 @@ class TestListFileVersions:
                 "system": "gba",
                 "active_slot": "default",
                 "files": {
-                    "pokemon.srm": {"tracked_save_id": tracked_id},
+                    "pokemon.srm": {"tracked_save_id": tracked_id, "last_sync_hash": "h"},
                 },
             },
         )
@@ -222,7 +222,7 @@ class TestListFileVersions:
                 "active_slot": "default",
                 "own_upload_ids": [50],
                 "files": {
-                    "pokemon.srm": {"tracked_save_id": 100},
+                    "pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "h"},
                 },
             },
         )
@@ -252,7 +252,7 @@ class TestListFileVersions:
                 "active_slot": "default",
                 # own_upload_ids key intentionally absent — legacy state
                 "files": {
-                    "pokemon.srm": {"tracked_save_id": 100},
+                    "pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "h"},
                 },
             },
         )
@@ -271,18 +271,22 @@ class TestRollbackToVersion:
     def _setup_state(self, svc, tmp_path, tracked_id: int, last_sync_hash: str | None = None) -> None:
         _install_rom(svc, tmp_path)
         _enable_sync_with_device(svc)
+        # last_sync_hash=None models "no baseline adopted yet": production reaches
+        # that state with the file absent from state.files (the matrix falls back
+        # to its in-memory FileSyncState() default), not a persisted hashless row —
+        # rom_save_files.last_sync_hash is NOT NULL (db/migrations/001_initial.sql).
+        files = (
+            {"pokemon.srm": {"tracked_save_id": tracked_id, "last_sync_hash": last_sync_hash}}
+            if last_sync_hash is not None
+            else {}
+        )
         _seed_save_state_dict(
             svc,
             42,
             {
                 "system": "gba",
                 "active_slot": "default",
-                "files": {
-                    "pokemon.srm": {
-                        "tracked_save_id": tracked_id,
-                        "last_sync_hash": last_sync_hash,
-                    },
-                },
+                "files": files,
             },
         )
 
@@ -360,7 +364,7 @@ class TestRollbackToVersion:
         """
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
-        self._setup_state(svc, tmp_path, tracked_id=999)
+        self._setup_state(svc, tmp_path, tracked_id=999, last_sync_hash="h")
         _create_save(tmp_path)
         # Tracked save 999 does NOT exist on server. Only save 50 is present
         # (and is the rollback target).

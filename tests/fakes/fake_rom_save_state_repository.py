@@ -26,6 +26,12 @@ class FakeRomSaveStateRepository:
         return copy.deepcopy(self._states.get(rom_id))
 
     def save(self, rom_id: int, state: RomSaveState) -> None:
+        # Mirror rom_save_files' NOT NULL on last_sync_hash so service tests reject
+        # what real SQLite rejects (db/migrations/001_initial.sql). tracked_save_id is
+        # intentionally NOT checked — it is nullable (hash-only baselines).
+        for filename, file in state.files.items():
+            if not file.last_sync_hash:
+                raise ValueError(f"rom_save_files.last_sync_hash is NOT NULL; file {filename!r} has none")
         self.save_count += 1
         self._states[rom_id] = copy.deepcopy(state)
 

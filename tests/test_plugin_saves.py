@@ -1029,10 +1029,16 @@ async def test_delete_platform_saves(plugin, tmp_path):
     _install_rom(plugin, tmp_path, rom_id=30, system="gba", file_name="GBAGame.gba")
 
     _seed_save_state(
-        plugin, 10, RomSaveState(files={"Game1.srm": FileSyncState()}, system="snes"), platform_slug="snes"
+        plugin,
+        10,
+        RomSaveState(files={"Game1.srm": FileSyncState(last_sync_hash="h")}, system="snes"),
+        platform_slug="snes",
     )
     _seed_save_state(
-        plugin, 20, RomSaveState(files={"Game2.srm": FileSyncState()}, system="snes"), platform_slug="snes"
+        plugin,
+        20,
+        RomSaveState(files={"Game2.srm": FileSyncState(last_sync_hash="h")}, system="snes"),
+        platform_slug="snes",
     )
 
     result = await plugin.delete_platform_saves("snes")
@@ -1068,7 +1074,7 @@ class TestSavesVersionHistoryCallables:
             RomSaveState(
                 system="gba",
                 active_slot="default",
-                files={"pokemon.srm": FileSyncState(tracked_save_id=100)},
+                files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash="h")},
             ),
         )
         plugin._fake_api.saves[100] = {
