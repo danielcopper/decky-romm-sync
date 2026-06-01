@@ -1,14 +1,11 @@
-"""TypedDicts for the plugin's residual on-disk JSON state shapes.
+"""TypedDicts describing dict-shaped records crossing service boundaries.
 
-The relational state (shortcut registry, installed ROMs, metadata cache,
-sync stats, last-sync timestamp) lives in SQLite after the cutover (#784).
-What remains in JSON is the ``downloaded_bios`` index inside ``state.json``,
-read once at startup into :class:`PluginState`. The other TypedDicts here
-are checked shapes still consumed by services that read/return those
-records (``ShortcutRegistryEntry``, ``InstalledRomEntry``,
-``MetadataCacheEntry``, ``SaveSortSettings``) — they describe the dict
-contract at a service boundary without changing the dict's runtime
-identity.
+The plugin's relational state lives in SQLite after the cutover (#784);
+nothing here is loaded from on-disk JSON. These TypedDicts are checked
+shapes still consumed by services that read/return those records
+(``ShortcutRegistryEntry``, ``InstalledRomEntry``, ``MetadataCacheEntry``,
+``SaveSortSettings``) — they describe the dict contract at a service
+boundary without changing the dict's runtime identity.
 """
 
 from __future__ import annotations
@@ -51,47 +48,11 @@ class InstalledRomEntry(TypedDict):
     rom_dir: NotRequired[str]
 
 
-class DownloadedBiosEntry(TypedDict):
-    """One downloaded BIOS/firmware file record inside ``downloaded_bios``.
-
-    Keyed by the BIOS file name. Tracked so migrations can move BIOS
-    files when the RetroDECK home path changes.
-    """
-
-    file_path: str
-    firmware_id: int
-    platform_slug: str
-    downloaded_at: str
-
-
 class SaveSortSettings(TypedDict):
     """RetroArch save-sorting settings snapshot used by save migrations."""
 
     sort_by_content: bool
     sort_by_core: bool
-
-
-class PluginState(TypedDict):
-    """Residual on-disk plugin state read from ``state.json`` at startup.
-
-    Post-cutover (#784) the relational state moved to SQLite; the only
-    key still read from JSON is ``downloaded_bios`` — the BIOS/firmware
-    download index MigrationService consults when the RetroDECK home path
-    changes.
-    """
-
-    downloaded_bios: dict[str, DownloadedBiosEntry]
-
-
-def make_default_plugin_state() -> PluginState:
-    """Return a fresh default ``PluginState`` dict.
-
-    Single source of truth for the residual key set bootstrap initialises
-    when ``state.json`` is missing or carries no ``downloaded_bios`` index.
-    """
-    return {
-        "downloaded_bios": {},
-    }
 
 
 class MetadataCacheEntry(TypedDict):

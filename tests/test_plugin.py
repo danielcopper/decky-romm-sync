@@ -11,7 +11,6 @@ from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.persistence import PersistenceAdapter, SettingsPersisterAdapter
@@ -32,7 +31,6 @@ def plugin():
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
-    p._state = make_default_plugin_state()
     # Default to "/tmp" so the prune guard sees an existing home in tests that
     # don't override it. Tests exercising the guard rebuild this with a
     # non-existent path or empty string.
@@ -870,7 +868,6 @@ class TestMainStartupOrdering:
                 core_info_provider=MagicMock(),
             ),
             stores=StateBundle(
-                state=make_default_plugin_state(),
                 settings={},
             ),
             callbacks=CallbackBundle(

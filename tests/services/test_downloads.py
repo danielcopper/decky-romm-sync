@@ -12,7 +12,6 @@ from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.download_file import DownloadFileAdapter
 from adapters.rom_files import RomFileAdapter
@@ -68,7 +67,6 @@ def plugin():
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
     p._resolve_system = MagicMock(side_effect=lambda slug, fs_slug=None: fs_slug or slug)
-    p._state = make_default_plugin_state()
 
     import decky
 

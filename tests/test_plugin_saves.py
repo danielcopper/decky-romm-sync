@@ -511,7 +511,6 @@ class TestPostExitSync:
         real_migration = MigrationService(
             config=MigrationServiceConfig(
                 migration_file_store=MigrationFileAdapter(),
-                state={"downloaded_bios": {}},
                 settings={},
                 loop=asyncio.get_event_loop(),
                 logger=logging.getLogger("test"),

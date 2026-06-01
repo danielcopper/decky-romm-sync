@@ -29,7 +29,6 @@ from fakes.fake_save_file_store import FakeSaveFileStore
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
@@ -99,26 +98,16 @@ class TestBootstrap:
         # CallbackBundle no longer carries it.
         assert not hasattr(result.callbacks, "core_info_provider")
 
-    def test_persistence_loaded_with_default_state_factory(self, tmp_path):
-        """First-run state contains the keys ``_default_state()`` ships.
+    def test_state_bundle_carries_only_settings(self, tmp_path):
+        """Post-cutover (#784) ``StateBundle`` holds only the live settings dict.
 
-        Regression for #671: ``_default_state`` must be a factory, not a
-        shared module-level dict — the residual ``downloaded_bios`` index
-        is mutated in place by services.
+        The residual ``downloaded_bios`` JSON index was the last on-disk JSON
+        state read at startup; with BIOS migration on SQLite the bundle no
+        longer carries a ``state`` field.
         """
         result = _bootstrap_for(tmp_path)
-        state = result.stores.state
-        # Inner containers were independently constructed; mutating them
-        # does not bleed into a future bootstrap call's state.
-        state["downloaded_bios"]["sentinel"] = {  # type: ignore[typeddict-item]
-            "file_path": "/x",
-            "firmware_id": 1,
-            "platform_slug": "gba",
-            "downloaded_at": "2026-01-01T00:00:00",
-        }
-
-        second = _bootstrap_for(tmp_path)
-        assert second.stores.state["downloaded_bios"] == {}
+        assert result.stores.settings is not None
+        assert not hasattr(result.stores, "state")
 
     def test_handles_debug_logger_exposed(self, tmp_path):
         """``BootstrapHandles.debug_logger`` is the same instance the CallbackBundle wires."""
@@ -188,7 +177,6 @@ class TestWireServices:
         settings = {}
         http_adapter = MagicMock(spec=RommHttpAdapter)
         steam_config = SteamConfigAdapter(user_home=str(tmp_path), logger=logger)
-        state = make_default_plugin_state()
         romm_api = MagicMock(spec=RommApiAdapter)
         return {
             "http_adapter": http_adapter,
@@ -204,7 +192,6 @@ class TestWireServices:
             "save_file_store": FakeSaveFileStore(),
             "gamelist_editor": MagicMock(),
             "path_probe": FakePathExistsReader(),
-            "state": state,
             "settings": settings,
             "loop": asyncio.new_event_loop(),
             "logger": logger,
@@ -253,7 +240,6 @@ class TestWireServices:
                 core_info_provider=deps["core_info_provider"],
             ),
             stores=StateBundle(
-                state=deps["state"],
                 settings=deps["settings"],
             ),
             runtime=RuntimeBundle(
@@ -293,12 +279,13 @@ class TestWireServices:
         assert isinstance(result["achievements_service"], AchievementsService)
         deps["loop"].close()
 
-    def test_services_share_state_reference(self, tmp_path):
+    def test_services_share_settings_reference(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        # MigrationService still holds the live state dict for its residual
-        # ``downloaded_bios`` reads; the relational state moved to SQLite (#784).
-        assert result["migration_service"]._state is deps["state"]
+        # MigrationService holds the live settings dict; all relational
+        # migration state (installs, BIOS, markers) reads through the UoW
+        # factory after the SQLite cutover (#784).
+        assert result["migration_service"]._settings is deps["settings"]
         deps["loop"].close()
 
     def test_returns_expected_services(self, tmp_path):

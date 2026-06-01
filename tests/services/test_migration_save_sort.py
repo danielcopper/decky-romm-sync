@@ -12,7 +12,7 @@ import pytest
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
-from models.state import SaveSortSettings, make_default_plugin_state
+from models.state import SaveSortSettings
 
 from adapters.migration_file import MigrationFileAdapter
 from domain.rom import Rom
@@ -88,8 +88,6 @@ def _make_service(
     commit flag and the kv_config values. Pass ``migration_file_store`` to swap
     the real ``MigrationFileAdapter`` for a fake when a test needs failure injection.
     """
-    state = make_default_plugin_state()
-
     uow = FakeUnitOfWork()
     if installed_roms:
         _seed_installs(uow, installed_roms)
@@ -102,7 +100,6 @@ def _make_service(
     svc = MigrationService(
         config=MigrationServiceConfig(
             migration_file_store=migration_file_store if migration_file_store is not None else MigrationFileAdapter(),
-            state=state,
             settings={},
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),

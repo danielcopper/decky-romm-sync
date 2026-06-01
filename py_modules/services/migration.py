@@ -15,7 +15,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import PluginState, SaveSortSettings
+from models.state import SaveSortSettings
 
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
@@ -50,14 +50,14 @@ _KV_SAVE_SORT_PREVIOUS = "save_sort_settings_previous"
 class MigrationServiceConfig:
     """Frozen wiring bundle handed to ``MigrationService.__init__``.
 
-    Holds the Protocol-typed migration-file adapter, the live state
-    and settings dicts, runtime infrastructure, persistence callbacks,
-    event emitter, and the provider callables MigrationService needs
-    at construction time.
+    Holds the Protocol-typed migration-file adapter, the live settings
+    dict, runtime infrastructure, persistence callbacks, event emitter,
+    and the provider callables MigrationService needs at construction
+    time. Relational migration state (ROM installs, BIOS records, change
+    markers) is read through the injected ``uow_factory``.
     """
 
     migration_file_store: MigrationFileStore
-    state: PluginState
     settings: dict
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -76,7 +76,6 @@ class MigrationService:
 
     def __init__(self, *, config: MigrationServiceConfig) -> None:
         self._migration_file_store = config.migration_file_store
-        self._state = config.state
         self._settings = config.settings
         self._loop = config.loop
         self._logger = config.logger
@@ -256,42 +255,65 @@ class MigrationService:
 
         return update
 
-    def _collect_tracked_bios_items(self, old_home, new_home):
-        """Collect tracked BIOS migration items from downloaded_bios state."""
+    def _collect_tracked_bios_items(self, old_home, new_home, bios_files, relocations):
+        """Collect tracked BIOS migration items from the ``BiosFile`` snapshot.
+
+        ``bios_files`` is a pre-snapshotted list of ``BiosFile`` records (the
+        caller opens the read UoW). Each item carries a success-hook updater
+        that records the intended new ``file_path`` into *relocations* (keyed by
+        the aggregate's composite identity ``(platform_slug, file_name)``) when
+        its move/skip succeeds; the relocations are applied to ``bios_files`` in
+        a separate write UoW after the file moves complete (ADR-0006).
+        """
         items = []
-        for file_name, bios_entry in self._state.get("downloaded_bios", {}).items():
-            file_path = bios_entry.get("file_path", "")
+        for bios_file in bios_files:
+            file_path = bios_file.file_path
             if not file_path or not file_path.startswith(old_home + os.sep):
                 continue
             new_path = os.path.join(new_home, os.path.relpath(file_path, old_home))
-
-            def make_bios_updater(be, np):
-                def update():
-                    be["file_path"] = np
-
-                return update
-
+            key = (bios_file.platform_slug, bios_file.file_name)
             items.append(
                 (
-                    file_name,
+                    bios_file.file_name,
                     file_path,
                     new_path,
-                    make_bios_updater(bios_entry, new_path),
+                    self._make_bios_relocation_updater(relocations, key, new_path),
                     "bios",
                 )
             )
         return items
 
-    def _collect_untracked_bios_items(self, old_home):
-        """Collect untracked BIOS migration items (downloaded before state tracking)."""
+    @staticmethod
+    def _make_bios_relocation_updater(relocations, key, new_path):
+        """Build a success-hook closure that records one BIOS file's new path.
+
+        The migration loop calls the returned updater once the move (or skip)
+        for this BIOS file succeeds. It records the new ``file_path`` keyed by
+        the aggregate's composite identity ``(platform_slug, file_name)`` into
+        *relocations* so the post-move write UoW can apply ``BiosFile.relocate``
+        for each moved record.
+        """
+
+        def update():
+            relocations[key] = new_path
+
+        return update
+
+    def _collect_untracked_bios_items(self, old_home, tracked_file_names):
+        """Collect untracked BIOS migration items (downloaded before state tracking).
+
+        ``tracked_file_names`` is the set of BIOS file names already covered by
+        the ``BiosFile`` snapshot, so those tracked records aren't moved twice.
+        Untracked BIOS files have no aggregate record, so their move carries a
+        no-op updater (nothing to persist).
+        """
         items = []
         old_bios = os.path.join(old_home, "bios")
         new_bios = self._retrodeck_paths.bios_path()
         if not self._migration_file_store.is_dir(old_bios):
             return items
-        downloaded_bios = self._state.get("downloaded_bios", {})
         for file_name, reg_entry in self._get_bios_files_index().items():
-            if file_name in downloaded_bios:
+            if file_name in tracked_file_names:
                 continue
             firmware_path = reg_entry.get("firmware_path", file_name)
             old_file = os.path.join(old_bios, firmware_path)
@@ -329,18 +351,21 @@ class MigrationService:
                 items.append((rel, old_file, new_file, lambda: None, "save"))
         return items
 
-    def _collect_migration_items(self, old_home, new_home, installs, relocations):
+    def _collect_migration_items(self, old_home, new_home, installs, bios_files, relocations, bios_relocations):
         """Collect all files that need migration across ROMs, BIOS, and saves.
 
         Returns list of (label, old_path, new_path, state_update_fn, kind) tuples.
         state_update_fn is called after a successful move/skip to update state.
-        ``installs`` is the pre-snapshotted ``RomInstall`` list; ``relocations``
-        accumulates the per-``rom_id`` new paths for the post-move write UoW.
+        ``installs``/``bios_files`` are the pre-snapshotted ``RomInstall`` and
+        ``BiosFile`` lists; ``relocations`` accumulates the per-``rom_id`` new
+        paths and ``bios_relocations`` the per-``(platform_slug, file_name)`` new
+        paths for the post-move write UoW.
         """
+        tracked_bios_names = {bf.file_name for bf in bios_files}
         items = []
         items.extend(self._collect_rom_items(old_home, new_home, installs, relocations))
-        items.extend(self._collect_tracked_bios_items(old_home, new_home))
-        items.extend(self._collect_untracked_bios_items(old_home))
+        items.extend(self._collect_tracked_bios_items(old_home, new_home, bios_files, bios_relocations))
+        items.extend(self._collect_untracked_bios_items(old_home, tracked_bios_names))
         items.extend(self._collect_save_items(old_home))
         return items
 
@@ -449,8 +474,10 @@ class MigrationService:
         """Sync helper for migrate_retrodeck_files — FS traversal + moves in executor."""
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
+            bios_files = list(uow.bios_files.iter_all())
         relocations: dict[int, dict[str, str]] = {}
-        items = self._collect_migration_items(old_home, new_home, installs, relocations)
+        bios_relocations: dict[tuple[str, str], str] = {}
+        items = self._collect_migration_items(old_home, new_home, installs, bios_files, relocations, bios_relocations)
         conflicts = self._find_conflicts(items)
 
         # If no strategy given and there are conflicts, return them for user decision
@@ -480,21 +507,24 @@ class MigrationService:
 
         # Apply the relocations the per-item updaters accumulated and clear the
         # previous-path marker, all in one short write UoW after the file moves.
-        self._apply_rom_relocations(installs, relocations, clear_marker=not errors)
+        self._apply_relocations(installs, relocations, bios_files, bios_relocations, clear_marker=not errors)
 
         return self._build_migration_result(counts, errors)
 
-    def _apply_rom_relocations(self, installs, relocations, *, clear_marker):
-        """Persist the relocated install records (and optionally clear the marker).
+    def _apply_relocations(self, installs, relocations, bios_files, bios_relocations, *, clear_marker):
+        """Persist the relocated install and BIOS records (and optionally clear the marker).
 
         Opens a single write UoW after the file moves: for every install whose
         move/skip succeeded, calls ``RomInstall.relocate`` with the new
-        ``rom_dir`` (``None`` for a single-file ROM) and ``file_path`` and saves
-        it. When *clear_marker* is true (a fully-successful migration) the
+        ``rom_dir`` (``None`` for a single-file ROM) and ``file_path``; for every
+        BIOS record whose move/skip succeeded, calls ``BiosFile.relocate`` with
+        the new ``file_path``. Both are saved in the same transaction. When
+        *clear_marker* is true (a fully-successful migration) the
         ``retrodeck_home_path_previous`` marker is deleted in the same
         transaction.
         """
         by_id = {install.rom_id: install for install in installs}
+        by_key = {(bf.platform_slug, bf.file_name): bf for bf in bios_files}
         with self._uow_factory() as uow:
             for rom_id, moved in relocations.items():
                 install = by_id.get(rom_id)
@@ -502,6 +532,12 @@ class MigrationService:
                     continue
                 install.relocate(moved["rom_dir"], moved["file_path"])
                 uow.rom_installs.save(install)
+            for key, new_path in bios_relocations.items():
+                bios_file = by_key.get(key)
+                if bios_file is None:
+                    continue
+                bios_file.relocate(new_path)
+                uow.bios_files.save(bios_file)
             if clear_marker:
                 uow.kv_config.delete(_KV_RETRODECK_HOME_PREVIOUS)
 
@@ -528,7 +564,8 @@ class MigrationService:
         """Sync helper for get_migration_status — FS traversal in executor."""
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
-        items = self._collect_migration_items(old_home, new_home, installs, {})
+            bios_files = list(uow.bios_files.iter_all())
+        items = self._collect_migration_items(old_home, new_home, installs, bios_files, {}, {})
         roms_count = sum(1 for _, _, _, _, kind in items if kind in ("rom", "rom_dir"))
         bios_count = sum(1 for _, _, _, _, kind in items if kind == "bios")
         saves_count = sum(1 for _, _, _, _, kind in items if kind == "save")

@@ -14,7 +14,6 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.migration_file import MigrationFileAdapter
@@ -46,7 +45,6 @@ def plugin(tmp_path, fake_romm_api):
     p = _make_testable_plugin()
     p.settings = {"romm_url": "", "romm_user": "", "romm_pass": "", "enabled_platforms": {}}
     p._http_adapter = MagicMock()
-    p._state = make_default_plugin_state()
 
     import decky
 
@@ -108,7 +106,6 @@ def plugin(tmp_path, fake_romm_api):
     p._migration_service = MigrationService(
         config=MigrationServiceConfig(
             migration_file_store=MigrationFileAdapter(),
-            state=p._state,
             settings=p.settings,
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
@@ -153,6 +150,27 @@ def _seed_install(uow, rom_id, *, file_path, rom_dir=None, system="n64", platfor
                 platform_slug=platform_slug,
                 system=system,
                 installed_at="2025-01-01T00:00:00",
+            )
+        )
+
+
+def _seed_bios(uow, *, platform_slug, file_name, file_path, firmware_id=None):
+    """Seed a ``BiosFile`` into the shared fake UoW the way FirmwareService writes it.
+
+    ``bios_files`` has no FK onto ``roms``, so no parent row is required (unlike
+    ``_seed_install``). Mirrors ``FirmwareService._download_firmware_post_io``'s
+    ``uow.bios_files.save(BiosFile.mark_downloaded(...))`` write.
+    """
+    from domain.bios_file import BiosFile
+
+    with uow:
+        uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug=platform_slug,
+                file_name=file_name,
+                file_path=file_path,
+                downloaded_at="2025-01-01T00:00:00",
+                firmware_id=firmware_id,
             )
         )
 
@@ -561,19 +579,19 @@ class TestMigrateRetroDeckFiles:
         with plugin._uow as uow:
             uow.kv_config.set("retrodeck_home_path_previous", old_home)
             uow.kv_config.set("retrodeck_home_path", new_home)
-        plugin._state["downloaded_bios"] = {
-            "scph5501.bin": {
-                "file_path": old_bios,
-                "firmware_id": 42,
-                "platform_slug": "psx",
-            }
-        }
+        _seed_bios(plugin._uow, platform_slug="psx", file_name="scph5501.bin", file_path=old_bios, firmware_id=42)
 
         result = await plugin.migrate_retrodeck_files()
         assert result["success"] is True
         assert result["bios_moved"] == 1
+        # File physically moved to the new RetroDECK home.
         assert os.path.exists(new_bios)
-        assert plugin._state["downloaded_bios"]["scph5501.bin"]["file_path"] == new_bios
+        # Persisted BiosFile.file_path updated in SQLite, and the write committed.
+        with plugin._uow as uow:
+            persisted = uow.bios_files.get("psx", "scph5501.bin")
+            assert persisted is not None
+            assert persisted.file_path == new_bios
+        assert plugin._uow.committed is True
 
     @pytest.mark.asyncio
     async def test_migrate_conflicts_need_confirmation(self, plugin, tmp_path):
@@ -718,13 +736,7 @@ class TestMigrateRetroDeckFiles:
         with plugin._uow as uow:
             uow.kv_config.set("retrodeck_home_path_previous", old_home)
             uow.kv_config.set("retrodeck_home_path", new_home)
-        plugin._state["downloaded_bios"] = {
-            "dc_boot.bin": {
-                "file_path": old_bios,
-                "firmware_id": 7,
-                "platform_slug": "dc",
-            }
-        }
+        _seed_bios(plugin._uow, platform_slug="dc", file_name="dc_boot.bin", file_path=old_bios, firmware_id=7)
 
         result = await plugin.migrate_retrodeck_files()
         assert result["bios_moved"] == 1
@@ -937,6 +949,32 @@ class TestMigrateSaveFiles:
         assert status["pending"] is True
         assert status["saves_count"] == 1
 
+    @pytest.mark.asyncio
+    async def test_status_counts_tracked_bios_from_sqlite(self, plugin, tmp_path):
+        """get_migration_status counts tracked BIOS from the SQLite ``BiosFile`` snapshot."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+        old_bios = os.path.join(old_home, "bios", "scph5501.bin")
+
+        os.makedirs(os.path.dirname(old_bios))
+        with open(old_bios, "w") as f:
+            f.write("bios data")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        _seed_bios(plugin._uow, platform_slug="psx", file_name="scph5501.bin", file_path=old_bios, firmware_id=42)
+
+        status = await plugin.get_migration_status()
+
+        assert status["pending"] is True
+        assert status["bios_count"] == 1
+
 
 class TestResolveSaveSortConflict:
     """Regression lock for _resolve_save_sort_conflict's mtime-naive behavior.
@@ -1067,9 +1105,6 @@ class TestMigrationFailureInjection:
 
         uow = uow if uow is not None else FakeUnitOfWork()
         defaults: dict = {
-            "state": {
-                "downloaded_bios": {},
-            },
             "settings": {},
             "loop": asyncio.get_event_loop(),
             "logger": decky.logger,

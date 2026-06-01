@@ -32,7 +32,6 @@ class Plugin:
     # raises ``AttributeError`` (the ``TestPersistenceAttributeIsLoud``
     # regression remains green).
     _persistence: Any
-    _state: Any
     _settings_persister: Any
     _http_adapter: Any
     _romm_api: Any

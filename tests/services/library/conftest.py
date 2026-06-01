@@ -19,7 +19,6 @@ from conftest import _make_testable_plugin
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.persistence import PersistenceAdapter
@@ -42,7 +41,6 @@ def plugin(tmp_path):
         "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
     }
     p._romm_api = MagicMock()
-    p._state = make_default_plugin_state()
 
     import decky
 

@@ -8,7 +8,6 @@ import pytest
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
-from models.state import make_default_plugin_state
 
 from adapters.romm.http import RommHttpAdapter
 from adapters.steam_config import SteamConfigAdapter
@@ -42,7 +41,6 @@ def plugin():
         p.settings, decky.DECKY_PLUGIN_DIR, logging.getLogger("test"), "decky-romm-sync/9.9.9"
     )
     p._romm_api = MagicMock()
-    p._state = make_default_plugin_state()
 
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config

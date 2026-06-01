@@ -12,12 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import json
 import logging
 import os
 from dataclasses import dataclass
-
-from models.state import PluginState, make_default_plugin_state
 
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
@@ -102,39 +99,6 @@ from services.steamgrid import SteamGridService, SteamGridServiceConfig
 _DB_FILENAME = "romm_sync.db"
 
 
-def _default_state() -> PluginState:
-    """Fresh default ``state`` dict for first-run persistence.
-
-    Delegates to :func:`models.state.make_default_plugin_state` so the
-    canonical shape lives next to the :class:`PluginState` schema. Wrapped
-    here (rather than re-exported) to preserve the module-level factory
-    indirection — callers always receive independent inner containers
-    even if the underlying default ever changes.
-    """
-    return make_default_plugin_state()
-
-
-def _load_downloaded_bios(runtime_dir: str) -> PluginState:
-    """Read the residual ``downloaded_bios`` index from ``state.json``.
-
-    Post-cutover (#784) the only key still read out of the legacy
-    ``state.json`` is ``downloaded_bios`` — MigrationService consults it
-    when the RetroDECK home path changes. This is a one-shot startup read
-    with no lock or backup machinery: a missing, corrupt, non-object, or
-    ``downloaded_bios``-less file yields the empty default.
-    """
-    state = _default_state()
-    state_path = os.path.join(runtime_dir, "state.json")
-    try:
-        with open(state_path) as f:
-            loaded = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return state
-    if isinstance(loaded, dict) and isinstance(loaded.get("downloaded_bios"), dict):
-        state["downloaded_bios"] = loaded["downloaded_bios"]
-    return state
-
-
 @dataclass(frozen=True)
 class AdapterBundle:
     """Concrete I/O adapters wired into services."""
@@ -157,9 +121,8 @@ class AdapterBundle:
 
 @dataclass(frozen=True)
 class StateBundle:
-    """Live mutable state stores shared across services."""
+    """Live mutable state shared across services."""
 
-    state: PluginState
     settings: dict
 
 
@@ -272,9 +235,7 @@ def bootstrap(
     constructs ``PersistenceAdapter``. Settings are loaded + migrated
     inside here so the ``SettingsPersisterAdapter`` binds the live dict
     at construction; mutating that dict from the caller side is visible
-    to every adapter/service that holds the same reference. The residual
-    ``downloaded_bios`` index is read once from ``state.json`` into
-    :class:`PluginState`.
+    to every adapter/service that holds the same reference.
 
     Parameters
     ----------
@@ -335,9 +296,6 @@ def bootstrap(
         settings = fold_legacy_save_sync_settings(settings, persistence.load_save_sync_state())
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
-    # The relational state moved to SQLite (#784); only the residual
-    # ``downloaded_bios`` index is still read from ``state.json`` at startup.
-    state = _load_downloaded_bios(runtime_dir)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
     plugin_metadata = PluginMetadataAdapter()
     # Single source of truth for outgoing User-Agent — read package.json
@@ -380,7 +338,6 @@ def bootstrap(
         core_info_provider=core_resolver,
     )
     stores = StateBundle(
-        state=state,
         settings=settings,
     )
     callbacks = CallbackBundle(
@@ -437,7 +394,6 @@ def wire_services(cfg: WiringConfig) -> dict:
     migration_service = MigrationService(
         config=MigrationServiceConfig(
             migration_file_store=cfg.adapters.migration_file_store,
-            state=cfg.stores.state,
             settings=cfg.stores.settings,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
