@@ -266,6 +266,13 @@ class StatusService:
         and each surfaced file is marked ``status="unknown"`` instead of
         the matrix-derived "ready to upload" label that an empty server
         list would otherwise produce — see ``_get_save_status_io``.
+
+        The ``rom_save_states`` read-modify-write (the baseline-adopt
+        write in ``_get_save_status_io``) runs under the per-ROM sync lock
+        (``SyncEngine.rom_lock(rom_id)``), so it cannot interleave with a
+        concurrent ``do_sync_rom_saves`` and lose that sync's update. The
+        server-saves network fetch stays outside the lock — only the local
+        RMW is the critical section.
         """
         rom_id = int(rom_id)
 
@@ -281,14 +288,15 @@ class StatusService:
             self._log_debug(f"Failed to fetch saves for rom {rom_id}: {e}")
             server_query_failed = True
 
-        return await self._loop.run_in_executor(
-            None,
-            lambda: self._get_save_status_io(
-                rom_id,
-                server_saves,
-                server_query_failed=server_query_failed,
-            ),
-        )
+        async with self._sync_engine.rom_lock(rom_id):
+            return await self._loop.run_in_executor(
+                None,
+                lambda: self._get_save_status_io(
+                    rom_id,
+                    server_saves,
+                    server_query_failed=server_query_failed,
+                ),
+            )
 
     def _read_device_id(self) -> str | None:
         with self._uow_factory() as uow:

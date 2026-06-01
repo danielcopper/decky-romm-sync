@@ -412,9 +412,9 @@ Earlier drafts persisted a `deferred` field in per-file state to suppress the mo
 
 ### Per-rom asyncio.Lock
 
-`SyncEngine._rom_sync_locks: dict[int, asyncio.Lock]` (`services/saves/sync_engine/engine.py`) serializes `pre_launch_sync`, `post_exit_sync`, `sync_rom_saves`, `sync_all_saves`, and `resolve_sync_conflict` for the same `rom_id`. Different rom_ids have independent locks, so cross-game concurrency (e.g. Sync All Saves running concurrently with a resolve on one specific rom) is unaffected. The lock is created lazily on first access.
+`SyncEngine._rom_sync_locks: dict[int, asyncio.Lock]` (`services/saves/sync_engine/engine.py`) serializes `pre_launch_sync`, `post_exit_sync`, `sync_rom_saves`, `sync_all_saves`, and `resolve_sync_conflict` for the same `rom_id`. `StatusService.get_save_status` also takes the lock — not for the read, but for its one write: the executor body adopts a baseline hash (`Skip(adopt_baseline=True)`) and persists it through a `rom_save_states` read-modify-write, which would otherwise race a concurrent sync and clobber that sync's update. The lock-free server-saves network fetch stays outside the lock; only the local RMW is the critical section. Different rom_ids have independent locks, so cross-game concurrency (e.g. Sync All Saves running concurrently with a resolve on one specific rom) is unaffected. The lock is created lazily on first access (`SyncEngine.rom_lock(rom_id)`).
 
-The realistic race the lock prevents: user clicks Keep Local → executor runs PUT + state mutation → in parallel, `post_exit_sync` for a game that just stopped runs and mutates the same per-file state → last-writer-wins on `save_sync_state.json` persist, dropping one set of fields. The lock makes the resolve-and-persist sequence atomic relative to background syncs.
+The realistic race the lock prevents: user clicks Keep Local → executor runs PUT + state mutation → in parallel, `post_exit_sync` for a game that just stopped runs and mutates the same per-file state → last-writer-wins on the `rom_save_states` aggregate, dropping one set of fields. The same lost-update window applies to `get_save_status`'s baseline-adopt write versus a concurrent pre-launch / post-exit / manual sync. The lock makes each read-modify-write-and-persist sequence atomic relative to the others.
 
 ## Local Save File Naming
 

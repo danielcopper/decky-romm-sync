@@ -1,5 +1,8 @@
 """Tests for StatusService — save-status DTO building and read-only status checks."""
 
+import asyncio
+import threading
+
 import pytest
 
 from domain.rom_save_state import RomSaveState
@@ -7,6 +10,7 @@ from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
     _file_md5,
+    _get_save_state,
     _install_rom,
     _seed_save_state,
     _seed_save_state_dict,
@@ -482,3 +486,146 @@ class TestCompositeServerQueryFailedDomain:
         assert display.status == "synced"
         assert display.label is None
         assert display.last_sync_check_at == "2026-04-01T08:00:00+00:00"
+
+
+def _seed_baseline_adopt_scenario(svc, fake, tmp_path) -> str:
+    """Seed the state that drives ``get_save_status`` to adopt + persist a baseline.
+
+    A local file is present, the server save reports our device as
+    ``is_current=True``, and the tracked entry has **no** ``last_sync_hash``
+    baseline yet — so the matrix returns ``Skip(adopt_baseline=True)`` and the
+    status RMW records the local hash as the new baseline (an observable
+    ``rom_save_states.save``). Returns the local file's md5.
+    """
+    _enable_sync_with_device(svc)
+    _install_rom(svc, tmp_path)
+    save_path = _create_save(tmp_path, content=b"matches baseline")
+    local_hash = _file_md5(str(save_path))
+
+    ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": True}])
+    fake.saves[100] = ss
+    # Realistic (hashful) tracked entry, but deliberately no last_sync_hash
+    # baseline — that absence is what triggers the adopt-baseline write.
+    _seed_save_state_dict(
+        svc,
+        42,
+        {
+            "files": {
+                "pokemon.srm": {
+                    "tracked_save_id": 100,
+                    "last_sync_server_updated_at": ss["updated_at"],
+                    "last_sync_server_save_id": 100,
+                    "last_sync_local_size": 1024,
+                }
+            }
+        },
+    )
+    return local_hash
+
+
+def _adopted_baseline(svc) -> str | None:
+    """Read back the persisted baseline hash for pokemon.srm, or ``None``."""
+    state = _get_save_state(svc, 42)
+    if state is None or "pokemon.srm" not in state.files:
+        return None
+    return state.files["pokemon.srm"].last_sync_hash
+
+
+async def _drain_until(predicate, *, attempts: int = 200, step: float = 0.005) -> bool:
+    """Drive the loop + thread-pool executor until *predicate* holds (or attempts run out).
+
+    ``run_in_executor`` resolves its result future via a cross-thread
+    ``call_soon_threadsafe`` callback, so a bare ``asyncio.sleep(0)`` does not
+    reliably drain an in-flight executor round-trip. A short real-time sleep
+    per iteration lets the worker thread finish and its callback land. Returns
+    whether *predicate* became true within the budget.
+    """
+    for _ in range(attempts):
+        if predicate():
+            return True
+        await asyncio.sleep(step)
+    return predicate()
+
+
+class TestGetSaveStatusRomLockSerialization:
+    """The status RMW (baseline adopt) must serialize under ``rom_lock``.
+
+    ``get_save_status`` does a get→mutate→save of ``rom_save_states``. Held
+    under ``SyncEngine.rom_lock(rom_id)``, it cannot interleave with a
+    concurrent ``do_sync_rom_saves`` and clobber that sync's write (#871).
+    """
+
+    @pytest.mark.asyncio
+    async def test_status_rmw_blocks_while_rom_lock_held(self, tmp_path):
+        """While the per-ROM lock is held, get_save_status must not enter or persist its RMW.
+
+        ``_get_save_status_io`` is the executor body that holds the entire
+        read-modify-write. Spying on it gives a cross-thread signal for *when*
+        the critical section starts. With the lock held by the test, the task
+        must park on ``rom_lock`` *before* that body runs — so the spy must not
+        fire and the baseline must stay unadopted until the lock is released.
+        """
+        svc, fake = make_service(tmp_path)
+        local_hash = _seed_baseline_adopt_scenario(svc, fake, tmp_path)
+        assert _adopted_baseline(svc) is None
+
+        status_svc = svc._status
+        entered_rmw = threading.Event()
+        original_io = status_svc._get_save_status_io
+
+        def spy_io(*args, **kwargs):
+            entered_rmw.set()
+            return original_io(*args, **kwargs)
+
+        status_svc._get_save_status_io = spy_io  # type: ignore[method-assign]
+
+        engine = svc._sync_engine
+        async with engine.rom_lock(42):
+            task = asyncio.create_task(svc.get_save_status(42))
+            # Drain the loop + executor so the lock-free network-fetch round
+            # trips complete and the task genuinely reaches the rom_lock await.
+            # If the lock did NOT guard the RMW, the executor body (spy) would
+            # fire here. Give it a generous window to *try*.
+            await _drain_until(entered_rmw.is_set)
+
+            assert not entered_rmw.is_set(), "RMW executor body ran while rom_lock was held"
+            assert not task.done(), "get_save_status completed while rom_lock was held"
+            # Non-vacuous: the persisted baseline is still unadopted.
+            assert _adopted_baseline(svc) is None
+
+        # Lock released → the task acquires it, runs the RMW body, and persists.
+        result = await asyncio.wait_for(task, timeout=5)
+
+        assert entered_rmw.is_set()
+        assert result["files"][0]["status"] == "synced"
+        # Observe the actual persisted state change, not just that a call happened.
+        assert _adopted_baseline(svc) == local_hash
+
+    @pytest.mark.asyncio
+    async def test_status_rmw_runs_when_lock_free(self, tmp_path):
+        """Control: with no contender holding the lock, the RMW persists immediately."""
+        svc, fake = make_service(tmp_path)
+        local_hash = _seed_baseline_adopt_scenario(svc, fake, tmp_path)
+
+        assert _adopted_baseline(svc) is None
+        result = await svc.get_save_status(42)
+
+        assert result["files"][0]["status"] == "synced"
+        assert _adopted_baseline(svc) == local_hash
+
+    @pytest.mark.asyncio
+    async def test_status_does_not_block_on_other_rom_lock(self, tmp_path):
+        """Holding rom_lock for a different rom_id must not stall this ROM's status RMW.
+
+        Proves the lock is per-ROM, not global: rom 42's status RMW completes
+        and persists while the test holds ``rom_lock(999)``.
+        """
+        svc, fake = make_service(tmp_path)
+        local_hash = _seed_baseline_adopt_scenario(svc, fake, tmp_path)
+
+        engine = svc._sync_engine
+        async with engine.rom_lock(999):
+            result = await asyncio.wait_for(svc.get_save_status(42), timeout=5)
+
+        assert result["files"][0]["status"] == "synced"
+        assert _adopted_baseline(svc) == local_hash
