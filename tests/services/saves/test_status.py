@@ -491,11 +491,11 @@ class TestCompositeServerQueryFailedDomain:
 def _seed_baseline_adopt_scenario(svc, fake, tmp_path) -> str:
     """Seed the state that drives ``get_save_status`` to adopt + persist a baseline.
 
-    A local file is present, the server save reports our device as
-    ``is_current=True``, and the tracked entry has **no** ``last_sync_hash``
-    baseline yet — so the matrix returns ``Skip(adopt_baseline=True)`` and the
-    status RMW records the local hash as the new baseline (an observable
-    ``rom_save_states.save``). Returns the local file's md5.
+    A local file is present and the server save reports our device as
+    ``is_current=True``, but no baseline is adopted yet (the file is absent
+    from ``state.files``) — so the matrix returns ``Skip(adopt_baseline=True)``
+    and the status RMW records the local hash as the new baseline (an
+    observable ``rom_save_states.save``). Returns the local file's md5.
     """
     _enable_sync_with_device(svc)
     _install_rom(svc, tmp_path)
@@ -504,22 +504,13 @@ def _seed_baseline_adopt_scenario(svc, fake, tmp_path) -> str:
 
     ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": True}])
     fake.saves[100] = ss
-    # Realistic (hashful) tracked entry, but deliberately no last_sync_hash
-    # baseline — that absence is what triggers the adopt-baseline write.
-    _seed_save_state_dict(
-        svc,
-        42,
-        {
-            "files": {
-                "pokemon.srm": {
-                    "tracked_save_id": 100,
-                    "last_sync_server_updated_at": ss["updated_at"],
-                    "last_sync_server_save_id": 100,
-                    "last_sync_local_size": 1024,
-                }
-            }
-        },
-    )
+    # "No baseline adopted yet" is modelled by the file being absent from
+    # state.files: the matrix falls back to its in-memory FileSyncState()
+    # default (last_sync_hash=None), not a persisted hashless row —
+    # rom_save_files.last_sync_hash is NOT NULL (db/migrations/001_initial.sql).
+    # The is_current server save above is what drives Skip(adopt_baseline=True);
+    # the local file matches it by filename, so no tracked_save_id is needed.
+    _seed_save_state_dict(svc, 42, {"files": {}})
     return local_hash
 
 
