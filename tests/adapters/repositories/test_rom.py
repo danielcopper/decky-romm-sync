@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from domain.playtime import Playtime
 from domain.rom import Rom
+from domain.rom_install import RomInstall
+from domain.rom_metadata import RomMetadata
+from domain.rom_save_state import RomSaveState
 
 if TYPE_CHECKING:
     from adapters.repositories.unit_of_work import SqliteUnitOfWork
@@ -136,3 +140,98 @@ class TestUpsert:
         assert loaded is not None
         assert loaded.shortcut_app_id == 200
         assert uow.roms.count() == 1
+
+
+def _seed_children(uow: SqliteUnitOfWork, rom_id: int) -> None:
+    """Seed a row in all five ``ON DELETE CASCADE`` children of ``roms``.
+
+    ``rom_save_states`` is a two-table aggregate, so the ``RomSaveState`` with a
+    tracked file also seeds a ``rom_save_files`` row.
+    """
+    uow.rom_installs.save(
+        RomInstall(
+            rom_id=rom_id,
+            file_path=f"/roms/snes/game_{rom_id}.sfc",
+            rom_dir=None,
+            platform_slug="snes",
+            system="snes",
+            installed_at="2026-01-01T00:00:00Z",
+        )
+    )
+    uow.rom_metadata.save(
+        rom_id,
+        RomMetadata.cached(
+            summary="A game",
+            genres=("RPG",),
+            companies=("Nintendo",),
+            first_release_date=None,
+            average_rating=None,
+            game_modes=("single",),
+            player_count="1",
+            cached_at=0.0,
+            steam_categories=(),
+        ),
+    )
+    uow.playtime.save(rom_id, Playtime(total_seconds=3600, session_count=2))
+    state = RomSaveState(system="snes")
+    state.adopt_baseline(
+        "battery.srm",
+        tracked_save_id=99,
+        last_sync_hash="abc123",
+    )
+    uow.rom_save_states.save(rom_id, state)
+
+
+class TestReSaveDoesNotCascade:
+    """A re-save (UPSERT) of an existing ROM must update in place, never
+    delete-then-insert the parent row — that DELETE would fire ON DELETE CASCADE
+    and silently wipe the per-ROM children (#887)."""
+
+    def test_children_survive_a_resave(self, uow: SqliteUnitOfWork):
+        rom_id = 1
+        uow.roms.save(_rom(rom_id, app_id=100))
+        _seed_children(uow, rom_id)
+
+        # Re-save the same ROM with changed columns (a normal library re-sync).
+        updated = _rom(rom_id, app_id=200)
+        updated.name = "Renamed Game"
+        uow.roms.save(updated)
+
+        # (a) The parent row reflects the update.
+        loaded = uow.roms.get(rom_id)
+        assert loaded is not None
+        assert loaded.shortcut_app_id == 200
+        assert loaded.name == "Renamed Game"
+
+        # (b) Every cascade child still exists.
+        assert uow.rom_installs.get(rom_id) is not None
+        assert uow.rom_metadata.get(rom_id) is not None
+        assert uow.playtime.get(rom_id) is not None
+        save_state = uow.rom_save_states.get(rom_id)
+        assert save_state is not None
+        assert "battery.srm" in save_state.files
+        assert uow._conn is not None
+        file_count = uow._conn.execute(
+            "SELECT COUNT(*) FROM rom_save_files WHERE rom_id = ?",
+            (rom_id,),
+        ).fetchone()[0]
+        assert file_count == 1
+
+    def test_genuine_delete_still_cascades(self, uow: SqliteUnitOfWork):
+        rom_id = 1
+        uow.roms.save(_rom(rom_id))
+        _seed_children(uow, rom_id)
+
+        uow.roms.delete(rom_id)
+
+        assert uow.roms.get(rom_id) is None
+        assert uow.rom_installs.get(rom_id) is None
+        assert uow.rom_metadata.get(rom_id) is None
+        assert uow.playtime.get(rom_id) is None
+        assert uow.rom_save_states.get(rom_id) is None
+        assert uow._conn is not None
+        file_count = uow._conn.execute(
+            "SELECT COUNT(*) FROM rom_save_files WHERE rom_id = ?",
+            (rom_id,),
+        ).fetchone()[0]
+        assert file_count == 0

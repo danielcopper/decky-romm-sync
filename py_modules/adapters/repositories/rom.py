@@ -44,8 +44,22 @@ class SqliteRomRepository(BaseRepository):
         return _row_to_rom(row) if row is not None else None
 
     def save(self, rom: Rom) -> None:
+        # UPSERT (ON CONFLICT … DO UPDATE), never INSERT OR REPLACE: REPLACE
+        # deletes-then-inserts the parent row, and that DELETE fires the
+        # ON DELETE CASCADE on the per-ROM child tables, silently wiping install,
+        # playtime, and save-sync baselines on every re-sync (#887).
         self._conn.execute(
-            f"INSERT OR REPLACE INTO roms ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO roms ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(rom_id) DO UPDATE SET "
+            "platform_slug = excluded.platform_slug, "
+            "name = excluded.name, "
+            "fs_name = excluded.fs_name, "
+            "shortcut_app_id = excluded.shortcut_app_id, "
+            "last_synced_at = excluded.last_synced_at, "
+            "cover_path = excluded.cover_path, "
+            "igdb_id = excluded.igdb_id, "
+            "sgdb_id = excluded.sgdb_id, "
+            "ra_id = excluded.ra_id",
             (
                 rom.rom_id,
                 rom.platform_slug,
