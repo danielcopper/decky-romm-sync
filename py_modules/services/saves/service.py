@@ -87,6 +87,7 @@ class SaveService:
                 log_debug=config.log_debug,
                 get_active_core=config.get_active_core,
                 hostname_provider=config.hostname_provider,
+                machine_id_provider=config.machine_id_provider,
                 settings_persister=config.settings_persister,
                 plugin_version=plugin_version,
                 detect_sort_change=config.detect_sort_change,

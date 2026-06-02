@@ -37,6 +37,24 @@ class HostnameReader(Protocol):
         ...
 
 
+class MachineIdReader(Protocol):
+    """Stable machine-derived device identity source.
+
+    Supplies the per-machine identifier device registration sends to RomM
+    as the fingerprint ``hostname`` so the server dedupes this device
+    across local-state wipes and reinstalls. Services consume this
+    Protocol instead of reading the identity file directly so device
+    registration stays free of raw I/O and tests can pin the value
+    without touching the filesystem. ``None`` signals the identity is
+    unreadable — callers degrade to no-fingerprint registration rather
+    than substituting a colliding value.
+    """
+
+    def get(self) -> str | None:
+        """Return the stable machine id, or ``None`` when unreadable."""
+        ...
+
+
 class PathExistsReader(Protocol):
     """Generic filesystem existence probe.
 

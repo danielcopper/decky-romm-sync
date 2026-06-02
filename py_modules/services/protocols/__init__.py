@@ -54,6 +54,7 @@ from services.protocols.infra import (
     DownloadQueueCleanup,
     EventEmitter,
     HostnameReader,
+    MachineIdReader,
     PathExistsReader,
     PendingSyncReader,
 )
@@ -126,6 +127,7 @@ __all__ = [
     "LaunchGateInstalledChecker",
     "LaunchGateRomLookup",
     "LaunchGateSaveStatusReader",
+    "MachineIdReader",
     "MigrationFileStore",
     "MigrationPendingFn",
     "PathExistsReader",

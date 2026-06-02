@@ -6,13 +6,85 @@ test_engine.py.
 """
 
 import pytest
+from fakes.fake_hostname_reader import FakeHostnameReader
+from fakes.fake_machine_id_reader import FakeMachineIdReader
 
 from lib.errors import RommApiError
 from tests.services.saves._helpers import (
     _create_save,
+    _enable_sync_with_device,
     _install_rom,
     make_service,
 )
+
+
+def _register_call(fake):
+    """Return the recorded ``register_device`` call entry, or ``None``."""
+    for entry in fake.call_log:
+        if entry[0] == "register_device":
+            return entry
+    return None
+
+
+class TestEnsureDeviceRegisteredFingerprint:
+    """The machine-id is sent as the RomM ``hostname`` fingerprint so the
+    server dedupes this device across reinstalls; the friendly OS hostname
+    is the display ``name`` only and must never leak into the fingerprint."""
+
+    @pytest.mark.asyncio
+    async def test_register_sends_machine_id_as_hostname(self, tmp_path):
+        svc, fake = make_service(
+            tmp_path,
+            hostname_provider=FakeHostnameReader(hostname="steamdeck"),
+            machine_id_provider=FakeMachineIdReader(machine_id="machine-abc-123"),
+        )
+        svc._config.settings["save_sync_enabled"] = True
+        # No device_id persisted → registration branch.
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        entry = _register_call(fake)
+        assert entry is not None
+        name, _platform, _client, _version = entry[1]
+        # Friendly OS hostname is the display name only.
+        assert name == "steamdeck"
+        # Machine-id is the fingerprint hostname — NOT the OS hostname.
+        assert entry[2]["hostname"] == "machine-abc-123"
+
+    @pytest.mark.asyncio
+    async def test_register_omits_hostname_when_machine_id_none(self, tmp_path):
+        svc, fake = make_service(
+            tmp_path,
+            hostname_provider=FakeHostnameReader(hostname="steamdeck"),
+            machine_id_provider=FakeMachineIdReader(machine_id=None),
+        )
+        svc._config.settings["save_sync_enabled"] = True
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        entry = _register_call(fake)
+        assert entry is not None
+        name, _platform, _client, _version = entry[1]
+        # Degrades to no-fingerprint — hostname is None, never the OS hostname.
+        assert entry[2]["hostname"] is None
+        assert name != entry[2]["hostname"]
+
+    @pytest.mark.asyncio
+    async def test_existing_device_id_skips_registration(self, tmp_path):
+        svc, fake = make_service(
+            tmp_path,
+            machine_id_provider=FakeMachineIdReader(machine_id="machine-abc-123"),
+        )
+        _enable_sync_with_device(svc, "server-uuid")
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"] == "server-uuid"
+        # Already registered → no register_device call, machine-id unused.
+        assert _register_call(fake) is None
 
 
 class TestEnsureDeviceRegisteredFailurePaths:

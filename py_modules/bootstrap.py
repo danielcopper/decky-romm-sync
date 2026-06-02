@@ -23,6 +23,7 @@ from adapters.download_file import DownloadFileAdapter
 from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
+from adapters.machine_id import MachineIdAdapter
 from adapters.migration_file import MigrationFileAdapter
 from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import (
@@ -71,6 +72,7 @@ from services.protocols import (
     FirmwareFileStore,
     GamelistXmlEditor,
     HostnameReader,
+    MachineIdReader,
     MigrationFileStore,
     PathExistsReader,
     PluginMetadataReader,
@@ -139,6 +141,7 @@ class RuntimeBundle:
     uuid_gen: UuidGen
     sleeper: Sleeper
     hostname_provider: HostnameReader
+    machine_id_provider: MachineIdReader
 
 
 @dataclass(frozen=True)
@@ -157,7 +160,7 @@ class CallbackBundle:
 
 @dataclass(frozen=True)
 class RuntimeAdaptersBundle:
-    """Concrete adapters for the Clock/UuidGen/Sleeper/HostnameReader seams.
+    """Concrete adapters for the Clock/UuidGen/Sleeper/HostnameReader/MachineIdReader seams.
 
     Bootstrap owns adapter instantiation, but the ``RuntimeBundle``
     handed to ``wire_services`` also needs runtime-only state ``main.py``
@@ -170,6 +173,7 @@ class RuntimeAdaptersBundle:
     uuid_gen: UuidGen
     sleeper: Sleeper
     hostname_provider: HostnameReader
+    machine_id_provider: MachineIdReader
 
 
 @dataclass(frozen=True)
@@ -319,6 +323,7 @@ def bootstrap(
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
+    machine_id_provider = MachineIdAdapter()
     debug_logger = SettingsAwareDebugLogger(settings=settings, logger=logger)
 
     adapters = AdapterBundle(
@@ -355,6 +360,7 @@ def bootstrap(
         uuid_gen=uuid_gen,
         sleeper=sleeper,
         hostname_provider=hostname_provider,
+        machine_id_provider=machine_id_provider,
     )
     handles = BootstrapHandles(debug_logger=debug_logger)
 
@@ -420,6 +426,7 @@ def wire_services(cfg: WiringConfig) -> dict:
         retrodeck_paths=cfg.callbacks.retrodeck_paths,
         get_active_core=cfg.adapters.core_info_provider.get_active_core,
         hostname_provider=cfg.runtime.hostname_provider,
+        machine_id_provider=cfg.runtime.machine_id_provider,
         log_debug=cfg.callbacks.log_debug,
         get_core_name=cfg.callbacks.get_core_name,
         plugin_metadata=cfg.callbacks.plugin_metadata,

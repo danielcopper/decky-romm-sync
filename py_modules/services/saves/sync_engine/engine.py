@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         CoreResolverFn,
         DebugLogger,
         HostnameReader,
+        MachineIdReader,
         MigrationPendingFn,
         RetryStrategy,
         RommSyncApi,
@@ -63,7 +64,8 @@ class SyncEngineConfig:
     Protocol-typed RomM adapter and retry strategy, runtime
     infrastructure (loop, logger, clock), the Protocol-typed filesystem
     adapter, the ``DebugLogger`` seam, the ES-DE core resolver, the
-    hostname provider + settings persister used for device registration,
+    hostname provider + machine-id provider + settings persister used for
+    device registration,
     the plugin version string passed to the server on register/update,
     and the optional sort-change and migration-pending callbacks
     SyncEngine consults at the entry of every public flow.
@@ -81,6 +83,7 @@ class SyncEngineConfig:
     log_debug: DebugLogger
     get_active_core: CoreResolverFn
     hostname_provider: HostnameReader
+    machine_id_provider: MachineIdReader
     settings_persister: SettingsPersister
     plugin_version: str
     detect_sort_change: SaveSortChangeFn
@@ -104,6 +107,7 @@ class SyncEngine:
         self._log_debug = config.log_debug
         self._get_active_core = config.get_active_core
         self._hostname_provider = config.hostname_provider
+        self._machine_id_provider = config.machine_id_provider
         self._settings_persister = config.settings_persister
         self._plugin_version = config.plugin_version
         self._detect_sort_change = config.detect_sort_change
@@ -275,6 +279,7 @@ class SyncEngine:
         return await self._devices.ensure_device_registered(
             loop=self._loop,
             hostname_provider=self._hostname_provider,
+            machine_id_provider=self._machine_id_provider,
         )
 
     async def list_devices(self) -> dict:

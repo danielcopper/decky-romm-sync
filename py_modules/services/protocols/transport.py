@@ -27,8 +27,20 @@ class SteamConfigStore(Protocol):
 class RommDeviceApi(Protocol):
     """RomM device registration / sync API surface."""
 
-    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
+    def register_device(
+        self,
+        name: str,
+        platform: str,
+        client: str,
+        client_version: str,
+        hostname: str | None = None,
+    ) -> dict:
         """Register this client as a sync device on the RomM server.
+
+        ``name`` is the friendly display label. ``hostname`` is the stable
+        machine-derived fingerprint the server dedupes on (``mac_address``
+        OR ``hostname`` + ``platform``); when ``None`` it is omitted from
+        the payload and registration degrades to no-fingerprint behaviour.
 
         Returns device dict with id, name, created_at.
         """

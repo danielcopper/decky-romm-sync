@@ -352,8 +352,15 @@ class FakeRommApi:
     # RommDeviceApi
     # ------------------------------------------------------------------
 
-    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
-        self._log("register_device", (name, platform, client, client_version))
+    def register_device(
+        self,
+        name: str,
+        platform: str,
+        client: str,
+        client_version: str,
+        hostname: str | None = None,
+    ) -> dict:
+        self._log("register_device", (name, platform, client, client_version), {"hostname": hostname})
         self._check_fail(self.register_device_side_effect)
         device_id = f"device-{self._next_device_id}"
         self._next_device_id += 1
@@ -363,6 +370,7 @@ class FakeRommApi:
             "platform": platform,
             "client": client,
             "client_version": client_version,
+            "hostname": hostname,
             "created_at": datetime.now(UTC).isoformat(),
         }
         self.devices.append(device)

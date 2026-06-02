@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         DebugLogger,
         EventEmitter,
         HostnameReader,
+        MachineIdReader,
         MigrationPendingFn,
         PluginMetadataReader,
         RetroDeckPaths,
@@ -73,6 +74,13 @@ class SaveServiceConfig:
         ``HostnameReader`` Protocol seam — supplies the local device
         hostname used as the registered device name during initial
         server-side device registration.
+    machine_id_provider:
+        ``MachineIdReader`` Protocol seam — supplies the stable
+        ``/etc/machine-id`` value sent as the RomM ``hostname``
+        fingerprint during initial server-side device registration so the
+        server dedupes this device across reinstalls. ``None`` when the
+        machine id is unreadable, which degrades registration to the
+        no-fingerprint path.
     get_core_name:
         Callable returning the RetroArch canonical ``corename`` field
         from a core's ``.info`` file for a given ``core_so`` (e.g.
@@ -132,6 +140,7 @@ class SaveServiceConfig:
     retrodeck_paths: RetroDeckPaths
     get_active_core: CoreResolverFn
     hostname_provider: HostnameReader
+    machine_id_provider: MachineIdReader
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
     plugin_dir: str

@@ -885,6 +885,7 @@ class TestMainStartupOrdering:
                 uuid_gen=MagicMock(),
                 sleeper=MagicMock(),
                 hostname_provider=MagicMock(),
+                machine_id_provider=MagicMock(),
             ),
             handles=BootstrapHandles(debug_logger=MagicMock()),
         )

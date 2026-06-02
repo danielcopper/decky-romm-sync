@@ -20,6 +20,7 @@ from fakes.fake_download_file_store import FakeDownloadFileStore
 from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_hostname_reader import FakeHostnameReader
+from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
@@ -115,12 +116,13 @@ class TestBootstrap:
         assert result.handles.debug_logger is result.callbacks.log_debug
 
     def test_runtime_adapters_bundle_populated(self, tmp_path):
-        """Bootstrap owns instantiation of clock/uuid/sleeper/hostname for ``main.py`` to compose RuntimeBundle."""
+        """Bootstrap instantiates clock/uuid/sleeper/hostname/machine-id for ``main.py`` to compose RuntimeBundle."""
         result = _bootstrap_for(tmp_path)
         assert result.runtime_adapters.clock is not None
         assert result.runtime_adapters.uuid_gen is not None
         assert result.runtime_adapters.sleeper is not None
         assert result.runtime_adapters.hostname_provider is not None
+        assert result.runtime_adapters.machine_id_provider is not None
 
     def test_user_agent_threaded_to_romm_http_adapter(self, tmp_path):
         """Bootstrap reads ``package.json`` once and threads the resulting
@@ -202,6 +204,7 @@ class TestWireServices:
             "uuid_gen": FakeUuidGen(),
             "sleeper": FakeSleeper(),
             "hostname_provider": FakeHostnameReader(),
+            "machine_id_provider": FakeMachineIdReader(),
             "min_required_version": (4, 8, 1),
             "retrodeck_paths": FakeRetroDeckPaths(
                 saves=str(tmp_path / "saves"),
@@ -252,6 +255,7 @@ class TestWireServices:
                 uuid_gen=deps["uuid_gen"],
                 sleeper=deps["sleeper"],
                 hostname_provider=deps["hostname_provider"],
+                machine_id_provider=deps["machine_id_provider"],
             ),
             callbacks=CallbackBundle(
                 retrodeck_paths=deps["retrodeck_paths"],

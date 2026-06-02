@@ -186,16 +186,23 @@ class RommApiAdapter:
 
     # ── Devices ───────────────────────────────────────────────────────
 
-    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
-        return self._client.post_json(
-            "/api/devices",
-            {
-                "name": name,
-                "platform": platform,
-                "client": client,
-                "client_version": client_version,
-            },
-        )
+    def register_device(
+        self,
+        name: str,
+        platform: str,
+        client: str,
+        client_version: str,
+        hostname: str | None = None,
+    ) -> dict:
+        payload = {
+            "name": name,
+            "platform": platform,
+            "client": client,
+            "client_version": client_version,
+        }
+        if hostname is not None:
+            payload["hostname"] = hostname
+        return self._client.post_json("/api/devices", payload)
 
     def list_devices(self) -> list[dict]:
         result = self._client.request("/api/devices")

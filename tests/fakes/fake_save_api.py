@@ -179,8 +179,15 @@ class FakeSaveApi:
             self._save_content.pop(sid, None)
         return {"deleted": len(save_ids)}
 
-    def register_device(self, name: str, platform: str, client: str, client_version: str) -> dict:
-        self.call_log.append(("register_device", (name, platform, client, client_version), {}))
+    def register_device(
+        self,
+        name: str,
+        platform: str,
+        client: str,
+        client_version: str,
+        hostname: str | None = None,
+    ) -> dict:
+        self.call_log.append(("register_device", (name, platform, client, client_version), {"hostname": hostname}))
         self._check_fail()
         device_id = f"device-{self._next_device_id}"
         self._next_device_id += 1

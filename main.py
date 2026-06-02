@@ -91,6 +91,7 @@ class Plugin:
                     uuid_gen=result.runtime_adapters.uuid_gen,
                     sleeper=result.runtime_adapters.sleeper,
                     hostname_provider=result.runtime_adapters.hostname_provider,
+                    machine_id_provider=result.runtime_adapters.machine_id_provider,
                 ),
                 callbacks=result.callbacks,
                 min_required_version=self._MIN_REQUIRED_VERSION,

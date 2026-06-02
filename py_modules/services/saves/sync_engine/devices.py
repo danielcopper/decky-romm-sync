@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         DebugLogger,
         HostnameReader,
+        MachineIdReader,
         RetryStrategy,
         RommSyncApi,
         SettingsPersister,
@@ -44,9 +45,10 @@ class DeviceRegistry:
     The server device id is read from and written to
     ``kv_config["device_id"]`` through the injected Unit-of-Work factory;
     the device label flows through ``settings.json``. The async entry
-    points take ``loop`` and ``hostname_provider`` per call so
-    :class:`SyncEngine` can pass its live (test-rebindable) attributes
-    without having to thread reassignments through this sub-module.
+    points take ``loop``, ``hostname_provider``, and ``machine_id_provider``
+    per call so :class:`SyncEngine` can pass its live (test-rebindable)
+    attributes without having to thread reassignments through this
+    sub-module.
     """
 
     def __init__(
@@ -90,8 +92,16 @@ class DeviceRegistry:
         *,
         loop: asyncio.AbstractEventLoop,
         hostname_provider: HostnameReader,
+        machine_id_provider: MachineIdReader,
     ) -> dict:
-        """Ensure this device is registered with the RomM server for save sync tracking."""
+        """Ensure this device is registered with the RomM server for save sync tracking.
+
+        ``hostname_provider`` supplies the friendly display ``name``;
+        ``machine_id_provider`` supplies the stable ``/etc/machine-id``
+        fingerprint sent as the RomM ``hostname`` so the server dedupes
+        this device across reinstalls. When the machine id is unreadable
+        (``None``) the call degrades to no-fingerprint registration.
+        """
         if not save_sync_enabled(self._settings):
             return {"success": False, "device_id": "", "device_name": "", "disabled": True}
 
@@ -128,6 +138,7 @@ class DeviceRegistry:
             }
 
         hostname = hostname_provider.get()
+        machine_id = machine_id_provider.get()
 
         try:
             result = await loop.run_in_executor(
@@ -137,6 +148,7 @@ class DeviceRegistry:
                     platform="linux",
                     client="decky-romm-sync",
                     client_version=self._plugin_version,
+                    hostname=machine_id,
                 ),
             )
             server_device_id = result.get("id") or result.get("device_id")

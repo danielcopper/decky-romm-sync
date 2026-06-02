@@ -72,12 +72,18 @@ RomM v4.7 introduces **save slots** — named containers for save files. This en
 
 Each machine running the plugin registers as a device with the RomM server. This allows RomM to track which device uploaded each save.
 
-1. On first use with save sync enabled, the plugin calls `POST /api/devices` with hostname, platform, client info
+1. On first use with save sync enabled, the plugin calls `POST /api/devices` with the friendly device label (`name`), platform, client info, and the contents of `/etc/machine-id` as the `hostname` fingerprint
 2. Server returns a `device_id` (UUID) stored as `server_device_id` in state
 3. This ID is passed to `list_saves` (populates `device_syncs` per save) and `upload_save` / `download_save_content` (tracks sync status)
 4. `device_syncs` array on each save shows per-device sync status: `device_id`, `device_name`, `is_current`, `last_synced_at`
 5. `is_current = false` means another device uploaded since our last sync
 6. Server returns HTTP 409 on POST when device has stale sync record (additional safety net)
+
+### Why `/etc/machine-id` is the fingerprint
+
+RomM ≥4.8.1 dedupes devices by fingerprint — `mac_address`, OR `hostname` + `platform` — and returns the existing device instead of minting a duplicate (`allow_existing` defaults true). The `name` field is **not** fingerprinted, so without a stable fingerprint every local-state wipe (the SQLite reinstall path) would create a fresh duplicate device on each reinstall.
+
+The plugin sends `/etc/machine-id` as the RomM `hostname`: it is machine-derived (survives a reinstall), unique per device (two Steam Decks stay distinct), and stable. The real OS hostname is deliberately **not** sent — two stock Steam Decks both report `steamdeck`, so a `hostname` + `platform` fingerprint built from the OS hostname would collide them into one server device. The friendly OS hostname remains the display-only `name`. When `/etc/machine-id` is unreadable the `hostname` field is omitted entirely, degrading to the pre-4.8.1 no-fingerprint behaviour rather than sending a colliding value.
 
 ### RomM account requirement
 

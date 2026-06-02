@@ -264,6 +264,26 @@ class TestRegisterDevice:
             },
         )
 
+    def test_includes_hostname_when_passed(self):
+        api, client = _make_api()
+        client.post_json.return_value = {"id": "abc-123"}
+        api.register_device(
+            "steamdeck",
+            "linux",
+            "decky-romm-sync",
+            "0.13.0",
+            hostname="machine-abc-123",
+        )
+        _path, payload = client.post_json.call_args[0]
+        assert payload["hostname"] == "machine-abc-123"
+
+    def test_omits_hostname_when_none(self):
+        api, client = _make_api()
+        client.post_json.return_value = {"id": "abc-123"}
+        api.register_device("steamdeck", "linux", "decky-romm-sync", "0.13.0", hostname=None)
+        _path, payload = client.post_json.call_args[0]
+        assert "hostname" not in payload
+
 
 class TestListDevices:
     def test_returns_array(self):
