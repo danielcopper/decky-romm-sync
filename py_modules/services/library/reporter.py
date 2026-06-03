@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.platform_names import decode_platform_names
 from domain.rom import Rom
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         Clock,
         EventEmitter,
         SteamConfigStore,
+        UnitOfWork,
         UnitOfWorkFactory,
     )
 
@@ -70,7 +71,7 @@ class SyncReporterConfig:
     """
 
     steam_config: SteamConfigStore
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     emit: EventEmitter
@@ -104,11 +105,11 @@ class SyncReporter:
 
     def _build_collection_app_ids(
         self,
-        uow,
+        uow: UnitOfWork,
         pending_platform_rom_ids: set[int] | None,
         pending_collection_memberships: dict[str, list[int]],
         platform_names: dict[str, str],
-    ) -> tuple[dict, dict[str, list]]:
+    ) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
         """Build platform_app_ids and romm_collection_app_ids from ``uow.roms``.
 
         Platform collections are grouped from the full ``roms`` table
@@ -121,7 +122,7 @@ class SyncReporter:
         whose ``shortcut_app_id`` is ``None`` (unbound / stale).
         """
         create_groups = self._settings.get("collection_create_platform_groups", False)
-        platform_app_ids: dict = {}
+        platform_app_ids: dict[str, list[int]] = {}
         for rom in uow.roms.iter_all():
             if rom.shortcut_app_id is None:
                 continue
@@ -130,7 +131,7 @@ class SyncReporter:
             display = platform_names.get(rom.platform_slug, rom.platform_slug)
             platform_app_ids.setdefault(display, []).append(rom.shortcut_app_id)
 
-        romm_collection_app_ids: dict[str, list] = {}
+        romm_collection_app_ids: dict[str, list[int]] = {}
         for coll_name, rom_ids in pending_collection_memberships.items():
             app_ids = [
                 rom.shortcut_app_id
@@ -150,7 +151,7 @@ class SyncReporter:
         pending_platform_rom_ids: set[int] | None,
         platform_names: dict[str, str],
         stale_rom_ids: list[int] | None = None,
-    ) -> tuple[dict, dict[str, list]]:
+    ) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
         """Unbind stale ROMs, refresh the name cache, and build collection maps.
 
         By the time this runs, every per-unit ``commit_unit_results``
@@ -341,7 +342,7 @@ class SyncReporter:
 
         self._stamp_rom_metadata(uow, rom_id, roms_by_id.get(rom_id))
 
-    def _stamp_rom_metadata(self, uow, rom_id: int, rom: dict | None) -> None:
+    def _stamp_rom_metadata(self, uow, rom_id: int, rom: dict[str, Any] | None) -> None:
         """Stamp the ROM's cached metadata into ``uow.rom_metadata`` for this commit.
 
         No-op when the acked ROM carries no ``metadatum`` (defensive: thin
@@ -418,7 +419,7 @@ class SyncReporter:
     def _read_registry_platforms_io(self):
         with self._uow_factory() as uow:
             names = self._read_platform_name_cache(uow)
-            platforms: dict[str, dict] = {}
+            platforms: dict[str, dict[str, Any]] = {}
             for rom in uow.roms.iter_all():
                 if rom.shortcut_app_id is None:
                     continue

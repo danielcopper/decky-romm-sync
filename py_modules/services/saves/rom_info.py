@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
@@ -72,7 +72,7 @@ class RomInfoService:
         self._get_core_name = config.get_core_name
         self._logger = config.logger
 
-    def get_rom_save_info(self, rom_id: int) -> dict | None:
+    def get_rom_save_info(self, rom_id: int) -> dict[str, Any] | None:
         """Get save-related info for an installed ROM.
 
         Returns dict with keys: system, rom_name, saves_dir, platform_slug, file_path
@@ -178,7 +178,7 @@ class RomInfoService:
         corename = self._get_core_name(core_so)
         return (corename or None, core_so)
 
-    def find_save_files(self, rom_id: int) -> list[dict]:
+    def find_save_files(self, rom_id: int) -> list[dict[str, str]]:
         """Find local save files for a ROM.
 
         Returns list of ``{"path": str, "filename": str}``.

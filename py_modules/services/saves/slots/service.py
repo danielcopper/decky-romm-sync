@@ -15,7 +15,7 @@ persistence is each operation's own narrow Unit of Work (ADR-0006).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from services.saves.slots.deletion import SlotDeleter
 from services.saves.slots.listing import SlotListing
@@ -59,7 +59,7 @@ class SlotsServiceConfig:
     re-upload.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
     status_service: StatusService
@@ -130,11 +130,11 @@ class SlotsService:
     # Slot listing — delegates to :class:`SlotListing`.
     # ------------------------------------------------------------------
 
-    async def get_save_slots(self, rom_id: int) -> dict:
+    async def get_save_slots(self, rom_id: int) -> dict[str, Any]:
         """List available save slots for a ROM."""
         return await self._listing.get_save_slots(rom_id)
 
-    async def get_slot_saves(self, rom_id: int, slot: str) -> dict:
+    async def get_slot_saves(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Fetch server save files for a specific slot."""
         return await self._listing.get_slot_saves(rom_id, slot)
 
@@ -144,11 +144,11 @@ class SlotsService:
     # continue to drive the same code path.
     # ------------------------------------------------------------------
 
-    def set_active_slot(self, rom_id: int, slot: str) -> dict:
+    def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Set the active save slot for a specific game."""
         return self._switcher.set_active_slot(rom_id, slot)
 
-    async def switch_slot(self, rom_id: int, new_slot: str) -> dict:
+    async def switch_slot(self, rom_id: int, new_slot: str) -> dict[str, Any]:
         """Switch the active save slot with immediate state sync."""
         return await self._switcher.switch_slot(rom_id, new_slot)
 
@@ -156,11 +156,11 @@ class SlotsService:
     # Save setup wizard — delegates to :class:`SetupWizard`.
     # ------------------------------------------------------------------
 
-    def is_save_tracking_configured(self, rom_id: int) -> dict:
+    def is_save_tracking_configured(self, rom_id: int) -> dict[str, Any]:
         """Check if save slot tracking is configured for a game."""
         return self._setup.is_save_tracking_configured(rom_id)
 
-    async def get_save_setup_info(self, rom_id: int) -> dict:
+    async def get_save_setup_info(self, rom_id: int) -> dict[str, Any]:
         """Get info needed for the first-sync setup wizard."""
         return await self._setup.get_save_setup_info(rom_id)
 
@@ -169,7 +169,7 @@ class SlotsService:
         rom_id: int,
         chosen_slot: str,
         migrate_from_slot: str | None | object = NO_MIGRATION,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync."""
         return await self._setup.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)
 
@@ -177,10 +177,10 @@ class SlotsService:
     # Slot deletion — delegates to :class:`SlotDeleter`.
     # ------------------------------------------------------------------
 
-    async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict:
+    async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Return info about what deleting a slot would do."""
         return await self._deleter.get_slot_delete_info(rom_id, slot)
 
-    async def delete_slot(self, rom_id: int, slot: str) -> dict:
+    async def delete_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Delete a save slot and all its saves (local state + server if applicable)."""
         return await self._deleter.delete_slot(rom_id, slot)

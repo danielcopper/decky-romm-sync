@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain import firmware_paths
 from domain.bios import collect_firmware_status
@@ -77,14 +77,14 @@ class FirmwareService:
         self._retrodeck_paths = config.retrodeck_paths
         self._core_info = config.core_info
         self._uow_factory = config.uow_factory
-        self._bios_registry: dict = {}
-        self._bios_files_index: dict | None = None
-        self._firmware_cache: list | None = None
+        self._bios_registry: dict[str, Any] = {}
+        self._bios_files_index: dict[str, dict[str, Any]] | None = None
+        self._firmware_cache: list[dict[str, Any]] | None = None
         self._firmware_cache_epoch: float = 0
         self._restore_firmware_cache()
 
     @property
-    def bios_files_index(self) -> dict:
+    def bios_files_index(self) -> dict[str, dict[str, Any]]:
         """Flat reverse index of BIOS files: {filename: entry_data}.
 
         Raises ``RuntimeError`` if accessed before ``load_bios_registry()`` —
@@ -187,7 +187,7 @@ class FirmwareService:
         self._logger.info("Restored firmware cache from DB (%d items)", len(entries))
 
     @staticmethod
-    def _entry_to_firmware_dict(entry: FirmwareCacheEntry) -> dict:
+    def _entry_to_firmware_dict(entry: FirmwareCacheEntry) -> dict[str, Any]:
         """Reconstruct an in-memory firmware dict from a thin cache aggregate."""
         return {
             "id": entry.id,
@@ -221,7 +221,7 @@ class FirmwareService:
         except Exception as e:
             self._logger.warning(f"Failed to persist firmware cache: {e}")
 
-    def _get_firmware_list(self) -> list:
+    def _get_firmware_list(self) -> list[dict[str, Any]]:
         """Return firmware list, using cache if TTL has not expired.
 
         TTL is checked against the wall-clock cache epoch so a cache

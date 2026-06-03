@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.rom_files import (
     build_m3u_content,
@@ -82,9 +82,9 @@ class DownloadService:
         self._uow_factory = config.uow_factory
 
         # Owned state
-        self._download_in_progress: set = set()
-        self._download_queue: dict = {}
-        self._download_tasks: dict = {}
+        self._download_in_progress: set[int] = set()
+        self._download_queue: dict[int, dict[str, Any]] = {}
+        self._download_tasks: dict[int, asyncio.Task[None]] = {}
 
     async def shutdown(self) -> None:
         """Cancel in-flight per-ROM download tasks on plugin unload.
@@ -418,7 +418,7 @@ class DownloadService:
             self._download_in_progress.discard(rom_id)
             self._prune_download_queue()
 
-    def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict) -> None:
+    def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict[str, Any]) -> None:
         """Auto-generate an M3U playlist if none exists and multiple disc files are found."""
         all_files = self._download_file_store.scan_files_with_sizes(extract_dir)
         # Check if an M3U already exists (search recursively)

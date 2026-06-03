@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.sync_state import SyncState
 from domain.work_unit import CollectionKind, WorkUnit
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 _SYNC_CANCELLED = "Sync cancelled"
 
 
-def _collection_units(collections: list[dict], enabled_ids: set[str], kind: CollectionKind) -> list[WorkUnit]:
+def _collection_units(collections: list[dict[str, Any]], enabled_ids: set[str], kind: CollectionKind) -> list[WorkUnit]:
     """Build WorkUnits for collections whose id is in *enabled_ids*, tagged with *kind*."""
     units: list[WorkUnit] = []
     for c in collections:
@@ -74,7 +74,7 @@ class LibraryFetcherConfig:
     """
 
     romm_api: RommLibraryApi
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
@@ -249,7 +249,7 @@ class LibraryFetcher:
 
     async def _apply_user_bucket(
         self, *, buckets: dict[str, dict[str, bool]], enabled: bool, scope: str | None
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Fetch user collections and stamp the ``user`` bucket. Returns failure dict or None."""
         if scope not in (None, "my"):
             return None
@@ -267,7 +267,7 @@ class LibraryFetcher:
 
     async def _apply_smart_bucket(
         self, *, buckets: dict[str, dict[str, bool]], enabled: bool, scope: str | None
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Fetch smart collections and stamp the ``smart`` bucket. Returns failure dict or None."""
         if scope not in (None, "smart"):
             return None
@@ -286,7 +286,7 @@ class LibraryFetcher:
 
     async def _apply_franchise_bucket(
         self, *, buckets: dict[str, dict[str, bool]], enabled: bool, scope: str | None
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Fetch franchise collections and stamp the ``franchise`` bucket. Returns failure dict or None."""
         if scope not in (None, "franchise"):
             return None
@@ -418,7 +418,7 @@ class LibraryFetcher:
             collections = []
         return _collection_units(collections, enabled_ids, "franchise")
 
-    def _read_incremental_baseline(self, platform_slug: str) -> tuple[str | None, list[dict]]:
+    def _read_incremental_baseline(self, platform_slug: str) -> tuple[str | None, list[dict[str, Any]]]:
         """Read ``(last_sync_iso, reconstructed_roms)`` for *platform_slug* from SQLite.
 
         ``last_sync`` is the ``finished_at`` of the newest completed
@@ -446,7 +446,9 @@ class LibraryFetcher:
         return last_sync, roms
 
     @staticmethod
-    def _decorate_reconstructed(roms: list[dict], platform_name: str, platform_slug: str) -> list[dict]:
+    def _decorate_reconstructed(
+        roms: list[dict[str, Any]], platform_name: str, platform_slug: str
+    ) -> list[dict[str, Any]]:
         """Stamp the live platform display name/slug onto reconstructed ROM dicts."""
         for rom in roms:
             rom["platform_name"] = platform_name
@@ -454,7 +456,7 @@ class LibraryFetcher:
             rom["platform_display_name"] = platform_name
         return roms
 
-    async def _try_unit_incremental_skip(self, unit: WorkUnit) -> list[dict] | None:
+    async def _try_unit_incremental_skip(self, unit: WorkUnit) -> list[dict[str, Any]] | None:
         """Per-unit incremental-skip pre-check for a platform unit.
 
         Returns the roms-reconstructed ROM list when the platform is
@@ -505,7 +507,7 @@ class LibraryFetcher:
         )
         return None
 
-    async def fetch_platform_unit(self, unit: WorkUnit) -> tuple[list[dict], bool]:
+    async def fetch_platform_unit(self, unit: WorkUnit) -> tuple[list[dict[str, Any]], bool]:
         """Fetch ROMs for a single platform unit.
 
         Tries the incremental-skip path first: if the platform's
@@ -531,7 +533,7 @@ class LibraryFetcher:
         platform_name = unit.name
         platform_slug = unit.slug
 
-        unit_roms: list[dict] = []
+        unit_roms: list[dict[str, Any]] = []
         offset = 0
         limit = 50
         while True:
@@ -540,7 +542,7 @@ class LibraryFetcher:
                 # ``dict | list`` keeps the isinstance guard below genuine:
                 # the paginated endpoint returns ``{"items": [...]}`` but the
                 # else-branch tolerates a bare-list response shape.
-                page: dict | list = await self._loop.run_in_executor(
+                page: dict[str, Any] | list[dict[str, Any]] = await self._loop.run_in_executor(
                     None,
                     self._romm_api.list_roms,
                     platform_id,
@@ -568,7 +570,9 @@ class LibraryFetcher:
 
         return unit_roms, False
 
-    async def fetch_collection_unit(self, unit: WorkUnit, synced_rom_ids: set[int]) -> tuple[list[dict], list[int]]:
+    async def fetch_collection_unit(
+        self, unit: WorkUnit, synced_rom_ids: set[int]
+    ) -> tuple[list[dict[str, Any]], list[int]]:
         """Fetch ROMs for a single collection unit.
 
         Mutates *synced_rom_ids* in place: every ROM seen via this
@@ -586,7 +590,7 @@ class LibraryFetcher:
         if unit.type != "collection":
             raise ValueError(f"fetch_collection_unit called with non-collection unit type={unit.type}")
 
-        new_roms: list[dict] = []
+        new_roms: list[dict[str, Any]] = []
         all_collection_rom_ids: list[int] = []
 
         offset = 0
@@ -597,7 +601,7 @@ class LibraryFetcher:
                 # ``dict | list`` keeps the isinstance guard below genuine:
                 # the paginated endpoint returns ``{"items": [...]}`` but the
                 # else-branch tolerates a bare-list response shape.
-                page: dict | list = await self._loop.run_in_executor(
+                page: dict[str, Any] | list[dict[str, Any]] = await self._loop.run_in_executor(
                     None, self._romm_api.list_roms_by_virtual_collection, str(unit.id), limit, offset
                 )
             elif unit.collection_kind == "smart":

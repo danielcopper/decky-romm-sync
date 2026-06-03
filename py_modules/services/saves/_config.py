@@ -8,7 +8,7 @@ references, plugin metadata, and callbacks into other services.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import asyncio
@@ -131,7 +131,7 @@ class SaveServiceConfig:
 
     romm_api: RommSyncApi
     retry: RetryStrategy
-    settings: dict
+    settings: dict[str, Any]
     settings_persister: SettingsPersister
     save_file_store: SaveFileStore
     loop: asyncio.AbstractEventLoop

@@ -19,7 +19,7 @@ rollback flow (older save versions) lives in
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
@@ -101,7 +101,7 @@ class RollbackOrchestrator:
         action: str,
         *,
         loop: asyncio.AbstractEventLoop,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Drive the post-lock conflict-resolution flow.
 
         ``loop`` is passed per call so :class:`SyncEngine` can hand its
@@ -203,7 +203,7 @@ class RollbackOrchestrator:
             self._logger.error(f"resolve_sync_conflict({rom_id}, {filename}, {action}) failed: {e}")
             return {"success": False, "message": str(e)}
 
-    def _validate_filename(self, rom_id: int, action: str, filename: str) -> dict | None:
+    def _validate_filename(self, rom_id: int, action: str, filename: str) -> dict[str, Any] | None:
         """Reject non-basename filenames; ``None`` if the filename is safe.
 
         The frontend-supplied filename flows into
@@ -234,7 +234,7 @@ class RollbackOrchestrator:
         self,
         save_state: RomSaveState,
         device_id: str | None,
-        server: dict,
+        server: dict[str, Any],
         saves_dir: str,
         system: str,
         rom_name: str,
@@ -255,7 +255,7 @@ class RollbackOrchestrator:
         save_state: RomSaveState,
         device_id: str | None,
         core_so: str | None,
-        server: dict,
+        server: dict[str, Any],
         saves_dir: str,
         system: str,
         rom_name: str,

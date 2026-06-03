@@ -14,7 +14,7 @@ import asyncio
 import base64
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.sgdb_artwork import (
     asset_type_endpoint,
@@ -59,7 +59,7 @@ class SteamGridServiceConfig:
     romm_api: RommRomReader
     steam_config: SteamConfigStore
     sgdb_artwork_cache: SgdbArtworkCache
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     settings_persister: SettingsPersister

@@ -13,7 +13,7 @@ not block the launch.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     import logging
@@ -71,7 +71,7 @@ class LaunchGateServiceConfig:
     logger: logging.Logger
 
 
-def _has_any_save_conflict(save_status: dict | None) -> bool:
+def _has_any_save_conflict(save_status: dict[str, Any] | None) -> bool:
     """Mirror the frontend ``hasAnySaveConflict`` predicate.
 
     The canonical conflict signal is a non-empty ``conflicts`` list on

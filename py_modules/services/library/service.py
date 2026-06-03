@@ -15,7 +15,7 @@ in-flight sync state belongs in a sub-service.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lib.late_binding import LateBinding
 from services.library._state import LibrarySyncStateBox
@@ -58,7 +58,7 @@ class LibraryServiceConfig:
 
     romm_api: RommLibraryApi
     steam_config: SteamConfigStore
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
@@ -166,7 +166,7 @@ class LibraryService:
         return self._box.sync_state
 
     @property
-    def pending_sync(self) -> dict:
+    def pending_sync(self) -> dict[int, dict[str, Any]]:
         """Public accessor for pending sync data (used by SteamGridService)."""
         return self._box.pending_sync
 
@@ -186,11 +186,11 @@ class LibraryService:
         self._box.sync_state = value
 
     @property
-    def _pending_sync(self) -> dict:
+    def _pending_sync(self) -> dict[int, dict[str, Any]]:
         return self._box.pending_sync
 
     @_pending_sync.setter
-    def _pending_sync(self, value: dict) -> None:
+    def _pending_sync(self, value: dict[int, dict[str, Any]]) -> None:
         self._box.pending_sync = value
 
     @property
@@ -202,11 +202,11 @@ class LibraryService:
         self._box.pending_delta = value
 
     @property
-    def _pending_collection_memberships(self) -> dict:
+    def _pending_collection_memberships(self) -> dict[str, list[int]]:
         return self._box.pending_collection_memberships
 
     @_pending_collection_memberships.setter
-    def _pending_collection_memberships(self, value: dict) -> None:
+    def _pending_collection_memberships(self, value: dict[str, list[int]]) -> None:
         self._box.pending_collection_memberships = value
 
     @property
@@ -218,11 +218,11 @@ class LibraryService:
         self._box.pending_platform_rom_ids = value
 
     @property
-    def _sync_progress(self) -> dict:
+    def _sync_progress(self) -> dict[str, Any]:
         return self._box.sync_progress
 
     @_sync_progress.setter
-    def _sync_progress(self, value: dict) -> None:
+    def _sync_progress(self, value: dict[str, Any]) -> None:
         self._box.sync_progress = value
 
     @property
@@ -242,7 +242,7 @@ class LibraryService:
         self._box.current_sync_id = value
 
     @property
-    def _settings(self) -> dict:
+    def _settings(self) -> dict[str, Any]:
         return self._config.settings
 
     # ── Public callable surface ──────────────────────────────────

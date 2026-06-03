@@ -14,7 +14,7 @@ from the live settings dict and dispatches to the runtime logger.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     import logging
@@ -38,7 +38,7 @@ class SettingsServiceConfig:
     Bundled here so the ctor stays within the S107 parameter budget.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     logger: logging.Logger
     settings_persister: SettingsPersister
@@ -65,7 +65,7 @@ class SettingsService:
         romm_user: str,
         romm_pass: str,
         allow_insecure_ssl: bool | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Persist server credentials.
 
         The masked placeholder (``"••••"``) leaves the stored password
@@ -86,7 +86,7 @@ class SettingsService:
             self._logger.error(f"Failed to save settings: {e}")
             return {"success": False, "message": f"Save failed: {e}"}
 
-    def get_settings(self) -> dict:
+    def get_settings(self) -> dict[str, Any]:
         """Return the read-shape settings dict for the frontend.
 
         Secrets (RomM password, SteamGridDB API key) are reported as
@@ -108,7 +108,7 @@ class SettingsService:
 
     # ── Log level ────────────────────────────────────────────────────────
 
-    def save_log_level(self, level: str) -> dict:
+    def save_log_level(self, level: str) -> dict[str, Any]:
         """Validate and persist the runtime log level."""
         if level not in _VALID_LOG_LEVELS:
             return {"success": False, "message": "Invalid log level"}
@@ -135,7 +135,7 @@ class SettingsService:
 
     # ── Steam Input ──────────────────────────────────────────────────────
 
-    def save_steam_input_setting(self, mode: str) -> dict:
+    def save_steam_input_setting(self, mode: str) -> dict[str, Any]:
         """Validate and persist the Steam Input mode preference."""
         if mode not in _VALID_STEAM_INPUT_MODES:
             return {"success": False, "message": f"Invalid mode: {mode}"}
@@ -143,7 +143,7 @@ class SettingsService:
         self._settings_persister.save_settings()
         return {"success": True}
 
-    def apply_steam_input_setting(self) -> dict:
+    def apply_steam_input_setting(self) -> dict[str, Any]:
         """Apply the current Steam Input mode to every bound ROM shortcut."""
         mode = self._settings.get("steam_input_mode", "default")
         with self._uow_factory() as uow:
@@ -159,20 +159,20 @@ class SettingsService:
 
     # ── RetroArch input driver ──────────────────────────────────────────
 
-    def fix_retroarch_input_driver(self) -> dict:
+    def fix_retroarch_input_driver(self) -> dict[str, Any]:
         """Repair a problematic RetroArch ``input_driver`` value (``x`` -> ``sdl2``)."""
         return self._steam_config.fix_retroarch_input_driver()
 
     # ── Whitelist (non-Steam shortcut removal) ──────────────────────────
 
-    def get_whitelist_settings(self) -> dict:
+    def get_whitelist_settings(self) -> dict[str, Any]:
         """Return whitelist settings used by the non-Steam game removal feature."""
         return {
             "disabled_defaults": self._settings.get("whitelist_disabled_defaults", []),
             "custom_names": self._settings.get("whitelist_custom_names", []),
         }
 
-    def update_whitelist_settings(self, disabled_defaults: object, custom_names: object) -> dict:
+    def update_whitelist_settings(self, disabled_defaults: object, custom_names: object) -> dict[str, Any]:
         """Validate and persist whitelist settings.
 
         Both arguments must be lists of strings. Anything else is
@@ -190,7 +190,7 @@ class SettingsService:
 
     # ── Collection grouping ─────────────────────────────────────────────
 
-    def save_collection_platform_groups(self, enabled: bool) -> dict:
+    def save_collection_platform_groups(self, enabled: bool) -> dict[str, Any]:
         """Persist the collection platform-group toggle."""
         self._settings["collection_create_platform_groups"] = bool(enabled)
         self._settings_persister.save_settings()

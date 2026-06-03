@@ -16,7 +16,7 @@ import contextlib
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
 from domain.rom_save_state import FileSyncState, RomSaveState
@@ -63,7 +63,7 @@ class MatrixOutcome:
     local_mtime_iso: str | None
     local_size: int | None
     file_state: FileSyncState
-    server_candidates: list[dict]
+    server_candidates: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ class DispatchSink:
     """
 
     errors: list[str]
-    conflicts: list[dict]
+    conflicts: list[dict[str, Any]]
 
 
 class MatrixExecutor:
@@ -118,7 +118,7 @@ class MatrixExecutor:
     # Server Save Hash Helper
     # ------------------------------------------------------------------
 
-    def get_server_save_hash(self, server_save: dict) -> str | None:
+    def get_server_save_hash(self, server_save: dict[str, Any]) -> str | None:
         """Download a server save to temp and compute its MD5 hash.
 
         Used for slow-path conflict detection when no content_hash is available.
@@ -147,7 +147,7 @@ class MatrixExecutor:
         self,
         save_state: RomSaveState,
         filename: str,
-        server_response: dict,
+        server_response: dict[str, Any],
         local_path: str,
         system: str,
         *,
@@ -207,7 +207,7 @@ class MatrixExecutor:
 
     def do_download_save(
         self,
-        server_save: dict,
+        server_save: dict[str, Any],
         saves_dir: str,
         filename: str,
         save_state: RomSaveState,
@@ -274,9 +274,9 @@ class MatrixExecutor:
         device_id: str | None,
         system: str,
         core_so: str | None,
-        server_save: dict | None = None,
+        server_save: dict[str, Any] | None = None,
         default_slot: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Upload a local save file to server.
 
         Mutates *save_state* in memory (per-file baseline, own-upload
@@ -335,7 +335,9 @@ class MatrixExecutor:
             self._save_file_store.remove_file(tmp)
 
     @staticmethod
-    def filter_server_saves_to_slot(server_saves: list[dict], active_slot: str | None) -> list[dict]:
+    def filter_server_saves_to_slot(
+        server_saves: list[dict[str, Any]], active_slot: str | None
+    ) -> list[dict[str, Any]]:
         """Filter server saves to the active slot.
 
         Saves with ``slot=None`` (legacy/no-slot) are accepted under any active
@@ -345,7 +347,7 @@ class MatrixExecutor:
             return [ss for ss in server_saves if ss.get("slot") == active_slot or ss.get("slot") is None]
         return [ss for ss in server_saves if not ss.get("slot")]
 
-    def _build_local_input(self, local_path: str, filename: str) -> dict:
+    def _build_local_input(self, local_path: str, filename: str) -> dict[str, Any]:
         """Build the dict shape consumed by ``compute_sync_action``."""
         exists = self._save_file_store.is_file(local_path)
         return {
@@ -359,10 +361,10 @@ class MatrixExecutor:
         self,
         rom_id: int,
         filename: str,
-        server: dict,
+        server: dict[str, Any],
         local_path: str | None,
         local_hash: str | None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Build a Phase-2 ``sync_conflict`` descriptor for the frontend."""
         local_mtime = None
         local_size = None
@@ -412,7 +414,7 @@ class MatrixExecutor:
         system: str,
         core_so: str | None,
         default_slot: str | None,
-        server_saves: list[dict],
+        server_saves: list[dict[str, Any]],
         errors: list[str],
     ) -> bool:
         """Execute an ``Upload`` action. Returns True iff the upload was issued."""
@@ -453,7 +455,7 @@ class MatrixExecutor:
         system: str,
         core_so: str | None,
         default_slot: str | None,
-        server_saves: list[dict],
+        server_saves: list[dict[str, Any]],
         sink: DispatchSink,
     ) -> bool:
         """Execute one ``SyncAction`` outcome. Returns True if a transfer happened.
@@ -518,11 +520,11 @@ class MatrixExecutor:
     def iter_matrix_outcomes(
         self,
         rom_id: int,
-        server_in_slot: list[dict],
+        server_in_slot: list[dict[str, Any]],
         *,
         save_state: RomSaveState | None,
         device_id: str | None,
-        info: dict,
+        info: dict[str, Any],
     ) -> Iterator[MatrixOutcome]:
         """Yield one :class:`MatrixOutcome` per save file in the ROM's active slot.
 
@@ -574,7 +576,7 @@ class MatrixExecutor:
         # Group server saves by canonical local target filename. Server-only
         # groups (no local file) get matrix-evaluated against their own group;
         # compute_sync_action picks newest-in-group internally.
-        server_only_groups: dict[str, list[dict]] = {}
+        server_only_groups: dict[str, list[dict[str, Any]]] = {}
         for ss in server_in_slot:
             target = local_save_target(ss, rom_name)
             if target in handled_filenames:
@@ -608,7 +610,7 @@ class MatrixExecutor:
         device_id: str | None,
         core_so: str | None,
         default_slot: str | None = None,
-    ) -> tuple[int, list[str], list[dict]]:
+    ) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Sync saves for a single ROM, mutating *save_state* in memory.
 
         Drives :meth:`iter_matrix_outcomes` and dispatches each emitted
@@ -646,7 +648,7 @@ class MatrixExecutor:
         )
 
         errors: list[str] = []
-        conflicts: list[dict] = []
+        conflicts: list[dict[str, Any]] = []
         sink = DispatchSink(errors=errors, conflicts=conflicts)
         synced = 0
 
@@ -690,7 +692,7 @@ class MatrixExecutor:
         return synced, errors, conflicts
 
 
-def _file_state_to_dict(file_state: FileSyncState) -> dict:
+def _file_state_to_dict(file_state: FileSyncState) -> dict[str, Any]:
     """Project a :class:`FileSyncState` value object onto the dict shape
     ``compute_sync_action`` consumes (the legacy ``to_dict`` surface)."""
     return {

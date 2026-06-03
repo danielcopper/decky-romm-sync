@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.artwork_paths import final_filename, staging_filename
 from domain.sync_stage import SyncStage
@@ -14,7 +14,7 @@ from lib.list_result import ErrorCode
 if TYPE_CHECKING:
     import asyncio
     import logging
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from models.state import ShortcutRegistryEntry
 
@@ -81,9 +81,9 @@ class ArtworkService:
 
     async def download_artwork(
         self,
-        all_roms: list[dict],
-        emit_progress: Callable,
-        is_cancelling: Callable,
+        all_roms: list[dict[str, Any]],
+        emit_progress: Callable[..., Awaitable[None]],
+        is_cancelling: Callable[[], bool],
         progress_step: int = 4,
         progress_total_steps: int = 6,
     ) -> dict[int, str]:
@@ -180,7 +180,7 @@ class ArtworkService:
 
     # ── Artwork base64 query ───────────────────────────────────────────────
 
-    async def get_artwork_base64(self, rom_id: int) -> dict:
+    async def get_artwork_base64(self, rom_id: int) -> dict[str, Any]:
         """Return base64-encoded cover artwork for a single ROM."""
         grid = self._steam_config.grid_dir()
         if not grid:
@@ -221,7 +221,7 @@ class ArtworkService:
 
     # ── Cover refresh (single-ROM repair) ──────────────────────────────────
 
-    async def refresh_cover(self, rom_id: int) -> dict:
+    async def refresh_cover(self, rom_id: int) -> dict[str, Any]:
         """Re-download a ROM's RomM cover and update its ``roms`` row.
 
         Looks up the ROM's current ``shortcut_app_id`` from ``uow.roms``,
@@ -311,7 +311,7 @@ class ArtworkService:
 
     # ── Staging file housekeeping ──────────────────────────────────────────
 
-    def is_staging_file_orphaned(self, grid: str, registry: dict, rom_id: str) -> bool:
+    def is_staging_file_orphaned(self, grid: str, registry: dict[str, int], rom_id: str) -> bool:
         """Check if a staging artwork file is orphaned (not bound or has final artwork).
 
         *registry* is a ``{str(rom_id): shortcut_app_id}`` map of the

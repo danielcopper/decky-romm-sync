@@ -9,7 +9,7 @@ would otherwise require service-to-service concrete imports.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class EventEmitter(Protocol):
@@ -80,7 +80,7 @@ class PendingSyncReader(Protocol):
     keeps the typed seam narrow to "give me the current mapping".
     """
 
-    def __call__(self) -> dict: ...
+    def __call__(self) -> dict[int, dict[str, Any]]: ...
 
 
 class DownloadQueueCleanup(Protocol):

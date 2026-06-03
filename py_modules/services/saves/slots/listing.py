@@ -8,7 +8,7 @@ slot deletion belong in their own sub-modules.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from lib.list_result import ErrorCode
@@ -32,7 +32,7 @@ class SlotListing:
     def __init__(
         self,
         *,
-        settings: dict,
+        settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
         romm_api: RommSaveApi,
         retry: RetryStrategy,
@@ -52,7 +52,7 @@ class SlotListing:
             device_id = uow.kv_config.get("device_id")
         return state, device_id
 
-    async def get_save_slots(self, rom_id: int) -> dict:
+    async def get_save_slots(self, rom_id: int) -> dict[str, Any]:
         """List available save slots for a ROM.
 
         Merges server slots with locally-created slots. Persists the merged
@@ -77,7 +77,7 @@ class SlotListing:
         # means "no slots"; the persisted slots dict will contain ``""``).
         if rom_state is None:
             active_slot: str | None = default_slot
-            persisted_slots: dict[str, dict] = {}
+            persisted_slots: dict[str, dict[str, Any]] = {}
         else:
             active_slot = rom_state.active_slot
             persisted_slots = rom_state.slots
@@ -102,10 +102,10 @@ class SlotListing:
                 "slots": [],
                 "active_slot": active_slot,
             }
-        server_slots_list: list[dict] = summary.get("slots", [])
+        server_slots_list: list[dict[str, Any]] = summary.get("slots", [])
 
         # Merge: update persisted slots with server data, promote local→server
-        merged: dict[str, dict] = {}
+        merged: dict[str, dict[str, Any]] = {}
         for s in server_slots_list:
             raw = s.get("slot") or s.get("slot_name")
             name = raw if raw else ""
@@ -146,8 +146,8 @@ class SlotListing:
 
     @staticmethod
     def _merge_persisted_slots(
-        persisted: dict[str, dict],
-        merged: dict[str, dict],
+        persisted: dict[str, dict[str, Any]],
+        merged: dict[str, dict[str, Any]],
         active_slot: str | None,
     ) -> None:
         """Add persisted local slots (or the active slot) that aren't on the server.
@@ -165,7 +165,7 @@ class SlotListing:
             elif info.get("source") == "server" and name == (active_slot or ""):
                 merged[name] = {"source": "server", "count": 0, "latest_updated_at": None}
 
-    async def get_slot_saves(self, rom_id: int, slot: str) -> dict:
+    async def get_slot_saves(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Fetch server save files for a specific slot.
 
         Used by the frontend to show save files when expanding an inactive slot panel.
@@ -186,7 +186,7 @@ class SlotListing:
         device_id = await self._loop.run_in_executor(None, self._read_device_id)
 
         try:
-            server_saves: list[dict] = await self._loop.run_in_executor(
+            server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),

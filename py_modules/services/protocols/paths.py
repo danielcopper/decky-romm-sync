@@ -11,7 +11,7 @@ which owns the read side.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class SystemResolver(Protocol):
@@ -66,7 +66,7 @@ class CoreInfoProvider(Protocol):
         rom_filename: str | None = None,
     ) -> tuple[str | None, str | None]: ...
 
-    def get_available_cores(self, system_name: str) -> list[dict]: ...
+    def get_available_cores(self, system_name: str) -> list[dict[str, Any]]: ...
 
     def reset_cache(self) -> None: ...
 

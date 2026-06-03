@@ -9,7 +9,7 @@ metadata all survive — only the on-disk files and the install record go.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lib.path_safety import is_safe_rom_path
 
@@ -98,7 +98,7 @@ class RomRemovalService:
         with self._uow_factory() as uow:
             uow.rom_installs.delete(rom_id)
 
-    async def remove_rom(self, rom_id: int | str) -> dict:
+    async def remove_rom(self, rom_id: int | str) -> dict[str, Any]:
         """Remove a single installed ROM: delete files and drop the install record."""
         rom_id_int = int(rom_id)
         with self._uow_factory() as uow:
@@ -117,7 +117,7 @@ class RomRemovalService:
 
         return {"success": True, "message": "ROM removed"}
 
-    def _uninstall_all_roms_io(self) -> tuple[int, list[dict]]:
+    def _uninstall_all_roms_io(self) -> tuple[int, list[dict[str, str]]]:
         """Sync helper for uninstall_all_roms — bulk file deletion (outside UoW) then row deletes in a write UoW.
 
         Reads every install record in a short read UoW, deletes files outside
@@ -129,7 +129,7 @@ class RomRemovalService:
             installs = list(uow.rom_installs.iter_all())
 
         count = 0
-        errors: list[dict] = []
+        errors: list[dict[str, str]] = []
         successfully_deleted: list[int] = []
         for install in installs:
             try:
@@ -145,7 +145,7 @@ class RomRemovalService:
                 uow.rom_installs.delete(rom_id)
         return count, errors
 
-    async def uninstall_all_roms(self) -> dict:
+    async def uninstall_all_roms(self) -> dict[str, Any]:
         """Remove all installed ROMs: delete files and drop their install records.
 
         Returns ``success`` (True only when every per-ROM deletion

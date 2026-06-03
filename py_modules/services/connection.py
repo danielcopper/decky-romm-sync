@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.version import meets_min_version
 from lib.errors import error_response
@@ -35,7 +35,7 @@ class ConnectionServiceConfig:
     plugin entrypoint.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     romm_api: RommConnectionApi
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
@@ -52,7 +52,7 @@ class ConnectionService:
         self._logger = config.logger
         self._min_required_version = config.min_required_version
 
-    async def test_connection(self) -> dict:
+    async def test_connection(self) -> dict[str, Any]:
         """Probe the configured server and return a frontend-shaped result dict.
 
         The result dict always carries ``success`` and ``message``. On
@@ -98,7 +98,7 @@ class ConnectionService:
                 "romm_version": version,
             }
 
-        result: dict = {"success": True, "message": "Connected to RomM"}
+        result: dict[str, Any] = {"success": True, "message": "Connected to RomM"}
         if version and version != "development":
             result["message"] = f"Connected to RomM {version}"
             result["romm_version"] = version

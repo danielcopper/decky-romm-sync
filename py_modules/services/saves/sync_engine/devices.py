@@ -14,7 +14,7 @@ the file-level transfer logic live elsewhere in the package
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from services.saves._settings import save_sync_enabled
 
@@ -55,7 +55,7 @@ class DeviceRegistry:
         self,
         *,
         uow_factory: UnitOfWorkFactory,
-        settings: dict,
+        settings: dict[str, Any],
         romm_api: RommSyncApi,
         retry: RetryStrategy,
         logger: logging.Logger,
@@ -93,7 +93,7 @@ class DeviceRegistry:
         loop: asyncio.AbstractEventLoop,
         hostname_provider: HostnameReader,
         machine_id_provider: MachineIdReader,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Ensure this device is registered with the RomM server for save sync tracking.
 
         ``hostname_provider`` supplies the friendly display ``name``;
@@ -168,7 +168,7 @@ class DeviceRegistry:
 
         return {"success": False, "device_id": "", "device_name": "", "error": "registration_failed"}
 
-    async def list_devices(self, *, loop: asyncio.AbstractEventLoop) -> dict:
+    async def list_devices(self, *, loop: asyncio.AbstractEventLoop) -> dict[str, Any]:
         """List all devices registered with the RomM server for this user."""
         if not save_sync_enabled(self._settings):
             return {"success": False, "devices": [], "disabled": True}

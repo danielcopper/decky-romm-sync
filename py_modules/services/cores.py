@@ -14,7 +14,7 @@ cross-service BIOS recheck are this service's concern.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import asyncio
@@ -57,7 +57,7 @@ class CoreService:
         self._retrodeck_paths = config.retrodeck_paths
         self._bios_checker = config.bios_checker
 
-    async def get_available_cores(self, platform_slug: str) -> dict:
+    async def get_available_cores(self, platform_slug: str) -> dict[str, Any]:
         """Return available cores for a platform along with the active selection."""
         cores = self._core_info.get_available_cores(platform_slug)
         active_so, active_label = self._core_info.get_active_core(platform_slug)
@@ -76,7 +76,7 @@ class CoreService:
         self._gamelist_editor.set_system_override(retrodeck_home, platform_slug, core_label or None)
         self._core_info.reset_cache()
 
-    async def set_system_core(self, platform_slug: str, core_label: str) -> dict:
+    async def set_system_core(self, platform_slug: str, core_label: str) -> dict[str, Any]:
         """Set or clear the system-wide core override for a platform.
 
         Empty ``core_label`` clears the override (reverts to the ES-DE
@@ -113,7 +113,7 @@ class CoreService:
         self._gamelist_editor.set_game_override(retrodeck_home, platform_slug, rom_path, core_label or None)
         self._core_info.reset_cache()
 
-    async def set_game_core(self, platform_slug: str, rom_path: str, core_label: str) -> dict:
+    async def set_game_core(self, platform_slug: str, rom_path: str, core_label: str) -> dict[str, Any]:
         """Set or clear the per-game core override.
 
         Empty ``core_label`` clears the per-game override (reverts to

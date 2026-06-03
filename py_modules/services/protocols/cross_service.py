@@ -27,9 +27,11 @@ class RetryStrategy(Protocol):
 class BiosChecker(Protocol):
     """BIOS status checking consumed by GameDetailService."""
 
-    def check_platform_bios_cached(self, platform_slug: str, rom_filename: str | None = None) -> dict | None: ...
+    def check_platform_bios_cached(
+        self, platform_slug: str, rom_filename: str | None = None
+    ) -> dict[str, Any] | None: ...
 
-    async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict: ...
+    async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict[str, Any]: ...
 
 
 class AchievementsReader(Protocol):
@@ -37,7 +39,7 @@ class AchievementsReader(Protocol):
 
     def get_ra_username(self) -> str: ...
 
-    def get_progress_cache_entry(self, rom_id_str: str) -> dict | None: ...
+    def get_progress_cache_entry(self, rom_id_str: str) -> dict[str, Any] | None: ...
 
 
 class ArtworkManager(Protocol):
@@ -45,12 +47,12 @@ class ArtworkManager(Protocol):
 
     async def download_artwork(
         self,
-        all_roms: list[dict],
+        all_roms: list[dict[str, Any]],
         emit_progress: Any,
         is_cancelling: Any,
         progress_step: int = 4,
         progress_total_steps: int = 6,
-    ) -> dict: ...
+    ) -> dict[Any, Any]: ...
 
     def finalize_cover_path(self, grid: str | None, cover_path: str, app_id: int, rom_id_str: str) -> str: ...
 
@@ -78,7 +80,7 @@ class LaunchGateRomLookup(Protocol):
     gate uses to allow the launch through unmodified.
     """
 
-    def get_rom_by_steam_app_id(self, app_id: int) -> dict | None: ...
+    def get_rom_by_steam_app_id(self, app_id: int) -> dict[str, Any] | None: ...
 
 
 class LaunchGateInstalledChecker(Protocol):
@@ -105,7 +107,7 @@ class LaunchGateSaveStatusReader(Protocol):
     allowed (no tracked saves — nothing to corrupt).
     """
 
-    async def get_save_status(self, rom_id: int) -> dict: ...
+    async def get_save_status(self, rom_id: int) -> dict[str, Any]: ...
 
     def has_tracked_save(self, rom_id: int) -> bool: ...
 
@@ -120,7 +122,7 @@ class SessionPlaytimeRecorder(Protocol):
     on the returned DTO so the frontend leaves the display untouched.
     """
 
-    async def record_session_end(self, rom_id: int) -> dict: ...
+    async def record_session_end(self, rom_id: int) -> dict[str, Any]: ...
 
 
 class SessionPostExitSync(Protocol):
@@ -133,7 +135,7 @@ class SessionPostExitSync(Protocol):
     toast.
     """
 
-    async def post_exit_sync(self, rom_id: int) -> dict: ...
+    async def post_exit_sync(self, rom_id: int) -> dict[str, Any]: ...
 
 
 class SessionAchievementSync(Protocol):
@@ -145,7 +147,7 @@ class SessionAchievementSync(Protocol):
     logged backend-side; the frontend never observes the outcome.
     """
 
-    async def sync_achievements_after_session(self, rom_id: int) -> dict: ...
+    async def sync_achievements_after_session(self, rom_id: int) -> dict[str, Any]: ...
 
 
 class SessionMigrationReader(Protocol):

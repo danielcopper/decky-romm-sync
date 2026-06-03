@@ -11,7 +11,7 @@ cache the library sync refreshes each run.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.platform_names import decode_platform_names
 
@@ -63,7 +63,7 @@ class ShortcutRemovalService:
 
     # ── Removal queries ────────────────────────────────────────────────────
 
-    def remove_all_shortcuts(self) -> dict:
+    def remove_all_shortcuts(self) -> dict[str, Any]:
         """Return app_ids and rom_ids for the frontend to remove via SteamClient.
 
         Bound ROMs contribute their ``shortcut_app_id``; every ROM contributes
@@ -77,7 +77,7 @@ class ShortcutRemovalService:
         rom_ids = [str(rom.rom_id) for rom in roms]
         return {"success": True, "app_ids": app_ids, "rom_ids": rom_ids}
 
-    async def remove_platform_shortcuts(self, platform_slug: str) -> dict:
+    async def remove_platform_shortcuts(self, platform_slug: str) -> dict[str, Any]:
         """Return app_ids and rom_ids for a platform for the frontend to remove via SteamClient.
 
         Filters ``uow.roms`` by ``platform_slug`` directly; the display name in
@@ -90,7 +90,7 @@ class ShortcutRemovalService:
             self._logger.error(f"Failed to get platform shortcuts: {e}")
             return {"success": False, "message": f"Failed: {e}", "app_ids": [], "rom_ids": []}
 
-    def _remove_platform_shortcuts_io(self, platform_slug: str) -> dict:
+    def _remove_platform_shortcuts_io(self, platform_slug: str) -> dict[str, Any]:
         with self._uow_factory() as uow:
             roms = list(uow.roms.iter_by_platform(platform_slug))
             platform_name = self._read_platform_name_cache(uow).get(platform_slug, platform_slug)
@@ -104,7 +104,7 @@ class ShortcutRemovalService:
 
     # ── Removal results ────────────────────────────────────────────────────
 
-    def _report_removal_results_io(self, removed_rom_ids: list) -> None:
+    def _report_removal_results_io(self, removed_rom_ids: list[int | str]) -> None:
         """Sync helper for report_removal_results — Steam-Input reset, artwork deletion, unbind."""
         with self._uow_factory() as uow:
             roms = {rom_id: uow.roms.get(int(rom_id)) for rom_id in removed_rom_ids}
@@ -142,7 +142,7 @@ class ShortcutRemovalService:
             entry["app_id"] = rom.shortcut_app_id
         return entry  # type: ignore[return-value]
 
-    async def report_removal_results(self, removed_rom_ids: list) -> dict:
+    async def report_removal_results(self, removed_rom_ids: list[int | str]) -> dict[str, Any]:
         """Called by frontend after removing shortcuts via SteamClient."""
         await self._loop.run_in_executor(None, self._report_removal_results_io, removed_rom_ids)
         return {"success": True, "message": f"Removed {len(removed_rom_ids)} shortcuts"}

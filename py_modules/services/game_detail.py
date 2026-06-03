@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from models.metadata import AchievementSummary
 
@@ -54,7 +54,7 @@ class GameDetailServiceConfig:
     game-detail payload.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     logger: logging.Logger
     clock: Clock
     uow_factory: UnitOfWorkFactory
@@ -81,7 +81,7 @@ class GameDetailService:
         return rom.fs_name
 
     @staticmethod
-    def _build_save_status(save_state: RomSaveState | None) -> dict | None:
+    def _build_save_status(save_state: RomSaveState | None) -> dict[str, Any] | None:
         """Build cached save-sync status from the ROM's save state, or None."""
         if save_state is None:
             return None
@@ -102,7 +102,7 @@ class GameDetailService:
             "conflicts": [],  # cached only — full conflicts via get_save_status()
         }
 
-    def _build_achievement_summary(self, rom_id_str: str, ra_id: int | None) -> dict | None:
+    def _build_achievement_summary(self, rom_id_str: str, ra_id: int | None) -> dict[str, Any] | None:
         """Build cached achievement summary for badge rendering, or None."""
         if not ra_id or not self._achievements.get_ra_username():
             return None
@@ -149,10 +149,10 @@ class GameDetailService:
         *,
         now: float,
         metadata: MetadataCacheEntry | None,
-        bios_status: dict | None,
+        bios_status: dict[str, Any] | None,
         platform_slug: str,
         ra_id: int | None,
-        achievement_summary: dict | None,
+        achievement_summary: dict[str, Any] | None,
     ) -> list[str]:
         """Return list of cache keys that are stale and need background refresh."""
         stale: list[str] = []
@@ -176,7 +176,7 @@ class GameDetailService:
 
         return stale
 
-    def get_cached_game_detail(self, app_id) -> dict:
+    def get_cached_game_detail(self, app_id) -> dict[str, Any]:
         """Return cached data for a game keyed by its Steam ``app_id``."""
         app_id = int(app_id)
 
@@ -263,7 +263,7 @@ class GameDetailService:
             "stale_fields": stale_fields,
         }
 
-    async def get_bios_status(self, rom_id) -> dict:
+    async def get_bios_status(self, rom_id) -> dict[str, Any]:
         """Return BIOS status for a ROM by looking up platform/rom_file from SQLite.
 
         Response always includes ``bios_status`` (dict or ``None``), ``bios_level``

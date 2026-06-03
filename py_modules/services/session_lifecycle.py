@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import logging
@@ -51,7 +51,7 @@ class SessionFinalizeSyncResult:
     offline: bool
     success: bool
     synced: int | None
-    conflicts: list[dict]
+    conflicts: list[dict[str, Any]]
     toast_title: str | None
     toast_body: str | None
     conflicts_toast: str | None
@@ -66,8 +66,8 @@ class SessionFinalizeMigration:
     without re-deriving them from a loose dict.
     """
 
-    retrodeck: dict
-    save_sort: dict
+    retrodeck: dict[str, Any]
+    save_sort: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ def _render_sync_toast(*, offline: bool, success: bool, synced: int | None) -> t
     return _TOAST_TITLE, _TOAST_BODY_FAILED
 
 
-def _render_conflicts_toast(conflicts: list[dict]) -> str | None:
+def _render_conflicts_toast(conflicts: list[dict[str, Any]]) -> str | None:
     """Render the additive "N save conflict(s) need resolution" body.
 
     Singular when ``count == 1``, plural otherwise. Returns ``None``
@@ -152,7 +152,7 @@ class SessionLifecycleService:
         # alone is not enough — without a strong ref, the loop is free to
         # garbage-collect the task before it completes. ``add_done_callback``
         # prunes finished entries to keep the set bounded.
-        self._background_tasks: set[asyncio.Task] = set()
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def shutdown(self) -> None:
         """Cancel any in-flight background tasks and await their completion.
@@ -273,7 +273,7 @@ class SessionLifecycleService:
         raw_synced = result.get("synced")
         synced = raw_synced if isinstance(raw_synced, int) else None
         raw_conflicts = result.get("conflicts")
-        conflicts: list[dict] = list(raw_conflicts) if isinstance(raw_conflicts, list) else []
+        conflicts: list[dict[str, Any]] = list(raw_conflicts) if isinstance(raw_conflicts, list) else []
 
         toast_title, toast_body = _render_sync_toast(offline=offline, success=success, synced=synced)
         conflicts_toast = _render_conflicts_toast(conflicts)

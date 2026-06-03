@@ -11,7 +11,7 @@ than reaching through ``service._state.x``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.sync_state import SyncState
 
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from domain.preview_delta import PreviewDelta
 
 
-def _default_progress() -> dict:
+def _default_progress() -> dict[str, Any]:
     return {
         "running": False,
         "stage": "",
@@ -48,10 +48,10 @@ class LibrarySyncStateBox:
     sync_state: SyncState = SyncState.IDLE
     current_sync_id: str | None = None
     sync_last_heartbeat: float = 0.0
-    sync_progress: dict = field(default_factory=_default_progress)
-    pending_sync: dict = field(default_factory=dict)
+    sync_progress: dict[str, Any] = field(default_factory=_default_progress)
+    pending_sync: dict[int, dict[str, Any]] = field(default_factory=dict)
     pending_delta: PreviewDelta | None = None
-    pending_collection_memberships: dict = field(default_factory=dict)
+    pending_collection_memberships: dict[str, list[int]] = field(default_factory=dict)
     pending_platform_rom_ids: set[int] | None = None
     # Per-unit pipeline coordination. ``unit_complete_event`` is set by
     # :meth:`SyncReporter.report_unit_results` when the frontend reports

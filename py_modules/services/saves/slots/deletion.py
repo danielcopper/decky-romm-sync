@@ -10,7 +10,7 @@ operation's own narrow Unit of Work (ADR-0006).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lib.list_result import ErrorCode
 from services.saves._settings import save_sync_enabled
@@ -35,7 +35,7 @@ class SlotDeleter:
     def __init__(
         self,
         *,
-        settings: dict,
+        settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
         rom_info: RomInfoService,
         romm_api: RommSaveApi,
@@ -65,7 +65,9 @@ class SlotDeleter:
         with self._uow_factory() as uow:
             uow.rom_save_states.save(rom_id, save_state)
 
-    def _validate_slot_operation(self, rom_id: int, slot: str) -> dict | tuple[RomSaveState, dict[str, dict]]:
+    def _validate_slot_operation(
+        self, rom_id: int, slot: str
+    ) -> dict[str, Any] | tuple[RomSaveState, dict[str, dict[str, Any]]]:
         """Shared validation for slot delete operations.
 
         Returns an error dict on failure, or a (rom_state, slots_dict) tuple on
@@ -79,12 +81,12 @@ class SlotDeleter:
         save_state = self._read_save_state(rom_id)
         if save_state is None:
             return {"success": False, "reason": "not_found"}
-        slots_dict: dict[str, dict] = save_state.slots
+        slots_dict: dict[str, dict[str, Any]] = save_state.slots
         if slot not in slots_dict:
             return {"success": False, "reason": "not_found"}
         return save_state, slots_dict
 
-    async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict:
+    async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Return info about what deleting a slot would do, for the confirmation modal."""
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
@@ -104,7 +106,7 @@ class SlotDeleter:
         if source == "server":
             device_id = await self._loop.run_in_executor(None, self._read_device_id)
             try:
-                server_saves: list[dict] = await self._loop.run_in_executor(
+                server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                     None,
                     lambda: self._retry.with_retry(
                         lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
@@ -145,11 +147,11 @@ class SlotDeleter:
             "is_active": is_active,
         }
 
-    async def _delete_server_slot_saves(self, rom_id: int, slot: str) -> dict:
+    async def _delete_server_slot_saves(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Delete all server saves in a slot. Returns result dict with count and IDs."""
         device_id = await self._loop.run_in_executor(None, self._read_device_id)
         try:
-            server_saves: list[dict] = await self._loop.run_in_executor(
+            server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
@@ -172,7 +174,7 @@ class SlotDeleter:
                 "message": f"Failed to delete server saves: {e}",
             }
 
-    async def delete_slot(self, rom_id: int, slot: str) -> dict:
+    async def delete_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Delete a save slot and all its saves (local state + server if applicable)."""
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""

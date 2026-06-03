@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
@@ -58,12 +58,12 @@ class MigrationServiceConfig:
     """
 
     migration_file_store: MigrationFileStore
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     settings_persister: SettingsPersister
     emit: EventEmitter
-    get_bios_files_index: Callable[[], dict]
+    get_bios_files_index: Callable[[], dict[str, dict[str, Any]]]
     retrodeck_paths: RetroDeckPaths
     get_retroarch_save_sorting: RetroArchSaveSortingProvider
     get_active_core: CoreResolverFn
@@ -91,9 +91,9 @@ class MigrationService:
         # alone is not enough — without a strong ref, the loop is free to
         # garbage-collect the task before it completes. ``add_done_callback``
         # prunes finished entries to keep the set bounded.
-        self._background_tasks: set[asyncio.Task] = set()
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
-    def _spawn_background_task(self, coro) -> asyncio.Task:
+    def _spawn_background_task(self, coro) -> asyncio.Task[Any]:
         """Schedule ``coro`` on the plugin loop and track the task for shutdown.
 
         Wraps ``loop.create_task`` so the resulting task is retained in
@@ -184,7 +184,7 @@ class MigrationService:
         with self._uow_factory() as uow:
             return bool(uow.kv_config.get(_KV_RETRODECK_HOME_PREVIOUS))
 
-    def dismiss_retrodeck_migration(self) -> dict:
+    def dismiss_retrodeck_migration(self) -> dict[str, Any]:
         """Dismiss the RetroDECK path migration warning without migrating files."""
         with self._uow_factory() as uow:
             uow.kv_config.delete(_KV_RETRODECK_HOME_PREVIOUS)
@@ -668,7 +668,7 @@ class MigrationService:
         old_settings: SaveSortSettings,
         new_settings: SaveSortSettings,
         installs: list[RomInstall],
-    ) -> list:
+    ) -> list[tuple[str, str, str, object, str]]:
         """Collect save files that need migration due to sort setting change.
 
         ``installs`` is the pre-snapshotted ``RomInstall`` list (the caller opens
@@ -698,7 +698,7 @@ class MigrationService:
         old_settings: SaveSortSettings,
         new_settings: SaveSortSettings,
         need_core: bool,
-        items: list,
+        items: list[tuple[str, str, str, object, str]],
     ) -> None:
         """Collect migration items for a single ROM's save files."""
         system = install.system
@@ -752,7 +752,7 @@ class MigrationService:
 
     def _get_save_sort_migration_status_io(
         self, old_settings: SaveSortSettings, new_settings: SaveSortSettings
-    ) -> dict:
+    ) -> dict[str, Any]:
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
         items = self._collect_save_sorting_items(old_settings, new_settings, installs)
@@ -763,13 +763,13 @@ class MigrationService:
             "saves_count": len(items),
         }
 
-    def dismiss_save_sort_migration(self) -> dict:
+    def dismiss_save_sort_migration(self) -> dict[str, Any]:
         """Dismiss the save sort migration warning without migrating files."""
         with self._uow_factory() as uow:
             uow.kv_config.delete(_KV_SAVE_SORT_PREVIOUS)
         return {"success": True}
 
-    async def get_save_sort_migration_status(self) -> dict:
+    async def get_save_sort_migration_status(self) -> dict[str, Any]:
         with self._uow_factory() as uow:
             old = self._read_save_sort_settings_previous(uow)
             new = self._read_save_sort_settings(uow)
@@ -777,7 +777,7 @@ class MigrationService:
             return {"pending": False}
         return await self._loop.run_in_executor(None, self._get_save_sort_migration_status_io, old, new)
 
-    async def refresh_state(self) -> dict:
+    async def refresh_state(self) -> dict[str, Any]:
         """Run both detection passes and return combined migration state.
 
         Detects any RetroDECK home-path change and any RetroArch save-sort
@@ -796,9 +796,9 @@ class MigrationService:
         old_path: str,
         new_path: str,
         state_updater,
-        counts: dict,
+        counts: dict[str, int],
         count_key: str,
-        errors: list,
+        errors: list[str],
     ) -> None:
         """Newest-wins resolution for a save-sort conflict.
 
@@ -844,7 +844,7 @@ class MigrationService:
 
     def _migrate_save_sort_files_io(
         self, old_settings: SaveSortSettings, new_settings: SaveSortSettings, conflict_strategy: str | None
-    ) -> dict:
+    ) -> dict[str, Any]:
         # conflict_strategy is retained for backwards-compatibility with the
         # callable signature but is unused for save-sort migration — conflicts
         # are resolved in place via newest-wins (see _resolve_save_sort_conflict).
@@ -868,7 +868,7 @@ class MigrationService:
                 uow.kv_config.delete(_KV_SAVE_SORT_PREVIOUS)
         return self._build_migration_result(counts, errors)
 
-    async def migrate_save_sort_files(self, conflict_strategy: str | None = None) -> dict:
+    async def migrate_save_sort_files(self, conflict_strategy: str | None = None) -> dict[str, Any]:
         with self._uow_factory() as uow:
             old = self._read_save_sort_settings_previous(uow)
             new = self._read_save_sort_settings(uow)

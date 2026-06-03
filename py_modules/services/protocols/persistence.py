@@ -10,7 +10,7 @@ plugin-level persisters.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class SettingsPersister(Protocol):
@@ -30,9 +30,9 @@ class FirmwareCachePersister(Protocol):
     ``"items" in data`` without a None-check.
     """
 
-    def save(self, data: dict) -> None: ...
+    def save(self, data: dict[str, Any]) -> None: ...
 
-    def load(self) -> dict: ...
+    def load(self) -> dict[str, Any]: ...
 
 
 class PluginMetadataReader(Protocol):

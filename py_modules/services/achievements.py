@@ -11,7 +11,7 @@ policy, and the pure progress extraction live here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.achievements import extract_achievements_from_rom, extract_game_progress
 
@@ -55,7 +55,7 @@ class AchievementsService:
         self._clock = config.clock
         self._log_debug = config.log_debug
 
-        self._achievements_cache: dict = {}
+        self._achievements_cache: dict[str, Any] = {}
 
     def _read_ra_id(self, rom_id: int) -> int | None:
         """Return the ROM's RetroAchievements id from ``uow.roms``, or ``None``.

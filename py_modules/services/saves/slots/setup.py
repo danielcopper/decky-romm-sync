@@ -10,7 +10,7 @@ operation's own narrow Unit of Work (ADR-0006).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
 from domain.rom_save_state import RomSaveState
@@ -41,7 +41,7 @@ class SetupWizard:
     def __init__(
         self,
         *,
-        settings: dict,
+        settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
         rom_info: RomInfoService,
         resolve_core: Callable[[int], str | None],
@@ -77,7 +77,7 @@ class SetupWizard:
         with self._uow_factory() as uow:
             uow.rom_save_states.save(rom_id, save_state)
 
-    def is_save_tracking_configured(self, rom_id: int) -> dict:
+    def is_save_tracking_configured(self, rom_id: int) -> dict[str, Any]:
         """Check if save slot tracking is configured for a game.
 
         Fast, synchronous check — reads only from local state.
@@ -89,7 +89,7 @@ class SetupWizard:
         active_slot = game_state.active_slot if (game_state and configured) else None
         return {"configured": configured, "active_slot": active_slot}
 
-    async def get_save_setup_info(self, rom_id: int) -> dict:
+    async def get_save_setup_info(self, rom_id: int) -> dict[str, Any]:
         """Get info needed for the first-sync setup wizard.
 
         Fetches server saves, checks local files, determines which
@@ -113,7 +113,7 @@ class SetupWizard:
         game_state, device_id = await self._loop.run_in_executor(None, self._read_setup_inputs, rom_id)
         default_slot = resolve_default_slot(self._settings) or "default"
         try:
-            server_saves: list[dict] = await self._loop.run_in_executor(
+            server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
@@ -137,7 +137,7 @@ class SetupWizard:
             }
 
         # Group server saves by slot
-        slots_map: dict[str | None, list[dict]] = {}
+        slots_map: dict[str | None, list[dict[str, Any]]] = {}
         for ss in server_saves:
             slot_key = ss.get("slot")
             slots_map.setdefault(slot_key, []).append(ss)
@@ -198,7 +198,7 @@ class SetupWizard:
         rom_id: int,
         chosen_slot: str,
         migrate_from_slot: str | None | object = NO_MIGRATION,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync.
 
         Sets slot_confirmed=true and active_slot in state.

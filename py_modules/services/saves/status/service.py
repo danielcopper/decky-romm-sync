@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import detect_core_change
 from domain.iso_time import parse_iso_to_epoch
@@ -46,7 +46,7 @@ class StatusServiceConfig:
     status updates to the frontend.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
     rom_info: RomInfoService
@@ -83,7 +83,7 @@ class StatusService:
         rom_id: int,
         server_device_id: str | None,
         own_upload_ids: list[int] | None,
-    ) -> tuple[dict, dict | None]:
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """Build the status DTO + optional conflict descriptor for one outcome.
 
         Returns ``(status_entry, conflict_entry_or_None)``. The conflict
@@ -104,7 +104,7 @@ class StatusService:
             server_device_id=server_device_id,
             uploaded_by_us=compute_uploaded_by_us(chosen_server, own_upload_ids),
         )
-        conflict_entry: dict | None = None
+        conflict_entry: dict[str, Any] | None = None
         if isinstance(action, Conflict):
             self._log_debug(
                 f"_get_save_status_io({rom_id}): conflict {outcome.filename} "
@@ -120,8 +120,8 @@ class StatusService:
         rom_id: int,
         save_state: RomSaveState,
         device_id: str | None,
-        server_in_slot: list[dict],
-        info: dict,
+        server_in_slot: list[dict[str, Any]],
+        info: dict[str, Any],
     ) -> tuple[MatrixOutcome | None, list[MatrixOutcome], bool]:
         """Iterate matrix outcomes for the active slot, splitting them into local/server-only buckets.
 
@@ -151,10 +151,10 @@ class StatusService:
     def _get_save_status_io(
         self,
         rom_id: int,
-        server_saves: list[dict],
+        server_saves: list[dict[str, Any]],
         *,
         server_query_failed: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Sync helper for get_save_status — runs in executor.
 
         Builds the saves-tab status for one ROM as a single-entry view of
@@ -199,8 +199,8 @@ class StatusService:
 
         own_upload_ids: list[int] | None = save_state.own_upload_ids if save_state else None
 
-        file_statuses: list[dict] = []
-        conflicts: list[dict] = []
+        file_statuses: list[dict[str, Any]] = []
+        conflicts: list[dict[str, Any]] = []
 
         if info is not None:
             # The baseline-adopt path mutates a working copy; an absent aggregate
@@ -258,7 +258,7 @@ class StatusService:
     # Public callable surface — invoked via the SaveService aggregate root
     # ------------------------------------------------------------------
 
-    async def get_save_status(self, rom_id: int) -> dict:
+    async def get_save_status(self, rom_id: int) -> dict[str, Any]:
         """Get save sync status for a ROM (local files, server saves, conflict state).
 
         When the ``list_saves`` call raises (transient network blip, server
@@ -276,7 +276,7 @@ class StatusService:
         """
         rom_id = int(rom_id)
 
-        server_saves: list[dict] = []
+        server_saves: list[dict[str, Any]] = []
         server_query_failed = False
         try:
             device_id = await self._loop.run_in_executor(None, self._read_device_id)
@@ -310,7 +310,7 @@ class StatusService:
         except Exception as e:
             self._log_debug(f"Background save status check failed for rom {rom_id}: {e}")
 
-    def check_core_change(self, rom_id: int) -> dict:
+    def check_core_change(self, rom_id: int) -> dict[str, Any]:
         """Check if emulator core changed since last sync for a ROM."""
         if not save_sync_enabled(self._settings):
             return {"changed": False}
@@ -365,7 +365,7 @@ def _outcome_server_sort_key(outcome: MatrixOutcome) -> float:
     return parse_iso_to_epoch(newest.get("updated_at")) or 0.0
 
 
-def _playtime_to_dict(playtime) -> dict:
+def _playtime_to_dict(playtime) -> dict[str, Any]:
     """Project the ``Playtime`` aggregate onto the frontend dict, or ``{}`` when absent."""
     if playtime is None:
         return {}
@@ -378,7 +378,7 @@ def _playtime_to_dict(playtime) -> dict:
     }
 
 
-def _redact_server_fields(entry: dict) -> dict:
+def _redact_server_fields(entry: dict[str, Any]) -> dict[str, Any]:
     """Return a copy of *entry* with status="unknown" and server fields nulled out.
 
     Used when the ``list_saves`` query failed: the matrix ran against an

@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
@@ -71,7 +71,7 @@ class SyncEngineConfig:
     SyncEngine consults at the entry of every public flow.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     rom_info: RomInfoService
     romm_api: RommSyncApi
@@ -198,13 +198,13 @@ class SyncEngine:
         device_id: str | None,
         core_so: str | None,
         default_slot: str | None = None,
-    ) -> tuple[int, list[str], list[dict]]:
+    ) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Sync saves for a single ROM (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.sync_rom_saves(rom_id, save_state, device_id, core_so, default_slot)
 
     def do_download_save(
         self,
-        server_save: dict,
+        server_save: dict[str, Any],
         saves_dir: str,
         filename: str,
         save_state: RomSaveState,
@@ -224,9 +224,9 @@ class SyncEngine:
         device_id: str | None,
         system: str,
         core_so: str | None,
-        server_save: dict | None = None,
+        server_save: dict[str, Any] | None = None,
         default_slot: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Upload a local save file to server (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.do_upload_save(
             rom_id, file_path, filename, save_state, device_id, system, core_so, server_save, default_slot
@@ -235,11 +235,11 @@ class SyncEngine:
     def iter_matrix_outcomes(
         self,
         rom_id: int,
-        server_in_slot: list[dict],
+        server_in_slot: list[dict[str, Any]],
         *,
         save_state: RomSaveState | None,
         device_id: str | None,
-        info: dict,
+        info: dict[str, Any],
     ) -> Iterator[MatrixOutcome]:
         """Yield one :class:`MatrixOutcome` per save file in the ROM's active slot."""
         return self._matrix.iter_matrix_outcomes(
@@ -251,7 +251,9 @@ class SyncEngine:
         self._matrix.adopt_baseline_hash(save_state, filename, local_hash)
 
     @staticmethod
-    def filter_server_saves_to_slot(server_saves: list[dict], active_slot: str | None) -> list[dict]:
+    def filter_server_saves_to_slot(
+        server_saves: list[dict[str, Any]], active_slot: str | None
+    ) -> list[dict[str, Any]]:
         """Filter server saves to the active slot."""
         return MatrixExecutor.filter_server_saves_to_slot(server_saves, active_slot)
 
@@ -259,10 +261,10 @@ class SyncEngine:
         self,
         rom_id: int,
         filename: str,
-        server: dict,
+        server: dict[str, Any],
         local_path: str | None,
         local_hash: str | None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Build a Phase-2 ``sync_conflict`` descriptor for the frontend."""
         return self._matrix.build_sync_conflict_entry(rom_id, filename, server, local_path, local_hash)
 
@@ -274,7 +276,7 @@ class SyncEngine:
     # with its callers avoids a constructor callback.
     # ------------------------------------------------------------------
 
-    async def ensure_device_registered(self) -> dict:
+    async def ensure_device_registered(self) -> dict[str, Any]:
         """Ensure this device is registered with the RomM server for save sync tracking."""
         return await self._devices.ensure_device_registered(
             loop=self._loop,
@@ -282,7 +284,7 @@ class SyncEngine:
             machine_id_provider=self._machine_id_provider,
         )
 
-    async def list_devices(self) -> dict:
+    async def list_devices(self) -> dict[str, Any]:
         """List all devices registered with the RomM server for this user."""
         return await self._devices.list_devices(loop=self._loop)
 
@@ -337,7 +339,7 @@ class SyncEngine:
                 e,
             )
 
-    async def _run_rom_sync(self, rom_id: int) -> tuple[int, list[str], list[dict]]:
+    async def _run_rom_sync(self, rom_id: int) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Read inputs → sync in executor → persist, for one ROM under its lock.
 
         The narrow-UoW shape (ADR-0006): a short read UoW loads the aggregate +
@@ -361,7 +363,7 @@ class SyncEngine:
         await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
         return synced, errors, conflicts
 
-    async def pre_launch_sync(self, rom_id: int) -> dict:
+    async def pre_launch_sync(self, rom_id: int) -> dict[str, Any]:
         """Download newer saves from server before game launch."""
         rom_id = int(rom_id)
         async with self.rom_lock(rom_id):
@@ -414,7 +416,7 @@ class SyncEngine:
                 "conflicts": list(conflicts),
             }
 
-    async def post_exit_sync(self, rom_id: int) -> dict:
+    async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
         """Upload changed saves after game exit."""
         self._logger.info("post_exit_sync called for rom_id=%d", rom_id)
         rom_id = int(rom_id)
@@ -477,7 +479,7 @@ class SyncEngine:
                 "conflicts": list(conflicts),
             }
 
-    async def sync_rom_saves(self, rom_id: int) -> dict:
+    async def sync_rom_saves(self, rom_id: int) -> dict[str, Any]:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""
         rom_id = int(rom_id)
         async with self.rom_lock(rom_id):
@@ -515,7 +517,7 @@ class SyncEngine:
         with self._uow_factory() as uow:
             return sorted(install.rom_id for install in uow.rom_installs.iter_all())
 
-    async def sync_all_saves(self) -> dict:
+    async def sync_all_saves(self) -> dict[str, Any]:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
         if not self.is_save_sync_enabled():
             return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0, "conflicts": 0}
@@ -533,7 +535,7 @@ class SyncEngine:
 
         total_synced = 0
         total_errors: list[str] = []
-        all_conflicts: list[dict] = []
+        all_conflicts: list[dict[str, Any]] = []
         rom_count = 0
 
         # Only iterate installed ROMs — non-installed ROMs have no save files
@@ -570,7 +572,7 @@ class SyncEngine:
         filename: str,
         server_save_id: int,
         action: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Resolve a pending sync conflict (true two-sided divergence).
 
         Reached when ``compute_sync_action`` returned ``Conflict`` — the

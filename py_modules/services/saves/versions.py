@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from services.saves._helpers import local_save_target
@@ -42,7 +42,7 @@ class VersionsServiceConfig:
     and the ``DebugLogger`` seam.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
     rom_info: RomInfoService
@@ -93,7 +93,7 @@ class VersionsService:
     # Version History API
     # ------------------------------------------------------------------
 
-    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> dict:
+    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> dict[str, Any]:
         """List server-side saves in the active slot, excluding the currently-tracked one.
 
         The slot is the unit, not the filename. Saves uploaded by other
@@ -158,9 +158,9 @@ class VersionsService:
         device_id: str | None,
         core_so: str | None,
         save_id: int,
-        info: dict,
-        server_saves: list[dict],
-    ) -> dict:
+        info: dict[str, Any],
+        server_saves: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Blocking I/O portion of the version-switch flow — runs in executor.
 
         The caller is responsible for the matrix pre-flight: by the time
@@ -234,7 +234,7 @@ class VersionsService:
 
         return {"status": "ok"}
 
-    async def rollback_to_version(self, rom_id: int, slot: str, save_id: int) -> dict:
+    async def rollback_to_version(self, rom_id: int, slot: str, save_id: int) -> dict[str, Any]:
         """Switch the local + tracked save to a chosen older server version.
 
         Flow:
@@ -314,7 +314,7 @@ class VersionsService:
             # Re-fetch server saves after the pre-flight: it may have created
             # or modified saves the switch needs to see.
             try:
-                server_saves: list[dict] = await self._loop.run_in_executor(
+                server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                     None,
                     lambda: self._retry.with_retry(
                         lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)

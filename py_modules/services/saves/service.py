@@ -12,7 +12,7 @@ single-sub-service logic does not.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from services.saves._config import SaveServiceConfig
@@ -149,11 +149,11 @@ class SaveService:
     # Device registration (delegated to SyncEngine)
     # ------------------------------------------------------------------
 
-    async def ensure_device_registered(self) -> dict:
+    async def ensure_device_registered(self) -> dict[str, Any]:
         """Ensure this device is registered with the RomM server for save sync tracking."""
         return await self._sync_engine.ensure_device_registered()
 
-    async def list_devices(self) -> dict:
+    async def list_devices(self) -> dict[str, Any]:
         """List all devices registered with the RomM server for this user."""
         return await self._sync_engine.list_devices()
 
@@ -161,7 +161,7 @@ class SaveService:
     # Status (delegated to StatusService)
     # ------------------------------------------------------------------
 
-    async def get_save_status(self, rom_id: int) -> dict:
+    async def get_save_status(self, rom_id: int) -> dict[str, Any]:
         """Get save sync status for a ROM (local files, server saves, conflict state)."""
         return await self._status.get_save_status(rom_id)
 
@@ -169,7 +169,7 @@ class SaveService:
         """Run full save status check in background and emit result to frontend."""
         await self._status.check_save_status_background(rom_id)
 
-    def check_core_change(self, rom_id: int) -> dict:
+    def check_core_change(self, rom_id: int) -> dict[str, Any]:
         """Check if emulator core changed since last sync for a ROM."""
         return self._status.check_core_change(rom_id)
 
@@ -193,19 +193,19 @@ class SaveService:
     # Sync orchestration (delegated to SyncEngine)
     # ------------------------------------------------------------------
 
-    async def pre_launch_sync(self, rom_id: int) -> dict:
+    async def pre_launch_sync(self, rom_id: int) -> dict[str, Any]:
         """Download newer saves from server before game launch."""
         return await self._sync_engine.pre_launch_sync(rom_id)
 
-    async def post_exit_sync(self, rom_id: int) -> dict:
+    async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
         """Upload changed saves after game exit."""
         return await self._sync_engine.post_exit_sync(rom_id)
 
-    async def sync_rom_saves(self, rom_id: int) -> dict:
+    async def sync_rom_saves(self, rom_id: int) -> dict[str, Any]:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""
         return await self._sync_engine.sync_rom_saves(rom_id)
 
-    async def sync_all_saves(self) -> dict:
+    async def sync_all_saves(self) -> dict[str, Any]:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
         return await self._sync_engine.sync_all_saves()
 
@@ -215,7 +215,7 @@ class SaveService:
         filename: str,
         server_save_id: int,
         action: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Resolve a pending sync conflict (true two-sided divergence)."""
         return await self._sync_engine.resolve_sync_conflict(rom_id, filename, server_save_id, action)
 
@@ -223,23 +223,23 @@ class SaveService:
     # Slots (delegated to SlotsService)
     # ------------------------------------------------------------------
 
-    async def get_save_slots(self, rom_id: int) -> dict:
+    async def get_save_slots(self, rom_id: int) -> dict[str, Any]:
         """List available save slots for a ROM."""
         return await self._slots.get_save_slots(rom_id)
 
-    async def get_slot_saves(self, rom_id: int, slot: str) -> dict:
+    async def get_slot_saves(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Fetch server save files for a specific slot."""
         return await self._slots.get_slot_saves(rom_id, slot)
 
-    async def switch_slot(self, rom_id: int, new_slot: str) -> dict:
+    async def switch_slot(self, rom_id: int, new_slot: str) -> dict[str, Any]:
         """Switch the active save slot with immediate state sync."""
         return await self._slots.switch_slot(rom_id, new_slot)
 
-    def is_save_tracking_configured(self, rom_id: int) -> dict:
+    def is_save_tracking_configured(self, rom_id: int) -> dict[str, Any]:
         """Check if save slot tracking is configured for a game."""
         return self._slots.is_save_tracking_configured(rom_id)
 
-    async def get_save_setup_info(self, rom_id: int) -> dict:
+    async def get_save_setup_info(self, rom_id: int) -> dict[str, Any]:
         """Get info needed for the first-sync setup wizard."""
         return await self._slots.get_save_setup_info(rom_id)
 
@@ -248,7 +248,7 @@ class SaveService:
         rom_id: int,
         chosen_slot: str,
         migrate_from_slot: str | None | object = NO_MIGRATION,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync.
 
         ``migrate_from_slot`` may be the ``NO_MIGRATION`` sentinel, ``None``,
@@ -259,11 +259,11 @@ class SaveService:
             migrate_from_slot = NO_MIGRATION
         return await self._slots.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)
 
-    async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict:
+    async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Return info about what deleting a slot would do, for the confirmation modal."""
         return await self._slots.get_slot_delete_info(rom_id, slot)
 
-    async def delete_slot(self, rom_id: int, slot: str) -> dict:
+    async def delete_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Delete a save slot and all its saves (local state + server if applicable)."""
         return await self._slots.delete_slot(rom_id, slot)
 
@@ -271,11 +271,11 @@ class SaveService:
     # Versions (delegated to VersionsService)
     # ------------------------------------------------------------------
 
-    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> dict:
+    async def list_file_versions(self, rom_id: int, slot: str, filename: str) -> dict[str, Any]:
         """List server-side versions of *filename* in the active slot."""
         return await self._versions.list_file_versions(rom_id, slot, filename)
 
-    async def rollback_to_version(self, rom_id: int, slot: str, save_id: int) -> dict:
+    async def rollback_to_version(self, rom_id: int, slot: str, save_id: int) -> dict[str, Any]:
         """Switch the local + tracked save to a chosen older server version."""
         return await self._versions.rollback_to_version(rom_id, slot, save_id)
 
@@ -287,11 +287,11 @@ class SaveService:
         """Whether the save-sync feature toggle is on."""
         return save_sync_enabled(self._settings)
 
-    def get_save_sync_settings(self) -> dict:
+    def get_save_sync_settings(self) -> dict[str, Any]:
         """Return current save sync settings as the frontend dict shape."""
         return save_sync_settings_view(self._settings)
 
-    def update_save_sync_settings(self, settings: dict) -> dict:
+    def update_save_sync_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         """Update save sync settings (sync toggles, slot, etc.) in settings.json."""
         for key, value in settings.items():
             if key not in ALLOWED_SETTINGS_KEYS:
@@ -354,7 +354,7 @@ class SaveService:
 
         return total_deleted, errors
 
-    def delete_local_saves(self, rom_id: int) -> dict:
+    def delete_local_saves(self, rom_id: int) -> dict[str, Any]:
         """Delete local save files (.srm, .rtc) for a ROM."""
         rom_id = int(rom_id)
 
@@ -380,7 +380,7 @@ class SaveService:
         with self._uow_factory() as uow:
             return [install.rom_id for install in uow.rom_installs.iter_all() if install.platform_slug == platform_slug]
 
-    def delete_platform_saves(self, platform_slug: str) -> dict:
+    def delete_platform_saves(self, platform_slug: str) -> dict[str, Any]:
         """Delete local save files for all installed ROMs on a platform."""
         rom_ids = self._installed_rom_ids_on_platform(platform_slug)
 

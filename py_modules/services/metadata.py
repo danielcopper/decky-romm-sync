@@ -12,7 +12,7 @@ service's concern.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import asyncio
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     )
 
 
-def _empty_metadata_entry() -> dict:
+def _empty_metadata_entry() -> dict[str, Any]:
     """Build the empty-default metadata entry returned on a cache miss.
 
     Array fields are empty lists (not tuples) to match the ``RomMetadata``
@@ -45,7 +45,7 @@ def _empty_metadata_entry() -> dict:
     }
 
 
-def _metadata_to_entry(metadata: RomMetadata) -> dict:
+def _metadata_to_entry(metadata: RomMetadata) -> dict[str, Any]:
     """Map a ``rom_metadata`` aggregate to the frontend wire entry.
 
     Tuple fields flatten to lists to match the ``RomMetadata`` interface

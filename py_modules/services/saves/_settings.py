@@ -12,22 +12,22 @@ from __future__ import annotations
 from typing import Any
 
 
-def save_sync_enabled(settings: dict) -> bool:
+def save_sync_enabled(settings: dict[str, Any]) -> bool:
     """Whether the save-sync feature toggle is on."""
     return bool(settings.get("save_sync_enabled", False))
 
 
-def sync_before_launch(settings: dict) -> bool:
+def sync_before_launch(settings: dict[str, Any]) -> bool:
     """Whether the pre-launch download is enabled."""
     return bool(settings.get("sync_before_launch", True))
 
 
-def sync_after_exit(settings: dict) -> bool:
+def sync_after_exit(settings: dict[str, Any]) -> bool:
     """Whether the post-exit upload is enabled."""
     return bool(settings.get("sync_after_exit", True))
 
 
-def resolve_default_slot(settings: dict) -> str | None:
+def resolve_default_slot(settings: dict[str, Any]) -> str | None:
     """The configured default slot, collapsing empty/None to ``None`` (legacy mode)."""
     raw_slot = settings.get("default_slot", "default")
     if raw_slot is None:
@@ -36,12 +36,12 @@ def resolve_default_slot(settings: dict) -> str | None:
     return slot_str if slot_str else None
 
 
-def autocleanup_limit(settings: dict) -> int:
+def autocleanup_limit(settings: dict[str, Any]) -> int:
     """The auto-cleanup retention limit, guarded against ``0`` / ``None``."""
     return int(settings.get("autocleanup_limit", 10) or 10)
 
 
-def save_sync_settings_view(settings: dict) -> dict[str, Any]:
+def save_sync_settings_view(settings: dict[str, Any]) -> dict[str, Any]:
     """Build the frontend-facing dict of the five save-sync knobs."""
     return {
         "save_sync_enabled": save_sync_enabled(settings),

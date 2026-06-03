@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import build_shortcuts_data
@@ -84,7 +84,7 @@ class SyncOrchestratorConfig:
     plugs the reader in via ``set()`` once the reporter is built.
     """
 
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     plugin_dir: str
@@ -168,7 +168,7 @@ class SyncOrchestrator:
             await self.emit_progress(SyncStage.DISCOVERING, message="Fetching platforms...")
             work_queue = await self._fetcher.build_work_queue()
 
-            all_roms: list[dict] = []
+            all_roms: list[dict[str, Any]] = []
             platform_rom_ids: set[int] = set()
             collection_memberships: dict[str, list[int]] = {}
             synced_rom_ids: set[int] = set()
@@ -250,7 +250,7 @@ class SyncOrchestrator:
     async def _fetch_preview_unit(
         self,
         unit: WorkUnit,
-        all_roms: list[dict],
+        all_roms: list[dict[str, Any]],
         platform_rom_ids: set[int],
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
@@ -324,7 +324,7 @@ class SyncOrchestrator:
         }
         await self._emit("sync_progress", self._sync_state.sync_progress)
 
-    def get_sync_status(self) -> dict:
+    def get_sync_status(self) -> dict[str, Any]:
         """Return the persisted progress snapshot — the authoritative sync state.
 
         Idle returns the default ``running: False`` snapshot; a live run
@@ -548,7 +548,9 @@ class SyncOrchestrator:
             transition(run)
             uow.sync_runs.save(run)
 
-    def _read_preview_baseline(self, slug_to_name: dict[str, str]) -> tuple[dict, list[str], list[str]]:
+    def _read_preview_baseline(
+        self, slug_to_name: dict[str, str]
+    ) -> tuple[dict[str, dict[str, Any]], list[str], list[str]]:
         """Read the classify baseline from SQLite in one short read UoW.
 
         Returns ``(registry, last_synced_platforms, last_synced_collections)``
@@ -560,7 +562,7 @@ class SyncOrchestrator:
         ``SyncRun``.
         """
         with self._uow_factory() as uow:
-            registry: dict = {}
+            registry: dict[str, dict[str, Any]] = {}
             for rom in uow.roms.iter_all():
                 if rom.shortcut_app_id is None:
                     continue
@@ -701,7 +703,7 @@ class SyncOrchestrator:
         *,
         synced_rom_ids: set[int],
         platform_rom_ids: set[int],
-    ) -> tuple[list[dict], bool]:
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Resolve ROMs for a platform unit and update cross-unit accumulators.
 
         Returns ``(unit_roms, skipped)`` for the caller's downstream
@@ -720,7 +722,7 @@ class SyncOrchestrator:
         *,
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
-    ) -> tuple[list[dict], bool]:
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Resolve ROMs for a collection unit and record its membership.
 
         Returns ``(unit_roms, skipped)`` — ``skipped`` is always

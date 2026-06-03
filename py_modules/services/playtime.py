@@ -13,7 +13,7 @@ import contextlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.playtime import Playtime
 
@@ -43,7 +43,7 @@ class PlaytimeServiceConfig:
 
     romm_api: RommPlaytimeApi
     retry: RetryStrategy
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
@@ -70,7 +70,7 @@ class PlaytimeService:
     # Playtime Notes API Helpers
     # ------------------------------------------------------------------
 
-    def _get_playtime_note(self, rom_id: int) -> dict | None:
+    def _get_playtime_note(self, rom_id: int) -> dict[str, Any] | None:
         """Fetch the playtime note for a ROM via the save API protocol.
 
         Reads ``all_user_notes`` from ROM detail and filters by title.
@@ -86,7 +86,7 @@ class PlaytimeService:
                 return note
         return None
 
-    def _create_playtime_note(self, rom_id: int, playtime_data: dict) -> dict:
+    def _create_playtime_note(self, rom_id: int, playtime_data: dict[str, Any]) -> dict[str, Any]:
         """Create a new playtime note for a ROM."""
         return self._romm_api.create_note(
             rom_id,
@@ -97,7 +97,7 @@ class PlaytimeService:
             },
         )
 
-    def _update_playtime_note(self, rom_id: int, note_id: int, playtime_data: dict) -> dict:
+    def _update_playtime_note(self, rom_id: int, note_id: int, playtime_data: dict[str, Any]) -> dict[str, Any]:
         """Update an existing playtime note."""
         return self._romm_api.update_note(
             rom_id,
@@ -106,7 +106,7 @@ class PlaytimeService:
         )
 
     @staticmethod
-    def _parse_playtime_note_content(content: str) -> dict | None:
+    def _parse_playtime_note_content(content: str) -> dict[str, Any] | None:
         """Parse JSON content from a playtime note. Returns dict or None."""
         if not content:
             return None
@@ -193,7 +193,7 @@ class PlaytimeService:
     # Public methods
     # ------------------------------------------------------------------
 
-    def record_session_start(self, rom_id: int) -> dict:
+    def record_session_start(self, rom_id: int) -> dict[str, Any]:
         """Record the start of a play session for playtime tracking.
 
         Opens (or re-opens) the session marker on the ROM's ``Playtime``
@@ -212,7 +212,7 @@ class PlaytimeService:
             return {"success": False, "message": "Unknown ROM"}
         return {"success": True}
 
-    async def record_session_end(self, rom_id: int) -> dict:
+    async def record_session_end(self, rom_id: int) -> dict[str, Any]:
         """Record end of play session, accumulate playtime delta.
 
         Only handles playtime — save sync is handled separately. The work runs
@@ -222,7 +222,7 @@ class PlaytimeService:
         """
         return await self._loop.run_in_executor(None, self._record_session_end_io, int(rom_id))
 
-    def _record_session_end_io(self, rom_id: int) -> dict:
+    def _record_session_end_io(self, rom_id: int) -> dict[str, Any]:
         """Synchronous twin of :meth:`record_session_end` (runs in the executor).
 
         Phase A — fold the closed session into the aggregate in a short write
@@ -259,7 +259,7 @@ class PlaytimeService:
             "session_count": session_count,
         }
 
-    def get_all_playtime(self) -> dict:
+    def get_all_playtime(self) -> dict[str, Any]:
         """Return all local playtime entries keyed by rom_id string.
 
         Wire shape is the minimal pair the frontend types and reads:

@@ -10,7 +10,7 @@ sub-modules. Persistence is each operation's own narrow Unit of Work
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from lib.list_result import ErrorCode
@@ -45,7 +45,7 @@ class SlotSwitcher:
     def __init__(
         self,
         *,
-        settings: dict,
+        settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
         sync_engine: SyncEngine,
         status_service: StatusService,
@@ -79,7 +79,7 @@ class SlotSwitcher:
         with self._uow_factory() as uow:
             uow.rom_save_states.save(rom_id, save_state)
 
-    def set_active_slot(self, rom_id: int, slot: str) -> dict:
+    def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Set the active save slot for a specific game.
 
         If the slot doesn't exist yet (not on server), it is persisted
@@ -99,7 +99,7 @@ class SlotSwitcher:
         self._loop.create_task(self._status_service.check_save_status_background(rom_id))
         return {"success": True, "active_slot": resolved_slot}
 
-    def _check_slot_switch_readiness(self, rom_id: int, save_state: RomSaveState) -> dict:
+    def _check_slot_switch_readiness(self, rom_id: int, save_state: RomSaveState) -> dict[str, Any]:
         """Check whether it is safe to switch slots for this ROM.
 
         A switch is unsafe if local files have changed since the last sync
@@ -127,7 +127,7 @@ class SlotSwitcher:
 
         return {"ready": True}
 
-    async def switch_slot(self, rom_id: int, new_slot: str) -> dict:
+    async def switch_slot(self, rom_id: int, new_slot: str) -> dict[str, Any]:
         """Switch the active save slot with immediate state sync.
 
         Pre-checks (all must pass):
@@ -177,7 +177,7 @@ class SlotSwitcher:
 
         # 5. Fetch server saves for the new slot (also proves server is reachable)
         try:
-            all_server_saves: list[dict] = await self._loop.run_in_executor(
+            all_server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
@@ -232,7 +232,7 @@ class SlotSwitcher:
 
     def _do_switch_downloads(
         self,
-        slot_saves: list[dict],
+        slot_saves: list[dict[str, Any]],
         saves_dir: str,
         save_state: RomSaveState,
         device_id: str | None,
