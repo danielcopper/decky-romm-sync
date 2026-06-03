@@ -175,7 +175,7 @@ class SyncOrchestrator:
 
             total_units = len(work_queue)
             for unit_index, unit in enumerate(work_queue, 1):
-                if box.sync_state == SyncState.CANCELLING:
+                if box.is_cancelling():
                     raise asyncio.CancelledError(_SYNC_CANCELLED)
                 await self.emit_progress(
                     SyncStage.FETCHING,
@@ -429,7 +429,7 @@ class SyncOrchestrator:
             await self._loop.run_in_executor(None, self._open_sync_run, run_id, platforms_planned, total_roms_planned)
 
             for unit_index, unit in enumerate(work_queue):
-                if box.sync_state == SyncState.CANCELLING:
+                if box.is_cancelling():
                     cancelled = True
                     break
 
@@ -443,7 +443,7 @@ class SyncOrchestrator:
                 )
                 total_games_applied += applied
 
-                if box.sync_state == SyncState.CANCELLING:
+                if box.is_cancelling():
                     cancelled = True
                     break
 
@@ -625,7 +625,7 @@ class SyncOrchestrator:
                 collection_memberships=collection_memberships,
             )
 
-        if box.sync_state == SyncState.CANCELLING:
+        if box.is_cancelling():
             return 0
 
         # Per-unit incremental skip: registry already matches the
@@ -650,7 +650,7 @@ class SyncOrchestrator:
             for sd in shortcuts_data:
                 sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
 
-        if box.sync_state == SyncState.CANCELLING:
+        if box.is_cancelling():
             return 0
 
         # Stage pending_sync for this unit so the reporter's commit step
@@ -747,7 +747,7 @@ class SyncOrchestrator:
         """
         box = self._sync_state
         while not event.is_set():
-            if box.sync_state == SyncState.CANCELLING:
+            if box.is_cancelling():
                 self._logger.info(f"Per-unit cancel observed while waiting for unit {unit.name}")
                 return None
             elapsed = self._clock.monotonic() - box.sync_last_heartbeat
@@ -818,7 +818,7 @@ class SyncOrchestrator:
         return await self._artwork.download_artwork(
             all_roms,
             emit_progress=self.emit_progress,
-            is_cancelling=lambda: box.sync_state == SyncState.CANCELLING,
+            is_cancelling=box.is_cancelling,
             progress_step=progress_step,
             progress_total_steps=progress_total_steps,
         )

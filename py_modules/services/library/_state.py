@@ -62,3 +62,7 @@ class LibrarySyncStateBox:
     # for the active unit. Surfaces the result so the orchestrator can
     # accumulate the per-unit registry into the cross-run accumulators.
     last_unit_results: dict[str, int] | None = None
+
+    def is_cancelling(self) -> bool:
+        """True while a cancel has been requested for the in-flight run."""
+        return self.sync_state is SyncState.CANCELLING

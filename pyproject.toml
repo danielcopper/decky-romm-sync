@@ -3,7 +3,7 @@ pythonVersion = "3.11"
 extraPaths = ["py_modules"]
 stubPath = "typings"
 typeCheckingMode = "basic"
-exclude = ["py_modules/_vendor", "scripts", ".venv"]
+exclude = ["py_modules/_vendor", "scripts", ".venv", ".worktrees"]
 reportMissingModuleSource = "none"
 reportMissingImports = "warning"
 reportPrivateUsage = "error"
@@ -11,6 +11,7 @@ reportRedeclaration = "none"
 reportUnusedParameter = "none"
 reportUnusedVariable = "warning"
 reportArgumentType = "error"
+reportUnnecessaryComparison = "error"
 
 # Tests inspect and rebind private state of the system under test —
 # white-box testing is a deliberate, accepted pattern here. The

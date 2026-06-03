@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from typing import cast
 
 import pytest
 
@@ -147,7 +148,7 @@ class TestMatchNarrowing:
     """``match`` statement narrows the union cleanly too."""
 
     def test_match_success_branch(self):
-        result: ListResult[int] = OkListResult(items=[1, 2, 3])
+        result = cast("ListResult[int]", OkListResult(items=[1, 2, 3]))
         match result:
             case OkListResult(items=items):
                 total = sum(items)
@@ -156,7 +157,7 @@ class TestMatchNarrowing:
         assert total == 6
 
     def test_match_failure_branch(self):
-        result: ListResult[int] = FailedListResult(error=ErrorCode.SERVER_UNREACHABLE)
+        result = cast("ListResult[int]", FailedListResult(error=ErrorCode.SERVER_UNREACHABLE))
         match result:
             case OkListResult():
                 outcome = "ok"
@@ -167,7 +168,7 @@ class TestMatchNarrowing:
         assert outcome == "retry"
 
     def test_match_empty_ok(self):
-        result: ListResult[str] = OkListResult(items=[])
+        result = cast("ListResult[str]", OkListResult(items=[]))
         match result:
             case OkListResult(items=items):
                 count = len(items)
