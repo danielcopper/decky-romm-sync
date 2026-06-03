@@ -105,7 +105,7 @@ def _make_service(
             logger=logging.getLogger("test"),
             settings_persister=MagicMock(),
             emit=MagicMock(),
-            get_bios_files_index=lambda: {},
+            get_bios_files_index=dict,
             retrodeck_paths=FakeRetroDeckPaths(
                 saves=saves_path,
                 roms=roms_path,

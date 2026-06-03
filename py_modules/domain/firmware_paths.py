@@ -24,7 +24,7 @@ def parse_firmware_slug(file_path: str) -> str:
     parts = file_path.strip("/").split("/")
     if len(parts) >= 2 and parts[0] == "bios":
         return parts[1]
-    elif len(parts) >= 2:
+    if len(parts) >= 2:
         return parts[0]
     return ""
 

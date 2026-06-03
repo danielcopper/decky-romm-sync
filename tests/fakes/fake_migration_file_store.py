@@ -115,14 +115,13 @@ class FakeMigrationFileStore:
             for part in dirname.split("/") if dirname else []:
                 per_dir_subdirs.setdefault(current, set()).add(part)
                 current = os.path.join(current, part)
-        triples: list[tuple[str, list[str], list[str]]] = []
         all_dirs = sorted(set(per_dir_files) | set(per_dir_subdirs) | {base_dir})
-        for d in all_dirs:
-            triples.append(
-                (
-                    d,
-                    sorted(per_dir_subdirs.get(d, set())),
-                    sorted(per_dir_files.get(d, [])),
-                )
+        triples: list[tuple[str, list[str], list[str]]] = [
+            (
+                d,
+                sorted(per_dir_subdirs.get(d, set())),
+                sorted(per_dir_files.get(d, [])),
             )
+            for d in all_dirs
+        ]
         return triples

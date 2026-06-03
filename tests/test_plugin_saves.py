@@ -518,7 +518,7 @@ class TestPostExitSync:
                 logger=logging.getLogger("test"),
                 settings_persister=MagicMock(),
                 emit=MagicMock(),
-                get_bios_files_index=lambda: {},
+                get_bios_files_index=dict,
                 retrodeck_paths=FakeRetroDeckPaths(),
                 get_retroarch_save_sorting=lambda: (False, False),
                 get_active_core=lambda system_name, rom_filename=None: (None, None),

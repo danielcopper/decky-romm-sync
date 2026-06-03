@@ -388,8 +388,7 @@ class FakeRommApi:
             if str(device.get("id")) == str(device_id):
                 device.update({k: v for k, v in fields.items() if v is not None})
                 return dict(device)
-        synthesized = {"id": device_id, **{k: v for k, v in fields.items() if v is not None}}
-        return synthesized
+        return {"id": device_id, **{k: v for k, v in fields.items() if v is not None}}
 
     # ------------------------------------------------------------------
     # RommSaveApi

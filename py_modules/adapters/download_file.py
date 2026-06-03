@@ -60,9 +60,7 @@ class DownloadFileAdapter:
             return []
         matches: list[str] = []
         for root, _dirs, files in os.walk(base_dir):
-            for filename in files:
-                if filename.endswith(suffixes):
-                    matches.append(os.path.join(root, filename))
+            matches.extend(os.path.join(root, filename) for filename in files if filename.endswith(suffixes))
         return matches
 
     def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> None:

@@ -356,16 +356,16 @@ class LibraryFetcher:
         units: list[WorkUnit] = []
 
         platforms = await self._fetch_enabled_platforms()
-        for platform in platforms:
-            units.append(
-                WorkUnit(
-                    type="platform",
-                    id=int(platform["id"]),
-                    name=platform.get("name", platform.get("display_name", "Unknown")),
-                    slug=platform.get("slug", ""),
-                    rom_count=int(platform.get("rom_count", 0)),
-                )
+        units.extend(
+            WorkUnit(
+                type="platform",
+                id=int(platform["id"]),
+                name=platform.get("name", platform.get("display_name", "Unknown")),
+                slug=platform.get("slug", ""),
+                rom_count=int(platform.get("rom_count", 0)),
             )
+            for platform in platforms
+        )
 
         buckets = self._get_enabled_collections_buckets()
         enabled_user_ids = {k for k, v in buckets["user"].items() if v}

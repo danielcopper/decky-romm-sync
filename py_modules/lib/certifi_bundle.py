@@ -15,4 +15,4 @@ except ImportError:
 
     def ca_bundle():
         """Return the path to the certifi CA bundle, or None if unavailable."""
-        return None
+        return

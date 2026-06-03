@@ -200,7 +200,7 @@ class _RecordingLoop:
     def create_task(self, coro):
         coro.close()
         self.tasks.append(coro)
-        return None
+        return
 
 
 class TestPathChangeDetection:
@@ -1110,7 +1110,7 @@ class TestMigrationFailureInjection:
             "logger": decky.logger,
             "settings_persister": FakeSettingsPersister(),
             "emit": RecordingEmitter(),
-            "get_bios_files_index": lambda: {},
+            "get_bios_files_index": dict,
             "retrodeck_paths": FakeRetroDeckPaths(),
             "get_retroarch_save_sorting": lambda: (False, False),
             "get_active_core": lambda system, rom_filename: (None, None),

@@ -43,6 +43,10 @@ select = [
     "RUF",   # ruff-specific rules
     "ARG",   # unused arguments
     "ASYNC", # flake8-async — blocking I/O in async functions
+    "RET",   # flake8-return
+    "C4",    # flake8-comprehensions
+    "PIE",   # flake8-pie
+    "PERF",  # perflint
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -233,7 +233,7 @@ class TestScanFilesWithSizes:
         (tmp_path / "a.bin").write_bytes(b"\x00" * 10)
         (tmp_path / "b.bin").write_bytes(b"\x00" * 20)
         out = adapter.scan_files_with_sizes(str(tmp_path))
-        sizes = {p: s for p, s in out}
+        sizes = dict(out)
         assert sizes[str(tmp_path / "a.bin")] == 10
         assert sizes[str(tmp_path / "b.bin")] == 20
 

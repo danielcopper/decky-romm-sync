@@ -59,16 +59,16 @@ def make_service(fake_api=None, clock=None, settings=None, uow=None, **overrides
     clk = clock or FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
     settings_dict = settings if settings is not None else {}
 
-    defaults: dict[str, Any] = dict(
-        romm_api=fake,
-        retry=_make_retry(),
-        settings=settings_dict,
-        loop=asyncio.get_event_loop(),
-        logger=logging.getLogger("test"),
-        clock=clk,
-        log_debug=lambda _msg: None,
-        uow_factory=FakeUnitOfWorkFactory(unit),
-    )
+    defaults: dict[str, Any] = {
+        "romm_api": fake,
+        "retry": _make_retry(),
+        "settings": settings_dict,
+        "loop": asyncio.get_event_loop(),
+        "logger": logging.getLogger("test"),
+        "clock": clk,
+        "log_debug": lambda _msg: None,
+        "uow_factory": FakeUnitOfWorkFactory(unit),
+    }
     defaults.update(overrides)
     svc = PlaytimeService(config=PlaytimeServiceConfig(**defaults))
     return svc, fake, unit

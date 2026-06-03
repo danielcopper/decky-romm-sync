@@ -139,8 +139,7 @@ class TestIsinstanceNarrowing:
         if isinstance(result, FailedListResult):
             pass
         else:
-            for item in result.items:
-                collected.append(item.upper())
+            collected.extend(item.upper() for item in result.items)
         assert collected == ["A", "B", "C"]
 
 

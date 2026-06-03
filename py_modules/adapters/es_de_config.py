@@ -746,8 +746,7 @@ class GamelistXmlEditorAdapter:
         if alt_label:
             escaped = GamelistXmlEditorAdapter.escape_xml(alt_label)
             parts.append(f"\n  <alternativeEmulator>\n    <label>{escaped}</label>\n  </alternativeEmulator>")
-        for game_xml in games_xml_list:
-            parts.append(f"\n  {game_xml}")
+        parts.extend(f"\n  {game_xml}" for game_xml in games_xml_list)
         parts.append("\n</gameList>\n")
         return "".join(parts)
 
