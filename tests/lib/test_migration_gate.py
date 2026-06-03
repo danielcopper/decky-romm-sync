@@ -29,7 +29,7 @@ class _FakeOwner:
         self._migration_service = _FakeMigrationService(pending)
         self._ret = ret
         self._raise = raise_exc
-        self.calls: list[tuple[tuple, dict]] = []
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
     @migration_blocked
     async def do_thing(self, *args, **kwargs):

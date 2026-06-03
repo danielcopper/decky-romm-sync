@@ -805,7 +805,7 @@ class TestSaveShortcutIcon:
 
     def test_save_icon_to_grid_writes_file(self, plugin, tmp_path):
         """Icon PNG should be written via the SteamConfigAdapter seam."""
-        written: dict = {}
+        written: dict[str, bytes] = {}
 
         def fake_write_icon(app_id, icon_bytes):
             path = os.path.join(str(tmp_path), f"{app_id}_icon.png")
@@ -875,7 +875,7 @@ class TestSaveShortcutIcon:
 
     def test_save_icon_to_grid_vdf_mismatch_still_writes_file(self, plugin, tmp_path):
         """If VDF has no matching shortcut, icon file should still be saved."""
-        written: dict = {}
+        written: dict[str, bytes] = {}
 
         def fake_write_icon(app_id, icon_bytes):
             path = os.path.join(str(tmp_path), f"{app_id}_icon.png")
@@ -908,7 +908,7 @@ class TestSaveShortcutIcon:
         """save_shortcut_icon callable should decode base64 and save."""
         import base64
 
-        written: dict = {}
+        written: dict[str, bytes] = {}
 
         def fake_write_icon(app_id, icon_bytes):
             path = os.path.join(str(tmp_path), f"{app_id}_icon.png")

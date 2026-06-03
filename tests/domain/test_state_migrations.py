@@ -1,5 +1,7 @@
 """Tests for domain/state_migrations.py — pure migration functions."""
 
+from typing import Any
+
 from domain.state_migrations import (
     fold_legacy_save_sync_settings,
     migrate_settings,
@@ -234,7 +236,7 @@ class TestFoldLegacySaveSyncSettings:
     """v3 → v4 cross-file lift (#822): save-sync knobs + device_name move from
     save_sync_state.json into settings.json."""
 
-    def _base_settings(self) -> dict:
+    def _base_settings(self) -> dict[str, Any]:
         """A settings dict carrying the DEFAULT_SETTINGS placeholders."""
         return {
             "version": 3,

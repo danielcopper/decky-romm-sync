@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import pytest
 
@@ -22,14 +23,14 @@ class FakePlaytimeRecorder:
     def __init__(
         self,
         *,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         side_effect: BaseException | None = None,
     ) -> None:
-        self.payload: dict = payload if payload is not None else {"success": True, "total_seconds": 3600}
+        self.payload: dict[str, Any] = payload if payload is not None else {"success": True, "total_seconds": 3600}
         self.side_effect = side_effect
         self.calls: list[int] = []
 
-    async def record_session_end(self, rom_id: int) -> dict:
+    async def record_session_end(self, rom_id: int) -> dict[str, Any]:
         self.calls.append(rom_id)
         if self.side_effect is not None:
             raise self.side_effect
@@ -42,14 +43,16 @@ class FakePostExitSync:
     def __init__(
         self,
         *,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         side_effect: BaseException | None = None,
     ) -> None:
-        self.payload: dict = payload if payload is not None else {"success": True, "synced": 0, "conflicts": []}
+        self.payload: dict[str, Any] = (
+            payload if payload is not None else {"success": True, "synced": 0, "conflicts": []}
+        )
         self.side_effect = side_effect
         self.calls: list[int] = []
 
-    async def post_exit_sync(self, rom_id: int) -> dict:
+    async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
         self.calls.append(rom_id)
         if self.side_effect is not None:
             raise self.side_effect
@@ -62,16 +65,16 @@ class FakeAchievementSync:
     def __init__(
         self,
         *,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         side_effect: BaseException | None = None,
         completion_event: asyncio.Event | None = None,
     ) -> None:
-        self.payload: dict = payload if payload is not None else {"success": True}
+        self.payload: dict[str, Any] = payload if payload is not None else {"success": True}
         self.side_effect = side_effect
         self.completion_event = completion_event
         self.calls: list[int] = []
 
-    async def sync_achievements_after_session(self, rom_id: int) -> dict:
+    async def sync_achievements_after_session(self, rom_id: int) -> dict[str, Any]:
         self.calls.append(rom_id)
         try:
             if self.side_effect is not None:
@@ -88,11 +91,11 @@ class FakeMigrationReader:
     def __init__(
         self,
         *,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         side_effect: BaseException | None = None,
         pending: bool = False,
     ) -> None:
-        self.payload: dict = (
+        self.payload: dict[str, Any] = (
             payload if payload is not None else {"retrodeck": {"pending": False}, "save_sort": {"pending": False}}
         )
         self.side_effect = side_effect
@@ -100,7 +103,7 @@ class FakeMigrationReader:
         self.refresh_calls = 0
         self.pending_calls = 0
 
-    async def refresh_state(self) -> dict:
+    async def refresh_state(self) -> dict[str, Any]:
         self.refresh_calls += 1
         if self.side_effect is not None:
             raise self.side_effect
@@ -662,7 +665,7 @@ class TestBackgroundTaskTracking:
         blocker = asyncio.Event()
 
         class BlockingAchievementSync:
-            async def sync_achievements_after_session(self, rom_id: int) -> dict:
+            async def sync_achievements_after_session(self, rom_id: int) -> dict[str, Any]:
                 await blocker.wait()
                 return {"success": True}
 
@@ -715,7 +718,7 @@ class TestBackgroundTaskTracking:
         blocker = asyncio.Event()
 
         class BlockingAchievementSync:
-            async def sync_achievements_after_session(self, rom_id: int) -> dict:
+            async def sync_achievements_after_session(self, rom_id: int) -> dict[str, Any]:
                 await blocker.wait()
                 return {"success": True}
 

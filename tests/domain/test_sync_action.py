@@ -8,6 +8,7 @@ must dispatch. Pure-domain only — no I/O, no service fixtures.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from domain.sync_action import (
     Conflict,
@@ -26,7 +27,7 @@ OTHER_DEVICE_ID = "device-xyz"
 # ---------------------------------------------------------------------------
 
 
-def _local(filename: str = "save.srm", mtime: float = 1_700_000_000.0) -> dict:
+def _local(filename: str = "save.srm", mtime: float = 1_700_000_000.0) -> dict[str, Any]:
     return {
         "filename": filename,
         "path": f"/tmp/{filename}",
@@ -35,7 +36,7 @@ def _local(filename: str = "save.srm", mtime: float = 1_700_000_000.0) -> dict:
     }
 
 
-def _device_sync(device_id: str, is_current: bool) -> dict:
+def _device_sync(device_id: str, is_current: bool) -> dict[str, Any]:
     return {"device_id": device_id, "is_current": is_current}
 
 
@@ -43,8 +44,8 @@ def _server_save(
     save_id: int = 1,
     updated_at: str = "2024-01-01T12:00:00+00:00",
     slot: int = 0,
-    device_syncs: list[dict] | None = None,
-) -> dict:
+    device_syncs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "id": save_id,
         "slot": slot,

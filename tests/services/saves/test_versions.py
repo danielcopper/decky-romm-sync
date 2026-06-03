@@ -1,5 +1,7 @@
 """Tests for VersionsService — save version history reads and rollback flow."""
 
+from typing import Any
+
 import pytest
 
 from tests.services.saves._helpers import (
@@ -291,7 +293,7 @@ class TestRollbackToVersion:
         )
 
     @staticmethod
-    def _tracked_save(save_id: int, *, updated_at: str = "2026-03-10T10:00:00Z") -> dict:
+    def _tracked_save(save_id: int, *, updated_at: str = "2026-03-10T10:00:00Z") -> dict[str, Any]:
         """Build a tracked-save fixture with our device flagged ``is_current``
         on it. Use this for tests where the matrix pre-flight should return
         ``Skip(synced)`` so the switch flow itself is what's exercised.

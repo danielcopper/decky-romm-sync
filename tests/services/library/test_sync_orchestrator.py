@@ -25,6 +25,7 @@ migration.
 
 import asyncio
 import os
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1786,7 +1787,7 @@ class TestPerUnitMetadataStamping:
             roms=[{"id": 10, "name": "A", "metadatum": {"genres": ["RPG"]}}],
         )
 
-        commit_calls: list[tuple] = []
+        commit_calls: list[tuple[Any, Any]] = []
         original_commit = plugin._sync_service._reporter.commit_unit_results
 
         async def tracked_commit(rid_to_aid, acked_roms):
@@ -1885,7 +1886,7 @@ class TestPerUnitMetadataStamping:
             ],
         )
 
-        commit_calls: list[tuple] = []
+        commit_calls: list[tuple[Any, Any]] = []
 
         async def capture_commit(rid_to_aid, acked_roms):
             commit_calls.append((rid_to_aid, acked_roms))

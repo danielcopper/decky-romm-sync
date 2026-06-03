@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,7 +31,7 @@ def _no_corename(core_so: str) -> str | None:
     return None
 
 
-def _seed_installs(uow, installed_roms: dict) -> None:
+def _seed_installs(uow, installed_roms: dict[str, Any]) -> None:
     """Seed Rom (FK parent) + RomInstall rows from the legacy installed_roms dict shape."""
     with uow:
         for rom_id_str, entry in installed_roms.items():
@@ -59,14 +59,14 @@ def _seed_installs(uow, installed_roms: dict) -> None:
             )
 
 
-def _read_marker(uow, key: str) -> dict:
+def _read_marker(uow, key: str) -> dict[str, Any]:
     """Decode a save-sort kv_config marker, asserting it is present."""
     raw = uow.kv_config.get(key)
     assert raw is not None, f"expected kv_config marker {key!r} to be set"
     return json.loads(raw)
 
 
-def _seed_markers(uow, state_overrides: dict) -> None:
+def _seed_markers(uow, state_overrides: dict[str, Any]) -> None:
     """Write the save-sort kv_config markers from the legacy state_overrides shape."""
     with uow:
         if "save_sort_settings" in state_overrides:
@@ -178,7 +178,7 @@ class TestDetectSaveSortChange:
         # Stub run_coroutine_threadsafe at the module level so we can
         # observe scheduling without needing a running event loop. The
         # stub closes the coroutine to avoid "never awaited" warnings.
-        scheduled: list = []
+        scheduled: list[Any] = []
 
         def fake_schedule(coro, loop):
             coro.close()

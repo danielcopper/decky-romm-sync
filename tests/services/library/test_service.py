@@ -1,5 +1,6 @@
 """Façade integration tests for LibraryService — public callable surface end-to-end."""
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1170,8 +1171,8 @@ class TestCollectionSyncEdgeCases:
         }
 
         # Empty shortcuts_data — no ROM was fetched from any source
-        shortcuts_data: list = []
-        fetched_platform_names: set = set()
+        shortcuts_data: list[dict[str, Any]] = []
+        fetched_platform_names: set[str] = set()
 
         new, changed, unchanged_ids, stale, _disabled_count = classify_roms(
             shortcuts_data, registry, fetched_platform_names

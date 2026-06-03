@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -36,7 +37,7 @@ def romm_api() -> MagicMock:
 
 def _make_service(
     *,
-    settings: dict,
+    settings: dict[str, Any],
     romm_api: MagicMock,
     loop: asyncio.AbstractEventLoop,
     logger: logging.Logger,
@@ -87,7 +88,7 @@ class TestTestConnectionBadPath:
 
     def test_unset_url_key_returns_config_error(self, event_loop, romm_api, logger):
         """``romm_url`` absent from settings dict → config_error."""
-        settings: dict = {}
+        settings: dict[str, Any] = {}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["error_code"] == "config_error"

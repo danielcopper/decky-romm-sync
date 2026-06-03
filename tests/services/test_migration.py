@@ -1,6 +1,7 @@
 import asyncio
 import os
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1007,7 +1008,7 @@ class TestResolveSaveSortConflict:
         os.utime(new_path, (new_mtime, new_mtime))
 
         counts: dict[str, int] = {}
-        errors: list = []
+        errors: list[str] = []
         state_updates: list[str] = []
 
         plugin._migration_service._resolve_save_sort_conflict(
@@ -1061,9 +1062,9 @@ class TestDetectSaveSortChangeThreadSafety:
         # emission from the loop thread regardless of which thread scheduled
         # it. We swap in a queue-aware ``EventEmitter`` rather than reading
         # the recorder fixture because we need an awaitable barrier.
-        emit_queue: asyncio.Queue = asyncio.Queue()
+        emit_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
 
-        async def fake_emit(event_name: str, payload: dict) -> None:
+        async def fake_emit(event_name: str, payload: dict[str, Any]) -> None:
             await emit_queue.put((event_name, payload))
 
         plugin._migration_service._emit = fake_emit
@@ -1104,7 +1105,7 @@ class TestMigrationFailureInjection:
         import decky
 
         uow = uow if uow is not None else FakeUnitOfWork()
-        defaults: dict = {
+        defaults: dict[str, Any] = {
             "settings": {},
             "loop": asyncio.get_event_loop(),
             "logger": decky.logger,
@@ -1168,7 +1169,7 @@ class TestMigrationFailureInjection:
         service = self._make_service(fake)
 
         counts: dict[str, int] = {}
-        errors: list = []
+        errors: list[str] = []
         state_updates: list[str] = []
         service._resolve_save_sort_conflict(
             label="gba/game.srm",
@@ -1201,7 +1202,7 @@ class TestMigrationFailureInjection:
         service = self._make_service(fake)
 
         counts: dict[str, int] = {}
-        errors: list = []
+        errors: list[str] = []
         state_updates: list[str] = []
         service._resolve_save_sort_conflict(
             label="gba/game.srm",

@@ -1,5 +1,7 @@
 """Tests for domain.sync_diff — pure delta computations for the sync engine."""
 
+from typing import Any
+
 from domain.sync_diff import (
     ClassificationResult,
     classify_roms,
@@ -100,7 +102,7 @@ class TestClassifyRoms:
         registry = {
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "SNES"},
         }
-        sd: list = []  # nothing fetched
+        sd: list[dict[str, Any]] = []  # nothing fetched
         _, _, _, stale, disabled = classify_roms(sd, registry, {"N64"})
         assert 1 in stale
         assert disabled == 1  # SNES not in {"N64"}
@@ -179,7 +181,7 @@ class TestClassifyRoms:
             "1": {"app_id": 1001, "name": "Game A", "platform_name": "GBA"},
             "2": {"app_id": 1002, "name": "Game B", "platform_name": "SNES"},
         }
-        sd: list = []
+        sd: list[dict[str, Any]] = []
         _, _, _, stale, disabled = classify_roms(sd, registry, {"N64"})
         assert len(stale) == 2
         assert disabled == 2

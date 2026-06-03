@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,7 +14,7 @@ from services.settings import SettingsService, SettingsServiceConfig
 
 
 @pytest.fixture
-def settings() -> dict:
+def settings() -> dict[str, Any]:
     return {}
 
 

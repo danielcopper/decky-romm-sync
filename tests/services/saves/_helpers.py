@@ -111,7 +111,7 @@ def _require_save_state(svc, rom_id: int) -> RomSaveState:
     return state
 
 
-def rom_save_state_from_dict(data: dict) -> RomSaveState:
+def rom_save_state_from_dict(data: dict[str, Any]) -> RomSaveState:
     """Build a ``RomSaveState`` from the legacy dict shape used across saves tests.
 
     The SQLite aggregate has no ``from_dict``; this test helper preserves the
@@ -144,7 +144,7 @@ def rom_save_state_from_dict(data: dict) -> RomSaveState:
     )
 
 
-def _seed_save_state_dict(svc, rom_id: int, data: dict, *, platform_slug: str = "gba") -> None:
+def _seed_save_state_dict(svc, rom_id: int, data: dict[str, Any], *, platform_slug: str = "gba") -> None:
     """Seed a ``RomSaveState`` from the legacy dict shape (seeds the ``Rom`` FK)."""
     _seed_save_state(svc, rom_id, rom_save_state_from_dict(data), platform_slug=platform_slug)
 
@@ -313,7 +313,7 @@ def _get_device_id(svc) -> str | None:
         return uow.kv_config.get("device_id")
 
 
-def _set_sort_settings(svc, settings: dict) -> None:
+def _set_sort_settings(svc, settings: dict[str, Any]) -> None:
     """Seed the last-seen save-sort observation marker in ``kv_config``."""
     import json
 
@@ -321,7 +321,7 @@ def _set_sort_settings(svc, settings: dict) -> None:
         uow.kv_config.set("save_sort_settings", json.dumps(settings))
 
 
-def _set_sort_settings_previous(svc, settings: dict) -> None:
+def _set_sort_settings_previous(svc, settings: dict[str, Any]) -> None:
     """Seed the pending pre-change save-sort marker in ``kv_config``."""
     import json
 
@@ -336,9 +336,9 @@ def _server_save_with_syncs(
     filename: str = "pokemon.srm",
     updated_at: str = "2026-02-17T06:00:00Z",
     file_size_bytes: int = 1024,
-    device_syncs: list[dict] | None = None,
+    device_syncs: list[dict[str, Any]] | None = None,
     slot: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Build a server-save dict with explicit device_syncs (no FakeApi shimming)."""
     base = _server_save(
         save_id=save_id,

@@ -44,17 +44,17 @@ class FakeRommApi:
 
     def __init__(self) -> None:
         # In-memory seeded data — tests mutate these directly.
-        self.platforms: list[dict] = []
-        self.roms: dict[int, dict] = {}
-        self.firmware_files: list[dict] = []
-        self.collections: list[dict] = []
-        self.virtual_collections: dict[str, list[dict]] = {}
-        self.smart_collections: list[dict] = []
-        self.notes: dict[int, list[dict]] = {}
-        self.saves: dict[int, dict] = {}
-        self.devices: list[dict] = []
-        self.current_user: dict = {"id": 1, "username": "tester"}
-        self.heartbeat_response: dict = {"status": "ok"}
+        self.platforms: list[dict[str, Any]] = []
+        self.roms: dict[int, dict[str, Any]] = {}
+        self.firmware_files: list[dict[str, Any]] = []
+        self.collections: list[dict[str, Any]] = []
+        self.virtual_collections: dict[str, list[dict[str, Any]]] = {}
+        self.smart_collections: list[dict[str, Any]] = []
+        self.notes: dict[int, list[dict[str, Any]]] = {}
+        self.saves: dict[int, dict[str, Any]] = {}
+        self.devices: list[dict[str, Any]] = []
+        self.current_user: dict[str, Any] = {"id": 1, "username": "tester"}
+        self.heartbeat_response: dict[str, Any] = {"status": "ok"}
         self._version: str | None = None
         self._save_content: dict[int, bytes] = {}
 
@@ -106,7 +106,7 @@ class FakeRommApi:
         self.delete_server_saves_side_effect: Exception | None = None
 
         # Observability — every method records ``(name, args, kwargs)``.
-        self.call_log: list[tuple[str, tuple, dict]] = []
+        self.call_log: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
 
         # Internal id counters for synthesised entities.
         self._next_save_id = 1000
@@ -135,7 +135,7 @@ class FakeRommApi:
         if method_side_effect is not None:
             raise method_side_effect
 
-    def _log(self, name: str, args: tuple = (), kwargs: dict | None = None) -> None:
+    def _log(self, name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> None:
         self.call_log.append((name, args, kwargs or {}))
 
     def _materialize_download(self, dest_path: str, payload: bytes) -> None:
@@ -161,12 +161,12 @@ class FakeRommApi:
         self._log("get_version")
         return self._version
 
-    def heartbeat(self) -> dict:
+    def heartbeat(self) -> dict[str, Any]:
         self._log("heartbeat")
         self._check_fail(self.heartbeat_side_effect)
         return dict(self.heartbeat_response)
 
-    def get_current_user(self) -> dict:
+    def get_current_user(self) -> dict[str, Any]:
         self._log("get_current_user")
         self._check_fail(self.get_current_user_side_effect)
         return dict(self.current_user)
@@ -175,7 +175,7 @@ class FakeRommApi:
     # RommPlatformReader
     # ------------------------------------------------------------------
 
-    def list_platforms(self) -> list[dict]:
+    def list_platforms(self) -> list[dict[str, Any]]:
         self._log("list_platforms")
         self._check_fail(self.list_platforms_side_effect)
         return [dict(p) for p in self.platforms]
@@ -184,7 +184,7 @@ class FakeRommApi:
     # RommRomReader
     # ------------------------------------------------------------------
 
-    def get_rom(self, rom_id: int) -> dict:
+    def get_rom(self, rom_id: int) -> dict[str, Any]:
         self._log("get_rom", (rom_id,))
         self._check_fail(self.get_rom_side_effect)
         rom = self.roms.get(rom_id)
@@ -192,11 +192,11 @@ class FakeRommApi:
             return {"id": rom_id}
         return dict(rom)
 
-    def _paginate(self, items: list[dict], limit: int, offset: int) -> dict:
+    def _paginate(self, items: list[dict[str, Any]], limit: int, offset: int) -> dict[str, Any]:
         sliced = items[offset : offset + limit]
         return {"items": [dict(r) for r in sliced], "total": len(items)}
 
-    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         self._log("list_roms", (platform_id,), {"limit": limit, "offset": offset})
         self._check_fail(self.list_roms_side_effect)
         items = [r for r in self.roms.values() if r.get("platform_id") == platform_id]
@@ -208,7 +208,7 @@ class FakeRommApi:
         updated_after: str,
         limit: int = 1,
         offset: int = 0,
-    ) -> dict:
+    ) -> dict[str, Any]:
         self._log(
             "list_roms_updated_after",
             (platform_id, updated_after),
@@ -222,7 +222,7 @@ class FakeRommApi:
         ]
         return self._paginate(items, limit, offset)
 
-    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         self._log(
             "list_roms_by_collection",
             (collection_id,),
@@ -232,7 +232,7 @@ class FakeRommApi:
         items = [r for r in self.roms.values() if collection_id in (r.get("collection_ids") or [])]
         return self._paginate(items, limit, offset)
 
-    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         self._log(
             "list_roms_by_virtual_collection",
             (virtual_id,),
@@ -242,7 +242,7 @@ class FakeRommApi:
         items = [r for r in self.roms.values() if virtual_id in (r.get("virtual_collection_ids") or [])]
         return self._paginate(items, limit, offset)
 
-    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         self._log(
             "list_roms_by_smart_collection",
             (smart_id,),
@@ -252,17 +252,17 @@ class FakeRommApi:
         items = [r for r in self.roms.values() if smart_id in (r.get("smart_collection_ids") or [])]
         return self._paginate(items, limit, offset)
 
-    def list_collections(self) -> list[dict]:
+    def list_collections(self) -> list[dict[str, Any]]:
         self._log("list_collections")
         self._check_fail(self.list_collections_side_effect)
         return [dict(c) for c in self.collections]
 
-    def list_virtual_collections(self, collection_type: str) -> list[dict]:
+    def list_virtual_collections(self, collection_type: str) -> list[dict[str, Any]]:
         self._log("list_virtual_collections", (collection_type,))
         self._check_fail(self.list_virtual_collections_side_effect)
         return [dict(c) for c in self.virtual_collections.get(collection_type, [])]
 
-    def list_smart_collections(self) -> list[dict]:
+    def list_smart_collections(self) -> list[dict[str, Any]]:
         self._log("list_smart_collections")
         self._check_fail(self.list_smart_collections_side_effect)
         return [dict(c) for c in self.smart_collections]
@@ -298,12 +298,12 @@ class FakeRommApi:
     # RommFirmwareApi
     # ------------------------------------------------------------------
 
-    def list_firmware(self) -> list[dict]:
+    def list_firmware(self) -> list[dict[str, Any]]:
         self._log("list_firmware")
         self._check_fail(self.list_firmware_side_effect)
         return [dict(f) for f in self.firmware_files]
 
-    def get_firmware(self, firmware_id: int) -> dict:
+    def get_firmware(self, firmware_id: int) -> dict[str, Any]:
         self._log("get_firmware", (firmware_id,))
         self._check_fail(self.get_firmware_side_effect)
         for fw in self.firmware_files:
@@ -322,14 +322,14 @@ class FakeRommApi:
     # RommPlaytimeApi
     # ------------------------------------------------------------------
 
-    def get_rom_with_notes(self, rom_id: int) -> dict:
+    def get_rom_with_notes(self, rom_id: int) -> dict[str, Any]:
         self._log("get_rom_with_notes", (rom_id,))
         self._check_fail(self.get_rom_with_notes_side_effect)
         detail = dict(self.roms.get(rom_id, {"id": rom_id}))
         detail["all_user_notes"] = [dict(n) for n in self.notes.get(rom_id, [])]
         return detail
 
-    def create_note(self, rom_id: int, data: dict) -> dict:
+    def create_note(self, rom_id: int, data: dict[str, Any]) -> dict[str, Any]:
         self._log("create_note", (rom_id, data))
         self._check_fail(self.create_note_side_effect)
         note_id = self._next_note_id
@@ -338,7 +338,7 @@ class FakeRommApi:
         self.notes.setdefault(rom_id, []).append(note)
         return dict(note)
 
-    def update_note(self, rom_id: int, note_id: int, data: dict) -> dict:
+    def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
         self._log("update_note", (rom_id, note_id, data))
         self._check_fail(self.update_note_side_effect)
         for notes in self.notes.values():
@@ -359,7 +359,7 @@ class FakeRommApi:
         client: str,
         client_version: str,
         hostname: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         self._log("register_device", (name, platform, client, client_version), {"hostname": hostname})
         self._check_fail(self.register_device_side_effect)
         device_id = f"device-{self._next_device_id}"
@@ -376,12 +376,12 @@ class FakeRommApi:
         self.devices.append(device)
         return dict(device)
 
-    def list_devices(self) -> list[dict]:
+    def list_devices(self) -> list[dict[str, Any]]:
         self._log("list_devices")
         self._check_fail(self.list_devices_side_effect)
         return [dict(d) for d in self.devices]
 
-    def update_device(self, device_id: str, **fields) -> dict:
+    def update_device(self, device_id: str, **fields) -> dict[str, Any]:
         self._log("update_device", (device_id,), fields)
         self._check_fail(self.update_device_side_effect)
         for device in self.devices:
@@ -400,7 +400,7 @@ class FakeRommApi:
         *,
         device_id: str | None = None,
         slot: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         self._log("list_saves", (rom_id,), {"device_id": device_id, "slot": slot})
         self._check_fail(self.list_saves_side_effect)
         saves = [dict(s) for s in self.saves.values() if s.get("rom_id") == rom_id]
@@ -422,7 +422,7 @@ class FakeRommApi:
         device_id: str | None = None,
         slot: str | None = None,
         overwrite: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         self._log(
             "upload_save",
             (rom_id, file_path, emulator),
@@ -482,15 +482,15 @@ class FakeRommApi:
         payload = self._save_content.get(save_id) or self.download_payloads.get(f"save:{save_id}", b"")
         self._materialize_download(dest_path, payload)
 
-    def confirm_download(self, save_id: int, device_id: str) -> dict:
+    def confirm_download(self, save_id: int, device_id: str) -> dict[str, Any]:
         self._log("confirm_download", (save_id, device_id))
         self._check_fail(self.confirm_download_side_effect)
         return {"status": "ok"}
 
-    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
+    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict[str, Any]:
         self._log("get_save_summary", (rom_id,), {"device_id": device_id})
         self._check_fail(self.get_save_summary_side_effect)
-        slots: dict[str | None, list[dict]] = {}
+        slots: dict[str | None, list[dict[str, Any]]] = {}
         for s in self.saves.values():
             if s.get("rom_id") == rom_id:
                 slots.setdefault(s.get("slot"), []).append(s)
@@ -506,7 +506,7 @@ class FakeRommApi:
             ],
         }
 
-    def delete_server_saves(self, save_ids: list[int]) -> dict:
+    def delete_server_saves(self, save_ids: list[int]) -> dict[str, Any]:
         self._log("delete_server_saves", (save_ids,))
         self._check_fail(self.delete_server_saves_side_effect)
         for sid in save_ids:

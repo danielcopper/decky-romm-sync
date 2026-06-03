@@ -46,7 +46,7 @@ Observability:
 from __future__ import annotations
 
 import pathlib
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class _ArtworkCacheSink(Protocol):
@@ -60,7 +60,7 @@ class FakeSteamGridDbApi:
 
     def __init__(self) -> None:
         # Seeded response bodies keyed by request path (longest-prefix match).
-        self._responses: dict[str, dict | None] = {}
+        self._responses: dict[str, dict[str, Any] | None] = {}
         # Staged image bytes returned by ``download_image`` writes.
         self._image_bytes: dict[str, bytes] = {}
         # Optional sink that captures ``download_image`` writes when bound.
@@ -68,7 +68,7 @@ class FakeSteamGridDbApi:
         # Default ``download_image`` return when no side_effect armed.
         self.download_image_return: bool = True
         # Body returned by ``verify_api_key`` when no side_effect armed.
-        self.verify_response: dict = {"success": True}
+        self.verify_response: dict[str, Any] = {"success": True}
 
         # Failure-injection seams.
         self._fail_on_next: Exception | None = None
@@ -77,7 +77,7 @@ class FakeSteamGridDbApi:
         self.verify_api_key_side_effect: Exception | None = None
 
         # Observability.
-        self.call_log: list[tuple[str, tuple, dict]] = []
+        self.call_log: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self.requested_paths: list[str] = []
         self.downloaded: list[tuple[str, str]] = []
         self.verify_calls: list[str] = []
@@ -98,14 +98,14 @@ class FakeSteamGridDbApi:
         if method_side_effect is not None:
             raise method_side_effect
 
-    def _log(self, name: str, args: tuple = (), kwargs: dict | None = None) -> None:
+    def _log(self, name: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> None:
         self.call_log.append((name, args, kwargs or {}))
 
     # ------------------------------------------------------------------
     # Seeding helpers
     # ------------------------------------------------------------------
 
-    def seed_raw_response(self, path: str, body: dict | None) -> None:
+    def seed_raw_response(self, path: str, body: dict[str, Any] | None) -> None:
         """Register a raw JSON body returned by ``request`` for *path*.
 
         Matching is by prefix so callers don't need to model the
@@ -147,7 +147,7 @@ class FakeSteamGridDbApi:
         """
         self._artwork_cache = cache
 
-    def seed_verify_response(self, body: dict) -> None:
+    def seed_verify_response(self, body: dict[str, Any]) -> None:
         """Override the body returned by ``verify_api_key``."""
         self.verify_response = body
 
@@ -155,7 +155,7 @@ class FakeSteamGridDbApi:
     # SteamGridDbApi Protocol surface
     # ------------------------------------------------------------------
 
-    def request(self, path: str) -> dict | None:
+    def request(self, path: str) -> dict[str, Any] | None:
         self._log("request", (path,))
         self.requested_paths.append(path)
         self._check_fail(self.request_side_effect)
@@ -187,7 +187,7 @@ class FakeSteamGridDbApi:
             return True
         return self.download_image_return
 
-    def verify_api_key(self, api_key: str) -> dict:
+    def verify_api_key(self, api_key: str) -> dict[str, Any]:
         self._log("verify_api_key", (api_key,))
         self.verify_calls.append(api_key)
         self._check_fail(self.verify_api_key_side_effect)
@@ -206,7 +206,7 @@ _ASSET_TYPE_TO_ENDPOINT: dict[str, str] = {
 }
 
 
-def _copy(body: dict | None) -> dict | None:
+def _copy(body: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return a shallow copy so mutations on the returned dict don't leak back."""
     if body is None:
         return None

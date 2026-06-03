@@ -4,6 +4,7 @@ import asyncio
 import base64
 import logging
 import os
+from typing import Any
 from unittest.mock import MagicMock
 
 # conftest.py patches decky before this import
@@ -52,7 +53,7 @@ def romm_api():
 
 
 @pytest.fixture
-def pending_sync_data() -> dict:
+def pending_sync_data() -> dict[str, Any]:
     """Mutable pending-sync dict; tests mutate this to stage pending entries."""
     return {}
 

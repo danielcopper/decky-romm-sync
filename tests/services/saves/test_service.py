@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import time
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -158,7 +159,7 @@ class TestDeviceRegistrationServer:
                 super().__init__()
                 self.heartbeat_calls = 0
 
-            def heartbeat(self) -> dict:
+            def heartbeat(self) -> dict[str, Any]:
                 self.heartbeat_calls += 1
                 return {"SYSTEM": {"VERSION": "4.8.5"}}
 
@@ -180,7 +181,7 @@ class TestDeviceRegistrationServer:
                 super().__init__()
                 self.heartbeat_calls = 0
 
-            def heartbeat(self) -> dict:
+            def heartbeat(self) -> dict[str, Any]:
                 self.heartbeat_calls += 1
                 return {"SYSTEM": {"VERSION": "4.8.5"}}
 
@@ -216,7 +217,7 @@ class TestDeviceRegistrationServer:
                 super().__init__()
                 self.heartbeat_calls = 0
 
-            def heartbeat(self) -> dict:
+            def heartbeat(self) -> dict[str, Any]:
                 self.heartbeat_calls += 1
                 return {"SYSTEM": {"VERSION": "4.8.5"}}
 
@@ -706,7 +707,7 @@ class TestSaveSyncSettingsSlotAndCleanup:
     def test_upload_uses_none_slot_when_active_slot_is_none(self, tmp_path):
         """When active_slot key is present but value is None, .get() returns None (legacy mode)."""
         _svc, _ = make_service(tmp_path)
-        game_state: dict = {"active_slot": None}
+        game_state: dict[str, Any] = {"active_slot": None}
         slot = game_state.get("active_slot", "default")
         assert slot is None
 
@@ -862,7 +863,7 @@ class TestCheckCoreChange:
 
     def test_rom_filename_resolved_for_per_game_core(self, tmp_path):
         """When installed_roms has file_path, the basename is passed to get_active_core."""
-        received_args: list = []
+        received_args: list[tuple[str, str | None]] = []
 
         def capture_core(system_name, rom_filename=None):
             received_args.append((system_name, rom_filename))

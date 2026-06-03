@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import pytest
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
@@ -45,10 +46,10 @@ class FakeBiosChecker:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
-        self.payload: dict = {"needs_bios": False}
+        self.payload: dict[str, Any] = {"needs_bios": False}
         self.side_effect: BaseException | None = None
 
-    async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict:
+    async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict[str, Any]:
         if self.side_effect is not None:
             raise self.side_effect
         self.calls.append((platform_slug, rom_filename))

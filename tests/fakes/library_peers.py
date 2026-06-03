@@ -30,23 +30,23 @@ class FakeArtworkManager:
 
     def __init__(
         self,
-        canned_download: dict | None = None,
+        canned_download: dict[str, Any] | None = None,
         finalize_override: Callable[[str | None, str, int, str], str] | None = None,
     ) -> None:
-        self.canned_download: dict = canned_download if canned_download is not None else {}
+        self.canned_download: dict[str, Any] = canned_download if canned_download is not None else {}
         self.finalize_override = finalize_override
-        self.download_calls: list[tuple[list[dict], Any, Any, int, int]] = []
+        self.download_calls: list[tuple[list[dict[str, Any]], Any, Any, int, int]] = []
         self.finalize_calls: list[tuple[str | None, str, int, str]] = []
         self.remove_calls: list[tuple[str, str | int, ShortcutRegistryEntry]] = []
 
     async def download_artwork(
         self,
-        all_roms: list[dict],
+        all_roms: list[dict[str, Any]],
         emit_progress: Awaitable[None] | Callable[..., Awaitable[None]],
         is_cancelling: Any,
         progress_step: int = 4,
         progress_total_steps: int = 6,
-    ) -> dict:
+    ) -> dict[str, Any]:
         self.download_calls.append((list(all_roms), emit_progress, is_cancelling, progress_step, progress_total_steps))
         return dict(self.canned_download)
 

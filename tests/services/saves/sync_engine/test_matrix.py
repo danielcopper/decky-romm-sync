@@ -8,6 +8,7 @@ device registration in test_devices.py; conflict rollback in test_rollback.py.
 
 import hashlib
 import os
+from typing import Any
 
 import pytest
 
@@ -370,7 +371,7 @@ class TestConfirmDownloadAfterSync:
         # Patch confirm_download to raise; the upload itself must still complete.
         original_confirm = fake.confirm_download
 
-        def boom(save_id: int, device_id: str) -> dict:
+        def boom(save_id: int, device_id: str) -> dict[str, Any]:
             fake.call_log.append(("confirm_download", (save_id, device_id), {}))
             raise RommApiError("HTTP 500: Server Error", url="/api/saves/x/downloaded", method="POST")
 
@@ -1355,7 +1356,7 @@ class TestHandleUnexpectedError:
         fake.download_save_content = _raise  # type: ignore[method-assign]
 
         errors: list[str] = []
-        conflicts: list = []
+        conflicts: list[dict[str, Any]] = []
         action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
         synced = svc._sync_engine._matrix._dispatch_sync_action(
             action,
@@ -1401,7 +1402,7 @@ class TestDispatchSyncActionErrorBranches:
         fake.download_save_content = _raise  # type: ignore[method-assign]
 
         errors: list[str] = []
-        conflicts: list = []
+        conflicts: list[dict[str, Any]] = []
         action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
         synced = svc._sync_engine._matrix._dispatch_sync_action(
             action,

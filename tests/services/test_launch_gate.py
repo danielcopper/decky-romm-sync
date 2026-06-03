@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -26,11 +26,11 @@ def _installed_rom(rom_id: int) -> InstalledRomEntry:
 class FakeRomLookup:
     """In-memory ``LaunchGateRomLookup`` for tests."""
 
-    def __init__(self, *, mapping: dict[int, dict] | None = None) -> None:
+    def __init__(self, *, mapping: dict[int, dict[str, Any]] | None = None) -> None:
         self.mapping = mapping if mapping is not None else {}
         self.calls: list[int] = []
 
-    def get_rom_by_steam_app_id(self, app_id: int) -> dict | None:
+    def get_rom_by_steam_app_id(self, app_id: int) -> dict[str, Any] | None:
         self.calls.append(app_id)
         return self.mapping.get(app_id)
 
@@ -53,17 +53,17 @@ class FakeSaveStatusReader:
     def __init__(
         self,
         *,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         side_effect: BaseException | None = None,
         tracked_rom_ids: set[int] | None = None,
     ) -> None:
-        self.payload: dict = payload if payload is not None else {"conflicts": []}
+        self.payload: dict[str, Any] = payload if payload is not None else {"conflicts": []}
         self.side_effect = side_effect
         self.tracked_rom_ids: set[int] = tracked_rom_ids if tracked_rom_ids is not None else set()
         self.calls: list[int] = []
         self.tracked_calls: list[int] = []
 
-    async def get_save_status(self, rom_id: int) -> dict:
+    async def get_save_status(self, rom_id: int) -> dict[str, Any]:
         self.calls.append(rom_id)
         if self.side_effect is not None:
             raise self.side_effect

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class FakeCoreInfoProvider:
     """In-memory CoreInfoProvider for tests.
@@ -17,10 +19,10 @@ class FakeCoreInfoProvider:
         self,
         *,
         active_core: tuple[str | None, str | None] = (None, None),
-        available_cores: list[dict] | None = None,
+        available_cores: list[dict[str, Any]] | None = None,
     ) -> None:
         self.active_core = active_core
-        self.available_cores: list[dict] = available_cores if available_cores is not None else []
+        self.available_cores: list[dict[str, Any]] = available_cores if available_cores is not None else []
         self.reset_cache_count = 0
 
     def get_active_core(
@@ -30,7 +32,7 @@ class FakeCoreInfoProvider:
     ) -> tuple[str | None, str | None]:
         return self.active_core
 
-    def get_available_cores(self, system_name: str) -> list[dict]:
+    def get_available_cores(self, system_name: str) -> list[dict[str, Any]]:
         return self.available_cores
 
     def reset_cache(self) -> None:

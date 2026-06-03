@@ -3,7 +3,7 @@
 import logging
 import os
 import tempfile
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest import mock
 
 import pytest
@@ -249,7 +249,7 @@ class TestReadSystemOverride:
 
 
 class TestGetActiveCore:
-    GBA_SYSTEM_INFO: ClassVar[dict] = {
+    GBA_SYSTEM_INFO: ClassVar[dict[str, Any]] = {
         "gba": {
             "default_core": "mgba_libretro",
             "default_label": "mGBA",
@@ -320,7 +320,7 @@ class TestGetActiveCore:
 
 
 class TestGetAvailableCores:
-    GBA_SYSTEM_INFO: ClassVar[dict] = {
+    GBA_SYSTEM_INFO: ClassVar[dict[str, Any]] = {
         "gba": {
             "default_core": "mgba_libretro",
             "default_label": "mGBA",
@@ -545,7 +545,7 @@ class TestReadGameOverride:
 class TestGetActiveCoreWithGameOverride:
     """``get_active_core`` reads per-game overrides when ``rom_filename`` is provided."""
 
-    GBA_SYSTEM_INFO: ClassVar[dict] = {
+    GBA_SYSTEM_INFO: ClassVar[dict[str, Any]] = {
         "gba": {
             "default_core": "mgba_libretro",
             "default_label": "mGBA",

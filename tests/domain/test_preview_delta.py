@@ -8,6 +8,7 @@ frozen semantics, and the zero-counts boundary case.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,7 @@ from domain.preview_delta import PreviewDelta
 
 
 def _build(**overrides) -> PreviewDelta:
-    defaults: dict = {
+    defaults: dict[str, Any] = {
         "preview_id": "preview-abc",
         "created_at": 1_700_000_000.0,
         "platforms_count": 2,

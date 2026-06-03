@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from bootstrap import (
@@ -223,7 +224,7 @@ class TestWireServices:
         }
 
     @staticmethod
-    def _make_config(deps: dict) -> WiringConfig:
+    def _make_config(deps: dict[str, Any]) -> WiringConfig:
         """Build a WiringConfig from the flat deps dict produced by ``_make_deps``."""
         return WiringConfig(
             adapters=AdapterBundle(

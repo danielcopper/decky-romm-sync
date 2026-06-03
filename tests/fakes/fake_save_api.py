@@ -27,18 +27,18 @@ class FakeSaveApi:
 
     def __init__(self, save_file_store: SaveFileStore | None = None) -> None:
         self.save_file_store: SaveFileStore | None = save_file_store
-        self.saves: dict[int, dict] = {}  # save_id -> save dict
-        self.roms: dict[int, dict] = {}  # rom_id -> rom detail dict
-        self.notes: dict[int, list[dict]] = {}  # rom_id -> [note dicts]
+        self.saves: dict[int, dict[str, Any]] = {}  # save_id -> save dict
+        self.roms: dict[int, dict[str, Any]] = {}  # rom_id -> rom detail dict
+        self.notes: dict[int, list[dict[str, Any]]] = {}  # rom_id -> [note dicts]
         self.uploaded_files: dict[int, str] = {}  # save_id -> source file_path (log only)
         self.downloaded_files: dict[int, str] = {}  # save_id -> dest_path (log only)
         self._save_content: dict[int, bytes] = {}  # save_id -> server-side bytes
-        self.call_log: list[tuple[str, tuple, dict]] = []
+        self.call_log: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self._next_save_id = 1000
         self._next_note_id = 2000
         self._fail_on_next: Exception | None = None
         self.heartbeat_raises: Exception | None = None
-        self._registered_devices: list[dict] = []
+        self._registered_devices: list[dict[str, Any]] = []
         self._next_device_id = 1
 
     def fail_on_next(self, exc: Exception) -> None:
@@ -112,21 +112,21 @@ class FakeSaveApi:
     def get_version(self) -> str | None:
         return getattr(self, "version", None)
 
-    def heartbeat(self) -> dict:
+    def heartbeat(self) -> dict[str, Any]:
         if self.heartbeat_raises is not None:
             raise self.heartbeat_raises
         return {"status": "ok"}
 
-    def list_platforms(self) -> list[dict]:
+    def list_platforms(self) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def get_current_user(self) -> dict:
+    def get_current_user(self) -> dict[str, Any]:
         raise NotImplementedError
 
-    def get_rom(self, rom_id: int) -> dict:
+    def get_rom(self, rom_id: int) -> dict[str, Any]:
         raise NotImplementedError
 
-    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         raise NotImplementedError
 
     def list_roms_updated_after(
@@ -135,7 +135,7 @@ class FakeSaveApi:
         updated_after: str,
         limit: int = 1,
         offset: int = 0,
-    ) -> dict:
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     def download_rom_content(
@@ -150,28 +150,28 @@ class FakeSaveApi:
     def download_cover(self, cover_url: str, dest: str) -> None:
         raise NotImplementedError
 
-    def list_firmware(self) -> list[dict]:
+    def list_firmware(self) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def get_firmware(self, firmware_id: int) -> dict:
+    def get_firmware(self, firmware_id: int) -> dict[str, Any]:
         raise NotImplementedError
 
     def download_firmware(self, firmware_id: int, filename: str, dest: str) -> None:
         raise NotImplementedError
 
-    def list_collections(self) -> list[dict]:
+    def list_collections(self) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def list_virtual_collections(self, collection_type: str) -> list[dict]:
+    def list_virtual_collections(self, collection_type: str) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         raise NotImplementedError
 
-    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         raise NotImplementedError
 
-    def delete_server_saves(self, save_ids: list[int]) -> dict:
+    def delete_server_saves(self, save_ids: list[int]) -> dict[str, Any]:
         self.call_log.append(("delete_server_saves", (save_ids,), {}))
         self._check_fail()
         for sid in save_ids:
@@ -186,7 +186,7 @@ class FakeSaveApi:
         client: str,
         client_version: str,
         hostname: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         self.call_log.append(("register_device", (name, platform, client, client_version), {"hostname": hostname}))
         self._check_fail()
         device_id = f"device-{self._next_device_id}"
@@ -195,12 +195,12 @@ class FakeSaveApi:
         self._registered_devices.append(device)
         return device
 
-    def list_devices(self) -> list[dict]:
+    def list_devices(self) -> list[dict[str, Any]]:
         self.call_log.append(("list_devices", (), {}))
         self._check_fail()
         return list(self._registered_devices)
 
-    def update_device(self, device_id: str, **fields) -> dict:
+    def update_device(self, device_id: str, **fields) -> dict[str, Any]:
         self.call_log.append(("update_device", (device_id,), fields))
         self._check_fail()
         for device in self._registered_devices:
@@ -225,15 +225,15 @@ class FakeSaveApi:
         self.downloaded_files[save_id] = dest_path
         self._materialize_download(save_id, dest_path)
 
-    def confirm_download(self, save_id: int, device_id: str) -> dict:
+    def confirm_download(self, save_id: int, device_id: str) -> dict[str, Any]:
         self.call_log.append(("confirm_download", (save_id, device_id), {}))
         self._check_fail()
         return {"status": "ok"}
 
-    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
+    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict[str, Any]:
         self.call_log.append(("get_save_summary", (rom_id,), {"device_id": device_id}))
         self._check_fail()
-        slots: dict[str | None, list[dict]] = {}
+        slots: dict[str | None, list[dict[str, Any]]] = {}
         for s in self.saves.values():
             if s.get("rom_id") == rom_id:
                 slot = s.get("slot")
@@ -260,7 +260,7 @@ class FakeSaveApi:
         *,
         device_id: str | None = None,
         slot: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         self.call_log.append(("list_saves", (rom_id,), {"device_id": device_id, "slot": slot}))
         self._check_fail()
         saves = [s for s in self.saves.values() if s.get("rom_id") == rom_id]
@@ -283,7 +283,7 @@ class FakeSaveApi:
         device_id: str | None = None,
         slot: str | None = None,
         overwrite: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         self.call_log.append(
             (
                 "upload_save",
@@ -348,7 +348,7 @@ class FakeSaveApi:
         self.downloaded_files[save_id] = dest_path
         self._materialize_download(save_id, dest_path)
 
-    def get_rom_with_notes(self, rom_id: int) -> dict:
+    def get_rom_with_notes(self, rom_id: int) -> dict[str, Any]:
         self.call_log.append(("get_rom_with_notes", (rom_id,), {}))
         self._check_fail()
         detail = self.roms.get(rom_id, {"id": rom_id})
@@ -357,7 +357,7 @@ class FakeSaveApi:
         detail["all_user_notes"] = self.notes.get(rom_id, [])
         return detail
 
-    def create_note(self, rom_id: int, data: dict) -> dict:
+    def create_note(self, rom_id: int, data: dict[str, Any]) -> dict[str, Any]:
         self.call_log.append(("create_note", (rom_id, data), {}))
         self._check_fail()
         note_id = self._next_note_id
@@ -366,7 +366,7 @@ class FakeSaveApi:
         self.notes.setdefault(rom_id, []).append(note)
         return dict(note)
 
-    def update_note(self, rom_id: int, note_id: int, data: dict) -> dict:
+    def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
         self.call_log.append(("update_note", (rom_id, note_id, data), {}))
         self._check_fail()
         for notes in self.notes.values():

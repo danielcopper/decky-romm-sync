@@ -6,12 +6,13 @@ import json
 import logging
 import os
 import time
+from typing import Any
 from unittest.mock import patch
 
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
 
 
-def _make_adapter(tmp_path, config: dict | None = None) -> RetroDeckPathsAdapter:
+def _make_adapter(tmp_path, config: dict[str, Any] | None = None) -> RetroDeckPathsAdapter:
     """Create adapter with optional retrodeck.json config."""
     user_home = str(tmp_path)
     if config is not None:
