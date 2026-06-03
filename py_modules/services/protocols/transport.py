@@ -103,10 +103,12 @@ class RommPlatformReader(Protocol):
 class RommPlaytimeApi(Protocol):
     """RomM Notes API surface for playtime tracking."""
 
-    def get_rom_with_notes(self, rom_id: int) -> dict:
+    def get_rom_with_notes(self, rom_id: int) -> object:
         """Fetch full ROM detail including user notes.
 
-        Used for playtime tracking. Notes are in the all_user_notes field.
+        Returns ``object`` — the JSON payload is unvalidated at this seam, so
+        the single consumer narrows it with ``isinstance`` before reading
+        ``all_user_notes``. Used for playtime tracking.
         """
         ...
 

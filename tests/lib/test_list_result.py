@@ -126,7 +126,7 @@ class TestIsinstanceNarrowing:
         assert total == 60
 
     def test_failure_branch_routes_on_code(self):
-        result: ListResult[int] = FailedListResult(error=ErrorCode.AUTH_FAILED, error_message="bad password")
+        result = cast("ListResult[int]", FailedListResult(error=ErrorCode.AUTH_FAILED, error_message="bad password"))
         if isinstance(result, FailedListResult):
             outcome = "reauth" if result.error is ErrorCode.AUTH_FAILED else "other"
         else:

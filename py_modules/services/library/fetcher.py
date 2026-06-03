@@ -104,7 +104,10 @@ class LibraryFetcher:
 
     async def get_platforms(self):
         try:
-            platforms = await self._loop.run_in_executor(None, self._romm_api.list_platforms)
+            # Typed ``object`` so the isinstance guard below is genuine
+            # narrowing — the RomM API return type is a JSON-shape promise
+            # the server can break (malformed payload, schema drift).
+            platforms: object = await self._loop.run_in_executor(None, self._romm_api.list_platforms)
         except Exception as e:
             self._logger.error(f"Failed to fetch platforms: {e}")
             _code, _msg = classify_error(e)
@@ -324,7 +327,9 @@ class LibraryFetcher:
 
     async def _fetch_enabled_platforms(self):
         """Fetch and filter platforms by enabled_platforms setting."""
-        platforms = await self._loop.run_in_executor(None, self._romm_api.list_platforms)
+        # Typed ``object`` so the isinstance guard below is genuine narrowing —
+        # the RomM API return type is a JSON-shape promise the server can break.
+        platforms: object = await self._loop.run_in_executor(None, self._romm_api.list_platforms)
         if not isinstance(platforms, list):
             self._logger.error(f"Unexpected platforms response type: {type(platforms).__name__}")
             return []
@@ -472,7 +477,10 @@ class LibraryFetcher:
             return None
 
         try:
-            delta_resp = await self._loop.run_in_executor(
+            # Typed ``object`` so the isinstance guard below is genuine
+            # narrowing — the RomM API return type is a JSON-shape promise
+            # the server can break.
+            delta_resp: object = await self._loop.run_in_executor(
                 None,
                 self._romm_api.list_roms_updated_after,
                 int(unit.id),
@@ -529,7 +537,10 @@ class LibraryFetcher:
         while True:
             self._check_cancelling()
             try:
-                page = await self._loop.run_in_executor(
+                # ``dict | list`` keeps the isinstance guard below genuine:
+                # the paginated endpoint returns ``{"items": [...]}`` but the
+                # else-branch tolerates a bare-list response shape.
+                page: dict | list = await self._loop.run_in_executor(
                     None,
                     self._romm_api.list_roms,
                     platform_id,
@@ -583,7 +594,10 @@ class LibraryFetcher:
         while True:
             self._check_cancelling()
             if unit.collection_kind == "franchise":
-                page = await self._loop.run_in_executor(
+                # ``dict | list`` keeps the isinstance guard below genuine:
+                # the paginated endpoint returns ``{"items": [...]}`` but the
+                # else-branch tolerates a bare-list response shape.
+                page: dict | list = await self._loop.run_in_executor(
                     None, self._romm_api.list_roms_by_virtual_collection, str(unit.id), limit, offset
                 )
             elif unit.collection_kind == "smart":

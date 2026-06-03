@@ -107,14 +107,14 @@ def _split_flat_to_buckets(flat: dict) -> dict[str, dict[str, bool]]:
 _BUCKET_KEYS = ("user", "smart", "franchise")
 
 
-def _is_nested_collections(value: dict) -> bool:
+def _is_nested_collections(value: object) -> bool:
     """Return True if *value* already has the full nested-by-kind shape."""
     if not isinstance(value, dict) or set(value.keys()) != set(_BUCKET_KEYS):
         return False
     return all(isinstance(v, dict) for v in value.values())
 
 
-def _is_partial_nested_collections(value: dict) -> bool:
+def _is_partial_nested_collections(value: object) -> bool:
     """Return True if *value* is a non-empty subset of bucket keys with dict values."""
     if not isinstance(value, dict) or not value:
         return False

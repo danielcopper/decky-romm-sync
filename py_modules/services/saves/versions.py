@@ -12,7 +12,7 @@ Persistence is the operation's own narrow Unit of Work (ADR-0006).
 from __future__ import annotations
 
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.rom_save_state import RomSaveState
@@ -305,7 +305,7 @@ class VersionsService:
                 await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
                 return {
                     "status": "conflict_blocked",
-                    "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
+                    "conflicts": list(conflicts),
                 }
             if errors:
                 await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)

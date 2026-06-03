@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.rom_save_state import RomSaveState
@@ -411,7 +411,7 @@ class SyncEngine:
                 "message": msg,
                 "synced": synced,
                 "errors": errors,
-                "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
+                "conflicts": list(conflicts),
             }
 
     async def post_exit_sync(self, rom_id: int) -> dict:
@@ -474,7 +474,7 @@ class SyncEngine:
                 "message": msg,
                 "synced": synced,
                 "errors": errors,
-                "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
+                "conflicts": list(conflicts),
             }
 
     async def sync_rom_saves(self, rom_id: int) -> dict:
@@ -507,7 +507,7 @@ class SyncEngine:
                 "message": msg,
                 "synced": synced,
                 "errors": errors,
-                "conflicts": [c if isinstance(c, dict) else asdict(c) for c in conflicts],
+                "conflicts": list(conflicts),
             }
 
     def _installed_rom_ids(self) -> list[int]:
@@ -559,7 +559,7 @@ class SyncEngine:
             "message": msg,
             "synced": total_synced,
             "conflicts": conflicts_count,
-            "conflicts_list": [c if isinstance(c, dict) else asdict(c) for c in all_conflicts],
+            "conflicts_list": list(all_conflicts),
             "roms_checked": rom_count,
             "errors": total_errors,
         }

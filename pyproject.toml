@@ -12,6 +12,7 @@ reportUnusedParameter = "none"
 reportUnusedVariable = "warning"
 reportArgumentType = "error"
 reportUnnecessaryComparison = "error"
+reportUnnecessaryIsInstance = "error"
 
 # Tests inspect and rebind private state of the system under test —
 # white-box testing is a deliberate, accepted pattern here. The
