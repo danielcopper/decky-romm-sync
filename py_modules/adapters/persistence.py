@@ -10,12 +10,13 @@ import fcntl
 import json
 import logging
 import os
+from typing import Any
 
 _FIRMWARE_CACHE_VERSION = 1
 _SETTINGS_VERSION = 4
 _LOCK_EXT = ".lock"
 
-DEFAULT_SETTINGS: dict = {
+DEFAULT_SETTINGS: dict[str, Any] = {
     "romm_url": "",
     "romm_user": "",
     "romm_pass": "",
@@ -59,7 +60,7 @@ class PersistenceAdapter:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _locked_write(self, path: str, data: dict, *, rotate_to: str | None = None) -> None:
+    def _locked_write(self, path: str, data: dict[str, Any], *, rotate_to: str | None = None) -> None:
         """Atomic write of *data* to *path* under an exclusive file lock.
 
         When ``rotate_to`` is provided, the existing file at ``path`` is
@@ -92,7 +93,7 @@ class PersistenceAdapter:
     # Settings
     # ------------------------------------------------------------------
 
-    def load_settings(self) -> dict:
+    def load_settings(self) -> dict[str, Any]:
         """Read ``settings.json``, apply defaults, and fix permissions.
 
         Migration logic (e.g. renaming old keys) is intentionally NOT
@@ -121,7 +122,7 @@ class PersistenceAdapter:
 
         return settings
 
-    def save_settings(self, data: dict) -> None:
+    def save_settings(self, data: dict[str, Any]) -> None:
         """Atomic write of *data* to ``settings.json`` with flock, stamping version."""
         data["version"] = _SETTINGS_VERSION
         settings_path = os.path.join(self._settings_dir, "settings.json")
@@ -131,7 +132,7 @@ class PersistenceAdapter:
     # Firmware cache
     # ------------------------------------------------------------------
 
-    def load_firmware_cache(self) -> dict:
+    def load_firmware_cache(self) -> dict[str, Any]:
         """Read ``firmware_cache.json`` with version check.
 
         Returns an empty cache dict if the file is missing, corrupt, or
@@ -149,7 +150,7 @@ class PersistenceAdapter:
         except (FileNotFoundError, json.JSONDecodeError):
             return {"version": _FIRMWARE_CACHE_VERSION}
 
-    def save_firmware_cache(self, data: dict) -> None:
+    def save_firmware_cache(self, data: dict[str, Any]) -> None:
         """Atomic write of *data* to ``firmware_cache.json`` with flock, stamping version."""
         data["version"] = _FIRMWARE_CACHE_VERSION
         cache_path = os.path.join(self._runtime_dir, "firmware_cache.json")
@@ -159,7 +160,7 @@ class PersistenceAdapter:
     # Save-sync state (legacy read — consumed only by the settings fold)
     # ------------------------------------------------------------------
 
-    def load_save_sync_state(self) -> dict | None:
+    def load_save_sync_state(self) -> dict[str, Any] | None:
         """Read ``save_sync_state.json`` and return the raw dict.
 
         Returns ``None`` when the file is missing, corrupt, or not a
@@ -188,7 +189,7 @@ class SettingsPersisterAdapter:
     on this class.
     """
 
-    def __init__(self, persistence: PersistenceAdapter, settings: dict) -> None:
+    def __init__(self, persistence: PersistenceAdapter, settings: dict[str, Any]) -> None:
         self._persistence = persistence
         self._settings = settings
 
@@ -208,8 +209,8 @@ class FirmwareCachePersisterAdapter:
     def __init__(self, persistence: PersistenceAdapter) -> None:
         self._persistence = persistence
 
-    def save(self, data: dict) -> None:
+    def save(self, data: dict[str, Any]) -> None:
         self._persistence.save_firmware_cache(data)
 
-    def load(self) -> dict:
+    def load(self) -> dict[str, Any]:
         return self._persistence.load_firmware_cache()

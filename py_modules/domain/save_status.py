@@ -6,7 +6,7 @@ No I/O, no service/adapter imports. Stateless functions only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 SaveSyncStatus = Literal["synced", "conflict", "none"]
 
@@ -30,7 +30,7 @@ class SaveSyncDisplay:
 
 
 def compute_save_sync_display(
-    files: list[dict] | None,
+    files: list[dict[str, Any]] | None,
     last_sync_check_at: str | None,
     *,
     server_query_failed: bool = False,

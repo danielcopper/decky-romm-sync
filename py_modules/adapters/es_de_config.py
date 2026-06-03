@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import logging
@@ -58,10 +58,10 @@ class CoreResolver:
         self._plugin_dir = plugin_dir
         self._logger = logger
         self._get_retrodeck_home = get_retrodeck_home
-        self._es_systems_cache: dict | None = None
+        self._es_systems_cache: dict[str, Any] | None = None
         self._es_systems_mtime: float | None = None
         self._es_systems_path: str | None = None
-        self._core_defaults_cache: dict | None = None
+        self._core_defaults_cache: dict[str, Any] | None = None
         self._core_defaults_mtime: float | None = None
         self._core_defaults_path: str | None = None
 
@@ -402,7 +402,7 @@ class CoreResolver:
             self._logger.warning("es_de_config: failed to read %s: %s", xml_path, e)
             return {}
 
-        systems: dict = {}
+        systems: dict[str, Any] = {}
         state = {
             "path": [],  # element name stack
             "text": "",  # accumulated character data
@@ -436,7 +436,7 @@ class CoreResolver:
 
     # -- internal cache methods ----------------------------------------------
 
-    def _load_core_defaults(self) -> dict:
+    def _load_core_defaults(self) -> dict[str, Any]:
         """Load the static core_defaults.json fallback.
 
         Re-reads from disk if the file's mtime has changed (handles plugin updates).
@@ -471,7 +471,7 @@ class CoreResolver:
         self._core_defaults_mtime = current_mtime
         return self._core_defaults_cache or {}
 
-    def _load_es_systems(self) -> dict:
+    def _load_es_systems(self) -> dict[str, Any]:
         """Load and cache es_systems.xml parse result.
 
         Re-reads from disk if the file's mtime has changed (handles flatpak updates).
@@ -684,7 +684,7 @@ class GamelistXmlEditorAdapter:
         except ImportError:
             return None
 
-        result: dict = {
+        result: dict[str, Any] = {
             "alt_emulator_label": None,
             "games": [],
         }
@@ -808,7 +808,7 @@ class GamelistXmlEditorAdapter:
         except ImportError:
             return raw_xml
 
-        elements: list = []
+        elements: list[tuple[str, str]] = []
         state = {"path": [], "text": "", "skip_altemulator": False}
 
         parser = expat.ParserCreate()

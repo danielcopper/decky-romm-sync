@@ -7,10 +7,12 @@ as parameters.
 
 from __future__ import annotations
 
+from typing import Any
+
 _DISC_EXTENSIONS = (".cue", ".chd", ".iso")
 
 
-def is_multi_file_download(rom_detail: dict) -> bool:
+def is_multi_file_download(rom_detail: dict[str, Any]) -> bool:
     """Decide whether RomM will serve this ROM as a ZIP that must be extracted.
 
     This is the single multi-vs-single gate for the download path. It must
@@ -131,7 +133,7 @@ def detect_launch_file(files: list[tuple[str, int]]) -> str | None:
     return max(files, key=lambda t: t[1])[0]
 
 
-def resolve_local_file_name(rom_detail: dict) -> tuple[str, bool]:
+def resolve_local_file_name(rom_detail: dict[str, Any]) -> tuple[str, bool]:
     """Resolve the on-disk filename for a ROM.
 
     For nested-single-file ROMs RomM reports ``fs_name`` as the parent

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ class BiosFileEntry:
     required: bool
     description: str
     classification: str  # "required" | "optional" | "unknown"
-    cores: dict[str, dict]  # {core_so: {"required": bool}}
+    cores: dict[str, dict[str, Any]]  # {core_so: {"required": bool}}
     used_by_active: bool
 
 
@@ -45,7 +46,7 @@ class BiosStatus:
     cached_at: float = 0.0
 
 
-def format_bios_status(bios: dict, platform_slug: str, *, cached_at: float = 0.0) -> BiosStatus:
+def format_bios_status(bios: dict[str, Any], platform_slug: str, *, cached_at: float = 0.0) -> BiosStatus:
     """Build a frontend-ready BiosStatus dataclass from raw firmware check result."""
     raw_files = bios.get("files", [])
     if raw_files and isinstance(raw_files[0], dict):
@@ -91,7 +92,7 @@ def format_bios_status(bios: dict, platform_slug: str, *, cached_at: float = 0.0
 
 
 def classify_firmware_file(
-    reg_entry: dict | None,
+    reg_entry: dict[str, Any] | None,
     file_name: str,
     active_core_so: str | None,
 ) -> tuple[bool, str, str]:
@@ -114,7 +115,7 @@ def classify_firmware_file(
     return is_required, classification, description
 
 
-def build_cores_info(reg_entry: dict | None) -> dict:
+def build_cores_info(reg_entry: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Build per-core info dict for frontend display."""
     if not reg_entry or "cores" not in reg_entry:
         return {}
@@ -124,7 +125,7 @@ def build_cores_info(reg_entry: dict | None) -> dict:
     }
 
 
-def is_used_by_active_core(reg_entry: dict | None, active_core_so: str | None) -> bool:
+def is_used_by_active_core(reg_entry: dict[str, Any] | None, active_core_so: str | None) -> bool:
     """Check if a firmware file is used by the active core."""
     if not active_core_so or not reg_entry or "cores" not in reg_entry:
         return True
@@ -135,7 +136,7 @@ def build_file_entry(
     file_name: str,
     downloaded: bool,
     dest: str,
-    reg_entry: dict | None,
+    reg_entry: dict[str, Any] | None,
     active_core_so: str | None,
 ) -> BiosFileEntry:
     """Build a single file status entry as a BiosFileEntry dataclass."""
@@ -153,8 +154,8 @@ def build_file_entry(
 
 
 def collect_firmware_status(
-    items: list[dict],
-    registry_platform: dict,
+    items: list[dict[str, Any]],
+    registry_platform: dict[str, Any],
     active_core_so: str | None,
 ) -> tuple[BiosFileEntry, ...]:
     """Build BiosFileEntry objects for a list of pre-resolved firmware items.

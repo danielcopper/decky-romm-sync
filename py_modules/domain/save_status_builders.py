@@ -9,6 +9,8 @@ state, or network — belongs here. Code that needs the live
 
 from __future__ import annotations
 
+from typing import Any
+
 from domain.iso_time import parse_iso_to_epoch
 from domain.sync_action import Conflict, Download, Skip, Upload
 
@@ -20,12 +22,12 @@ def build_file_status(
     local_hash: str | None,
     local_mtime: str | None,
     local_size: int | None,
-    server: dict | None,
+    server: dict[str, Any] | None,
     last_sync_at: str | None,
     status: str,
     server_device_id: str | None = None,
     uploaded_by_us: bool | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Build a file status dict for the frontend."""
     server_device_syncs = server.get("device_syncs", []) if server else []
     device_syncs = [
@@ -79,7 +81,7 @@ def status_from_action(action: object) -> str:
     return "synced"
 
 
-def resolve_chosen_server(action: object, candidates: list[dict]) -> dict | None:
+def resolve_chosen_server(action: object, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick the server-save dict to display alongside the file-status row.
 
     - ``Download`` and ``Conflict`` carry the chosen save explicitly on the

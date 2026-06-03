@@ -6,9 +6,10 @@ No I/O, no imports from services, adapters, or lib.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 
-def build_shortcuts_data(roms: list[dict], plugin_dir: str) -> list[dict]:
+def build_shortcuts_data(roms: list[dict[str, Any]], plugin_dir: str) -> list[dict[str, Any]]:
     """Transform ROM list into shortcut data dicts for frontend AddShortcut calls."""
     exe = os.path.join(plugin_dir, "bin", "romm-launcher")
     start_dir = os.path.join(plugin_dir, "bin")

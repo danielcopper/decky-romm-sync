@@ -6,9 +6,11 @@ and the per-ROM ``own_upload_ids`` list. Pure: no I/O, no logging.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 def compute_uploaded_by_us(
-    server_save: dict | None,
+    server_save: dict[str, Any] | None,
     own_upload_ids: list[int] | None,
 ) -> bool | None:
     """Three-way attribution: True/False when ``own_upload_ids`` is known

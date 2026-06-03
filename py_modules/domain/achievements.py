@@ -8,8 +8,10 @@ the wall clock belongs in ``services/achievements.py``, not here.
 
 from __future__ import annotations
 
+from typing import Any
 
-def extract_achievements_from_rom(rom_data: dict) -> list[dict]:
+
+def extract_achievements_from_rom(rom_data: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the normalized achievement list from a RomM ROM detail dict.
 
     Prefers ``ra_metadata``; falls back to ``merged_ra_metadata`` (which has
@@ -38,11 +40,11 @@ def extract_achievements_from_rom(rom_data: dict) -> list[dict]:
 
 
 def extract_game_progress(
-    ra_progression: dict | None,
+    ra_progression: dict[str, Any] | None,
     ra_id: int,
     total: int,
     cached_at: float,
-) -> dict:
+) -> dict[str, Any]:
     """Reduce a user's RA progression payload into a per-game progress dict.
 
     Looks up the entry whose ``rom_ra_id`` matches ``ra_id``. Returns a

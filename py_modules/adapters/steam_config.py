@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from _vendor import vdf
 
@@ -62,14 +62,14 @@ class SteamConfigAdapter:
 
     # -- VDF read/write (deprecated — frontend uses SteamClient API) ----------
 
-    def read_shortcuts(self) -> dict:
+    def read_shortcuts(self) -> dict[str, Any]:
         path = self.shortcuts_vdf_path()
         if not path or not os.path.exists(path):
             return {"shortcuts": {}}
         with open(path, "rb") as f:
             return vdf.binary_loads(f.read())
 
-    def write_shortcuts(self, data: dict) -> None:
+    def write_shortcuts(self, data: dict[str, Any]) -> None:
         path = self.shortcuts_vdf_path()
         if not path:
             raise RuntimeError("Cannot find Steam shortcuts.vdf path")
@@ -105,14 +105,15 @@ class SteamConfigAdapter:
 
     # -- Steam Input config ---------------------------------------------------
 
-    def set_steam_input_config(self, app_ids: list, mode: str = "default") -> None:
+    def set_steam_input_config(self, app_ids: list[int], mode: str = "default") -> None:
         """Set UseSteamControllerConfig for given app_ids in localconfig.vdf.
 
         mode: "default" (remove key / "1"), "force_on" ("2"), "force_off" ("0")
         """
-        data, localconfig_path = self._load_localconfig()
-        if data is None:
+        loaded = self._load_localconfig()
+        if loaded[0] is None:
             return
+        data, localconfig_path = loaded
 
         apps = self._navigate_to_apps_section(data, create=mode != "default")
         if apps is None:
@@ -122,7 +123,7 @@ class SteamConfigAdapter:
         if changed:
             self._write_localconfig(data, localconfig_path, mode, len(app_ids))
 
-    def _load_localconfig(self) -> tuple:
+    def _load_localconfig(self) -> tuple[dict[str, Any], str] | tuple[None, None]:
         """Load and parse localconfig.vdf. Returns (data, path) or (None, None)."""
         user_dir = self.find_steam_user_dir()
         if not user_dir:
@@ -141,7 +142,7 @@ class SteamConfigAdapter:
             self._logger.error(f"Failed to parse localconfig.vdf: {e}")
             return None, None
 
-    def _navigate_to_apps_section(self, data: dict, *, create: bool) -> dict | None:
+    def _navigate_to_apps_section(self, data: dict[str, Any], *, create: bool) -> dict[str, Any] | None:
         """Navigate to UserLocalConfigStore.Apps, optionally creating missing keys."""
         node = data
         for key in ("UserLocalConfigStore", "Apps"):
@@ -154,7 +155,7 @@ class SteamConfigAdapter:
         return node
 
     @staticmethod
-    def _apply_steam_input_mode(apps: dict, app_ids: list, mode: str) -> bool:
+    def _apply_steam_input_mode(apps: dict[str, Any], app_ids: list[int], mode: str) -> bool:
         """Apply or remove UseSteamControllerConfig for each app_id. Returns True if changed."""
         value_map = {"force_on": "2", "force_off": "0"}
         changed = False
@@ -172,7 +173,7 @@ class SteamConfigAdapter:
                 changed = True
         return changed
 
-    def _write_localconfig(self, data: dict, path: str, mode: str, count: int) -> None:
+    def _write_localconfig(self, data: dict[str, Any], path: str, mode: str, count: int) -> None:
         """Atomically write localconfig.vdf back to disk."""
         try:
             tmp_path = path + ".tmp"
@@ -185,7 +186,7 @@ class SteamConfigAdapter:
 
     # -- RetroArch input driver check -----------------------------------------
 
-    def check_retroarch_input_driver(self) -> dict | None:
+    def check_retroarch_input_driver(self) -> dict[str, Any] | None:
         """Check if RetroArch input_driver is set to a problematic value."""
         candidates = [
             "~/.var/app/net.retrodeck.retrodeck/config/retroarch/retroarch.cfg",
@@ -211,7 +212,7 @@ class SteamConfigAdapter:
                 continue
         return None
 
-    def fix_retroarch_input_driver(self) -> dict:
+    def fix_retroarch_input_driver(self) -> dict[str, Any]:
         """Change RetroArch input_driver from 'x' to 'sdl2'."""
         check = self.check_retroarch_input_driver()
         if not check or not check.get("warning"):

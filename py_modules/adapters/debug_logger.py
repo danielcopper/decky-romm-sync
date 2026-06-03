@@ -9,7 +9,7 @@ underlying :class:`logging.Logger` it emits through.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     import logging
@@ -28,7 +28,7 @@ class SettingsAwareDebugLogger:
 
     _LOG_LEVELS: ClassVar[dict[str, int]] = {"debug": 0, "info": 1, "warn": 2, "error": 3}
 
-    def __init__(self, *, settings: dict, logger: logging.Logger) -> None:
+    def __init__(self, *, settings: dict[str, Any], logger: logging.Logger) -> None:
         self._settings = settings
         self._logger = logger
 

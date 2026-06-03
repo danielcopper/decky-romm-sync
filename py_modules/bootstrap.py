@@ -70,6 +70,7 @@ from services.steamgrid import SteamGridService, SteamGridServiceConfig
 if TYPE_CHECKING:
     import asyncio
     import logging
+    from typing import Any
 
     from services.protocols import (
         Clock,
@@ -129,7 +130,7 @@ class AdapterBundle:
 class StateBundle:
     """Live mutable state shared across services."""
 
-    settings: dict
+    settings: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -377,7 +378,7 @@ def bootstrap(
     )
 
 
-def wire_services(cfg: WiringConfig) -> dict:
+def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     """Create service instances after plugin state is initialised.
 
     Called from ``Plugin._main()`` after save-sync state is populated
@@ -394,8 +395,8 @@ def wire_services(cfg: WiringConfig) -> dict:
     # binding is populated via ``.set(...)`` once the producer exists.
     # Accessing ``.get()`` before ``.set()`` raises RuntimeError instead of
     # the NameError a bare forward-ref lambda would produce.
-    bios_files_index_binding: LateBinding[dict] = LateBinding("bios_files_index")
-    pending_sync_binding: LateBinding[dict] = LateBinding("pending_sync")
+    bios_files_index_binding: LateBinding[dict[str, dict[str, Any]]] = LateBinding("bios_files_index")
+    pending_sync_binding: LateBinding[dict[int, dict[str, Any]]] = LateBinding("pending_sync")
 
     # MigrationService is constructed before SaveService so that
     # save_sync_service can receive a bound reference to

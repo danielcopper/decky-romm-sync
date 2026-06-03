@@ -9,11 +9,13 @@ clock is read here; staleness and persistence live elsewhere.
 
 from __future__ import annotations
 
+from typing import Any
+
 from domain.rom_metadata import RomMetadata
 from domain.steam_categories import build_steam_categories
 
 
-def build_rom_metadata(rom: dict, cached_at: float) -> RomMetadata:
+def build_rom_metadata(rom: dict[str, Any], cached_at: float) -> RomMetadata:
     """Map a RomM ROM dict + ``cached_at`` epoch into a ``RomMetadata`` aggregate.
 
     Reads the nested ``metadatum`` block, normalising RomM's wire quirks:

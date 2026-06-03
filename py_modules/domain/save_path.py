@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 
 def resolve_save_dir(
@@ -128,7 +129,7 @@ class LocalSaveTarget:
     sanitized_from: str | None = None
 
 
-def compute_local_save_target(server_save: dict, rom_name: str) -> LocalSaveTarget:
+def compute_local_save_target(server_save: dict[str, Any], rom_name: str) -> LocalSaveTarget:
     """The canonical local filename for a server save: ``<rom_name>.<ext>``.
 
     ``rom_name`` is the deterministic identity from RetroArch's

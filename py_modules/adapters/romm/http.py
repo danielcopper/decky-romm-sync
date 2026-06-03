@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from lib.certifi_bundle import ca_bundle as _ca_bundle
 from lib.errors import (
@@ -53,7 +53,7 @@ class RommHttpAdapter:
     _READ_TIMEOUT = 60
     _DOWNLOAD_BLOCK_SIZE = 65536
 
-    def __init__(self, settings: dict, plugin_dir: str, logger: logging.Logger, user_agent: str) -> None:
+    def __init__(self, settings: dict[str, Any], plugin_dir: str, logger: logging.Logger, user_agent: str) -> None:
         self._settings = settings
         self._plugin_dir = plugin_dir
         self._logger = logger
@@ -63,7 +63,7 @@ class RommHttpAdapter:
     # Platform map
     # ------------------------------------------------------------------
 
-    def load_platform_map(self) -> dict:
+    def load_platform_map(self) -> dict[str, str]:
         """Load the platform slug -> RetroDECK system mapping from config.json."""
         # Check plugin root first (Decky CLI moves defaults/ contents to root),
         # then defaults/ subdirectory (dev deploys via mise run deploy)
@@ -130,7 +130,7 @@ class RommHttpAdapter:
         if entry:
             cls, tpl = entry
             text = tpl.format(method=method, url=url) if tpl else msg
-            kwargs: dict = {"url": url, "method": method}
+            kwargs: dict[str, Any] = {"url": url, "method": method}
             if cls is RommServerError:
                 kwargs["status_code"] = code
             return cls(text, **kwargs)

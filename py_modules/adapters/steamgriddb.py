@@ -8,7 +8,7 @@ import os
 import ssl
 import urllib.error
 import urllib.request
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lib.certifi_bundle import ca_bundle as _ca_bundle
 from lib.errors import SgdbApiError
@@ -33,7 +33,7 @@ class SteamGridDbAdapter:
         SteamGridDB rejects the default ``Python-urllib`` UA with 403.
     """
 
-    def __init__(self, *, settings: dict, logger: logging.Logger, user_agent: str) -> None:
+    def __init__(self, *, settings: dict[str, Any], logger: logging.Logger, user_agent: str) -> None:
         self._settings = settings
         self._logger = logger
         self._user_agent = user_agent
@@ -41,7 +41,7 @@ class SteamGridDbAdapter:
     def _ssl_context(self) -> ssl.SSLContext:
         return ssl.create_default_context(cafile=_ca_bundle())
 
-    def request(self, path: str) -> dict | None:
+    def request(self, path: str) -> dict[str, Any] | None:
         """Authenticated GET to SGDB API v2."""
         api_key = self._settings.get("steamgriddb_api_key", "")
         if not api_key:
@@ -78,7 +78,7 @@ class SteamGridDbAdapter:
                     os.remove(tmp_path)
             return False
 
-    def verify_api_key(self, api_key: str) -> dict:
+    def verify_api_key(self, api_key: str) -> dict[str, Any]:
         """Verify an API key against SGDB.
 
         Raises ``SgdbApiError`` on non-2xx HTTP responses so callers can

@@ -7,8 +7,10 @@ reading and writing is the caller's responsibility.
 
 from __future__ import annotations
 
+from typing import Any
 
-def migrate_settings(data: dict) -> dict:
+
+def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
     """Bring *data* from any older settings schema to the current version.
 
     Value semantics — the caller's dict is never mutated.
@@ -33,7 +35,7 @@ _SAVE_SYNC_KNOBS = (
 )
 
 
-def fold_legacy_save_sync_settings(settings: dict, save_sync_raw: dict | None) -> dict:
+def fold_legacy_save_sync_settings(settings: dict[str, Any], save_sync_raw: dict[str, Any] | None) -> dict[str, Any]:
     """Fold the legacy save-sync knobs + ``device_name`` into *settings*.
 
     Returns a new dict — the inputs are never mutated. The five feature
@@ -57,7 +59,7 @@ def fold_legacy_save_sync_settings(settings: dict, save_sync_raw: dict | None) -
     return folded
 
 
-def _migrate_v0_to_v1(data: dict) -> dict:
+def _migrate_v0_to_v1(data: dict[str, Any]) -> dict[str, Any]:
     """v0 → v1: rename deprecated boolean keys."""
     if data.pop("disable_steam_input", None):
         data["steam_input_mode"] = "force_off"
@@ -67,7 +69,7 @@ def _migrate_v0_to_v1(data: dict) -> dict:
     return data
 
 
-def _migrate_v2_to_v3(data: dict) -> dict:
+def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
     """v<3 → v3: normalize ``enabled_collections`` to nested-by-kind shape.
 
     Splits a flat dict into user/smart/franchise buckets. Numeric string
@@ -84,7 +86,7 @@ def _migrate_v2_to_v3(data: dict) -> dict:
     return data
 
 
-def _normalize_enabled_collections(flat: dict) -> dict[str, dict[str, bool]]:
+def _normalize_enabled_collections(flat: dict[str, Any]) -> dict[str, dict[str, bool]]:
     """Coerce *flat* to the full three-bucket shape."""
     if _is_nested_collections(flat):
         return flat
@@ -93,7 +95,7 @@ def _normalize_enabled_collections(flat: dict) -> dict[str, dict[str, bool]]:
     return _split_flat_to_buckets(flat)
 
 
-def _split_flat_to_buckets(flat: dict) -> dict[str, dict[str, bool]]:
+def _split_flat_to_buckets(flat: dict[Any, Any]) -> dict[str, dict[str, bool]]:
     """Split a pre-v3 flat enabled_collections dict into user/franchise buckets."""
     nested: dict[str, dict[str, bool]] = {"user": {}, "smart": {}, "franchise": {}}
     for key, value in flat.items():
@@ -124,12 +126,12 @@ def _is_partial_nested_collections(value: object) -> bool:
     return all(isinstance(v, dict) for v in value.values())
 
 
-def _fill_missing_buckets(value: dict) -> dict[str, dict[str, bool]]:
+def _fill_missing_buckets(value: dict[str, Any]) -> dict[str, dict[str, bool]]:
     """Return a complete three-bucket dict, filling missing buckets with ``{}``."""
     return {kind: dict(value.get(kind, {})) for kind in _BUCKET_KEYS}
 
 
-def _migrate_v3_to_v4(data: dict) -> dict:
+def _migrate_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
     """v<4 → v4: stamp the version after the save-sync fold.
 
     The cross-file lift of the save-sync knobs + ``device_name`` from
@@ -141,7 +143,7 @@ def _migrate_v3_to_v4(data: dict) -> dict:
     return data
 
 
-def migrate_state(data: dict) -> dict:
+def migrate_state(data: dict[str, Any]) -> dict[str, Any]:
     """Bring *data* from any older state schema to the current version."""
     # No migrations at v1 — infrastructure for future changes
     return data

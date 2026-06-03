@@ -13,7 +13,7 @@ threaded through separately — the unit itself is a static descriptor.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 UnitType = Literal["platform", "collection"]
 CollectionKind = Literal["user", "smart", "franchise"]
@@ -32,9 +32,9 @@ class WorkUnit:
     # ``None`` is only valid when ``type == "platform"``.
     collection_kind: CollectionKind | None = None
 
-    def to_event_payload(self) -> dict:
+    def to_event_payload(self) -> dict[str, Any]:
         """Serialise to the shape emitted in ``sync_plan`` / ``sync_apply_unit``."""
-        payload: dict = {
+        payload: dict[str, Any] = {
             "type": self.type,
             "id": self.id,
             "name": self.name,

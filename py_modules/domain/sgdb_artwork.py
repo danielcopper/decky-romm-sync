@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import struct
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 # Discriminant returned by ``classify_resolution`` describing which
@@ -78,7 +78,7 @@ def build_autocomplete_path(term: str) -> str:
     return f"/search/autocomplete/{quote(term)}"
 
 
-def parse_autocomplete_results(payload: dict | None) -> list[dict]:
+def parse_autocomplete_results(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Normalise an SGDB autocomplete response into candidate dicts.
 
     From the SGDB shape ``{"success": true, "data": [{"id", "name",
@@ -94,7 +94,7 @@ def parse_autocomplete_results(payload: dict | None) -> list[dict]:
     data = payload.get("data")
     if not isinstance(data, list):
         return []
-    results: list[dict] = []
+    results: list[dict[str, Any]] = []
     for entry in data:
         if not isinstance(entry, dict):
             continue
@@ -112,7 +112,7 @@ def parse_autocomplete_results(payload: dict | None) -> list[dict]:
     return results
 
 
-def first_grid_url(payload: dict | None) -> str | None:
+def first_grid_url(payload: dict[str, Any] | None) -> str | None:
     """Return a thumbnail URL for the first grid in a ``/grids/...`` response.
 
     Prefers the ``thumb`` field, falling back to ``url``. Returns

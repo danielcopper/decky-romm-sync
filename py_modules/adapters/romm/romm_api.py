@@ -7,7 +7,7 @@ directly to HTTP endpoints via RommHttpAdapter.
 from __future__ import annotations
 
 import urllib.parse
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from adapters.romm.http import RommHttpAdapter
@@ -30,21 +30,21 @@ class RommApiAdapter:
 
     # ── Server / Auth ─────────────────────────────────────────────────
 
-    def heartbeat(self) -> dict:
+    def heartbeat(self) -> dict[str, Any]:
         return self._client.request("/api/heartbeat")
 
-    def list_platforms(self) -> list[dict]:
+    def list_platforms(self) -> list[dict[str, Any]]:
         return self._client.request("/api/platforms")
 
-    def get_current_user(self) -> dict:
+    def get_current_user(self) -> dict[str, Any]:
         return self._client.request("/api/users/me")
 
     # ── ROMs ──────────────────────────────────────────────────────────
 
-    def get_rom(self, rom_id: int) -> dict:
+    def get_rom(self, rom_id: int) -> dict[str, Any]:
         return self._client.request(f"/api/roms/{rom_id}")
 
-    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         return self._client.request(f"/api/roms?platform_ids={platform_id}&limit={limit}&offset={offset}")
 
     def list_roms_updated_after(
@@ -53,7 +53,7 @@ class RommApiAdapter:
         updated_after: str,
         limit: int = 1,
         offset: int = 0,
-    ) -> dict:
+    ) -> dict[str, Any]:
         quoted_after = urllib.parse.quote(updated_after)
         return self._client.request(
             f"/api/roms?platform_ids={platform_id}&limit={limit}&offset={offset}&updated_after={quoted_after}"
@@ -78,34 +78,34 @@ class RommApiAdapter:
 
     # ── Collections ───────────────────────────────────────────────────
 
-    def list_collections(self) -> list[dict]:
+    def list_collections(self) -> list[dict[str, Any]]:
         result = self._client.request("/api/collections")
         return result if isinstance(result, list) else []
 
-    def list_virtual_collections(self, collection_type: str) -> list[dict]:
+    def list_virtual_collections(self, collection_type: str) -> list[dict[str, Any]]:
         result = self._client.request(f"/api/collections/virtual?type={collection_type}")
         return result if isinstance(result, list) else []
 
-    def list_smart_collections(self) -> list[dict]:
+    def list_smart_collections(self) -> list[dict[str, Any]]:
         result = self._client.request("/api/collections/smart")
         return result if isinstance(result, list) else []
 
-    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         return self._client.request(f"/api/roms?collection_id={collection_id}&limit={limit}&offset={offset}")
 
-    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         encoded_id = urllib.parse.quote(str(virtual_id), safe="")
         return self._client.request(f"/api/roms?virtual_collection_id={encoded_id}&limit={limit}&offset={offset}")
 
-    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict:
+    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         return self._client.request(f"/api/roms?smart_collection_id={smart_id}&limit={limit}&offset={offset}")
 
     # ── Firmware / BIOS ───────────────────────────────────────────────
 
-    def list_firmware(self) -> list[dict]:
+    def list_firmware(self) -> list[dict[str, Any]]:
         return self._client.request("/api/firmware")
 
-    def get_firmware(self, firmware_id: int) -> dict:
+    def get_firmware(self, firmware_id: int) -> dict[str, Any]:
         return self._client.request(f"/api/firmware/{firmware_id}")
 
     def download_firmware(self, firmware_id: int, filename: str, dest: str) -> None:
@@ -123,7 +123,7 @@ class RommApiAdapter:
         *,
         device_id: str | None = None,
         slot: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         query = f"/api/saves?rom_id={rom_id}"
         if device_id is not None:
             query += f"&device_id={urllib.parse.quote(device_id, safe='')}"
@@ -142,7 +142,7 @@ class RommApiAdapter:
         device_id: str | None = None,
         slot: str | None = None,
         overwrite: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         params = f"rom_id={rom_id}&emulator={urllib.parse.quote(emulator, safe='')}"
         if device_id is not None:
             params += f"&device_id={urllib.parse.quote(device_id, safe='')}"
@@ -171,19 +171,19 @@ class RommApiAdapter:
             path += f"?device_id={urllib.parse.quote(device_id, safe='')}&optimistic={opt}"
         self._client.download(path, dest_path)
 
-    def confirm_download(self, save_id: int, device_id: str) -> dict:
+    def confirm_download(self, save_id: int, device_id: str) -> dict[str, Any]:
         return self._client.post_json(
             f"/api/saves/{save_id}/downloaded",
             {"device_id": device_id},
         )
 
-    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict:
+    def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict[str, Any]:
         query = f"/api/saves/summary?rom_id={rom_id}"
         if device_id is not None:
             query += f"&device_id={urllib.parse.quote(device_id, safe='')}"
         return self._client.request(query)
 
-    def delete_server_saves(self, save_ids: list[int]) -> dict:
+    def delete_server_saves(self, save_ids: list[int]) -> dict[str, Any]:
         return self._client.post_json("/api/saves/delete", {"saves": save_ids})
 
     # ── Devices ───────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ class RommApiAdapter:
         client: str,
         client_version: str,
         hostname: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         payload = {
             "name": name,
             "platform": platform,
@@ -206,21 +206,21 @@ class RommApiAdapter:
             payload["hostname"] = hostname
         return self._client.post_json("/api/devices", payload)
 
-    def list_devices(self) -> list[dict]:
+    def list_devices(self) -> list[dict[str, Any]]:
         result = self._client.request("/api/devices")
         return result if isinstance(result, list) else []
 
-    def update_device(self, device_id: str, **fields) -> dict:
+    def update_device(self, device_id: str, **fields) -> dict[str, Any]:
         payload = {k: v for k, v in fields.items() if v is not None}
         return self._client.put_json(f"/api/devices/{urllib.parse.quote(device_id, safe='')}", payload)
 
     # ── Notes / Playtime ──────────────────────────────────────────────
 
-    def get_rom_with_notes(self, rom_id: int) -> dict:
+    def get_rom_with_notes(self, rom_id: int) -> dict[str, Any]:
         return self._client.request(f"/api/roms/{rom_id}")
 
-    def create_note(self, rom_id: int, data: dict) -> dict:
+    def create_note(self, rom_id: int, data: dict[str, Any]) -> dict[str, Any]:
         return self._client.post_json(f"/api/roms/{rom_id}/notes", data)
 
-    def update_note(self, rom_id: int, note_id: int, data: dict) -> dict:
+    def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
         return self._client.put_json(f"/api/roms/{rom_id}/notes/{note_id}", data)

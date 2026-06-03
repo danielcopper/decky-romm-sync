@@ -20,7 +20,7 @@ from lib.migration_gate import migration_blocked
 
 
 class Plugin:
-    settings: dict
+    settings: dict[str, Any]
     loop: asyncio.AbstractEventLoop
 
     # Test-only attribute slots — production ``Plugin`` does not read

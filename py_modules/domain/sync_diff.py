@@ -12,20 +12,20 @@ slices as primitive parameters and returns primitives or NamedTuple results.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 
 class ClassificationResult(NamedTuple):
-    new: list[dict]
-    changed: list[dict]
+    new: list[dict[str, Any]]
+    changed: list[dict[str, Any]]
     unchanged_ids: list[int]
     stale: list[int]
     disabled_count: int
 
 
 def classify_roms(
-    shortcuts_data: list[dict],
-    registry: dict,
+    shortcuts_data: list[dict[str, Any]],
+    registry: dict[str, Any],
     fetched_platform_names: set[str],
 ) -> ClassificationResult:
     """Bucket fetched ROMs against the saved shortcut registry.
@@ -39,8 +39,8 @@ def classify_roms(
     Changed ROMs are returned as fresh dicts with an added ``existing_app_id``
     key — the caller's shortcuts_data is not mutated.
     """
-    new: list[dict] = []
-    changed: list[dict] = []
+    new: list[dict[str, Any]] = []
+    changed: list[dict[str, Any]] = []
     unchanged_ids: list[int] = []
 
     for sd in shortcuts_data:
@@ -68,7 +68,7 @@ def classify_roms(
 def compute_collection_diff(
     collection_memberships: dict[str, list[int]],
     last_synced_collections: list[str],
-) -> dict:
+) -> dict[str, Any]:
     """Diff enabled collections (by name) against the last-synced set.
 
     Returns ``{"has_changes": bool, "added": [...], "removed": [...]}``.
@@ -106,11 +106,11 @@ def should_include_in_platform_collection(
 
 
 def compute_platform_collection_diff(
-    shortcuts_data: list[dict],
+    shortcuts_data: list[dict[str, Any]],
     platform_rom_ids: set[int] | None,
     last_synced_platforms: list[str],
     create_platform_groups: bool,
-) -> dict:
+) -> dict[str, Any]:
     """Diff future platform-group collections against last-synced platforms.
 
     Returns ``{"has_changes": bool, "added_count": int, "removed_count": int}``.

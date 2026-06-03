@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import logging
@@ -27,7 +27,7 @@ class RetroDeckPathsAdapter:
     def __init__(self, *, user_home: str, logger: logging.Logger) -> None:
         self._user_home = user_home
         self._logger = logger
-        self._cached_config: dict | None = None
+        self._cached_config: dict[str, Any] | None = None
         self._cache_time = 0.0
 
     def _config_path(self) -> str:
@@ -41,7 +41,7 @@ class RetroDeckPathsAdapter:
             "retrodeck.json",
         )
 
-    def _load_config(self) -> dict | None:
+    def _load_config(self) -> dict[str, Any] | None:
         now = time.monotonic()
         if self._cached_config is not None and (now - self._cache_time) < self._CACHE_TTL:
             return self._cached_config

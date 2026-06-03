@@ -40,6 +40,7 @@ No I/O. No imports from services or adapters. Stdlib only.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from domain.iso_time import parse_iso_to_epoch
 
@@ -77,14 +78,14 @@ class Upload:
 class Download:
     """Adopt the chosen server save (raw RomM API dict)."""
 
-    server_save: dict
+    server_save: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class Conflict:
     """Both sides changed. User must decide via the resolve callable."""
 
-    server_save: dict
+    server_save: dict[str, Any]
 
 
 SyncAction = Skip | Upload | Download | Conflict
@@ -95,7 +96,7 @@ SyncAction = Skip | Upload | Download | Conflict
 # ---------------------------------------------------------------------------
 
 
-def _local_mtime_ge_server_updated_at(local_file: dict, server: dict) -> bool:
+def _local_mtime_ge_server_updated_at(local_file: dict[str, Any], server: dict[str, Any]) -> bool:
     """Return True iff local mtime is at-or-after the server save's updated_at.
 
     On any parse failure (missing/garbled timestamps) we conservatively return
@@ -117,7 +118,7 @@ def _local_mtime_ge_server_updated_at(local_file: dict, server: dict) -> bool:
 
 
 def _decide_when_is_current(
-    server: dict, local_file: dict | None, local_hash: str | None, last_sync_hash: str | None
+    server: dict[str, Any], local_file: dict[str, Any] | None, local_hash: str | None, last_sync_hash: str | None
 ) -> SyncAction:
     """Branch 4: ``our_entry.is_current=True`` on the chosen save."""
     if local_file is None:
@@ -135,7 +136,7 @@ def _decide_when_is_current(
 
 
 def _decide_when_not_current(
-    server: dict, local_file: dict | None, local_hash: str | None, last_sync_hash: str | None
+    server: dict[str, Any], local_file: dict[str, Any] | None, local_hash: str | None, last_sync_hash: str | None
 ) -> SyncAction:
     """Branch 5: ``our_entry`` exists but ``is_current=False`` (server moved past us)."""
     if local_file is None or not last_sync_hash:
@@ -147,7 +148,7 @@ def _decide_when_not_current(
     return Download(server_save=server)
 
 
-def _decide_when_no_entry(server: dict, local_file: dict | None) -> SyncAction:
+def _decide_when_no_entry(server: dict[str, Any], local_file: dict[str, Any] | None) -> SyncAction:
     """Branch 6: no ``device_syncs`` entry for our device on the chosen save."""
     if local_file is None:
         return Download(server_save=server)
@@ -158,9 +159,9 @@ def _decide_when_no_entry(server: dict, local_file: dict | None) -> SyncAction:
 
 
 def compute_sync_action(
-    local_file: dict | None,
-    server_saves_in_slot: list[dict],
-    files_state: dict,
+    local_file: dict[str, Any] | None,
+    server_saves_in_slot: list[dict[str, Any]],
+    files_state: dict[str, Any],
     device_id: str,
     local_hash: str | None,
 ) -> SyncAction:
