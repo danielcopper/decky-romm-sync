@@ -18,7 +18,6 @@ this sync do?" belongs in the orchestrator.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -29,12 +28,13 @@ from domain.rom_metadata_mapping import build_rom_metadata
 from domain.sync_diff import should_include_in_platform_collection
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
-from services.library._state import LibrarySyncStateBox
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
     from collections.abc import Awaitable, Callable
 
+    from services.library._state import LibrarySyncStateBox
     from services.protocols import (
         ArtworkManager,
         Clock,

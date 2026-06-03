@@ -21,10 +21,13 @@ the ``Config Source Parsers`` wiki page for the rationale.
 
 from __future__ import annotations
 
-import logging
 import os
+from typing import TYPE_CHECKING
 
 from domain.retroarch_core_info import parse_core_info
+
+if TYPE_CHECKING:
+    import logging
 
 
 class RetroArchCoreInfoAdapter:

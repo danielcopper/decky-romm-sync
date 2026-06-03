@@ -7,12 +7,15 @@ Steam ``userdata`` directory (resolved from ``DECKY_USER_HOME``).
 from __future__ import annotations
 
 import contextlib
-import logging
 import os
+from typing import TYPE_CHECKING
 
 from _vendor import vdf
 
 from lib.errors import SteamGridDirMissingError
+
+if TYPE_CHECKING:
+    import logging
 
 
 class SteamConfigAdapter:

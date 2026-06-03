@@ -10,13 +10,14 @@ than reaching through ``service._state.x``.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from domain.sync_state import SyncState
 
 if TYPE_CHECKING:
+    import asyncio
+
     from domain.preview_delta import PreviewDelta
 
 

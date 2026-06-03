@@ -8,6 +8,7 @@ carry coverage rather than riding on the adapters'.
 from __future__ import annotations
 
 import sqlite3
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -29,19 +30,21 @@ from fakes.fake_rom_repository import FakeRomRepository
 from fakes.fake_rom_save_state_repository import FakeRomSaveStateRepository
 from fakes.fake_sync_run_repository import FakeSyncRunRepository
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
-from services.protocols import (
-    BiosFileRepository,
-    FirmwareCacheRepository,
-    KvConfigRepository,
-    PlaytimeRepository,
-    RomInstallRepository,
-    RomMetadataRepository,
-    RomRepository,
-    RomSaveStateRepository,
-    SyncRunRepository,
-    UnitOfWork,
-    UnitOfWorkFactory,
-)
+
+if TYPE_CHECKING:
+    from services.protocols import (
+        BiosFileRepository,
+        FirmwareCacheRepository,
+        KvConfigRepository,
+        PlaytimeRepository,
+        RomInstallRepository,
+        RomMetadataRepository,
+        RomRepository,
+        RomSaveStateRepository,
+        SyncRunRepository,
+        UnitOfWork,
+        UnitOfWorkFactory,
+    )
 
 
 def _rom(rom_id: int) -> Rom:

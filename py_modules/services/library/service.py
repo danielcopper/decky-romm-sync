@@ -14,7 +14,6 @@ in-flight sync state belongs in a sub-service.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -25,6 +24,7 @@ from services.library.reporter import SyncReporter, SyncReporterConfig
 from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
 
     from domain.preview_delta import PreviewDelta

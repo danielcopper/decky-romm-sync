@@ -16,7 +16,6 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, cast
 
 from models.metadata import AchievementSummary
-from models.state import MetadataCacheEntry
 
 from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
 from domain.platform_names import decode_platform_names
@@ -24,6 +23,8 @@ from domain.save_status import compute_save_sync_display
 
 if TYPE_CHECKING:
     import logging
+
+    from models.state import MetadataCacheEntry
 
     from domain.rom import Rom
     from domain.rom_install import RomInstall

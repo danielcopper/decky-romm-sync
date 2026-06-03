@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -33,6 +32,7 @@ from services.saves.sync_engine.rollback import RollbackOrchestrator
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Iterator
 
     from services.protocols import (
         Clock,

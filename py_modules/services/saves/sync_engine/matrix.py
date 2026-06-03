@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -34,6 +33,7 @@ from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
     import logging
+    from collections.abc import Iterator
 
     from services.protocols import (
         Clock,

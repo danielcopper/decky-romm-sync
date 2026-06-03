@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-
-from models.state import ShortcutRegistryEntry
 
 from domain.artwork_paths import final_filename, staging_filename
 from domain.sync_stage import SyncStage
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
     from collections.abc import Callable
+
+    from models.state import ShortcutRegistryEntry
 
     from services.protocols import (
         CoverArtFileStore,

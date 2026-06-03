@@ -17,10 +17,11 @@ Protocols below, so the adapter package never imports this module — keeping th
 
 from __future__ import annotations
 
-from types import TracebackType
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from services.protocols.repositories import (
         BiosFileRepository,
         FirmwareCacheRepository,

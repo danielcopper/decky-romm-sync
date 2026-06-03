@@ -22,10 +22,11 @@ this Protocol surface.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from domain.bios_file import BiosFile
     from domain.firmware_cache import FirmwareCacheEntry
     from domain.playtime import Playtime

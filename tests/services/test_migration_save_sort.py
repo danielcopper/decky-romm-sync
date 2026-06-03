@@ -6,18 +6,21 @@ import asyncio
 import json
 import logging
 import os
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
-from models.state import SaveSortSettings
 
 from adapters.migration_file import MigrationFileAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from services.migration import MigrationService, MigrationServiceConfig
+
+if TYPE_CHECKING:
+    from models.state import SaveSortSettings
 
 
 def _active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:

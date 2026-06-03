@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from domain.rom_save_state import RomSaveState
 from lib.list_result import ErrorCode
 from services.saves._settings import save_sync_enabled
 
@@ -20,6 +19,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
+    from domain.rom_save_state import RomSaveState
     from services.protocols import (
         DebugLogger,
         RetryStrategy,

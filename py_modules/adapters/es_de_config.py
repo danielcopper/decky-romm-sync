@@ -8,10 +8,13 @@ writing per-system / per-game core overrides back to ``gamelist.xml``.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
-from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import logging
+    from collections.abc import Callable
 
 _CORE_SO_RE = re.compile(r"%CORE_RETROARCH%/([\w-]+_libretro)\.so")
 

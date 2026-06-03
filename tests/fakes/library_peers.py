@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from models.state import ShortcutRegistryEntry
-
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    from models.state import ShortcutRegistryEntry
 
 
 class FakeArtworkManager:

@@ -31,14 +31,14 @@ from domain.sync_diff import (
 from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
-from domain.work_unit import WorkUnit
 from lib.errors import classify_error
-from lib.late_binding import LateBinding
-from services.library._state import LibrarySyncStateBox
 
 if TYPE_CHECKING:
     import logging
 
+    from domain.work_unit import WorkUnit
+    from lib.late_binding import LateBinding
+    from services.library._state import LibrarySyncStateBox
     from services.library.fetcher import LibraryFetcher
     from services.library.reporter import SyncReporter
     from services.protocols import (

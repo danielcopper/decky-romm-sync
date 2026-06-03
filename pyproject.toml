@@ -49,6 +49,7 @@ select = [
     "C4",    # flake8-comprehensions
     "PIE",   # flake8-pie
     "PERF",  # perflint
+    "TC",   # flake8-type-checking
 ]
 
 [tool.ruff.lint.per-file-ignores]

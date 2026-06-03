@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _SNES9X_INFO = (
     "# Software Information\n"

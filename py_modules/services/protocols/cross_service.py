@@ -10,9 +10,10 @@ narrow seam one consuming service sees of another service's surface.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from models.state import InstalledRomEntry, ShortcutRegistryEntry
+if TYPE_CHECKING:
+    from models.state import InstalledRomEntry, ShortcutRegistryEntry
 
 
 class RetryStrategy(Protocol):

@@ -19,12 +19,12 @@ from typing import TYPE_CHECKING
 from domain.sync_state import SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
-from services.library._state import LibrarySyncStateBox
 
 if TYPE_CHECKING:
     import logging
     from collections.abc import Awaitable, Callable
 
+    from services.library._state import LibrarySyncStateBox
     from services.protocols import (
         DebugLogger,
         RommLibraryApi,

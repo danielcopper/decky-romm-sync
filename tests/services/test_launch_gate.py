@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
-from models.state import InstalledRomEntry
 
 from services.launch_gate import (
     LaunchGateService,
     LaunchGateServiceConfig,
     LaunchVerdict,
 )
+
+if TYPE_CHECKING:
+    from models.state import InstalledRomEntry
 
 
 def _installed_rom(rom_id: int) -> InstalledRomEntry:

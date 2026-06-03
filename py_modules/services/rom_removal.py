@@ -8,13 +8,13 @@ metadata all survive — only the on-disk files and the install record go.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from lib.path_safety import is_safe_rom_path
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
 
     from domain.rom_install import RomInstall

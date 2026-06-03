@@ -17,8 +17,6 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from models.state import SaveSortSettings
-
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
 
@@ -31,6 +29,8 @@ _KV_SAVE_SORT_PREVIOUS = "save_sort_settings_previous"
 
 if TYPE_CHECKING:
     import logging
+
+    from models.state import SaveSortSettings
 
     from services.protocols import (
         CoreNameProviderFn,

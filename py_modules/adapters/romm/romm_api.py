@@ -7,8 +7,10 @@ directly to HTTP endpoints via RommHttpAdapter.
 from __future__ import annotations
 
 import urllib.parse
+from typing import TYPE_CHECKING
 
-from adapters.romm.http import RommHttpAdapter
+if TYPE_CHECKING:
+    from adapters.romm.http import RommHttpAdapter
 
 
 class RommApiAdapter:

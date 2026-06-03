@@ -150,6 +150,6 @@ class TestMigrationBlockedDecorator:
         svc = MagicMock()
         svc.is_retrodeck_migration_pending.return_value = True
         owner = _Owner(svc)
-        result = cast(dict[str, Any], await owner.do())
+        result = cast("dict[str, Any]", await owner.do())
         assert result["blocked_by_migration"] is True
         svc.is_retrodeck_migration_pending.assert_called_once_with()

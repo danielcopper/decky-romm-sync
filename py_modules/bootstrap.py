@@ -10,11 +10,10 @@ caller to keep as its source of truth.
 
 from __future__ import annotations
 
-import asyncio
 import functools
-import logging
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
@@ -60,34 +59,6 @@ from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
-from services.protocols import (
-    Clock,
-    CoreInfoProvider,
-    CoreNameProviderFn,
-    CoverArtFileStore,
-    DebugLogger,
-    DownloadFileStore,
-    EventEmitter,
-    FirmwareCachePersister,
-    FirmwareFileStore,
-    GamelistXmlEditor,
-    HostnameReader,
-    MachineIdReader,
-    MigrationFileStore,
-    PathExistsReader,
-    PluginMetadataReader,
-    RetroArchSaveSortingProvider,
-    RetroDeckPaths,
-    RomFileStore,
-    RommApi,
-    SaveFileStore,
-    SettingsPersister,
-    SgdbArtworkCache,
-    Sleeper,
-    SteamConfigStore,
-    UnitOfWorkFactory,
-    UuidGen,
-)
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
 from services.session_lifecycle import SessionLifecycleService, SessionLifecycleServiceConfig
@@ -95,6 +66,39 @@ from services.settings import SettingsService, SettingsServiceConfig
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 from services.steamgrid import SteamGridService, SteamGridServiceConfig
+
+if TYPE_CHECKING:
+    import asyncio
+    import logging
+
+    from services.protocols import (
+        Clock,
+        CoreInfoProvider,
+        CoreNameProviderFn,
+        CoverArtFileStore,
+        DebugLogger,
+        DownloadFileStore,
+        EventEmitter,
+        FirmwareCachePersister,
+        FirmwareFileStore,
+        GamelistXmlEditor,
+        HostnameReader,
+        MachineIdReader,
+        MigrationFileStore,
+        PathExistsReader,
+        PluginMetadataReader,
+        RetroArchSaveSortingProvider,
+        RetroDeckPaths,
+        RomFileStore,
+        RommApi,
+        SaveFileStore,
+        SettingsPersister,
+        SgdbArtworkCache,
+        Sleeper,
+        SteamConfigStore,
+        UnitOfWorkFactory,
+        UuidGen,
+    )
 
 # Filename of the SQLite database inside the plugin runtime dir. Created by the
 # migration runner at startup; unused until the service cutover (#784).

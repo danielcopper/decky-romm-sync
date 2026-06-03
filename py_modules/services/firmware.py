@@ -11,7 +11,6 @@ responsibility.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -24,6 +23,7 @@ from domain.firmware_cache import FirmwareCacheEntry
 from lib.errors import error_response
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
 
     from services.protocols import (
