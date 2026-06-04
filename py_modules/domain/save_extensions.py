@@ -19,6 +19,16 @@ _DEFAULT_EXTENSIONS: tuple[str, ...] = (".srm", ".rtc", ".sav")
 _PLATFORM_OVERRIDES: dict[str, tuple[str, ...]] = {
     "nds": (".srm", ".rtc", ".sav", ".dsv"),  # DeSmuME native format
     "segacd": (".srm", ".rtc", ".sav", ".brm"),  # Genesis Plus GX Sega CD BRAM
+    "saturn": (".srm", ".rtc", ".sav", ".bkr", ".bcr", ".smpc"),  # Beetle Saturn / yabasanshiro backup RAM
+    "saturnjp": (".srm", ".rtc", ".sav", ".bkr", ".bcr", ".smpc"),
+    "ngp": (".srm", ".rtc", ".sav", ".flash", ".ngf"),  # Beetle NeoPop (.flash) / RACE (.ngf)
+    "ngpc": (".srm", ".rtc", ".sav", ".flash", ".ngf"),
+    "pokemini": (".srm", ".rtc", ".sav", ".eep"),  # PokeMini EEPROM
+    "amiga": (".srm", ".rtc", ".sav", ".nvr"),  # PUAE non-volatile RAM
+    "amiga1200": (".srm", ".rtc", ".sav", ".nvr"),
+    "amiga600": (".srm", ".rtc", ".sav", ".nvr"),
+    "amigacd32": (".srm", ".rtc", ".sav", ".nvr"),
+    "cdtv": (".srm", ".rtc", ".sav", ".nvr"),
 }
 
 

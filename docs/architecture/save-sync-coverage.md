@@ -22,8 +22,9 @@ Two hard properties follow, and they define the entire coverage envelope:
 2. **The file must live in the save folder.** A save in RetroArch's _system_ directory (Flycast VMUs), in a per-emulator
    subdirectory (`mame/nvram/`), or next to the ROM (`savefiles_in_content_dir`) is never seen.
 
-The extension list is a small static map: a default of `.srm` / `.rtc` / `.sav`, plus per-platform overrides (today only
-`nds` → `.dsv` and `segacd` → `.brm`).
+The extension list is a small static map: a default of `.srm` / `.rtc` / `.sav`, plus per-platform overrides (`nds` →
+`.dsv`, `segacd` → `.brm`, `saturn`/`saturnjp` → `.bkr`/`.bcr`/`.smpc`, `ngp`/`ngpc` → `.flash`/`.ngf`, `pokemini` →
+`.eep`, and the `amiga` family → `.nvr`).
 
 ## How RomM stores saves
 
@@ -127,13 +128,7 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `virtualjaguar_libretro` | 🟠 (b) | `.srm`, `.cdrom.srm` | infix / saves | atarijaguar |
     | `dosbox_pure_libretro` | 🟡 (a) | `.pure.zip`, `.save.zip` | single_token_nonstandard / saves | dos, pc, windows3x, windows9x |
     | `kronos_libretro` | 🟡 (a) | `.ram` | single_token_nonstandard / saves | arcade, consolearcade, mame, saturn, saturnjp +1 |
-    | `mednafen_ngp_libretro` | 🟡 (a) | `.flash` | single_token_nonstandard / saves | ngp, ngpc |
-    | `mednafen_saturn_libretro` | 🟡 (a) | `.bkr`, `.bcr`, `.smpc` | single_token_nonstandard / saves | saturn, saturnjp |
     | `nxengine_libretro` | 🟡 (a) | `.dat` | single_token_nonstandard / saves | ports |
-    | `pokemini_libretro` | 🟡 (a) | `.eep` | single_token_nonstandard / saves | pokemini |
-    | `puae2021_libretro` | 🟡 (a) | `.nvr` | single_token_nonstandard / saves | amiga, amiga1200, amiga600, amigacd32, cdtv |
-    | `puae_libretro` | 🟡 (a) | `.nvr` | single_token_nonstandard / saves | amiga, amiga1200, amiga600, amigacd32, cdtv |
-    | `race_libretro` | 🟡 (a) | `.ngf` | single_token_nonstandard / saves | ngp, ngpc |
     | `retro8_libretro` | 🟡 (a) | `.p8d.txt` | single_token_nonstandard / saves | pico8 |
     | `ardens_libretro` | ❓ | — | unknown / unknown | arduboy |
     | `panda3ds_libretro` | ❓ | — | unknown / unknown | n3ds |
@@ -159,9 +154,11 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `genesis_plus_gx_wide_libretro` | ✅ | `.srm`, `.brm` | single_token_default / saves | gamegear, genesis, mark3, mastersystem, megacd +5 |
     | `geolith_libretro` | ✅ | `.srm`, `.nv`, `.mcr` | single_token_default / saves | arcade, mame, neogeo |
     | `gpsp_libretro` | ✅ | `.srm` | single_token_default / saves | gba |
+    | `mednafen_ngp_libretro` | ✅ | `.flash` | single_token_default / saves | ngp, ngpc |
     | `mednafen_pce_fast_libretro` | ✅ | `.srm` | single_token_default / saves | pcengine, pcenginecd, tg16, tg-cd |
     | `mednafen_pce_libretro` | ✅ | `.srm` | single_token_default / saves | pcengine, pcenginecd, supergrafx, tg16, tg-cd |
     | `mednafen_pcfx_libretro` | ✅ | `.srm` | single_token_default / saves | pcfx |
+    | `mednafen_saturn_libretro` | ✅ | `.bkr`, `.bcr`, `.smpc` | single_token_default / saves | saturn, saturnjp |
     | `mednafen_supafaust_libretro` | ✅ | `.srm` | single_token_default / saves | sfc, snes, snesna |
     | `mednafen_supergrafx_libretro` | ✅ | `.srm` | single_token_default / saves | supergrafx, tg16 |
     | `mednafen_vb_libretro` | ✅ | `.srm` | single_token_default / saves | virtualboy |
@@ -177,9 +174,13 @@ no battery save · `❓` unverified. Non-`.srm` rows are libretro-documented and
     | `opera_libretro` | ✅ | `.srm` | single_token_default / saves | 3do |
     | `parallel_n64_libretro` | ✅ | `.srm` | single_token_default / saves | n64, n64dd |
     | `picodrive_libretro` | ✅ | `.srm` | single_token_default / saves | gamegear, genesis, mark3, mastersystem, megacd +7 |
+    | `pokemini_libretro` | ✅ | `.eep` | single_token_default / saves | pokemini |
     | `potator_libretro` | ✅ | `.srm` | single_token_default / saves | supervision |
+    | `puae2021_libretro` | ✅ | `.nvr` | single_token_default / saves | amiga, amiga1200, amiga600, amigacd32, cdtv |
+    | `puae_libretro` | ✅ | `.nvr` | single_token_default / saves | amiga, amiga1200, amiga600, amigacd32, cdtv |
     | `quasi88_libretro` | ✅ | `.srm` | single_token_default / saves | pc88 |
     | `quicknes_libretro` | ✅ | `.srm` | single_token_default / saves | famicom, nes |
+    | `race_libretro` | ✅ | `.ngf` | single_token_default / saves | ngp, ngpc |
     | `sameboy_libretro` | ✅ | `.srm`, `.rtc` | single_token_default / saves | gb, gbc, sgb |
     | `sameduck_libretro` | ✅ | `.srm`, `.rtc` | single_token_default / saves | megaduck |
     | `smsplus_libretro` | ✅ | `.srm` | single_token_default / saves | gamegear, mark3, mastersystem |

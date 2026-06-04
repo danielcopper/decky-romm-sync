@@ -46,12 +46,48 @@ class TestGetSaveExtensionsWithOverride:
         assert ".brm" in result
         assert ".srm" in result
 
+    def test_saturn_override_appends_backup_ram_extensions(self):
+        """Saturn returns Beetle Saturn / yabasanshiro backup RAM extensions, defaults retained."""
+        result = get_save_extensions("saturn")
+        assert result == (".srm", ".rtc", ".sav", ".bkr", ".bcr", ".smpc")
+
+    def test_saturnjp_matches_saturn(self):
+        """The saturnjp alias slug returns the same tuple as saturn."""
+        assert get_save_extensions("saturnjp") == get_save_extensions("saturn")
+
+    def test_ngp_override_appends_flash_and_ngf(self):
+        """NGP returns Beetle NeoPop (.flash) and RACE (.ngf) extensions, defaults retained."""
+        result = get_save_extensions("ngp")
+        assert result == (".srm", ".rtc", ".sav", ".flash", ".ngf")
+
+    def test_ngpc_matches_ngp(self):
+        """The ngpc alias slug returns the same tuple as ngp."""
+        assert get_save_extensions("ngpc") == get_save_extensions("ngp")
+
+    def test_pokemini_override_appends_eep(self):
+        """PokeMini returns the EEPROM .eep extension, defaults retained."""
+        result = get_save_extensions("pokemini")
+        assert result == (".srm", ".rtc", ".sav", ".eep")
+
+    def test_amiga_override_appends_nvr(self):
+        """Amiga returns the PUAE .nvr extension, defaults retained."""
+        result = get_save_extensions("amiga")
+        assert result == (".srm", ".rtc", ".sav", ".nvr")
+
+    def test_amiga_family_slugs_match(self):
+        """All amiga-family slugs return identical tuples."""
+        expected = get_save_extensions("amiga")
+        for slug in ("amiga1200", "amiga600", "amigacd32", "cdtv"):
+            assert get_save_extensions(slug) == expected
+
     def test_non_override_platform_still_returns_default(self):
         """Platforms without overrides get defaults."""
         result = get_save_extensions("gba")
         assert result == _DEFAULTS
         assert ".dsv" not in result
         assert ".brm" not in result
+        assert ".nvr" not in result
+        assert ".flash" not in result
 
     def test_patched_override_replaces_defaults(self):
         """A patched override completely replaces the default list."""
