@@ -63,12 +63,14 @@ nav:
       - BIOS Management: user-guide/bios-management.md
       - Save Sync: user-guide/save-sync.md
       - Save File Extensions: user-guide/save-file-extensions.md
+      - Save Sync Support Matrix: user-guide/save-sync-support-matrix.md
       - RetroDECK Path Migration: user-guide/retrodeck-path-migration.md
       - Troubleshooting: user-guide/troubleshooting.md
   - Architecture:
       - Backend Architecture: architecture/backend-architecture.md
       - Database Design: architecture/database-design.md
       - Save File Sync Architecture: architecture/save-file-sync-architecture.md
+      - Save Sync Coverage: architecture/save-sync-coverage.md
       - Config Source Parsers: architecture/config-source-parsers.md
       - Steam Non-Steam Shortcuts: architecture/steam-non-steam-shortcuts.md
       - Steam Remote Play & Cross-Device: architecture/steam-remote-play.md

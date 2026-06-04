@@ -3,6 +3,16 @@
 Research results for which save file extensions RetroDECK cores produce, and what our plugin needs to support. This
 informs the implementation of [#196](https://github.com/danielcopper/decky-romm-sync/issues/196).
 
+!!! note "Superseded in part by the full audit"
+
+    A later core-by-core audit of all 155 RetroDECK cores is captured in the
+    [Save sync support matrix](save-sync-support-matrix.md), with the rationale in
+    [Save sync coverage](../architecture/save-sync-coverage.md). It **revisits some assumptions on this page** —
+    notably that Saturn (Beetle Saturn writes `.bkr`/`.bcr`/`.smpc`, not `.srm`), Neo Geo Pocket (`.flash`/`.ngf`),
+    and Pokémon Mini (`.eep`) are _not_ standard `.srm`. Those rows are documented by libretro but still await
+    on-device confirmation ([#237](https://github.com/danielcopper/decky-romm-sync/issues/237)). Treat the matrix as
+    the broader, current view; this page remains the record of the original `.srm`/`.dsv`/`.brm` decision.
+
 ## How RetroArch Save Extensions Work
 
 RetroArch has two save mechanisms:
