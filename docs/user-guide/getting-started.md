@@ -2,17 +2,25 @@
 
 ## What is decky-romm-sync?
 
-decky-romm-sync is a [Decky Loader](https://decky.xyz/) plugin that connects your self-hosted [RomM](https://github.com/rommapp/romm) ROM library to Steam. Every game in your RomM library appears as a Non-Steam shortcut in the Steam Library, complete with cover art, metadata, and collections. Games launch through [RetroDECK](https://retrodeck.net/).
+decky-romm-sync is a [Decky Loader](https://decky.xyz/) plugin that connects your self-hosted
+[RomM](https://github.com/rommapp/romm) ROM library to Steam. Every game in your RomM library appears as a Non-Steam
+shortcut in the Steam Library, complete with cover art, metadata, and collections. Games launch through
+[RetroDECK](https://retrodeck.net/).
 
 ## Prerequisites
 
 Before installing the plugin, you need:
 
-1. **A RomM server** — a running RomM instance with your ROM library. You'll need the server URL plus a username and password to connect the first time. The plugin exchanges those credentials for a RomM Client API Token and stores only the token — your password is never saved. Each user should have their own RomM account (see [Save Sync](save-sync.md) for why this matters).
+1. **A RomM server** — a running RomM instance with your ROM library. You'll need the server URL plus a username and
+   password to connect the first time. The plugin exchanges those credentials for a RomM Client API Token and stores
+   only the token — your password is never saved. Each user should have their own RomM account (see
+   [Save Sync](save-sync.md) for why this matters).
 
-2. **RetroDECK** — installed on your Steam Deck or Linux PC. RetroDECK handles the actual emulation. The plugin creates shortcuts that launch games through RetroDECK.
+2. **RetroDECK** — installed on your Steam Deck or Linux PC. RetroDECK handles the actual emulation. The plugin creates
+   shortcuts that launch games through RetroDECK.
 
-3. **Decky Loader** — the plugin framework for Steam's Gaming Mode. Install it from [decky.xyz](https://decky.xyz/) if you haven't already.
+3. **Decky Loader** — the plugin framework for Steam's Gaming Mode. Install it from [decky.xyz](https://decky.xyz/) if
+   you haven't already.
 
 4. **A personal RomM account** — save sync ties saves to the authenticated user. Use your own account, not a shared one.
 
@@ -40,9 +48,12 @@ Before installing the plugin, you need:
 
 6. Decky downloads and installs the plugin automatically — no restart needed
 
-**Tip:** You can also open the [releases page](https://github.com/danielcopper/decky-romm-sync/releases) in Steam's built-in browser (Gaming Mode → long-press the Steam button → Web Browser), long-press the zip download link, and copy the URL from there.
+**Tip:** You can also open the [releases page](https://github.com/danielcopper/decky-romm-sync/releases) in Steam's
+built-in browser (Gaming Mode → long-press the Steam button → Web Browser), long-press the zip download link, and copy
+the URL from there.
 
-Any direct URL to the zip file works (GitHub releases, a self-hosted mirror, etc.) as long as it points to a valid `.zip` containing the plugin.
+Any direct URL to the zip file works (GitHub releases, a self-hosted mirror, etc.) as long as it points to a valid
+`.zip` containing the plugin.
 
 ### Manual installation (alternative)
 
@@ -61,11 +72,15 @@ After installation, you need to connect the plugin to your RomM server:
 4. Tap **Connect**, enter your RomM username and password once, and confirm
 5. The **RomM Account** row shows **Connected** on success. Tap **Test Connection** to re-verify at any time
 
-The plugin mints a RomM Client API Token from the credentials you enter and discards the password — it is never stored. The same applies if the plugin auto-migrates an older install that still had a saved password: the password is discarded as soon as a token is minted. If your RomM account is not allowed to create API tokens, the Connect step reports that and you'll need an account with token permissions.
+The plugin mints a RomM Client API Token from the credentials you enter and discards the password — it is never stored.
+The same applies if the plugin auto-migrates an older install that still had a saved password: the password is discarded
+as soon as a token is minted. If your RomM account is not allowed to create API tokens, the Connect step reports that
+and you'll need an account with token permissions.
 
 <!-- Screenshot: Connection Settings page with URL field, Connect button, and token status -->
 
-Once connected, you're ready to sync your library. See [Configuration](configuration.md) for additional settings, or jump straight to [Syncing Your Library](syncing-your-library.md).
+Once connected, you're ready to sync your library. See [Configuration](configuration.md) for additional settings, or
+jump straight to [Syncing Your Library](syncing-your-library.md).
 
 ---
 

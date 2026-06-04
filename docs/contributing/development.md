@@ -17,7 +17,8 @@ mise install          # installs Node LTS, pnpm, Python
 mise run setup        # installs JS + Python dependencies
 ```
 
-This creates a Python virtual environment (auto-activated by mise via `_.python.venv` in `mise.toml`) and installs all npm packages.
+This creates a Python virtual environment (auto-activated by mise via `_.python.venv` in `mise.toml`) and installs all
+npm packages.
 
 ## Building
 
@@ -40,9 +41,12 @@ To run with coverage:
 python -m pytest tests/ -q --cov=py_modules --cov=main --cov-report=term --cov-branch
 ```
 
-Tests mirror the source layout (`tests/services/`, `tests/adapters/`, `tests/domain/`, `tests/models/`, `tests/lib/`), with each test file mapping 1:1 to a source module. Shared mocks live in `tests/conftest.py`, which also provides a mock `decky` module so tests run without Decky Loader.
+Tests mirror the source layout (`tests/services/`, `tests/adapters/`, `tests/domain/`, `tests/models/`, `tests/lib/`),
+with each test file mapping 1:1 to a source module. Shared mocks live in `tests/conftest.py`, which also provides a mock
+`decky` module so tests run without Decky Loader.
 
-Frontend component tests run with `mise run test:frontend` (`pnpm test`); see the CLAUDE.md "Frontend component tests" section for the `@decky/api` event harness.
+Frontend component tests run with `mise run test:frontend` (`pnpm test`); see the CLAUDE.md "Frontend component tests"
+section for the `@decky/api` event harness.
 
 Every backend feature or callable where testing makes sense should have unit tests covering:
 
@@ -56,7 +60,8 @@ Every backend feature or callable where testing makes sense should have unit tes
 mise run dev          # builds frontend + restarts plugin_loader
 ```
 
-This runs `pnpm build` and then `sudo systemctl restart plugin_loader` to pick up changes. For backend-only changes, restarting the plugin loader is sufficient without rebuilding.
+This runs `pnpm build` and then `sudo systemctl restart plugin_loader` to pick up changes. For backend-only changes,
+restarting the plugin loader is sufficient without rebuilding.
 
 ## Deploying to Device
 
@@ -83,17 +88,22 @@ The `.importlinter` config enforces the layer boundary contracts:
 - Utilities (`lib/`) must not import services, adapters, or domain
 - Domain must not import services or adapters (`lib` is allowed)
 - Models must not import services, adapters, domain, or lib
-- Services must not import stdlib I/O / non-deterministic primitives (`time`, `uuid`, `random`, `subprocess`, `threading`, `requests`)
+- Services must not import stdlib I/O / non-deterministic primitives (`time`, `uuid`, `random`, `subprocess`,
+  `threading`, `requests`)
 - Services must be independent of each other (no cross-service imports)
 
-`mise run lint` also runs `scripts/check_cosmic_call_bans.sh`, which complements the import rules at the call site: services may not call `datetime.now()` / `asyncio.sleep()` / `time.time()` / `time.monotonic()` / `uuid.uuid4()` / `random.*` directly — they inject the `Clock` / `Sleeper` / `UuidGen` Protocol instead.
+`mise run lint` also runs `scripts/check_cosmic_call_bans.sh`, which complements the import rules at the call site:
+services may not call `datetime.now()` / `asyncio.sleep()` / `time.time()` / `time.monotonic()` / `uuid.uuid4()` /
+`random.*` directly — they inject the `Clock` / `Sleeper` / `UuidGen` Protocol instead.
 
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Code Quality
 
-- **SonarCloud** — CI-based analysis on every PR and push to main. Quality Gate enforces 80% coverage on new code, 0 bugs, 0 vulnerabilities.
-- **Ruff** — Python linting in CI. Expanded ruleset includes B (bugbear), SIM (simplify), UP (pyupgrade), RUF (ruff-specific), and ARG (unused arguments) in addition to the base E/F rules.
+- **SonarCloud** — CI-based analysis on every PR and push to main. Quality Gate enforces 80% coverage on new code, 0
+  bugs, 0 vulnerabilities.
+- **Ruff** — Python linting in CI. Expanded ruleset includes B (bugbear), SIM (simplify), UP (pyupgrade), RUF
+  (ruff-specific), and ARG (unused arguments) in addition to the base E/F rules.
 - **basedpyright** — Type checking in CI. Checks all source files including the test suite (tests/ is not excluded).
 - **import-linter** — Layer boundary enforcement in CI (see Linting section above).
 - **pytest-cov** — Branch coverage reported to SonarCloud.
@@ -147,4 +157,5 @@ defaults/config.json                 # platform_map: 149 platform slug -> RetroD
 tests/                               # Backend unit tests, mirroring py_modules/ layout
 ```
 
-See [Backend Architecture](../architecture/backend-architecture.md) for the service/adapter design, dependency diagram, and layer enforcement rules.
+See [Backend Architecture](../architecture/backend-architecture.md) for the service/adapter design, dependency diagram,
+and layer enforcement rules.

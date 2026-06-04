@@ -2,10 +2,10 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-|---------|--------------------|
-| Latest  | Yes                |
-| Older   | No                 |
+| Version | Supported |
+| ------- | --------- |
+| Latest  | Yes       |
+| Older   | No        |
 
 Only the latest release receives security fixes.
 
@@ -14,7 +14,8 @@ Only the latest release receives security fixes.
 If you discover a security vulnerability in decky-romm-sync, please report it responsibly:
 
 1. **Do NOT open a public GitHub issue.**
-2. Use [GitHub Security Advisories](https://github.com/danielcopper/decky-romm-sync/security/advisories/new) to report privately.
+2. Use [GitHub Security Advisories](https://github.com/danielcopper/decky-romm-sync/security/advisories/new) to report
+   privately.
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce
@@ -35,4 +36,5 @@ This plugin handles:
 
 - Settings files are stored with `0600` permissions (owner-only read/write)
 - Credentials are never logged — masked in all log output
-- The `allow_insecure_ssl` option disables certificate verification for self-hosted servers with self-signed certificates. This is an opt-in user setting with a warning in the UI.
+- The `allow_insecure_ssl` option disables certificate verification for self-hosted servers with self-signed
+  certificates. This is an opt-in user setting with a warning in the UI.

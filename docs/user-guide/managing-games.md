@@ -1,10 +1,12 @@
 # Managing Games
 
-After syncing, each game in your Steam Library that came from RomM has an injected **RomM Sync** panel on its detail page. This panel handles downloads, artwork, BIOS status, save sync, and more.
+After syncing, each game in your Steam Library that came from RomM has an injected **RomM Sync** panel on its detail
+page. This panel handles downloads, artwork, BIOS status, save sync, and more.
 
 ## The Game Detail Panel
 
-When you open a RomM game in the Steam Library, you'll see the RomM Sync panel below the standard Steam content. It shows:
+When you open a RomM game in the Steam Library, you'll see the RomM Sync panel below the standard Steam content. It
+shows:
 
 - **Status badge** — "Installed", "Downloading", or "Not Installed"
 - **Platform name** — which system the game belongs to (e.g. "Game Boy Advance")
@@ -31,7 +33,8 @@ Downloaded ROMs are stored in your RetroDECK roms directory (e.g. `~/retrodeck/r
 
 ### Multi-Disc Games
 
-Multi-disc games (e.g. multi-disc PS1 titles) are downloaded as a single ZIP from RomM, extracted automatically, and an M3U playlist file is used for disc switching. This is handled transparently — just download and play.
+Multi-disc games (e.g. multi-disc PS1 titles) are downloaded as a single ZIP from RomM, extracted automatically, and an
+M3U playlist file is used for disc switching. This is handled transparently — just download and play.
 
 ## Uninstalling ROMs
 
@@ -52,11 +55,20 @@ Tap **Refresh Metadata** in the game detail panel to:
 - Re-fetch game metadata (description, developer, genres, release date) from RomM
 - Update the native Steam display with the latest information
 
-This is useful if artwork was missing on first sync (SteamGridDB may have added new images since) or if metadata has changed on your RomM server.
+This is useful if artwork was missing on first sync (SteamGridDB may have added new images since) or if metadata has
+changed on your RomM server.
 
-When you tap **Refresh Artwork**, the plugin asks your RomM server which SteamGridDB game the ROM maps to and applies the hero banner, logo, wide grid, and icon for that game. **RomM is the source of truth**: whenever your server has a SteamGridDB id for a game, that id wins — on both sync and refresh. If RomM has no id, the plugin tries to derive one from the game's IGDB id. Only when neither resolves a SteamGridDB game does a picker open, where you search SteamGridDB by name and choose from the results (with thumbnails). A name pick is applied immediately but is **not permanent** — once your RomM server has a SteamGridDB id for that game, that id takes over. Because a manual pick isn't stored as the resolved id, you can change it any time: just tap **Refresh Artwork** again and the picker reopens. To pin a specific match for good, set the SteamGridDB id on the game in RomM.
+When you tap **Refresh Artwork**, the plugin asks your RomM server which SteamGridDB game the ROM maps to and applies
+the hero banner, logo, wide grid, and icon for that game. **RomM is the source of truth**: whenever your server has a
+SteamGridDB id for a game, that id wins — on both sync and refresh. If RomM has no id, the plugin tries to derive one
+from the game's IGDB id. Only when neither resolves a SteamGridDB game does a picker open, where you search SteamGridDB
+by name and choose from the results (with thumbnails). A name pick is applied immediately but is **not permanent** —
+once your RomM server has a SteamGridDB id for that game, that id takes over. Because a manual pick isn't stored as the
+resolved id, you can change it any time: just tap **Refresh Artwork** again and the picker reopens. To pin a specific
+match for good, set the SteamGridDB id on the game in RomM.
 
-The full set of per-game actions — refresh artwork, refresh metadata, sync save files, download BIOS, and uninstall — is available from the RomM Actions menu in the game detail panel.
+The full set of per-game actions — refresh artwork, refresh metadata, sync save files, download BIOS, and uninstall — is
+available from the RomM Actions menu in the game detail panel.
 
 ![RomM Actions context menu with Refresh Artwork, Sync Save Files, Download BIOS, and Uninstall entries](../assets/screenshot-actions.jpg)
 
@@ -78,7 +90,8 @@ Select any installed game in the Steam Library and press **Play**. The plugin's 
 2. Launches RetroDECK with the correct ROM
 3. RetroDECK auto-detects the system from the ROM's directory path and uses the appropriate emulator
 
-If the ROM is not downloaded, the launcher will request a download — you'll get a toast notification and can play once the download completes.
+If the ROM is not downloaded, the launcher will request a download — you'll get a toast notification and can play once
+the download completes.
 
 ---
 

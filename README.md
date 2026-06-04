@@ -23,8 +23,8 @@ documentation site. This README is just the quick tour.
 
 - **Library sync** — Pulls platforms and ROMs from your RomM server and creates Steam shortcuts, complete with cover
   art, hero banners, and logos (with optional [SteamGridDB](https://www.steamgriddb.com/) artwork)
-- **Save sync** — Keeps save files in sync across devices through your RomM server, with newest-wins conflict
-  resolution and a manual override when you need it
+- **Save sync** — Keeps save files in sync across devices through your RomM server, with newest-wins conflict resolution
+  and a manual override when you need it
 - **ROM downloads** — Download ROMs on demand with progress tracking and a managed download queue
 - **BIOS management** — Download firmware/BIOS files from RomM for systems that need them (PSX, Dreamcast, PS2, …)
 - **Game detail page** — Install status, BIOS status, and download/uninstall actions right on each game's Steam page
@@ -36,10 +36,10 @@ documentation site. This README is just the quick tour.
 
 ## Screenshots
 
-| QAM panel | Game detail page |
-| :---: | :---: |
-| ![RomM Sync QAM panel](assets/screenshot-qam.jpg) | ![Game detail page with metadata](assets/screenshot-game-detail.jpg) |
-| **BIOS management** | **Per-game actions** |
+|                                   QAM panel                                    |                                        Game detail page                                         |
+| :----------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------: |
+|               ![RomM Sync QAM panel](assets/screenshot-qam.jpg)                |              ![Game detail page with metadata](assets/screenshot-game-detail.jpg)               |
+|                              **BIOS management**                               |                                      **Per-game actions**                                       |
 | ![BIOS status showing a required file to download](assets/screenshot-bios.jpg) | ![RomM actions menu: sync saves, download BIOS, refresh artwork](assets/screenshot-actions.jpg) |
 
 ## Requirements
@@ -64,7 +64,8 @@ search for **RomM Sync**, and install. No Developer Mode required.
 This is the current method while v1.0 is in progress. It requires **Developer Mode** in Decky Loader (Decky settings →
 gear icon → toggle **Developer Mode**).
 
-1. Download the latest `decky-romm-sync.zip` from the [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
+1. Download the latest `decky-romm-sync.zip` from the
+   [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
 2. In Decky settings → **Developer** tab → **Install Plugin from ZIP** (or **from URL** with the
    [latest release link](https://github.com/danielcopper/decky-romm-sync/releases/latest/download/decky-romm-sync.zip))
 
@@ -93,16 +94,16 @@ Build from source, run the tests, and read the architecture reference on the doc
 
 This plugin stands on the shoulders of some great projects:
 
-- [RomM](https://github.com/rommapp/romm) — the self-hosted ROM manager at the heart of this plugin. RomM provides
-  the library, metadata, cover art, and save file storage that makes the entire sync experience possible
-- [RetroDECK](https://retrodeck.net/) — the all-in-one emulation solution for Steam Deck that bundles ES-DE,
-  RetroArch, and standalone emulators into a single flatpak. Our entire launch chain runs through RetroDECK
+- [RomM](https://github.com/rommapp/romm) — the self-hosted ROM manager at the heart of this plugin. RomM provides the
+  library, metadata, cover art, and save file storage that makes the entire sync experience possible
+- [RetroDECK](https://retrodeck.net/) — the all-in-one emulation solution for Steam Deck that bundles ES-DE, RetroArch,
+  and standalone emulators into a single flatpak. Our entire launch chain runs through RetroDECK
 - [Decky Loader](https://decky.xyz/) — the plugin framework that makes all of this possible
 - [Valve](https://www.valvesoftware.com/) — for the Steam Deck, SteamOS, and an open enough platform to build on
 - [Unifideck](https://github.com/ma3ke/unifideck) — inspiration for game detail page injection techniques and gamepad
   navigation patterns
-- [MetaDeck](https://github.com/EmuDeck/MetaDeck) — inspiration for store patching patterns used in metadata display
-  on non-Steam shortcuts
+- [MetaDeck](https://github.com/EmuDeck/MetaDeck) — inspiration for store patching patterns used in metadata display on
+  non-Steam shortcuts
 
 ## License
 
