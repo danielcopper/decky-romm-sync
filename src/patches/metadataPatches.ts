@@ -117,6 +117,12 @@ export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updat
       `updatePlaytimeDisplay: appId=${appId} wrote ${totalMinutes}min (was ${prevMinutes}), rt_last_time_played was ${prevLastPlayed}`,
     ),
   );
+  // Single write-chokepoint for `minutes_playtime_forever` — emit a DOM signal
+  // so any mounted view (e.g. RomMPlaySection's PLAYTIME item) can re-read the
+  // overview and refresh on the same mount, instead of staying stale until a
+  // navigate-away/back remount. Fires for session-end, reconcile-on-view, and
+  // any future writer that routes through here.
+  globalThis.dispatchEvent(new CustomEvent("romm_playtime_changed", { detail: { appId } }));
   return true;
 }
 

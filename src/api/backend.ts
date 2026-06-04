@@ -313,6 +313,15 @@ export const getAllPlaytime = callable<
   { playtime: Record<string, { total_seconds: number; session_count: number }> }
 >("get_all_playtime");
 
+// Pull-only playtime reconcile-on-view — folds the RomM playtime note total in
+// (max) so a session played on another device shows up the moment the detail
+// page is opened. server_query_failed=true means the server was unreachable and
+// total_seconds/session_count are the local fallback.
+export const reconcilePlaytime = callable<
+  [number],
+  { total_seconds: number; session_count: number; server_query_failed: boolean }
+>("reconcile_playtime");
+
 // RetroDECK path migration
 export const getMigrationStatus = callable<[], MigrationStatus>("get_migration_status");
 export const migrateRetroDeckFiles = callable<[string | null], MigrationResult>("migrate_retrodeck_files");

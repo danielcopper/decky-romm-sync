@@ -27,6 +27,7 @@ import * as cachedStore from "../utils/cachedGameDetailStore";
 import * as connectionState from "../utils/connectionState";
 import * as sectionRefresh from "../utils/sectionRefresh";
 import * as playSectionUtils from "../utils/playSection";
+import * as formatters from "../utils/formatters";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
 
@@ -102,6 +103,15 @@ vi.mock("../utils/cachedGameDetailStore", () => ({
   getCachedGameDetail: vi.fn(),
   invalidateCachedGameDetail: vi.fn(),
 }));
+
+// ----- metadataPatches.updatePlaytimeDisplay — the overview write-chokepoint.
+// Mock it so the reconcile-on-view test can assert the reconciled total is
+// pushed through, and so we control whether the romm_playtime_changed signal
+// fires (the section's reactive PLAYTIME effect listens for it). -----
+vi.mock("../patches/metadataPatches", () => ({
+  updatePlaytimeDisplay: vi.fn(),
+}));
+import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 
 // ----- @decky/ui — global stub from test-setup.ts covers Focusable,
 // DialogButton (with disabled), Menu, MenuItem, showContextMenu, showModal,
@@ -260,6 +270,14 @@ describe("RomMPlaySection", () => {
       message: "Connected",
     });
     vi.mocked(backend.debugLog).mockResolvedValue(undefined);
+    // reconcilePlaytime defaults to a server-unreachable no-op so the
+    // connection effect's fire-and-forget reconcile doesn't push playtime or
+    // spew debugLogs into unrelated tests. Tests opt into the success shape.
+    vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+      total_seconds: 0,
+      session_count: 0,
+      server_query_failed: true,
+    });
     // refreshCoverArtwork defaults to success so the artwork-refresh action
     // doesn't spew "refreshCoverArtwork failed" debugLogs into unrelated tests.
     vi.mocked(backend.refreshCoverArtwork).mockResolvedValue({
@@ -740,6 +758,176 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("background save check error"));
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // E2. Playtime reconcile-on-view (#868) + reactive PLAYTIME display (#869)
+  // ------------------------------------------------------------------
+
+  describe("playtime reconcile-on-view (#868) and reactive display (#869)", () => {
+    // formatPlaytime maps minutes 1:1 to "<n>m" so stale vs fresh totals are
+    // distinguishable in the rendered text (the default mock collapses every
+    // non-zero value to "1h 30m").
+    function useDistinctPlaytimeFormatter(): void {
+      vi.mocked(formatters.formatPlaytime).mockImplementation((m: number) => (m > 0 ? `${m}m` : "None"));
+    }
+
+    it("fires reconcilePlaytime on enter when connected, then pushes the total via updatePlaytimeDisplay", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 314,
+        save_sync_enabled: false,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+        total_seconds: 7200,
+        session_count: 4,
+        server_query_failed: false,
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.reconcilePlaytime)).toHaveBeenCalledWith(314);
+      // Reconciled total pushed to the overview write-chokepoint, updateLastPlayed=false.
+      expect(vi.mocked(updatePlaytimeDisplay)).toHaveBeenCalledWith(testAppId, 7200, false);
+    });
+
+    it("is NOT gated on saveSyncEnabled — reconcile fires even when save-sync is OFF", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 271,
+        save_sync_enabled: false, // save-sync OFF
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+        total_seconds: 3600,
+        session_count: 1,
+        server_query_failed: false,
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      // getSaveStatus stays untouched (save-sync gate held) but reconcile still ran.
+      expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.reconcilePlaytime)).toHaveBeenCalledWith(271);
+      expect(vi.mocked(updatePlaytimeDisplay)).toHaveBeenCalledWith(testAppId, 3600, false);
+    });
+
+    it("does NOT reconcile when offline (server not reachable)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 99,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.reconcilePlaytime)).not.toHaveBeenCalled();
+      expect(vi.mocked(updatePlaytimeDisplay)).not.toHaveBeenCalled();
+    });
+
+    it("server_query_failed=true → no overview push; PLAYTIME stays on the local value", async () => {
+      useDistinctPlaytimeFormatter();
+      // Mount with a known local playtime of 30 minutes.
+      stubAppStore({ [testAppId]: { minutes_playtime_forever: 30 } });
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+        total_seconds: 0,
+        session_count: 0,
+        server_query_failed: true,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.reconcilePlaytime)).toHaveBeenCalledWith(42);
+      // server_query_failed → no push.
+      expect(vi.mocked(updatePlaytimeDisplay)).not.toHaveBeenCalled();
+      // Display stays on the local 30-minute value (non-vacuous: assert the text).
+      expect(container.textContent).toContain("30m");
+    });
+
+    it("debugLog fires when reconcilePlaytime rejects (catch is non-vacuous)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 77,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.reconcilePlaytime).mockRejectedValue(new Error("boom"));
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("playtime reconcile error"));
+      expect(vi.mocked(updatePlaytimeDisplay)).not.toHaveBeenCalled();
+    });
+
+    it("#869 — a romm_playtime_changed event refreshes PLAYTIME on the same mount (no remount)", async () => {
+      useDistinctPlaytimeFormatter();
+      // Mount with a stale local total of 10 minutes.
+      stubAppStore({ [testAppId]: { minutes_playtime_forever: 10 } });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("10m"); // stale value visible
+
+      // A later write (session end OR reconcile) raised the overview to 95 min
+      // and fired the chokepoint signal. The section must re-read and refresh.
+      stubAppStore({ [testAppId]: { minutes_playtime_forever: 95 } });
+      act(() => {
+        globalThis.dispatchEvent(new CustomEvent("romm_playtime_changed", { detail: { appId: testAppId } }));
+      });
+      expect(container.textContent).toContain("95m"); // fresh value, same mount
+      expect(container.textContent).not.toContain("10m");
+    });
+
+    it("#869 — ignores romm_playtime_changed for a different appId", async () => {
+      useDistinctPlaytimeFormatter();
+      stubAppStore({ [testAppId]: { minutes_playtime_forever: 10 } });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("10m");
+
+      // Event for a different app — overview lookup for testAppId still returns
+      // 10 min; the mismatched-appId guard must no-op (no re-read, no change).
+      act(() => {
+        globalThis.dispatchEvent(new CustomEvent("romm_playtime_changed", { detail: { appId: testAppId + 9999 } }));
+      });
+      expect(container.textContent).toContain("10m");
+    });
+
+    it("#869 — reconcile result reaches the display end-to-end via the chokepoint signal", async () => {
+      useDistinctPlaytimeFormatter();
+      // Mount stale at 5 minutes.
+      stubAppStore({ [testAppId]: { minutes_playtime_forever: 5 } });
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 868,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+        total_seconds: 7200, // 120 min
+        session_count: 4,
+        server_query_failed: false,
+      });
+      // Simulate the real chokepoint: when the section pushes the reconciled
+      // total, raise the overview and emit the signal the section listens for.
+      vi.mocked(updatePlaytimeDisplay).mockImplementation((id: number, totalSeconds: number) => {
+        stubAppStore({ [testAppId]: { minutes_playtime_forever: Math.floor(totalSeconds / 60) } });
+        globalThis.dispatchEvent(new CustomEvent("romm_playtime_changed", { detail: { appId: id } }));
+        return true;
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(updatePlaytimeDisplay)).toHaveBeenCalledWith(testAppId, 7200, false);
+      expect(container.textContent).toContain("120m"); // reconciled total live, no remount
+      expect(container.textContent).not.toContain("5m");
+    });
+
+    it("#869 — registers + removes the romm_playtime_changed listener across mount/unmount", async () => {
+      const before = domListenerCount("romm_playtime_changed");
+      const { unmount } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(domListenerCount("romm_playtime_changed")).toBe(before + 1);
+      unmount();
+      expect(domListenerCount("romm_playtime_changed")).toBe(before);
     });
   });
 

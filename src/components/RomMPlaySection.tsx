@@ -44,8 +44,10 @@ import {
   syncRomSaves,
   deleteLocalSaves,
   setGameCore,
+  reconcilePlaytime,
   debugLog,
 } from "../api/backend";
+import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import type { AvailableCore, BiosStatus, SaveStatus } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
@@ -316,6 +318,27 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   useEffect(() => {
     let cancelled = false;
 
+    // Reconcile-on-view (#868) — pull-only: folds the RomM playtime note total
+    // into the local total so a session played on another device shows up the
+    // moment the detail page opens. INDEPENDENT of save-sync — only gated on
+    // connectivity, so it must NOT sit behind doSaveCheck's saveSyncEnabled
+    // guard. Pushes the reconciled total through updatePlaytimeDisplay (the
+    // overview write-chokepoint), which emits romm_playtime_changed; the
+    // reactive PLAYTIME effect (#869) re-reads the overview and refreshes the
+    // display on the same mount. server_query_failed → no-op (stay local).
+    async function doReconcilePlaytime(isCancelled: boolean) {
+      const romId = romIdRef.current;
+      if (!romId) return;
+      try {
+        const result = await reconcilePlaytime(romId);
+        if (isCancelled) return;
+        if (result.server_query_failed) return;
+        updatePlaytimeDisplay(appId, result.total_seconds, false);
+      } catch (e) {
+        detach(debugLog(`RomMPlaySection: playtime reconcile error: ${e}`));
+      }
+    }
+
     async function doSaveCheck(isCancelled: boolean) {
       const romId = romIdRef.current;
       if (!romId || !info.saveSyncEnabled) return;
@@ -362,8 +385,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         setConnectionState(connState);
         globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: connState } }));
 
-        // If connected, do background save status check to detect new conflicts
-        if (connected) await doSaveCheck(cancelled);
+        if (connected) {
+          // Fire-and-forget reconcile — non-blocking, runs regardless of
+          // save-sync. NOT awaited so it never delays the save check or render.
+          detach(doReconcilePlaytime(cancelled));
+          // Background save status check to detect new conflicts (save-sync only)
+          await doSaveCheck(cancelled);
+        }
       } catch {
         if (!cancelled) {
           setRommConnectionState("offline");
@@ -376,7 +404,31 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     return () => {
       cancelled = true;
     };
-  }, [info.saveSyncEnabled]);
+  }, [info.saveSyncEnabled, appId]);
+
+  // Reactive PLAYTIME display (#869) — re-read Steam's overview whenever the
+  // playtime write-chokepoint (updatePlaytimeDisplay) fires romm_playtime_changed
+  // for this appId. Drives the displayed PLAYTIME / LAST PLAYED from the source
+  // of truth (the overview) instead of a mount-only snapshot, so a session end
+  // (handleGameStop) or a multi-device reconcile-on-view refreshes the value on
+  // the SAME mount — no navigate-away/back remount required.
+  useEffect(() => {
+    const onPlaytimeChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ appId?: number } | null>).detail;
+      if (detail?.appId !== appId) return;
+      const ov = appStore.GetAppOverviewByAppID(appId);
+      if (!ov) return;
+      setInfo((prev) => ({
+        ...prev,
+        playtime: formatPlaytime(ov.minutes_playtime_forever ?? 0),
+        lastPlayed: formatLastPlayed(ov.rt_last_time_played ?? 0),
+      }));
+    };
+    globalThis.addEventListener("romm_playtime_changed", onPlaytimeChanged);
+    return () => {
+      globalThis.removeEventListener("romm_playtime_changed", onPlaytimeChanged);
+    };
+  }, [appId]);
 
   // Helper: create an info item with header and value (Steam's two-line pattern)
   const infoItem = (key: string, header: string, value: string, extraClass?: string) =>
