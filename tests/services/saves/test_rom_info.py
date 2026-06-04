@@ -79,6 +79,36 @@ class TestFindSaveFiles:
 
         assert result == []
 
+    def test_probes_system_extensions_when_slug_differs_from_system(self, tmp_path):
+        """find_save_files keys save extensions by the normalized system, not the raw RomM slug (#899).
+
+        Regression for the call-site leak: ``get_save_extensions`` was called
+        with the raw RomM ``platform_slug`` (``sega-saturn``), which has no
+        override and falls back to defaults — so a Saturn backup-RAM ``.bkr``
+        save was never probed. The fix keys the lookup by the normalized
+        ``system`` (``saturn``), whose override includes ``.bkr``. Reverting the
+        rom_info.py change (passing ``platform_slug`` again) makes this fail:
+        ``sega-saturn`` is not in ``_PLATFORM_OVERRIDES`` so ``.bkr`` is not in
+        the probed extension list and the save is missed.
+        """
+        svc, _ = make_service(tmp_path)
+        _seed_install(
+            svc,
+            70,
+            file_path=str(tmp_path / "retrodeck" / "roms" / "saturn" / "Panzer Dragoon.cue"),
+            system="saturn",
+            platform_slug="sega-saturn",
+        )
+        # sort_by_content=True (RetroDECK default, no sort settings seeded) →
+        # saves land in saves_base/{content_dir}, content_dir = "saturn".
+        saves_dir = tmp_path / "saves" / "saturn"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        (saves_dir / "Panzer Dragoon.bkr").write_bytes(b"\x00" * 256)
+
+        result = svc._rom_info.find_save_files(70)
+
+        assert [f["filename"] for f in result] == ["Panzer Dragoon.bkr"]
+
 
 class TestGetRomSaveInfo:
     """Tests for get_rom_save_info."""

@@ -22,9 +22,11 @@ Two hard properties follow, and they define the entire coverage envelope:
 2. **The file must live in the save folder.** A save in RetroArch's _system_ directory (Flycast VMUs), in a per-emulator
    subdirectory (`mame/nvram/`), or next to the ROM (`savefiles_in_content_dir`) is never seen.
 
-The extension list is a small static map: a default of `.srm` / `.rtc` / `.sav`, plus per-platform overrides (`nds` →
-`.dsv`, `segacd` → `.brm`, `saturn`/`saturnjp` → `.bkr`/`.bcr`/`.smpc`, `ngp`/`ngpc` → `.flash`/`.ngf`, `pokemini` →
-`.eep`, and the `amiga` family → `.nvr`).
+The extension list is a small static map keyed by the **RetroDECK system** (the normalized value from
+`resolve_system` / `platform_map`, not the raw RomM platform slug — keying by system keeps the lookup aligned with the
+save directory, cores, and gamelists, which are all system-keyed): a default of `.srm` / `.rtc` / `.sav`, plus
+per-system overrides (`nds` → `.dsv`, `segacd` → `.brm`, `saturn` → `.bkr`/`.bcr`/`.smpc`, `ngp`/`ngpc` →
+`.flash`/`.ngf`, `pokemini` → `.eep`, and `amiga`/`amigacd32` → `.nvr`).
 
 ## How RomM stores saves
 

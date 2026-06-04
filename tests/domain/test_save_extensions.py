@@ -31,17 +31,17 @@ class TestGetSaveExtensionsDefault:
 
 
 class TestGetSaveExtensionsWithOverride:
-    """get_save_extensions respects platform-specific overrides."""
+    """get_save_extensions respects per-system overrides (keys are RetroDECK systems)."""
 
     def test_nds_override_includes_dsv(self):
-        """NDS platform returns DeSmuME .dsv extension."""
+        """NDS system returns DeSmuME .dsv extension."""
         result = get_save_extensions("nds")
         assert ".dsv" in result
         assert ".srm" in result
         assert ".sav" in result
 
     def test_segacd_override_includes_brm(self):
-        """Sega CD platform returns Genesis Plus GX .brm extension."""
+        """Sega CD system returns Genesis Plus GX .brm extension."""
         result = get_save_extensions("segacd")
         assert ".brm" in result
         assert ".srm" in result
@@ -51,17 +51,13 @@ class TestGetSaveExtensionsWithOverride:
         result = get_save_extensions("saturn")
         assert result == (".srm", ".rtc", ".sav", ".bkr", ".bcr", ".smpc")
 
-    def test_saturnjp_matches_saturn(self):
-        """The saturnjp alias slug returns the same tuple as saturn."""
-        assert get_save_extensions("saturnjp") == get_save_extensions("saturn")
-
     def test_ngp_override_appends_flash_and_ngf(self):
         """NGP returns Beetle NeoPop (.flash) and RACE (.ngf) extensions, defaults retained."""
         result = get_save_extensions("ngp")
         assert result == (".srm", ".rtc", ".sav", ".flash", ".ngf")
 
     def test_ngpc_matches_ngp(self):
-        """The ngpc alias slug returns the same tuple as ngp."""
+        """The ngpc system returns the same tuple as ngp."""
         assert get_save_extensions("ngpc") == get_save_extensions("ngp")
 
     def test_pokemini_override_appends_eep(self):
@@ -74,11 +70,22 @@ class TestGetSaveExtensionsWithOverride:
         result = get_save_extensions("amiga")
         assert result == (".srm", ".rtc", ".sav", ".nvr")
 
-    def test_amiga_family_slugs_match(self):
-        """All amiga-family slugs return identical tuples."""
-        expected = get_save_extensions("amiga")
-        for slug in ("amiga1200", "amiga600", "amigacd32", "cdtv"):
-            assert get_save_extensions(slug) == expected
+    def test_amigacd32_override_appends_nvr(self):
+        """AmigaCD32 returns the PUAE .nvr extension, defaults retained."""
+        result = get_save_extensions("amigacd32")
+        assert result == (".srm", ".rtc", ".sav", ".nvr")
+
+    def test_dropped_keys_now_return_default(self):
+        """Keys unreachable under system-keying are dropped → they return defaults.
+
+        ``saturnjp`` normalizes to system ``saturn``, ``amiga1200``/``amiga600``
+        to system ``amiga``, and ``commodore-cdtv`` is not yet in platform_map
+        (so no ``cdtv`` system can arrive). None of these strings is a system
+        name any install produces, so they are no longer override keys and fall
+        through to the defaults.
+        """
+        for dropped in ("saturnjp", "amiga1200", "amiga600", "cdtv"):
+            assert get_save_extensions(dropped) == _DEFAULTS
 
     def test_non_override_platform_still_returns_default(self):
         """Platforms without overrides get defaults."""

@@ -148,7 +148,11 @@ For decky-romm-sync (RetroDECK-only):
 | `.mcr`, `.mcd`                 | **No**                            | PSX Mednafen/DuckStation formats, RetroArch cores use `.srm` |
 | `.nv`                          | **No**                            | MAME NVRAM, completely different directory structure         |
 
-### Platform Override Map
+### System Override Map
+
+Override keys are RetroDECK **system** names (the normalized value from `resolve_system` / `platform_map`), not raw
+RomM platform slugs — this keeps the extension lookup aligned with the save directory, cores, and gamelists, which are
+all system-keyed.
 
 ```python
 _DEFAULT_EXTENSIONS = (".srm", ".rtc", ".sav")

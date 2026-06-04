@@ -188,11 +188,11 @@ class RomInfoService:
             return []
         rom_name = info["rom_name"]
         saves_dir = info["saves_dir"]
-        platform_slug = info["platform_slug"]
+        system = info["system"]
         if not self._save_file_store.is_dir(saves_dir):
             return []
         results = []
-        for ext in get_save_extensions(platform_slug):
+        for ext in get_save_extensions(system):
             save_path = os.path.join(saves_dir, rom_name + ext)
             if self._save_file_store.is_file(save_path):
                 results.append({"path": save_path, "filename": rom_name + ext})

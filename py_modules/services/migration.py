@@ -746,7 +746,6 @@ class MigrationService:
         """Collect migration items for a single ROM's save files."""
         system = install.system
         file_path = install.file_path
-        platform_slug = install.platform_slug
         if not system or not file_path:
             return
         core_name: str | None = None
@@ -786,7 +785,7 @@ class MigrationService:
         if old_dir == new_dir:
             return
         rom_name = os.path.splitext(os.path.basename(file_path))[0]
-        for ext in get_save_extensions(platform_slug):
+        for ext in get_save_extensions(system):
             filename = rom_name + ext
             old_file = os.path.join(old_dir, filename)
             new_file = os.path.join(new_dir, filename)
