@@ -330,19 +330,6 @@ class TestGetPlaytime:
 
 
 class TestPlaytimeNotes:
-    def test_parse_valid_content(self):
-        data = PlaytimeService._parse_playtime_note_content('{"seconds": 100}')
-        assert data == {"seconds": 100}
-
-    def test_parse_empty(self):
-        assert PlaytimeService._parse_playtime_note_content("") is None
-
-    def test_parse_invalid_json(self):
-        assert PlaytimeService._parse_playtime_note_content("not json") is None
-
-    def test_parse_non_dict(self):
-        assert PlaytimeService._parse_playtime_note_content("[1,2,3]") is None
-
     def test_get_playtime_note_finds_correct_title(self):
         svc, fake, _ = make_service()
         fake.notes[42] = [
@@ -357,6 +344,155 @@ class TestPlaytimeNotes:
         svc, _, _ = make_service()
         note = svc._get_playtime_note(42)
         assert note is None
+
+
+# ---------------------------------------------------------------------------
+# TestReconcilePlaytime
+# ---------------------------------------------------------------------------
+
+
+def _seed_playtime_note(fake: FakeSaveApi, rom_id: int, seconds: int, note_id: int = 2000) -> None:
+    """Stage a server-side ``romm-sync:playtime`` note carrying ``seconds``."""
+    fake.notes[rom_id] = [
+        {
+            "id": note_id,
+            "rom_id": rom_id,
+            "title": "romm-sync:playtime",
+            "content": json.dumps({"seconds": seconds}),
+            "is_public": False,
+        }
+    ]
+
+
+class TestReconcilePlaytime:
+    @pytest.mark.asyncio
+    async def test_seeds_total_and_links_note_from_server(self):
+        """Empty row + valid note → seed total to note seconds, link note id."""
+        svc, fake, uow = make_service()
+        _seed_rom(uow, 42)  # roms row exists, no playtime row
+        _seed_playtime_note(fake, 42, 500, note_id=2000)
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["total_seconds"] == 500
+        assert result["server_query_failed"] is False
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.total_seconds == 500
+        assert entry.note_id == 2000
+
+    @pytest.mark.asyncio
+    async def test_server_ahead_raises_local_total(self):
+        """Local < server → reconcile raises the local total to the server value."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=100, session_count=2))
+        _seed_playtime_note(fake, 42, 500)
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["total_seconds"] == 500
+        assert result["session_count"] == 2  # untouched by a pull
+        assert result["server_query_failed"] is False
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.total_seconds == 500
+
+    @pytest.mark.asyncio
+    async def test_local_ahead_is_noop(self):
+        """Local >= server → reconcile_total never regresses, total unchanged."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=900, session_count=4))
+        _seed_playtime_note(fake, 42, 300)
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["total_seconds"] == 900
+        assert result["server_query_failed"] is False
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.total_seconds == 900
+
+    @pytest.mark.asyncio
+    async def test_no_note_returns_local_without_creating_row(self):
+        """No server note → return local total, do NOT seed an empty row."""
+        svc, _, uow = make_service()
+        _seed_rom(uow, 42)  # roms row, no playtime row, no note
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["total_seconds"] == 0
+        assert result["session_count"] == 0
+        assert result["server_query_failed"] is False
+        # Pull-only with no note must not create a rom_playtime row.
+        assert uow.playtime.get(42) is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_note_does_not_seed(self):
+        """Malformed note JSON → parse returns None → server_seconds 0, no raise."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=120, session_count=1))
+        fake.notes[42] = [
+            {
+                "id": 2000,
+                "rom_id": 42,
+                "title": "romm-sync:playtime",
+                "content": "not valid json",
+                "is_public": False,
+            }
+        ]
+
+        result = await svc.reconcile_playtime(42)
+
+        # max(120, 0) = 120 — local total preserved, note id still linked.
+        assert result["total_seconds"] == 120
+        assert result["server_query_failed"] is False
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.total_seconds == 120
+
+    @pytest.mark.asyncio
+    async def test_server_unreachable_returns_local_total(self):
+        """Fetch raises → server_query_failed True, returns the local row's total."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=250, session_count=3))
+        fake.fail_on_next(RommApiError("unreachable"))
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["server_query_failed"] is True
+        assert result["total_seconds"] == 250
+        assert result["session_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_orphan_rom_id_is_graceful_noop(self):
+        """rom_id absent from roms → IntegrityError at commit → graceful result."""
+        svc, fake, uow = make_service()  # no _seed_rom: rom_id 42 orphaned
+        _seed_playtime_note(fake, 42, 500)
+
+        result = await svc.reconcile_playtime(42)
+
+        # The commit's FK check aborts (no raise out of the callable); the unit
+        # never flips committed and the graceful no-op reports zero totals.
+        assert result["server_query_failed"] is False
+        assert result["total_seconds"] == 0
+        assert result["session_count"] == 0
+        assert uow.committed is False
+
+    @pytest.mark.asyncio
+    async def test_double_run_is_idempotent(self):
+        """Running reconcile twice leaves the total and linked note id stable."""
+        svc, fake, uow = make_service()
+        _seed_rom(uow, 42)
+        _seed_playtime_note(fake, 42, 500, note_id=2000)
+
+        first = await svc.reconcile_playtime(42)
+        second = await svc.reconcile_playtime(42)
+
+        assert first["total_seconds"] == second["total_seconds"] == 500
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.total_seconds == 500
+        assert entry.note_id == 2000
 
 
 # ---------------------------------------------------------------------------

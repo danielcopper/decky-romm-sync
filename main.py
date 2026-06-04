@@ -419,6 +419,9 @@ class Plugin:
     async def get_all_playtime(self):
         return self._playtime_service.get_all_playtime()
 
+    async def reconcile_playtime(self, rom_id):
+        return await self._playtime_service.reconcile_playtime(int(rom_id))
+
     # ── SGDB delegation to SteamGridService ───────────────────────
 
     async def get_sgdb_artwork_base64(self, rom_id, asset_type_num):

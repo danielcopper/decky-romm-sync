@@ -10,10 +10,28 @@ the local durable + read model that reconciles with it.
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from domain._aggregate import cosmic_aggregate
 from domain.iso_time import parse_iso
 
 _MAX_SESSION_SECONDS = 86_400  # a single session contributes at most 24h
+
+
+def parse_playtime_note_content(content: str) -> dict[str, Any] | None:
+    """Parse the JSON body of a RomM playtime note into a dict.
+
+    Returns the decoded object when ``content`` holds a JSON dict, or ``None``
+    for empty content, malformed JSON, or a non-dict top-level value.
+    """
+    if not content:
+        return None
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 @cosmic_aggregate

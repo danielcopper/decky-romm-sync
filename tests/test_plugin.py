@@ -696,6 +696,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "record_session_start",
     "record_session_end",
     "get_all_playtime",
+    "reconcile_playtime",
     # SteamGridDB / Steam shortcut artwork (Steam-side, not retrodeck).
     "get_sgdb_artwork_base64",
     "verify_sgdb_api_key",

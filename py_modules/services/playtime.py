@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.playtime import Playtime
+from domain.playtime import Playtime, parse_playtime_note_content
 
 if TYPE_CHECKING:
     import asyncio
@@ -49,6 +49,11 @@ class PlaytimeServiceConfig:
     clock: Clock
     log_debug: DebugLogger
     uow_factory: UnitOfWorkFactory
+
+
+def _empty_reconcile_result(*, server_query_failed: bool) -> dict[str, Any]:
+    """The reconcile result for a missing local row — zero totals."""
+    return {"total_seconds": 0, "session_count": 0, "server_query_failed": server_query_failed}
 
 
 class PlaytimeService:
@@ -105,19 +110,6 @@ class PlaytimeService:
             {"content": json.dumps(playtime_data)},
         )
 
-    @staticmethod
-    def _parse_playtime_note_content(content: str) -> dict[str, Any] | None:
-        """Parse JSON content from a playtime note. Returns dict or None."""
-        if not content:
-            return None
-        try:
-            data = json.loads(content)
-            if isinstance(data, dict):
-                return data
-        except ValueError:
-            pass
-        return None
-
     def _sync_playtime_to_romm_io(self, rom_id: int, session_duration_sec: int) -> None:
         """Push playtime to RomM via the Notes API after a session.
 
@@ -148,7 +140,7 @@ class PlaytimeService:
 
             if note:
                 note_id = note.get("id")
-                server_data = self._parse_playtime_note_content(note.get("content", ""))
+                server_data = parse_playtime_note_content(note.get("content", ""))
                 if server_data:
                     server_seconds = int(server_data.get("seconds", 0))
 
@@ -274,3 +266,73 @@ class PlaytimeService:
                     for rom_id, pt in uow.playtime.iter_all()
                 }
             }
+
+    async def reconcile_playtime(self, rom_id: int) -> dict[str, Any]:
+        """Pull the shared RomM-note total into the local row on detail-page view.
+
+        Read-only against the server: fetches the playtime note and folds its
+        total into the ``Playtime`` aggregate via ``reconcile_total`` (the clamp
+        never regresses local play). Unlike the session-end path this never
+        writes a note — it only catches the local row up to a server record that
+        moved ahead on another device. The work runs in an executor (the SQLite
+        connection has thread affinity).
+        """
+        return await self._loop.run_in_executor(None, self._reconcile_playtime_io, int(rom_id))
+
+    def _reconcile_playtime_io(self, rom_id: int) -> dict[str, Any]:
+        """Synchronous twin of :meth:`reconcile_playtime` (runs in the executor).
+
+        Fetches the note outside any transaction, then folds its total into the
+        aggregate in a short write UoW. Returns the partial-success shape
+        ``{total_seconds, session_count, server_query_failed}``: ``total``/
+        ``count`` come from the resulting (or existing) local row, and
+        ``server_query_failed`` flags an unreachable server. Never raises out of
+        the callable — a fetch failure or an orphan ``rom_id`` (no ``roms`` row)
+        degrades to the local row's values.
+        """
+        try:
+            note = self._retry.with_retry(self._get_playtime_note, rom_id)
+        except Exception as e:
+            self._log_debug(f"Failed to reconcile playtime for rom {rom_id}: {e}")
+            return self._local_playtime_result(rom_id, server_query_failed=True)
+
+        if note is None:
+            # No server record — do not seed an empty row; report the local row.
+            return self._local_playtime_result(rom_id, server_query_failed=False)
+
+        server_data = parse_playtime_note_content(note.get("content", ""))
+        server_seconds = int(server_data.get("seconds", 0)) if server_data else 0
+        note_id = note.get("id")
+
+        try:
+            with self._uow_factory() as uow:
+                pt = uow.playtime.get(rom_id) or Playtime()
+                pt.reconcile_total(server_seconds)
+                if note_id is not None:
+                    pt.link_note(note_id)
+                uow.playtime.save(rom_id, pt)
+                total_seconds = pt.total_seconds
+                session_count = pt.session_count
+        except sqlite3.IntegrityError as e:
+            # Orphan FK (rom_id absent from roms): the commit rolls back, so no
+            # row exists to report — a graceful 0/0 no-op.
+            self._log_debug(f"Failed to reconcile playtime for rom {rom_id}: {e}")
+            return _empty_reconcile_result(server_query_failed=False)
+
+        return {
+            "total_seconds": total_seconds,
+            "session_count": session_count,
+            "server_query_failed": False,
+        }
+
+    def _local_playtime_result(self, rom_id: int, *, server_query_failed: bool) -> dict[str, Any]:
+        """Build the reconcile result from the existing local row (0/0 when absent)."""
+        with self._uow_factory() as uow:
+            entry = uow.playtime.get(rom_id)
+        if entry is None:
+            return _empty_reconcile_result(server_query_failed=server_query_failed)
+        return {
+            "total_seconds": entry.total_seconds,
+            "session_count": entry.session_count,
+            "server_query_failed": server_query_failed,
+        }

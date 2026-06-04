@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from domain.playtime import Playtime
+from domain.playtime import Playtime, parse_playtime_note_content
 
 
 class TestBeginSession:
@@ -91,3 +91,17 @@ class TestReconcileTotal:
         playtime = Playtime(total_seconds=250)
         playtime.reconcile_total(250)
         assert playtime.total_seconds == 250
+
+
+class TestParsePlaytimeNoteContent:
+    def test_parse_valid_content(self):
+        assert parse_playtime_note_content('{"seconds": 100}') == {"seconds": 100}
+
+    def test_parse_empty(self):
+        assert parse_playtime_note_content("") is None
+
+    def test_parse_invalid_json(self):
+        assert parse_playtime_note_content("not json") is None
+
+    def test_parse_non_dict(self):
+        assert parse_playtime_note_content("[1,2,3]") is None
