@@ -6,12 +6,12 @@ this page shows what syncs for each system today, and what's planned.
 
 ## Categories
 
-|    | Meaning                                                                                                                                                                    |
-| -- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅ | **Synced today.** Your saves for this system carry across devices automatically.                                                                                           |
-| 🔜 | **Planned.** This save type isn't synced yet, but it fits the model and is on the way in a future release.                                                                 |
-| ❌ | **Not synced.** This system uses a _shared_ memory card (one card for many games) or stores saves outside the per-game save folder, so it doesn't fit per-game sync today. |
-| ⚪ | **No save data.** This system's emulator has no in-game save to sync (you can still use save states locally).                                                              |
+|    | Meaning                                                                                                                                                                                                                                           |
+| -- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅ | **Synced today.** Your saves for this system carry across devices automatically.                                                                                                                                                                  |
+| 🔜 | **Planned.** This save type isn't synced yet, but it fits the model and is on the way in a future release.                                                                                                                                        |
+| ❌ | **Not synced yet.** This system uses a _shared_ memory card (one card for many games) or stores saves outside the per-game save folder, so it doesn't fit per-game sync today — **planned for a later release**, handled differently (see below). |
+| ⚪ | **No save data.** This system's emulator has no in-game save to sync (you can still use save states locally).                                                                                                                                     |
 
 ## What syncs today ✅
 
