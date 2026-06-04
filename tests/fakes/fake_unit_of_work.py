@@ -11,7 +11,8 @@ The clean-commit path also models the schema's ``rom_id`` foreign key: the real
 ``SqliteUnitOfWork`` runs with ``PRAGMA foreign_keys=ON``, so committing a
 per-rom child aggregate whose ``rom_id`` has no matching ``roms`` row raises
 ``sqlite3.IntegrityError``. The fake reproduces that at commit (see
-``_PER_ROM_FK_CHILD_REPOS``) so tests can't silently rely on the gap. ON DELETE
+``_PER_ROM_FK_CHILD_REPOS``) and, like the real failed COMMIT, rolls the
+uncommitted writes back rather than leaving the orphan observable. ON DELETE
 CASCADE is intentionally **not** modeled — no consumer deliberately purges a
 ``roms`` row yet (ADR-0007); only the orphan-child-on-commit check exists.
 
@@ -119,28 +120,42 @@ class FakeUnitOfWork:
         if exc_type is None:
             # Mirror PRAGMA foreign_keys=ON: a child row whose rom_id has no
             # matching roms row aborts the commit with sqlite3.IntegrityError.
-            self._enforce_rom_id_foreign_keys()
+            try:
+                self._enforce_rom_id_foreign_keys()
+            except sqlite3.IntegrityError:
+                # A failed COMMIT discards the transaction's uncommitted writes;
+                # model that rollback before re-raising so the orphaned write is
+                # not left observable (the real UoW closes the connection).
+                self._restore_snapshot(snapshot)
+                self.rolled_back = True
+                raise
             self.committed = True
             return
-        if snapshot is not None:
-            self.roms._restore(snapshot.roms)
-            self.rom_installs._restore(snapshot.rom_installs)
-            self.rom_metadata._restore(snapshot.rom_metadata)
-            self.playtime._restore(snapshot.playtime)
-            self.rom_save_states._restore(snapshot.rom_save_states)
-            self.bios_files._restore(snapshot.bios_files)
-            self.firmware_cache._restore(snapshot.firmware_cache)
-            self.sync_runs._restore(snapshot.sync_runs)
-            self.kv_config._restore(snapshot.kv_config)
+        self._restore_snapshot(snapshot)
         self.rolled_back = True
+
+    def _restore_snapshot(self, snapshot: _Snapshot | None) -> None:
+        """Discard every write made inside the block (the real UoW's ``ROLLBACK``)."""
+        if snapshot is None:
+            return
+        self.roms._restore(snapshot.roms)
+        self.rom_installs._restore(snapshot.rom_installs)
+        self.rom_metadata._restore(snapshot.rom_metadata)
+        self.playtime._restore(snapshot.playtime)
+        self.rom_save_states._restore(snapshot.rom_save_states)
+        self.bios_files._restore(snapshot.bios_files)
+        self.firmware_cache._restore(snapshot.firmware_cache)
+        self.sync_runs._restore(snapshot.sync_runs)
+        self.kv_config._restore(snapshot.kv_config)
 
     def _enforce_rom_id_foreign_keys(self) -> None:
         """Raise ``sqlite3.IntegrityError`` if any per-rom child row is orphaned.
 
         Validates every ``rom_id`` in the FK-bearing child repos against the
         ``roms`` repo, matching the real schema's ``REFERENCES roms(rom_id)``.
-        The fake leaves ``committed`` untouched on failure (the caller re-raises),
-        so the orphaned write is observable as a non-committed unit.
+        On failure ``__exit__`` restores the pre-block snapshot — modelling
+        SQLite discarding the uncommitted writes when COMMIT fails the FK check —
+        then re-raises, leaving ``committed`` False and ``rolled_back`` True.
         """
         rom_ids = set(self.roms._snapshot())
         for repo_name in self._PER_ROM_FK_CHILD_REPOS:
