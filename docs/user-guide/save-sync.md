@@ -154,6 +154,13 @@ If the RomM server is unreachable when a sync is attempted:
 The plugin tracks playtime per game. Session start and end times are recorded, and device suspend/resume is accounted
 for (sleep time is excluded). Playtime is displayed on the game detail page next to the save sync status.
 
+The displayed playtime refreshes live: when you finish a session the PLAYTIME value updates on the same detail page
+without needing to navigate away and back. Opening a game's detail page also reconciles playtime with RomM — if you
+played the same game on another device, that device's total is folded in (the higher of the two totals wins, so playtime
+never goes backwards) and shown as soon as the page loads. This reconcile is pull-only and never overwrites the server's
+record; it works independently of whether save sync is enabled. When RomM is unreachable the displayed value stays on
+your local total.
+
 Steam also tracks playtime natively for non-Steam shortcuts, so you'll see playtime in the standard Steam UI as well.
 
 ## Save File Location

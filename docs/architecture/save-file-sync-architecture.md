@@ -1060,9 +1060,17 @@ The plugin stores playtime data in RomM notes (since RomM has no dedicated playt
 3. **Update**: `PUT /api/roms/{id}/notes/{note_id}` with updated playtime JSON
 4. **Delete**: `DELETE /api/roms/{id}/notes/{note_id}` if needed
 
-The note `id` is cached locally on the `rom_playtime` row (`note_id`) to avoid fetching the full ROM detail on every
-session end. If the local row is lost, the plugin recovers by reading `all_user_notes` from the ROM detail and finding
-existing notes by `title == "romm-sync:playtime"`.
+The note `id` is recorded on the `rom_playtime` row (`note_id`) when a note is first created. The session-end push
+re-reads `all_user_notes` each time to merge against the current server total, so it does not currently rely on the
+cached id to skip the fetch.
+
+**Reconcile-on-view (pull-only).** Opening a game's detail page triggers `reconcile_playtime(rom_id)`: the plugin reads
+`all_user_notes` from the ROM detail, finds the `title == "romm-sync:playtime"` note, and folds its `seconds` total into
+the local `rom_playtime` row via `reconcile_total` (a `max`-merge that never regresses the local total). This is
+**pull-only and total-only** — it catches the local row up to a server record that moved ahead on another device, links
+the note `id` if it wasn't cached yet, and never writes a note (the push stays at session end). If no note exists it
+returns the local total without seeding an empty row; a server-unreachable fetch degrades to the local total with a
+`server_query_failed` flag.
 
 ### Future: RomM playtime API
 
