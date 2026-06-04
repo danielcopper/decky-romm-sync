@@ -48,7 +48,7 @@ import type {
   SyncStaleData,
   SyncCollectionsData,
 } from "./types";
-import { removeShortcut } from "./utils/steamShortcuts";
+import { removeShortcut, setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads";
 
@@ -350,22 +350,16 @@ export default definePlugin(() => {
     logInfo(`sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total`);
   });
 
-  // ``sync_stale`` arrives after every unit finishes — apply removals
-  // through the same Steam APIs the monolithic path uses, then let the
-  // backend reconcile ownership via the finalise step's registry write.
-  const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", async (data: SyncStaleData) => {
-    if (!Array.isArray(data.remove_rom_ids) || data.remove_rom_ids.length === 0) return;
-    try {
-      const { getExistingRomMShortcuts } = await import("./utils/steamShortcuts");
-      const existing = await getExistingRomMShortcuts();
-      for (const romId of data.remove_rom_ids) {
-        const appId = existing.get(romId);
-        if (appId) removeShortcut(appId);
-      }
-      logInfo(`sync_stale: removed ${data.remove_rom_ids.length} stale shortcuts`);
-    } catch (e) {
-      logError(`sync_stale handler failed: ${e}`);
+  // ``sync_stale`` arrives after every unit finishes — remove each stale
+  // shortcut by the ``app_id`` the backend captured BEFORE unbinding the
+  // row. Resolving rom_id→app_id here (via getExistingRomMShortcuts) would
+  // race the backend unbind and find nothing, orphaning the shortcut.
+  const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", (data: SyncStaleData) => {
+    if (!Array.isArray(data.remove) || data.remove.length === 0) return;
+    for (const { app_id } of data.remove) {
+      if (app_id) removeShortcut(app_id);
     }
+    logInfo(`sync_stale: removed ${data.remove.length} stale shortcuts`);
   });
 
   // ``sync_collections`` arrives at the end of the per-unit run with the
@@ -419,6 +413,28 @@ export default definePlugin(() => {
         title: "RomM Sync",
         body: `Downloaded ${data.rom_name}`,
       });
+
+      // The ROM is now installed — its shortcut's launch options must carry the
+      // full launch command (was "" while uninstalled). The backend resolved
+      // the bound appId for this rom_id and put it on the payload, so confirm-set
+      // the new launch options directly. ``app_id`` is null when the ROM isn't
+      // synced yet (no shortcut) — no-op; the next sync writes the command at
+      // creation time.
+      if (data.app_id !== null) {
+        const appId = data.app_id;
+        detach(
+          (async () => {
+            try {
+              const ok = await setLaunchOptionsConfirmed(appId, data.launch_options);
+              if (!ok) {
+                logError(`download_complete: failed to confirm launch options for rom ${data.rom_id} (appId ${appId})`);
+              }
+            } catch (e) {
+              logError(`download_complete: failed to set launch options for rom ${data.rom_id}: ${e}`);
+            }
+          })(),
+        );
+      }
     },
   );
 
@@ -467,6 +483,39 @@ export default definePlugin(() => {
     );
   });
 
+  // After a RetroDECK-home migration the backend rewrites each installed ROM's
+  // launch command to the new path and emits the new command per shortcut.
+  // Confirm-set each so existing shortcuts launch from the migrated location.
+  const migrationRelaunchListener = addEventListener<[{ items: { app_id: number; launch_options: string }[] }]>(
+    "migration_relaunch_options",
+    (data) => {
+      if (!Array.isArray(data.items) || data.items.length === 0) return;
+      detach(
+        (async () => {
+          // Apply in bounded-concurrency batches (mirrors getExistingRomMShortcuts)
+          // so a migration touching many ROMs doesn't serialize worst-case
+          // per-shortcut confirm-poll timeouts.
+          const CONCURRENCY = 10;
+          for (let i = 0; i < data.items.length; i += CONCURRENCY) {
+            const batch = data.items.slice(i, i + CONCURRENCY);
+            await Promise.all(
+              batch.map(async (item) => {
+                try {
+                  const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
+                  if (!ok) {
+                    logError(`migration_relaunch_options: failed to confirm launch options for appId ${item.app_id}`);
+                  }
+                } catch (e) {
+                  logError(`migration_relaunch_options: failed to set launch options for appId ${item.app_id}: ${e}`);
+                }
+              }),
+            );
+          }
+        })(),
+      );
+    },
+  );
+
   return {
     name: "RomM Sync",
     icon: <FaGamepad />,
@@ -489,6 +538,7 @@ export default definePlugin(() => {
       removeEventListener("retrodeck_path_changed", pathChangedListener);
       removeEventListener("save_sort_changed", saveSortChangedListener);
       removeEventListener("save_status_updated", saveStatusListener);
+      removeEventListener("migration_relaunch_options", migrationRelaunchListener);
     },
   };
 });

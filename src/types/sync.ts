@@ -119,7 +119,14 @@ export interface SyncApplyUnitData {
 }
 
 export interface SyncStaleData {
-  remove_rom_ids: number[];
+  /**
+   * Bound stale ROMs to remove from Steam. Each entry carries the `app_id`
+   * read on the backend BEFORE the row was unbound, so the handler removes
+   * the shortcut directly without re-resolving rom_id→app_id (which races
+   * the backend unbind). Unbound stale ROMs are excluded — they have no
+   * Steam shortcut to remove.
+   */
+  remove: { rom_id: number; app_id: number }[];
 }
 
 export interface SyncCollectionsData {

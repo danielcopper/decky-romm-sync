@@ -31,6 +31,14 @@ export interface DownloadCompleteEvent {
   rom_name: string;
   platform_name: string;
   file_path: string;
+  /**
+   * Bound Steam `app_id` for this ROM, or `null` when the ROM isn't synced
+   * yet (no shortcut). Resolved on the backend so the handler confirm-sets
+   * launch options on the exact shortcut without a full-library scan.
+   */
+  app_id: number | null;
+  /** Full launch command for the just-downloaded ROM (now installed/launchable). */
+  launch_options: string;
 }
 
 export interface DownloadFailedEvent {

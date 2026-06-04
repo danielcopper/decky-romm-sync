@@ -186,7 +186,8 @@ class SyncOrchestrator:
                 )
                 await self._fetch_preview_unit(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships)
 
-            shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir)
+            installed_paths = await self._loop.run_in_executor(None, self._scan_installed_paths)
+            shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir, installed_paths)
             platform_name_set = {u.name for u in work_queue if u.type == "platform"}
             slug_to_name = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
             registry, last_synced_platforms, last_synced_collections = await self._loop.run_in_executor(
@@ -639,8 +640,13 @@ class SyncOrchestrator:
             self._logger.info(f"Per-unit apply skipped: {unit.name} ({len(unit_roms)} ROMs unchanged)")
             return len(unit_roms)
 
-        # Build shortcut data for this unit.
-        shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir)
+        # Build shortcut data for this unit. Installed ROMs carry the full
+        # launch command; uninstalled ROMs get an empty placeholder until
+        # they are downloaded.
+        installed_paths = await self._loop.run_in_executor(
+            None, self._read_installed_paths, {rom["id"] for rom in unit_roms}
+        )
+        shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir, installed_paths)
 
         # Download artwork for this unit. Empty unit_roms is a defensive
         # guard — an empty platform that survived planning still has no
@@ -781,14 +787,21 @@ class SyncOrchestrator:
         Returns ``(platform_app_ids, romm_collection_app_ids)`` so the
         caller can derive the SyncRun's completed platform/collection names.
         """
-        # Stale rom_ids: any bound ROM in the registry whose rom_id wasn't
+        # Stale ROMs: any bound ROM in the registry whose rom_id wasn't
         # seen by any processed unit. Only meaningful on a non-cancelled run
         # — a partial run can't tell "stale" from "didn't get to it yet".
+        # Each entry carries the ROM's ``shortcut_app_id`` as read BEFORE the
+        # reporter's finalize unbinds it (which NULLs the binding); the
+        # frontend removes the Steam shortcut directly by ``app_id`` so it
+        # never has to re-resolve rom_id→app_id after the binding is gone.
         if not cancelled:
-            stale_rom_ids = await self._loop.run_in_executor(None, self._scan_stale_rom_ids, synced_rom_ids)
+            stale = await self._loop.run_in_executor(None, self._scan_stale_roms, synced_rom_ids)
         else:
-            stale_rom_ids = []
-        await self._emit("sync_stale", {"remove_rom_ids": stale_rom_ids})
+            stale = []
+        await self._emit(
+            "sync_stale",
+            {"remove": [{"rom_id": rom_id, "app_id": app_id} for rom_id, app_id in stale]},
+        )
 
         return await self._reporter.get().finalize_per_unit_run(
             pending_collection_memberships=collection_memberships,
@@ -796,18 +809,51 @@ class SyncOrchestrator:
             total_games=total_games_applied,
             platform_names=platform_names,
             cancelled=cancelled,
-            stale_rom_ids=stale_rom_ids,
+            stale_rom_ids=[rom_id for rom_id, _app_id in stale],
         )
 
-    def _scan_stale_rom_ids(self, synced_rom_ids: set[int]) -> list[int]:
-        """Return bound ROMs in ``uow.roms`` whose rom_id wasn't synced this run.
+    def _scan_installed_paths(self) -> dict[int, str]:
+        """Read ``{rom_id: file_path}`` for the whole installed library in one scan.
+
+        Used by the preview path, which already operates over every ROM in the
+        library — a single ``iter_all()`` is the cheapest way to cover them all.
+        Only ROMs with a current install record appear in the map; ROMs not
+        downloaded are absent, so :func:`build_shortcuts_data` emits an empty
+        placeholder launch command for them.
+        """
+        with self._uow_factory() as uow:
+            return {install.rom_id: install.file_path for install in uow.rom_installs.iter_all()}
+
+    def _read_installed_paths(self, rom_ids: set[int]) -> dict[int, str]:
+        """Read ``{rom_id: file_path}`` for *rom_ids* via targeted point-lookups.
+
+        Used by the per-unit apply path: scanning the whole ``rom_installs``
+        table once per unit is O(units * all-installs) (#797), so this resolves
+        only the unit's ROMs via ``get(rom_id)``. ROMs with no install record
+        are absent, so :func:`build_shortcuts_data` emits an empty placeholder
+        launch command for them.
+        """
+        with self._uow_factory() as uow:
+            paths: dict[int, str] = {}
+            for rom_id in rom_ids:
+                install = uow.rom_installs.get(rom_id)
+                if install is not None:
+                    paths[rom_id] = install.file_path
+            return paths
+
+    def _scan_stale_roms(self, synced_rom_ids: set[int]) -> list[tuple[int, int]]:
+        """Return ``(rom_id, app_id)`` for bound ROMs not synced this run.
 
         Unbound (stale) rows are skipped — they were already cleared on a
-        prior run and must not re-emit a removal.
+        prior run and carry no Steam shortcut to remove. The ``app_id`` is
+        the still-live ``shortcut_app_id`` captured here, before the
+        reporter's finalize unbinds the row; the orchestrator threads it
+        into the ``sync_stale`` payload so the frontend removes the Steam
+        shortcut without re-resolving rom_id→app_id after the unbind.
         """
         with self._uow_factory() as uow:
             return [
-                rom.rom_id
+                (rom.rom_id, rom.shortcut_app_id)
                 for rom in uow.roms.iter_all()
                 if rom.shortcut_app_id is not None and rom.rom_id not in synced_rom_ids
             ]

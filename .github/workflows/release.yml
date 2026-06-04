@@ -81,7 +81,7 @@ jobs:
         run: |
           BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
           echo "Checking $BUILT_ZIP for required entries..."
-          for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/romm-launcher; do
+          for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/rom-launcher; do
             if ! unzip -l "$BUILT_ZIP" | grep -qE "/$required\b"; then
               echo "ERROR: release zip is missing $required"
               unzip -l "$BUILT_ZIP"

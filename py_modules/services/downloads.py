@@ -22,6 +22,7 @@ from domain.rom_files import (
     resolve_local_file_name,
 )
 from domain.rom_install import RomInstall
+from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 from lib.errors import error_response
 
 if TYPE_CHECKING:
@@ -304,6 +305,18 @@ class DownloadService:
             cleanup=lambda: self._download_file_store.remove_file(target_path),
         )
 
+    def _resolve_bound_app_id(self, rom_id: int) -> int | None:
+        """Return the ROM's bound ``shortcut_app_id``, or ``None`` when unbound.
+
+        Read in a short read UoW so ``download_complete`` can carry the
+        exact Steam ``app_id`` for the just-downloaded ROM. ``None`` means
+        the ROM has no Steam shortcut yet (not synced) — the frontend
+        no-ops and the next sync writes the launch command at creation.
+        """
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(int(rom_id))
+        return rom.shortcut_app_id if rom is not None else None
+
     def _make_progress_callback(self, rom_id, rom_name, platform_name, file_name):
         """Build a throttled progress callback for a download."""
         last_emit = [0.0]  # mutable container for closure
@@ -374,13 +387,20 @@ class DownloadService:
                     None, self._post_download_single_io, rom_id, rom_detail, target_path, system
                 )
 
-            if post_io_error is not None:
+            if post_io_error is not None or final_path is None:
                 # The download succeeded but the install record failed its
                 # invariant; the artifact was already cleaned up by the worker.
-                raise ValueError(post_io_error)
+                # ``final_path is None`` always coincides with a non-None error
+                # — the guard narrows the type for the launch-command build below.
+                raise ValueError(post_io_error or "install record produced no launch path")
 
             self._download_queue[rom_id]["status"] = "completed"
             self._download_queue[rom_id]["progress"] = 1.0
+            # Resolve the bound Steam ``shortcut_app_id`` for this rom_id (or
+            # ``None`` when the ROM hasn't been synced yet) so the frontend
+            # confirm-sets launch options on the exact shortcut without a
+            # full-library scan to re-resolve rom_id→app_id.
+            app_id = await self._loop.run_in_executor(None, self._resolve_bound_app_id, rom_id)
             await self._emit(
                 "download_complete",
                 {
@@ -388,6 +408,8 @@ class DownloadService:
                     "rom_name": rom_name,
                     "platform_name": platform_name,
                     "file_path": final_path,
+                    "app_id": app_id,
+                    "launch_options": build_launch_options(resolve_emulator_invocation(rom_detail), final_path),
                 },
             )
             self._logger.info(f"Download complete: {rom_name} -> {final_path}")

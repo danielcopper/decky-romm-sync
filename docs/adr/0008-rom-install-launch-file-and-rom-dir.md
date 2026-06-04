@@ -46,8 +46,11 @@ the #837 reporter's "base→`roms/`, updates+DLC→`storage/<game>/`" placement 
 ## Decision
 
 - **`RomInstall` carries `file_path` (always) and `rom_dir` (nullable).**
-  - `file_path` is the **launch target** — the file `romm-launcher` execs
-    (`SELECT file_path … ; flatpak run … "<file_path>"`, per
+  - `file_path` is the **launch target** — the file baked into the Steam
+    shortcut's `launch_options` (`flatpak run … "<file_path>"`) that the
+    `rom-launcher` exec wrapper is handed and runs (per
+    [ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md), which
+    superseded the dynamic SQLite read of
     [ADR-0005](0005-launcher-resolves-path-from-sqlite.md)); save-path
     resolution, ES-DE core resolution, and the displayed filename all derive
     from it. It is load-bearing for every ROM and is never NULL.

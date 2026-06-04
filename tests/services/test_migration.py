@@ -123,11 +123,13 @@ def plugin(tmp_path, fake_romm_api):
     return p
 
 
-def _seed_install(uow, rom_id, *, file_path, rom_dir=None, system="n64", platform_slug=""):
+def _seed_install(uow, rom_id, *, file_path, rom_dir=None, system="n64", platform_slug="", app_id=None):
     """Seed a Rom (FK parent) then its RomInstall into the shared fake UoW.
 
     ``rom_dir`` defaults to ``None`` (single-file ROM); pass a dedicated
-    directory for a folder-backed (multi-file) ROM.
+    directory for a folder-backed (multi-file) ROM. ``app_id`` defaults to
+    ``None`` (unbound ROM); pass an int to seed a bound shortcut so the
+    re-resolve step picks the install up.
     """
     from domain.rom import Rom
     from domain.rom_install import RomInstall
@@ -139,7 +141,7 @@ def _seed_install(uow, rom_id, *, file_path, rom_dir=None, system="n64", platfor
                 platform_slug=platform_slug or system,
                 name=f"Game {rom_id}",
                 fs_name=f"game{rom_id}",
-                shortcut_app_id=None,
+                shortcut_app_id=app_id,
                 last_synced_at="2025-01-01T00:00:00",
             )
         )
@@ -975,6 +977,265 @@ class TestMigrateSaveFiles:
 
         assert status["pending"] is True
         assert status["bios_count"] == 1
+
+
+class TestMigrationRelaunchOptions:
+    """Re-resolve step: after a RetroDECK-home migration relocates ROM files and
+    updates ``rom_installs`` to the new paths, the service emits
+    ``migration_relaunch_options`` so the frontend rewrites each affected Steam
+    shortcut's baked ``launch_options`` (ADR-0005). Only ROMs that are BOTH
+    installed (have a ``rom_installs`` row) AND bound (``shortcut_app_id`` set)
+    are eligible — uninstalled or unbound ROMs are skipped.
+    """
+
+    @staticmethod
+    def _relaunch_emit(plugin):
+        """Return the single ``migration_relaunch_options`` payload, or ``None``."""
+        for event, args in plugin._migration_service._emit.calls:
+            if event == "migration_relaunch_options":
+                return args[0]
+        return None
+
+    @staticmethod
+    def _seed_bound_uninstalled(uow, rom_id, *, app_id, system="n64"):
+        """Seed a bound Rom row with NO ``rom_installs`` row (downloaded=false)."""
+        from domain.rom import Rom
+
+        with uow:
+            uow.roms.save(
+                Rom(
+                    rom_id=rom_id,
+                    platform_slug=system,
+                    name=f"Game {rom_id}",
+                    fs_name=f"game{rom_id}",
+                    shortcut_app_id=app_id,
+                    last_synced_at="2025-01-01T00:00:00",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_relocated_installed_bound_rom_emits_new_launch_options(self, plugin, tmp_path):
+        """Happy path: a relocated installed+bound ROM emits its app_id + NEW-path command."""
+        import decky
+
+        from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+        old_rom = os.path.join(old_home, "roms", "n64", "zelda.z64")
+        new_rom = os.path.join(new_home, "roms", "n64", "zelda.z64")
+
+        os.makedirs(os.path.dirname(old_rom))
+        with open(old_rom, "w") as f:
+            f.write("rom data")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64", app_id=4242)
+
+        result = await plugin.migrate_retrodeck_files()
+        assert result["success"] is True
+
+        payload = self._relaunch_emit(plugin)
+        assert payload is not None
+        expected_cmd = build_launch_options(resolve_emulator_invocation({"id": 1}), new_rom)
+        assert payload["items"] == [{"app_id": 4242, "launch_options": expected_cmd}]
+        # The command must point at the NEW path, never the stale old one.
+        assert new_rom in payload["items"][0]["launch_options"]
+        assert old_rom not in payload["items"][0]["launch_options"]
+
+    @pytest.mark.asyncio
+    async def test_installed_unbound_rom_excluded(self, plugin, tmp_path):
+        """Edge: installed but UNBOUND (shortcut_app_id None) is excluded from items."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+        old_rom = os.path.join(old_home, "roms", "n64", "zelda.z64")
+
+        os.makedirs(os.path.dirname(old_rom))
+        with open(old_rom, "w") as f:
+            f.write("rom data")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64", app_id=None)
+
+        result = await plugin.migrate_retrodeck_files()
+        assert result["success"] is True
+
+        # Event still fires (matches sync_stale always-emit convention) but the
+        # unbound install is not in the items.
+        payload = self._relaunch_emit(plugin)
+        assert payload is not None
+        assert payload["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_bound_uninstalled_rom_excluded(self, plugin, tmp_path):
+        """Edge: bound but NOT installed (no rom_installs row) is excluded."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        # Bound Rom row, but no install — nothing on disk, no rom_installs row.
+        self._seed_bound_uninstalled(plugin._uow, 7, app_id=9999)
+
+        result = await plugin.migrate_retrodeck_files()
+        assert result["success"] is True
+
+        payload = self._relaunch_emit(plugin)
+        assert payload is not None
+        assert payload["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_mixed_batch_includes_only_installed_and_bound(self, plugin, tmp_path):
+        """Edge: mixed batch — only the installed+bound ROM appears in items."""
+        import decky
+
+        from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+        bound_rom = os.path.join(old_home, "roms", "n64", "bound.z64")
+        new_bound_rom = os.path.join(new_home, "roms", "n64", "bound.z64")
+        unbound_rom = os.path.join(old_home, "roms", "n64", "unbound.z64")
+
+        os.makedirs(os.path.dirname(bound_rom))
+        with open(bound_rom, "w") as f:
+            f.write("bound data")
+        with open(unbound_rom, "w") as f:
+            f.write("unbound data")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        # 1) installed + bound  → included
+        _seed_install(plugin._uow, 1, file_path=bound_rom, system="n64", app_id=1111)
+        # 2) installed + unbound → excluded
+        _seed_install(plugin._uow, 2, file_path=unbound_rom, system="n64", app_id=None)
+        # 3) bound + uninstalled → excluded
+        self._seed_bound_uninstalled(plugin._uow, 3, app_id=3333)
+
+        result = await plugin.migrate_retrodeck_files()
+        assert result["success"] is True
+
+        payload = self._relaunch_emit(plugin)
+        assert payload is not None
+        expected_cmd = build_launch_options(resolve_emulator_invocation({"id": 1}), new_bound_rom)
+        assert payload["items"] == [{"app_id": 1111, "launch_options": expected_cmd}]
+
+    @pytest.mark.asyncio
+    async def test_zero_eligible_roms_emits_empty_items(self, plugin, tmp_path):
+        """Edge: zero eligible ROMs — still emits (sync_stale convention) with empty items."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        # No installs, no bound ROMs.
+
+        result = await plugin.migrate_retrodeck_files()
+        assert result["success"] is True
+
+        payload = self._relaunch_emit(plugin)
+        assert payload is not None
+        assert payload["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_no_relaunch_emit_on_needs_confirmation(self, plugin, tmp_path):
+        """The needs-confirmation early return must NOT emit relaunch options.
+
+        Nothing was relocated and no paths were persisted, so re-resolving and
+        rewriting shortcuts would point them at files that did not move.
+        """
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+        old_rom = os.path.join(old_home, "roms", "n64", "zelda.z64")
+        new_rom = os.path.join(new_home, "roms", "n64", "zelda.z64")
+
+        os.makedirs(os.path.dirname(old_rom))
+        os.makedirs(os.path.dirname(new_rom))
+        with open(old_rom, "w") as f:
+            f.write("old data")
+        with open(new_rom, "w") as f:
+            f.write("new data")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64", app_id=4242)
+
+        result = await plugin.migrate_retrodeck_files()
+        assert result["needs_confirmation"] is True
+
+        assert self._relaunch_emit(plugin) is None
+
+    @pytest.mark.asyncio
+    async def test_relaunch_options_built_from_persisted_new_paths(self, plugin, tmp_path):
+        """The event fires only after the relocated path is persisted to rom_installs.
+
+        Asserting the emitted command equals the command for the persisted
+        ``rom_installs.file_path`` ties the emit to post-commit state — a
+        pre-commit emit would carry the stale old path.
+        """
+        import decky
+
+        from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+        old_rom = os.path.join(old_home, "roms", "n64", "zelda.z64")
+
+        os.makedirs(os.path.dirname(old_rom))
+        with open(old_rom, "w") as f:
+            f.write("rom data")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64", app_id=4242)
+
+        await plugin.migrate_retrodeck_files()
+
+        # The persisted install now points at the new path.
+        with plugin._uow as uow:
+            persisted_path = uow.rom_installs.get(1).file_path
+        payload = self._relaunch_emit(plugin)
+        assert payload is not None
+        expected_cmd = build_launch_options(resolve_emulator_invocation({"id": 1}), persisted_path)
+        assert payload["items"][0]["launch_options"] == expected_cmd
 
 
 class TestResolveSaveSortConflict:

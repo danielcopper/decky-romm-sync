@@ -127,6 +127,34 @@ def _seed_rom_row(plugin, rom_id, *, app_id, platform_slug, name="Game", fs_name
         plugin._uow.roms.save(rom)
 
 
+def _seed_install(plugin, rom_id, *, file_path, platform_slug="n64"):
+    """Insert a ``RomInstall`` record (with its FK-parent ``Rom``) into the shared UoW."""
+    from domain.rom import Rom
+    from domain.rom_install import RomInstall
+
+    with plugin._uow:
+        plugin._uow.roms.save(
+            Rom(
+                rom_id=rom_id,
+                platform_slug=platform_slug,
+                name=f"Game {rom_id}",
+                fs_name=f"game_{rom_id}.z64",
+                shortcut_app_id=None,
+                last_synced_at="2025-01-01T00:00:00",
+            )
+        )
+        plugin._uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=rom_id,
+                file_path=file_path,
+                rom_dir=None,
+                platform_slug=platform_slug,
+                system=platform_slug,
+                installed_at="2025-01-01T00:00:00",
+            )
+        )
+
+
 def _seed_completed_run(plugin, *, at, platforms=None, collections=None, run_id="run-prev"):
     """Insert a completed ``SyncRun`` so ``last_sync`` / ``last_synced_*`` reads resolve."""
     from domain.sync_run import SyncRun
@@ -156,36 +184,32 @@ class TestShortcutDataFormat:
     Steam shortcuts. These tests ensure the data is well-formed.
     """
 
-    @pytest.mark.asyncio
-    async def test_exe_path_points_to_romm_launcher(self, plugin):
-        """Exe path must point to bin/romm-launcher inside the plugin directory."""
+    def test_exe_path_points_to_rom_launcher(self, plugin):
+        """Exe path must point to bin/rom-launcher inside the plugin directory."""
         import decky
 
-        plugin.settings["romm_url"] = "http://romm.local"
-        exe = os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "romm-launcher")
+        from domain.shortcut_data import build_shortcuts_data
 
-        assert exe.endswith("/bin/romm-launcher"), f"Exe path should end with /bin/romm-launcher, got: {exe}"
+        result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {})
+        exe = result[0]["exe"]
+        assert exe.endswith("/bin/rom-launcher"), f"Exe path should end with /bin/rom-launcher, got: {exe}"
         assert "decky-romm-sync" in exe, f"Exe path should contain plugin name, got: {exe}"
 
-    def test_launch_options_format(self, plugin):
-        """Launch options must follow the romm:<rom_id> pattern."""
-        import re
+    def test_installed_rom_gets_launch_command(self, plugin):
+        """An installed ROM's launch_options is the full RetroDECK launch command."""
+        from domain.shortcut_data import build_shortcuts_data
 
-        pattern = r"^romm:\d+$"
-
-        # Test valid formats
-        for rom_id in [1, 42, 4409, 99999]:
-            launch_opt = f"romm:{rom_id}"
-            assert re.match(pattern, launch_opt), f"Launch option '{launch_opt}' does not match expected pattern"
+        result = build_shortcuts_data([{"id": 42, "name": "Game"}], "/plugin", {42: "/roms/n64/game.z64"})
+        assert result[0]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/n64/game.z64"'
 
     def test_start_dir_is_parent_of_exe(self, plugin):
         """Start dir must be the directory containing the launcher."""
         import decky
 
-        exe = os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "romm-launcher")
-        start_dir = os.path.join(decky.DECKY_PLUGIN_DIR, "bin")
+        from domain.shortcut_data import build_shortcuts_data
 
-        assert start_dir == os.path.dirname(exe), f"start_dir ({start_dir}) should be parent of exe ({exe})"
+        result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {})
+        assert result[0]["start_dir"] == os.path.dirname(result[0]["exe"])
 
 
 class TestSyncPreview:
@@ -883,6 +907,44 @@ class TestDoSyncPerUnit:
         assert unit_events[1]["unit_index"] == 1
 
     @pytest.mark.asyncio
+    async def test_emitted_shortcuts_carry_install_launch_options(self, plugin, fake_romm_api):
+        """Installed ROMs get the full launch command; uninstalled ROMs get ``""``.
+
+        The orchestrator builds the ``{rom_id: file_path}`` map from
+        ``rom_installs`` and passes it to ``build_shortcuts_data`` so the
+        emitted ``sync_apply_unit`` shortcuts carry per-ROM launch options.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Installed"}, {"id": 11, "name": "NotInstalled"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        # rom 10 has an install record; rom 11 does not.
+        _seed_install(plugin, 10, file_path="/roms/n64/installed.z64", platform_slug="n64")
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        by_rom = {s["rom_id"]: s for s in unit_events[0]["shortcuts"]}
+        assert by_rom[10]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/n64/installed.z64"'
+        assert by_rom[11]["launch_options"] == ""
+
+    @pytest.mark.asyncio
     async def test_skipped_unit_short_circuits_apply(self, plugin, fake_romm_api):
         """``skipped=True`` from the fetcher short-circuits the whole apply+commit branch.
 
@@ -927,7 +989,7 @@ class TestDoSyncPerUnit:
         # rom_id 10 is not classified as stale.
         stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
         assert len(stale_events) == 1
-        assert stale_events[0] == {"remove_rom_ids": []}
+        assert stale_events[0] == {"remove": []}
 
         # Blueprint invariant #1: a delta sync must NOT shrink platform
         # collections. The skipped platform's unchanged ROM (app_id 1010)
@@ -970,9 +1032,10 @@ class TestDoSyncPerUnit:
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
-        # Frontend was told to remove rom_id 99.
+        # Frontend was told to remove rom_id 99, carrying its bound app_id
+        # captured before the finalize unbind NULLed the binding.
         stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
-        assert stale_events == [{"remove_rom_ids": [99]}]
+        assert stale_events == [{"remove": [{"rom_id": 99, "app_id": 9900}]}]
 
         # rom 99 was unbound (NULL app_id) but its row survives; only the
         # synced ROM is still bound.
@@ -985,6 +1048,39 @@ class TestDoSyncPerUnit:
         stats = await plugin.get_sync_stats()
         assert stats["roms"] == 1
         assert stats["total_shortcuts"] == 1
+
+    @pytest.mark.asyncio
+    async def test_sync_stale_excludes_unbound_roms(self, plugin, fake_romm_api):
+        """An already-unbound stale ROM (NULL ``shortcut_app_id``) is excluded
+        from the ``sync_stale`` payload — it has no Steam shortcut to remove.
+
+        rom 10 is the live synced ROM, rom 99 is a bound stale ROM (carries its
+        app_id), and rom 77 is an unbound leftover (cleared on a prior run). Only
+        the bound stale ROM appears in ``remove``, each entry carrying its app_id.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_rom_row(plugin, 10, app_id=1000, platform_slug="n64", name="A", fs_name="a.z64")
+        _seed_rom_row(plugin, 99, app_id=9900, platform_slug="gba", name="Z", fs_name="z.gba")
+        _seed_rom_row(plugin, 77, app_id=None, platform_slug="snes", name="Y", fs_name="y.sfc")
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = AsyncMock(return_value={})
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        # Only the bound stale ROM (99) is emitted; the unbound leftover (77) is excluded.
+        assert stale_events == [{"remove": [{"rom_id": 99, "app_id": 9900}]}]
 
     @pytest.mark.asyncio
     async def test_downloads_artwork_when_not_skipped(self, plugin, fake_romm_api):

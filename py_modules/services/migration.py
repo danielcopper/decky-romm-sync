@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
+from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 
 if TYPE_CHECKING:
     import logging
@@ -509,7 +510,40 @@ class MigrationService:
         # previous-path marker, all in one short write UoW after the file moves.
         self._apply_relocations(installs, relocations, bios_files, bios_relocations, clear_marker=not errors)
 
-        return self._build_migration_result(counts, errors)
+        result = self._build_migration_result(counts, errors)
+        # Re-resolve the launch command for every installed+bound ROM AFTER the
+        # write UoW above has persisted the new paths (ADR-0005/0006): the path
+        # is baked into the Steam shortcut's launch_options, so a relocated ROM
+        # needs its shortcut rewritten or launches break. Read from a fresh UoW
+        # so the relocated rom_installs.file_path is what we build the command
+        # from. Stashed on the result for the async caller to emit on the loop.
+        result["_relaunch_items"] = self._build_relaunch_items()
+        return result
+
+    def _build_relaunch_items(self) -> list[dict[str, Any]]:
+        """Build the ``migration_relaunch_options`` items from the post-move state.
+
+        For every ROM that is both installed (has a ``rom_installs`` row, now at
+        the relocated ``file_path``) and bound (its ``Rom.shortcut_app_id`` is
+        set), compose the new Steam-shortcut launch command from the relocated
+        path. Uninstalled or unbound ROMs are skipped — their shortcuts show
+        Download or carry a placeholder launch command, so there is nothing to
+        re-resolve. Reads through the UoW; no raw I/O at the service layer.
+        """
+        items: list[dict[str, Any]] = []
+        with self._uow_factory() as uow:
+            for install in uow.rom_installs.iter_all():
+                rom = uow.roms.get(install.rom_id)
+                if rom is None or rom.shortcut_app_id is None:
+                    continue
+                invocation = resolve_emulator_invocation({"id": rom.rom_id})
+                items.append(
+                    {
+                        "app_id": rom.shortcut_app_id,
+                        "launch_options": build_launch_options(invocation, install.file_path),
+                    }
+                )
+        return items
 
     def _apply_relocations(self, installs, relocations, bios_files, bios_relocations, *, clear_marker):
         """Persist the relocated install and BIOS records (and optionally clear the marker).
@@ -556,9 +590,18 @@ class MigrationService:
         if not old_home or not new_home or old_home == new_home:
             return {"success": False, "message": "No path migration needed"}
 
-        return await self._loop.run_in_executor(
+        result = await self._loop.run_in_executor(
             None, self._migrate_retrodeck_files_io, old_home, new_home, conflict_strategy
         )
+        # Pop the internal relaunch payload (only present on the actual-migration
+        # path, not the needs-confirmation early return) and emit it so the live
+        # Steam shortcuts get their baked launch_options rewritten to the new
+        # paths. Emitted after the executor returns — the relocation write UoW
+        # has already committed, so the items carry the persisted new paths.
+        relaunch_items = result.pop("_relaunch_items", None)
+        if relaunch_items is not None:
+            await self._emit("migration_relaunch_options", {"items": relaunch_items})
+        return result
 
     def _get_migration_status_io(self, old_home, new_home):
         """Sync helper for get_migration_status — FS traversal in executor."""

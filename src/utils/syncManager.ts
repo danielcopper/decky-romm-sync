@@ -1,7 +1,7 @@
 import { addEventListener } from "@decky/api";
 import type { SyncAddItem, SyncApplyUnitData } from "../types";
 import { getArtworkBase64, reportUnitResults, syncHeartbeat, logInfo, logError } from "../api/backend";
-import { getExistingRomMShortcuts, addShortcut } from "./steamShortcuts";
+import { getExistingRomMShortcuts, addShortcut, setLaunchOptionsConfirmed } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -33,7 +33,9 @@ async function resolveShortcutAppId(item: SyncAddItem, existing: Map<number, num
     SteamClient.Apps.SetShortcutName(existingAppId, item.name);
     SteamClient.Apps.SetShortcutExe(existingAppId, item.exe);
     SteamClient.Apps.SetShortcutStartDir(existingAppId, item.start_dir);
-    SteamClient.Apps.SetAppLaunchOptions(existingAppId, item.launch_options);
+    // Launch options carry the full RetroDECK command (or "" for uninstalled).
+    // Confirm the write landed rather than fire-and-forget — Set* returns void.
+    await setLaunchOptionsConfirmed(existingAppId, item.launch_options);
     return existingAppId;
   }
   return (await addShortcut(item)) ?? undefined;

@@ -2,11 +2,17 @@
 
 ## Status
 
-Accepted as the **interim** launcher design shipped with the cutover
-([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)). Revisits
+**Superseded by [ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md).**
+The gate this ADR set — #827 proving `SetAppLaunchOptions`-on-existing reliable —
+passed, so the "dumb exec wrapper / path baked into `launch_options`" end state
+(#785) landed and the interim DB-read launcher described below is retired. This
+record is kept for the history of why the interim existed.
+
+Originally accepted as the **interim** launcher design shipped with the cutover
+([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)). Revisited
 the "dumb exec wrapper / path baked into `launch_options`" approach locked in
-[#785](https://github.com/danielcopper/decky-romm-sync/issues/785), which is
-**deferred, not rejected** — it stays the intended end state, gated on the
+[#785](https://github.com/danielcopper/decky-romm-sync/issues/785), which was
+**deferred, not rejected** — it stayed the intended end state, gated on the
 hardware test in [#827](https://github.com/danielcopper/decky-romm-sync/issues/827).
 
 ## Context

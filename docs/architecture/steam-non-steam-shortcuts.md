@@ -37,14 +37,19 @@ The 500ms delay is critical. Without it, the `Set*` calls may silently fail beca
 Pass the raw path:
 
 ```typescript
-SteamClient.Apps.SetShortcutExe(appId, "/home/deck/homebrew/plugins/decky-romm-sync/bin/romm-launcher");
+SteamClient.Apps.SetShortcutExe(appId, "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher");
 ```
 
 ### Updating existing shortcuts
 
-Calling `Set*` methods on an existing shortcut to change its `exe`, `startDir`, or `launchOptions` **may not take effect reliably**. If launch configuration needs to change, the safest approach is to delete and recreate the shortcut (re-sync).
+A shortcut's `appId` is derived from `exe + appName` (CRC32). Two consequences follow:
 
-Simple display property changes (name, artwork) work fine via `Set*`.
+- **`launchOptions` and `startDir` are appId-safe.** Changing either on an existing shortcut keeps the same `appId`, so the shortcut's identity, artwork, collection membership, and `roms.shortcut_app_id` binding all survive. `SetAppLaunchOptions` on an existing shortcut is **reliable** — confirmed on hardware in [#827](https://github.com/danielcopper/decky-romm-sync/issues/827) across in-session writes, a Steam restart, and removal-churn re-syncs. The plugin uses it directly to bake the launch command in at download-complete and to re-resolve paths after a RetroDECK-home migration.
+- **`exe` and `appName` are destructive.** Changing either yields a *different* `appId` — effectively a new shortcut. A launch-config change that touches `exe` or the name therefore requires delete + recreate (re-sync); a `launchOptions`-only change does not.
+
+Because `SetAppLaunchOptions` returns `void` with no success signal, the plugin **fires the set then polls** `RegisterForAppDetails` until the read-back `strLaunchOptions` matches (`setLaunchOptionsConfirmed`). Setting `""` — the placeholder an uninstalled ROM carries until it is downloaded — is valid and confirms against an empty read-back.
+
+The real hazard is not the set: heavy removal-churn can corrupt Steam's in-memory shortcut state. A Steam restart clears it. The sync engine processes removals before additions to minimise churn.
 
 See: `src/utils/steamShortcuts.ts`
 
@@ -77,7 +82,7 @@ Each entry has these key fields:
 | `AppName` | string | Display name |
 | `Exe` | string | **Quoted** path: `"/path/to/exe"` |
 | `StartDir` | string | **Quoted** path: `"/path/to/dir"` |
-| `LaunchOptions` | string | Unquoted: `romm:42` — the ROM marker `bin/romm-launcher` parses |
+| `LaunchOptions` | string | The full launch command the `bin/rom-launcher` exec wrapper runs, e.g. `flatpak run net.retrodeck.retrodeck "/path/to/game.iso"` — or `""` (placeholder) for an uninstalled ROM. No `romm:<id>` marker; ownership is detected by the exe path instead |
 | `appid` | signed int32 | Assigned by Steam when `AddShortcut` runs; stored as the signed int32 form (`to_signed_app_id`) |
 | `icon` | string | Icon path or hash |
 | `tags` | object | Steam collection tags. The plugin manages collections via `collectionStore` (machine-scoped names like `RomM: N64 (steamdeck)`), not by writing this VDF field. |
@@ -99,7 +104,7 @@ See: `py_modules/adapters/steam_config.py`
 
 ## App IDs and Artwork
 
-`SteamClient.Apps.AddShortcut()` returns the real `appId`, so the plugin does **not** compute shortcut app IDs from `exe + name`. The frontend stores the returned `appId` and the backend persists it as `shortcut_app_id` on the ROM's `roms` row (the synced-ROM registry; reverse-lookupable by `shortcut_app_id`). There is no CRC32 app-ID generator in the codebase.
+`SteamClient.Apps.AddShortcut()` returns the real `appId`, so the plugin does **not** compute shortcut app IDs itself — there is no CRC32 app-ID generator in the codebase. Steam derives the `appId` from `exe + appName` (CRC32), which is why mutating `launchOptions` or `startDir` keeps the same `appId` (see [Updating existing shortcuts](#updating-existing-shortcuts)) while changing `exe`/name produces a different one. The frontend stores the returned `appId` and the backend persists it as `shortcut_app_id` on the ROM's `roms` row (the synced-ROM registry; reverse-lookupable by `shortcut_app_id`). The frontend resolves rom_id ↔ appId through the backend's `get_app_id_rom_id_map()` callable, which reads that binding.
 
 The only app-ID math the backend does is converting an unsigned Steam app ID to its signed int32 form for `shortcuts.vdf` records — `to_signed_app_id(app_id)` in `py_modules/domain/sgdb_artwork.py`. SGDB endpoint/asset-type maps live in the same module.
 
@@ -129,7 +134,7 @@ Grid artwork is stored at `userdata/<user_id>/config/grid/`, keyed by the shortc
 | `py_modules/adapters/steam_config.py` | `SteamConfigAdapter` — VDF read/write, grid dir, shortcut icon write, Steam Input config |
 | `py_modules/services/library/` | LibraryService — builds shortcut data, drives per-unit sync apply |
 | `py_modules/domain/sgdb_artwork.py` | `to_signed_app_id`, SGDB asset-type/endpoint maps |
-| `bin/romm-launcher` | Bash script invoked by Steam — parses `romm:<id>`, looks up ROM path, launches RetroDECK |
+| `bin/rom-launcher` | Pure `exec "$@"` wrapper invoked by Steam — runs the full launch command baked into the shortcut's launch options; owns no state, no path resolution, no emulator knowledge |
 
 ## Common Pitfalls
 
@@ -141,9 +146,9 @@ Pre-quoting the exe path in `AddShortcut` or `SetShortcutExe` causes double-quot
 
 Calling `Set*` methods too quickly after `AddShortcut` (before the 500ms delay) results in the properties not being saved. The shortcut appears in the library but with wrong or missing exe/startDir/launchOptions. Launches fail or open the wrong thing.
 
-### Shortcut property updates are unreliable
+### Removal-churn can corrupt shortcut state
 
-Changing `exe`, `startDir`, or `launchOptions` on existing shortcuts via `Set*` calls sometimes does not persist. The workaround is to delete and recreate the shortcut. The sync engine handles this by processing removals before additions.
+`SetAppLaunchOptions` on an existing shortcut is reliable (validated in [#827](https://github.com/danielcopper/decky-romm-sync/issues/827); see [Updating existing shortcuts](#updating-existing-shortcuts)) — the historical "property updates may not persist" warning has been narrowed. The remaining hazard is **removal-churn**: adding and removing many shortcuts in one pass can corrupt Steam's in-memory shortcut state. A Steam restart clears it. The sync engine processes removals before additions to keep churn down, and every launch-options write uses the fire-then-poll `setLaunchOptionsConfirmed` so a silently dropped write is observable rather than assumed. Only `exe`/name changes still need delete + recreate, because those change the `appId`.
 
 ### AddShortcut timing between shortcuts
 

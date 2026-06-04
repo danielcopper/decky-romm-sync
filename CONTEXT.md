@@ -145,8 +145,12 @@ Write "ROM file" when referring to the on-disk artifact.
 The two path fields on `RomInstall` (`domain/rom_install.py`) answer different
 questions and must not be conflated:
 
-- **`file_path`** — the **launch target**: the single file RetroDECK is handed
-  (`romm-launcher` execs it, per
+- **`file_path`** — the **launch target**: the single file RetroDECK is handed.
+  It is baked into the Steam shortcut's `launch_options`
+  (`flatpak run … "<file_path>"`) and the `rom-launcher` exec wrapper runs that
+  command (per
+  [ADR-0009](docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md),
+  which superseded the dynamic SQLite read of
   [ADR-0005](docs/adr/0005-launcher-resolves-path-from-sqlite.md)). Present for
   every ROM. Save-path resolution, ES-DE core resolution, and the displayed
   filename all derive from it.
