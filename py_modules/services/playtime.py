@@ -298,7 +298,11 @@ class PlaytimeService:
 
         if note is None:
             # No server record — do not seed an empty row; report the local row.
-            return self._local_playtime_result(rom_id, server_query_failed=False)
+            result = self._local_playtime_result(rom_id, server_query_failed=False)
+            self._log_debug(
+                f"Reconciled playtime for rom {rom_id}: no server note, kept local total={result['total_seconds']}s"
+            )
+            return result
 
         server_data = parse_playtime_note_content(note.get("content", ""))
         server_seconds = int(server_data.get("seconds", 0)) if server_data else 0
@@ -319,6 +323,10 @@ class PlaytimeService:
             self._log_debug(f"Failed to reconcile playtime for rom {rom_id}: {e}")
             return _empty_reconcile_result(server_query_failed=False)
 
+        self._log_debug(
+            f"Reconciled playtime for rom {rom_id}: server={server_seconds}s "
+            f"note_id={note_id} -> total={total_seconds}s"
+        )
         return {
             "total_seconds": total_seconds,
             "session_count": session_count,

@@ -494,6 +494,21 @@ class TestReconcilePlaytime:
         assert entry.total_seconds == 500
         assert entry.note_id == 2000
 
+    @pytest.mark.asyncio
+    async def test_emits_outcome_debug_line(self):
+        """Each reconcile logs one debug line naming the rom and its outcome."""
+        logs: list[str] = []
+        svc, fake, uow = make_service(log_debug=logs.append)
+        _seed_rom(uow, 42)
+        _seed_playtime_note(fake, 42, 500, note_id=2000)
+        _seed_rom(uow, 99)  # roms row, no note
+
+        await svc.reconcile_playtime(42)  # server note present
+        await svc.reconcile_playtime(99)  # no server note
+
+        assert any("rom 42" in m and "note_id=2000" in m and "total=500s" in m for m in logs)
+        assert any("rom 99" in m and "no server note" in m for m in logs)
+
 
 # ---------------------------------------------------------------------------
 # TestEdgeCases
