@@ -29,6 +29,40 @@ class SaveSyncDisplay:
     last_sync_check_at: str | None
 
 
+@dataclass(frozen=True)
+class MultiFileSlot:
+    """Whether the active slot's current save spans more than one file.
+
+    A single game state on RetroArch can be stored as several files with
+    distinct extensions (e.g. Sega Saturn cartridge saves: ``.bkr`` +
+    ``.bcr`` + ``.smpc``). RomM stores each of those as an independent save
+    record with its own version stack, so the slot's "current save" is
+    really an N-file *set*, not a single file with a version history.
+
+    ``is_multi_file`` is True when the slot resolves to more than one
+    distinct local target filename. ``component_files`` is the sorted set
+    of those filenames (the N files that together make up the current
+    save); it always reflects every distinct filename in the slot, even
+    for the single-file case (one entry).
+    """
+
+    is_multi_file: bool
+    component_files: list[str]
+
+
+def compute_multi_file_slot(filenames: list[str]) -> MultiFileSlot:
+    """Classify an active slot as single- or multi-file from its target filenames.
+
+    *filenames* is the set of canonical local target filenames the active
+    slot resolves to — one per distinct save record / extension, gathered
+    from the matrix outcomes. More than one distinct filename means the
+    slot's current save is a multi-file set (the sibling files are
+    components of one game state, not prior versions of each other).
+    """
+    distinct = sorted(set(filenames))
+    return MultiFileSlot(is_multi_file=len(distinct) > 1, component_files=distinct)
+
+
 def compute_save_sync_display(
     files: list[dict[str, Any]] | None,
     last_sync_check_at: str | None,

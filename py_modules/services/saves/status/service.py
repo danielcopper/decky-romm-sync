@@ -8,7 +8,7 @@ from domain.emulator_tag import detect_core_change
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_attribution import compute_uploaded_by_us
-from domain.save_status import compute_save_sync_display
+from domain.save_status import compute_multi_file_slot, compute_save_sync_display
 from domain.save_status_builders import (
     build_file_status,
     resolve_chosen_server,
@@ -122,23 +122,28 @@ class StatusService:
         device_id: str | None,
         server_in_slot: list[dict[str, Any]],
         info: dict[str, Any],
-    ) -> tuple[MatrixOutcome | None, list[MatrixOutcome], bool]:
+    ) -> tuple[MatrixOutcome | None, list[MatrixOutcome], bool, list[str]]:
         """Iterate matrix outcomes for the active slot, splitting them into local/server-only buckets.
 
         Side effect: when an outcome is ``Skip(adopt_baseline=True)`` with
         a local hash, records that hash as the new sync baseline on
         *save_state* (in memory) and flags that a write is needed.
 
-        Returns ``(first_local_outcome, server_only_outcomes, baseline_adopted)``.
-        The local bucket is the first outcome with a local file present —
-        matching the active-slot single-entry view this status flow surfaces.
+        Returns ``(first_local_outcome, server_only_outcomes, baseline_adopted,
+        all_filenames)``. The local bucket is the first outcome with a local
+        file present — matching the active-slot single-entry view this status
+        flow surfaces. ``all_filenames`` is every distinct canonical target
+        filename the slot resolves to (one per outcome), used to detect a
+        multi-file save (#908 guard).
         """
         local_outcome: MatrixOutcome | None = None
         server_only_outcomes: list[MatrixOutcome] = []
         baseline_adopted = False
+        all_filenames: list[str] = []
         for outcome in self._sync_engine.iter_matrix_outcomes(
             rom_id, server_in_slot, save_state=save_state, device_id=device_id, info=info
         ):
+            all_filenames.append(outcome.filename)
             if isinstance(outcome.action, Skip) and outcome.action.adopt_baseline and outcome.local_hash:
                 self._sync_engine.adopt_baseline_hash(save_state, outcome.filename, outcome.local_hash)
                 baseline_adopted = True
@@ -146,7 +151,7 @@ class StatusService:
                 server_only_outcomes.append(outcome)
             elif local_outcome is None:
                 local_outcome = outcome
-        return local_outcome, server_only_outcomes, baseline_adopted
+        return local_outcome, server_only_outcomes, baseline_adopted, all_filenames
 
     def _get_save_status_io(
         self,
@@ -201,14 +206,16 @@ class StatusService:
 
         file_statuses: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
+        multi_file = compute_multi_file_slot([])
 
         if info is not None:
             # The baseline-adopt path mutates a working copy; an absent aggregate
             # starts from a fresh default so the matrix can evaluate against it.
             working_state = save_state if save_state is not None else RomSaveState()
-            local_outcome, server_only_outcomes, baseline_adopted = self._partition_outcomes(
+            local_outcome, server_only_outcomes, baseline_adopted, all_filenames = self._partition_outcomes(
                 rom_id, working_state, device_id, server_in_slot, info
             )
+            multi_file = compute_multi_file_slot(all_filenames)
             if baseline_adopted:
                 with self._uow_factory() as uow:
                     uow.rom_save_states.save(rom_id, working_state)
@@ -252,6 +259,15 @@ class StatusService:
                 )
             ),
             "server_query_failed": server_query_failed,
+            # Interim #908 guard: a slot whose current save spans >1 distinct
+            # file (e.g. Saturn .bkr/.bcr/.smpc) is an N-file *set*, not a
+            # single file with a version history. Per-version rollback would
+            # revert one component and leave the others — an incoherent save —
+            # so version history + rollback are suppressed for multi-file slots
+            # until grouped save-states land (#908).
+            "multi_file": multi_file.is_multi_file,
+            "component_files": multi_file.component_files,
+            "rollback_supported": not multi_file.is_multi_file,
         }
 
     # ------------------------------------------------------------------

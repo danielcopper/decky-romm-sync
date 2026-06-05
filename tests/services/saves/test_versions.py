@@ -266,6 +266,44 @@ class TestListFileVersions:
         assert len(versions) == 1
         assert versions[0]["uploaded_by_us"] is None
 
+    @pytest.mark.asyncio
+    async def test_multi_file_slot_suppresses_versions(self, tmp_path):
+        """A multi-file slot (e.g. Saturn .bkr/.bcr) returns multi_file_unsupported
+        with an empty version list — the sibling records are components of one
+        game state, not prior versions (#908 interim guard)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path, system="saturn", file_name="rally.cue")
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bkr")
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bcr")
+        # Server saves exist, but they must NOT be surfaced as "previous versions".
+        fake.saves[100] = _server_save(
+            save_id=100, rom_id=42, slot="default", filename="rally.bkr", updated_at="2026-03-10T10:00:00Z"
+        )
+        fake.saves[50] = _server_save(
+            save_id=50, rom_id=42, slot="default", filename="rally.bcr", updated_at="2026-03-01T10:00:00Z"
+        )
+
+        result = await svc.list_file_versions(42, "default", "rally.bkr")
+
+        assert result == {"status": "multi_file_unsupported", "versions": []}
+
+    @pytest.mark.asyncio
+    async def test_single_file_slot_still_lists_versions(self, tmp_path):
+        """A single-extension slot is unaffected by the multi-file guard."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default", updated_at="2026-03-10T10:00:00Z")
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-03-01T10:00:00Z")
+        self._setup_state(svc, tracked_id=100)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert result["status"] == "ok"
+        assert [v["id"] for v in result["versions"]] == [50]
+
 
 class TestRollbackToVersion:
     """Tests for SaveService.rollback_to_version — the core rollback flow."""
@@ -553,6 +591,46 @@ class TestRollbackToVersion:
         assert "error" not in result
         # Critical: must NOT collide with the "genuinely deleted" case.
         assert result["status"] != "version_deleted"
+
+    @pytest.mark.asyncio
+    async def test_multi_file_slot_refuses_rollback(self, tmp_path):
+        """A multi-file slot refuses per-version rollback (#908 interim guard).
+
+        Rolling one component (e.g. Saturn .bkr) back to an older version
+        would leave the siblings (.bcr/.smpc) on the current version,
+        producing an incoherent save — so the rollback is refused before any
+        preflight or destructive I/O runs.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path, system="saturn", file_name="rally.cue")
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bkr")
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bcr")
+        fake.saves[50] = _server_save(
+            save_id=50, rom_id=42, slot="default", filename="rally.bkr", updated_at="2026-02-01T10:00:00Z"
+        )
+
+        result = await svc.rollback_to_version(42, "default", 50)
+
+        assert result == {"status": "unsupported"}
+        # No destructive I/O ran: the target was never downloaded.
+        download_ids = [c[1][0] for c in fake.call_log if c[0] == "download_save_content"]
+        assert 50 not in download_ids
+
+    @pytest.mark.asyncio
+    async def test_single_file_slot_rollback_unaffected(self, tmp_path):
+        """A single-extension slot rolls back normally — the guard does not fire."""
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = self._tracked_save(100)
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", 50)
+
+        assert result["status"] == "ok"
 
     # ------------------------------------------------------------------
     # Cross-device propagation: rollback re-PUTs target so it becomes

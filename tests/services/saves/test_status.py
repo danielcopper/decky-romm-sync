@@ -263,6 +263,62 @@ class TestGetSaveStatusComputeAction:
         assert result["conflicts"] == []
 
 
+class TestMultiFileSlotGuard:
+    """get_save_status flags a multi-file slot and marks rollback unsupported (#908 interim guard).
+
+    A multi-file save (e.g. Saturn ``.bkr``/``.bcr``/``.smpc``) is one game
+    state spread across several files, each stored on RomM as an independent
+    record. Listing the siblings as "previous versions" and rolling one back
+    would corrupt the set, so the status response signals the frontend to
+    suppress version history + rollback until grouped save-states land.
+    """
+
+    @pytest.mark.asyncio
+    async def test_multi_file_slot_flags_and_disables_rollback(self, tmp_path):
+        """Two distinct local extensions for the same rom → multi_file=True, rollback unsupported."""
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path, system="saturn", file_name="rally.cue")
+        # Two component files of one Saturn cartridge save.
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bkr")
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bcr")
+
+        result = await svc.get_save_status(42)
+
+        assert result["multi_file"] is True
+        assert result["rollback_supported"] is False
+        # Component filenames are the sorted set of the slot's files.
+        assert result["component_files"] == ["rally.bcr", "rally.bkr"]
+
+    @pytest.mark.asyncio
+    async def test_single_file_slot_is_not_multi_file(self, tmp_path):
+        """A single-extension slot keeps multi_file=False and rollback supported."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.saves[100] = _server_save()
+
+        result = await svc.get_save_status(42)
+
+        assert result["multi_file"] is False
+        assert result["rollback_supported"] is True
+        assert result["component_files"] == ["pokemon.srm"]
+
+    @pytest.mark.asyncio
+    async def test_no_local_files_is_not_multi_file(self, tmp_path):
+        """ROM installed but no local saves → not multi-file, rollback supported."""
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+
+        result = await svc.get_save_status(42)
+
+        assert result["multi_file"] is False
+        assert result["rollback_supported"] is True
+        assert result["component_files"] == []
+
+
 class TestSaveSyncDisplayEnrichment:
     """get_save_status ships a pre-computed save_sync_display alongside files/conflicts."""
 

@@ -221,6 +221,49 @@ describe("SlotPanel", () => {
       expect(queryByTestId("vhp-b.srm")).not.toBeNull();
     });
 
+    it("multi-file slot: shows component list + #908 note and NO VersionHistoryPanel", () => {
+      const status = makeStatus({
+        files: [
+          {
+            filename: "rally.bkr",
+            local_path: "/data/rally.bkr",
+            local_hash: "h",
+            local_mtime: "2025-06-15T10:00:00Z",
+            local_size: 100,
+            server_save_id: 1,
+            server_file_name: null,
+            server_emulator: null,
+            server_updated_at: null,
+            server_size: null,
+            last_sync_at: null,
+            status: "synced",
+          },
+        ],
+        multi_file: true,
+        component_files: ["rally.bcr", "rally.bkr", "rally.smpc"],
+        rollback_supported: false,
+      });
+      const { container, queryByTestId } = render(
+        <SlotPanel
+          {...defaultProps({
+            isActive: true,
+            defaultExpanded: true,
+            saveStatus: status,
+          })}
+        />,
+      );
+      // The component file list is shown.
+      expect(container.textContent).toContain("Files in this save (3)");
+      expect(container.textContent).toContain("rally.bcr");
+      expect(container.textContent).toContain("rally.smpc");
+      // The calm #908 note replaces Previous Versions / rollback.
+      expect(container.textContent).toContain(
+        "This save spans 3 files. Per-version rollback isn't available for multi-file saves yet.",
+      );
+      // No version-history / rollback control is rendered for the file.
+      expect(queryByTestId("vhp-rally.bkr")).toBeNull();
+    });
+
     it("shows 'No save files tracked yet' when active slot has no files", () => {
       const { container } = render(
         <SlotPanel

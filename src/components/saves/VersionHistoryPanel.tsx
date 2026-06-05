@@ -35,7 +35,10 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({ romId, slot,
     setLoadError(null);
     try {
       const result: ListFileVersionsResult = await savesListFileVersions(romId, slot, filename);
-      if (result.status === "ok") {
+      if (result.status === "ok" || result.status === "multi_file_unsupported") {
+        // multi_file_unsupported carries an empty list — a multi-file slot's
+        // siblings are components, not prior versions (#908). The panel is
+        // hidden for multi-file slots anyway; this is the defensive backstop.
         setVersions(result.versions);
       } else {
         detach(debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`));

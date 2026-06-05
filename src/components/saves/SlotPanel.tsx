@@ -23,6 +23,48 @@ import { InactiveSlotBody } from "./InactiveSlotBody";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { detach } from "../../utils/detach";
 
+/**
+ * Multi-file note (#908 interim guard) — replaces the Previous-Versions /
+ * rollback UI for a save that spans more than one file. Lists the N component
+ * filenames and explains that per-version rollback isn't available yet.
+ */
+function renderMultiFileNote(componentFiles: string[]): ReturnType<typeof createElement> {
+  const n = componentFiles.length;
+  return createElement(
+    "div",
+    {
+      key: "multi-file-note",
+      style: { marginTop: "6px", marginLeft: "8px" },
+    },
+    createElement(
+      "div",
+      { style: { fontSize: "11px", color: "#8f98a0", fontWeight: 600 } },
+      `Files in this save (${n})`,
+    ),
+    ...componentFiles.map((fn) =>
+      createElement(
+        "div",
+        {
+          key: `comp-${fn}`,
+          style: {
+            fontSize: "11px",
+            color: "#8f98a0",
+            fontFamily: "monospace",
+            wordBreak: "break-all" as const,
+            marginTop: "1px",
+          },
+        },
+        fn,
+      ),
+    ),
+    createElement(
+      "div",
+      { style: { fontSize: "11px", color: MUTED_COLOR, fontStyle: "italic" as const, marginTop: "4px" } },
+      `This save spans ${n} files. Per-version rollback isn't available for multi-file saves yet.`,
+    ),
+  );
+}
+
 function renderActiveSlotBody(
   saveStatus: SaveStatus | null,
   conflicts: SyncConflict[],
@@ -32,6 +74,24 @@ function renderActiveSlotBody(
   onVersionRestored: () => void,
 ): (ReturnType<typeof createElement> | null)[] {
   if (saveStatus && saveStatus.files.length > 0) {
+    // Multi-file save (#908 guard): the slot's current save is one game state
+    // spread across N files. The siblings are components, not prior versions,
+    // so suppress the per-file VersionHistoryPanel/rollback and show the
+    // component list + a calm note instead.
+    if (saveStatus.multi_file) {
+      const componentFiles = saveStatus.component_files ?? [];
+      return [
+        ...saveStatus.files.map((f) => {
+          const conflict = conflicts.find((c) => c.filename === f.filename);
+          return createElement(
+            "div",
+            { key: f.filename },
+            renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
+          );
+        }),
+        renderMultiFileNote(componentFiles),
+      ];
+    }
     return saveStatus.files.map((f) => {
       const conflict = conflicts.find((c) => c.filename === f.filename);
       return createElement(

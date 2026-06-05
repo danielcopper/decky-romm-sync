@@ -631,6 +631,31 @@ is more involved than a simple download because it must:
 2. Make the chosen save authoritative cross-device — other devices that already have the latest save tracked must end up
    downloading the chosen version on their next sync.
 
+### Multi-file saves: version history suppressed (interim #908 guard)
+
+Some systems store one game state across **several files with distinct extensions** — e.g. a Sega Saturn cartridge save
+is `<rom>.bkr` + `<rom>.bcr` + `<rom>.smpc` (three files = one state). RomM stores each filename as an **independent
+save record with its own version stack**, so the slot's "current save" is really an N-file _set_, not a single file with
+a version history. Per-file rollback would revert one component and leave the siblings on their current version — an
+incoherent save.
+
+Until grouped save-states with atomic set rollback land
+([#908](https://github.com/danielcopper/decky-romm-sync/issues/908)), the plugin **detects multi-file slots and
+suppresses version history + rollback** for them:
+
+- `get_save_status` carries `multi_file: bool`, `component_files: list[str]` (the N filenames, sorted), and
+  `rollback_supported: bool`. Detection counts the distinct canonical target filenames the active slot resolves to
+  (across the matrix outcomes); more than one ⇒ multi-file.
+- The SAVES tab replaces the Previous-Versions dropdown for a multi-file slot with a read-only **"Files in this save
+  (N)"** component list plus a short note that per-version rollback isn't available yet.
+- `list_file_versions` short-circuits to `{"status": "multi_file_unsupported", "versions": []}` and
+  `rollback_to_version` refuses with `{"status": "unsupported"}` before any preflight or destructive I/O. Both backstops
+  detect multi-file from the **local** save files on disk (a rollback target is always installed), so they add no extra
+  network round-trip.
+
+Single-file slots — including a single file with genuine prior versions — are unaffected and keep the full
+version-history + rollback flow described below.
+
 ### Why a switch cannot be a download-only
 
 A pure download to local would only update _our_ device. On the next sync from any other device, RomM's

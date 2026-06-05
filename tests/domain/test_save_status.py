@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from domain.save_status import SaveSyncDisplay, compute_save_sync_display
+from domain.save_status import (
+    MultiFileSlot,
+    SaveSyncDisplay,
+    compute_multi_file_slot,
+    compute_save_sync_display,
+)
 
 
 class TestComputeSaveSyncDisplay:
@@ -75,3 +80,33 @@ class TestComputeSaveSyncDisplay:
         """Default value (False) preserves the pre-fix behavior."""
         result = compute_save_sync_display(None, None)
         assert result == SaveSyncDisplay(status="none", label="No saves", last_sync_check_at=None)
+
+
+class TestComputeMultiFileSlot:
+    """compute_multi_file_slot — single vs. multi-file detection from target filenames."""
+
+    def test_empty_is_single_file(self):
+        """No files (e.g. ROM not installed / empty slot) is not multi-file."""
+        result = compute_multi_file_slot([])
+        assert result == MultiFileSlot(is_multi_file=False, component_files=[])
+
+    def test_single_file_is_not_multi_file(self):
+        result = compute_multi_file_slot(["pokemon.srm"])
+        assert result == MultiFileSlot(is_multi_file=False, component_files=["pokemon.srm"])
+
+    def test_multiple_distinct_files_is_multi_file(self):
+        """Saturn cartridge save: .bkr + .bcr + .smpc = one game state across three files."""
+        result = compute_multi_file_slot(["rally.bkr", "rally.bcr", "rally.smpc"])
+        assert result.is_multi_file is True
+        # Sorted set of the component filenames.
+        assert result.component_files == ["rally.bcr", "rally.bkr", "rally.smpc"]
+
+    def test_duplicate_filenames_collapse_to_single(self):
+        """Repeated identical filenames are one distinct file, not multi-file."""
+        result = compute_multi_file_slot(["pokemon.srm", "pokemon.srm"])
+        assert result == MultiFileSlot(is_multi_file=False, component_files=["pokemon.srm"])
+
+    def test_component_files_are_deduped_and_sorted(self):
+        result = compute_multi_file_slot(["b.sav", "a.srm", "b.sav", "a.srm"])
+        assert result.is_multi_file is True
+        assert result.component_files == ["a.srm", "b.sav"]

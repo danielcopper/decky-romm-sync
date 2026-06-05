@@ -84,6 +84,18 @@ export interface SaveStatus {
    *  and surface a misleading uploads-pending indicator on what is in
    *  fact a connectivity blip. */
   server_query_failed?: boolean;
+  /** True when the active slot's current save spans more than one distinct
+   *  file (e.g. Sega Saturn `.bkr`/`.bcr`/`.smpc`). Those siblings are
+   *  components of one game state, not prior versions — so the frontend
+   *  suppresses per-file version history + rollback and shows the component
+   *  list instead. Interim #908 guard. */
+  multi_file?: boolean;
+  /** The N filenames that together make up the current save (sorted). Set
+   *  alongside `multi_file`; one entry for a single-file slot. */
+  component_files?: string[];
+  /** False when per-version rollback is unavailable for the slot — currently
+   *  only for multi-file saves (mirrors `!multi_file`). */
+  rollback_supported?: boolean;
 }
 
 export interface SaveSlotSummary {
@@ -192,4 +204,5 @@ export type RollbackStatus =
 
 export type ListFileVersionsResult =
   | { status: "ok"; versions: SaveVersionEntry[] }
+  | { status: "multi_file_unsupported"; versions: SaveVersionEntry[] }
   | { status: "server_unreachable"; message: string };

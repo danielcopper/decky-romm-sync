@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
+from domain.save_status import compute_multi_file_slot
 from services.saves._helpers import local_save_target
 from services.saves._settings import resolve_default_slot
 
@@ -89,6 +90,19 @@ class VersionsService:
         with self._uow_factory() as uow:
             uow.rom_save_states.save(rom_id, save_state)
 
+    def _local_component_filenames(self, rom_id: int) -> list[str]:
+        """Distinct local save filenames on disk for the ROM (one per extension).
+
+        Used to detect a multi-file save — more than one distinct filename
+        means the slot's current save is an N-file set (e.g. Saturn
+        ``.bkr``/``.bcr``/``.smpc``), not a single file with a version
+        history (#908 interim guard). Reads only the local saves directory,
+        no network: a rollback target is always an *installed* ROM, so its
+        component files are present on disk. Returns an empty list when the
+        ROM is not installed.
+        """
+        return [lf["filename"] for lf in self._rom_info.find_save_files(rom_id)]
+
     # ------------------------------------------------------------------
     # Version History API
     # ------------------------------------------------------------------
@@ -111,6 +125,14 @@ class VersionsService:
           contains: id, file_name, emulator, updated_at, file_size_bytes,
           device_syncs, uploaded_by_us. ``versions`` may be empty — the
           server answered, nothing matched.
+        - ``{"status": "multi_file_unsupported", "versions": []}`` when the
+          slot's current save spans more than one distinct file (e.g.
+          Saturn ``.bkr``/``.bcr``/``.smpc``). The sibling records are
+          components of one game state, not prior versions, so listing them
+          as history would be misleading and rolling back would corrupt the
+          set. Interim #908 guard — the frontend already hides the panel via
+          ``get_save_status``'s ``multi_file`` flag; this is the defensive
+          backstop for any direct caller.
         - ``{"status": "server_unreachable", "message": ...}`` if the
           ``list_saves`` call failed (network, server, auth, etc.). The
           frontend distinguishes this from an empty list so it can show a
@@ -118,6 +140,11 @@ class VersionsService:
         """
         rom_id = int(rom_id)
         save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
+
+        component_files = await self._loop.run_in_executor(None, self._local_component_filenames, rom_id)
+        if compute_multi_file_slot(component_files).is_multi_file:
+            self._log_debug(f"list_file_versions: multi-file slot for rom {rom_id} ({component_files}); suppressing")
+            return {"status": "multi_file_unsupported", "versions": []}
 
         try:
             server_saves = await self._loop.run_in_executor(
@@ -264,6 +291,11 @@ class VersionsService:
           ``version_deleted`` so it can prompt the user to reinstall the
           ROM rather than telling them the version is gone from the
           server.
+        - ``{"status": "unsupported"}`` if the slot's current save spans
+          more than one distinct file (e.g. Saturn ``.bkr``/``.bcr``/
+          ``.smpc``). Per-version rollback would revert one component and
+          leave the others — an incoherent save — so it is refused.
+          Interim #908 guard; grouped atomic-set rollback is tracked there.
         - ``{"status": "version_deleted"}`` if the chosen save id is no
           longer on the server (genuinely deleted — the ``list_saves``
           call succeeded and the id was absent).
@@ -291,6 +323,17 @@ class VersionsService:
             info = self._rom_info.get_rom_save_info(rom_id)
             if not info:
                 return {"status": "rom_not_installed"}
+
+            # Interim #908 guard: refuse per-version rollback on a multi-file
+            # slot (e.g. Saturn .bkr/.bcr/.smpc) before any destructive or
+            # preflight I/O runs — rolling one component back would leave the
+            # others, producing an incoherent save. Local-only (no network):
+            # a rollback target is always installed, so its component files
+            # are on disk.
+            component_files = await self._loop.run_in_executor(None, self._local_component_filenames, rom_id)
+            if compute_multi_file_slot(component_files).is_multi_file:
+                self._log_debug(f"rollback_to_version: multi-file slot for rom {rom_id} ({component_files}); refusing")
+                return {"status": "unsupported"}
 
             save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
             core_so = await self._loop.run_in_executor(None, self._resolve_core, rom_id)
