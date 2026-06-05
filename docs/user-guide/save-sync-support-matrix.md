@@ -23,13 +23,9 @@ TurboGrafx, WonderSwan, Atari Lynx, Virtual Boy, and more.
 
 Per-game saves for these systems fit the sync model and are planned for a future release:
 
-| System                                  | Notes |
-| --------------------------------------- | ----- |
-| Sega Saturn — per-game backup-RAM saves |       |
-| PlayStation — memory-card saves         |       |
-| Neo Geo Pocket / Color                  |       |
-| Pokémon Mini                            |       |
-| Commodore Amiga                         |       |
+| System                          | Notes |
+| ------------------------------- | ----- |
+| PlayStation — memory-card saves |       |
 
 A few less-common systems (some DOS, PICO-8, ST-V) may also gain support pending confirmation.
 
@@ -106,28 +102,24 @@ states still work locally). See the full table for specifics.
     | `vsmile` | ❌ | Saves are stored separately by the emulator (MAME) |
     | `wii` | ❌ | Not synced |
     | `x68000` | ❌ | Not synced |
-    | `amiga` | 🔜 | Planned |
     | `amiga1200` | 🔜 | Planned |
     | `amiga600` | 🔜 | Planned |
-    | `amigacd32` | 🔜 | Planned |
     | `atarijaguar` | 🔜 | Planned |
     | `cdimono1` | 🔜 | Under review |
-    | `cdtv` | 🔜 | Planned |
+    | `cdtv` | 🔜 | Planned — pending platform mapping (#907) |
     | `dos` | 🔜 | Planned |
-    | `ngp` | 🔜 | Planned |
-    | `ngpc` | 🔜 | Planned |
     | `pc` | 🔜 | Planned |
     | `pico8` | 🔜 | Planned |
-    | `pokemini` | 🔜 | Planned |
     | `psx` | 🔜 | Planned |
     | `quake` | 🔜 | Planned |
-    | `saturn` | 🔜 | Planned |
     | `saturnjp` | 🔜 | Planned |
     | `stv` | 🔜 | Planned |
     | `wasm4` | 🔜 | Under review |
     | `windows3x` | 🔜 | Planned |
     | `windows9x` | 🔜 | Planned |
     | `3do` | ✅ | Synced |
+    | `amiga` | ✅ | Synced |
+    | `amigacd32` | ✅ | Synced |
     | `atari2600` | ✅ | Synced |
     | `c64` | ✅ | Synced |
     | `famicom` | ✅ | Synced |
@@ -151,12 +143,16 @@ states still work locally). See the full table for specifics.
     | `nds` | ✅ | Synced |
     | `neogeo` | ✅ | Synced |
     | `nes` | ✅ | Synced |
+    | `ngp` | ✅ | Synced |
+    | `ngpc` | ✅ | Synced |
     | `pc88` | ✅ | Synced |
     | `pcengine` | ✅ | Synced |
     | `pcenginecd` | ✅ | Synced |
     | `pcfx` | ✅ | Synced |
     | `plus4` | ✅ | Synced |
+    | `pokemini` | ✅ | Synced |
     | `satellaview` | ✅ | Synced |
+    | `saturn` | ✅ | Synced |
     | `sega32x` | ✅ | Synced |
     | `sega32xjp` | ✅ | Synced |
     | `sega32xna` | ✅ | Synced |
@@ -215,4 +211,4 @@ states still work locally). See the full table for specifics.
 ---
 
 _Coverage is reviewed against the emulator cores RetroDECK ships. Some 🔜 entries are awaiting on-device confirmation.
-Last reviewed 2026-06-04._
+Last reviewed 2026-06-05._
