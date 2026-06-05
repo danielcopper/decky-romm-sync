@@ -5,7 +5,35 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **persistence:** Persistence moved from JSON state files to SQLite, and the ROM launcher was rebuilt (its path changed, so every Steam shortcut gets a new app ID). Updating therefore requires removing the old shortcuts and re-syncing. Follow these steps in order.
+The JSON→SQLite migration and the rebuilt ROM launcher both require a re-sync
+after updating, and old Steam shortcuts must be removed. **Please read before
+upgrading.**
+
+**Your data is safe:** downloaded ROM files and on-disk save files are untouched,
+and nothing on the RomM server changes. Only the plugin's local tracking state
+resets and the Steam shortcuts are recreated (the launcher's path changed, so
+every shortcut gets a new app ID).
+
+**Upgrade steps — in order:**
+
+1. **If you use save sync:** in the QAM, open **Settings** and press **Sync All
+   Saves Now**, so your latest saves are on RomM before the local state resets.
+2. In the QAM, open **Data Management** and press **Remove All RomM Shortcuts** —
+   do this on the *current* version, before upgrading, so the old shortcuts are
+   cleaned up properly.
+3. Upgrade the plugin, then open **Settings** and confirm your configuration is
+   correct.
+4. Re-sync your library from RomM. This recreates the shortcuts and rebuilds the
+   plugin's tracking state; save-sync baselines re-establish on this sync.
+
+**Playtime** is restored automatically — opening a game's detail page pulls its
+total back from RomM (per game, on first view). Not restored: per-game session
+counts and "last played" timestamps, and any playtime that was never synced to
+RomM.
+
+The old JSON files (`state.json`, `metadata_cache.json`, `firmware_cache.json`,
+`save_sync_state.json`) are silently ignored and can be deleted by hand from the
+plugin's data directory.
 
 ### Features
 
