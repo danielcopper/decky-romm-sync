@@ -3,7 +3,7 @@
 Anything that derives status metadata from a sync action, the local
 file state, and the server-side save records — without touching disk,
 state, or network — belongs here. Code that needs the live
-:class:`SaveSyncState` aggregate, network calls, or file I/O belongs in
+:class:`RomSaveState` aggregate, network calls, or file I/O belongs in
 ``services/saves/status/``.
 """
 

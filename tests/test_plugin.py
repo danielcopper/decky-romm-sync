@@ -883,7 +883,6 @@ class TestMainStartupOrdering:
                 get_retroarch_save_sorting=MagicMock(),
                 get_core_name=MagicMock(),
                 settings_persister=MagicMock(),
-                firmware_cache_persister=MagicMock(),
                 log_debug=MagicMock(),
                 plugin_metadata=MagicMock(),
                 uow_factory=MagicMock(),

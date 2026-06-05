@@ -8,10 +8,8 @@ import threading
 import pytest
 
 from adapters.persistence import (
-    _FIRMWARE_CACHE_VERSION,
     _SETTINGS_VERSION,
     DEFAULT_SETTINGS,
-    FirmwareCachePersisterAdapter,
     PersistenceAdapter,
 )
 
@@ -47,11 +45,6 @@ class TestLocking:
             loaded = json.load(f)
         assert loaded["romm_url"] == "http://example.com"
         assert loaded["romm_user"] == "testuser"
-
-    def test_save_firmware_cache_creates_lock_file(self, adapter):
-        adapter.save_firmware_cache({"snes": {"files": []}})
-        lock_path = os.path.join(adapter._runtime_dir, "firmware_cache.json.lock")
-        assert os.path.exists(lock_path)
 
     def test_locked_write_concurrent(self, adapter):
         """Two threads writing simultaneously — final file must be valid JSON."""
@@ -110,34 +103,6 @@ class TestVersionStampingOnSave:
         assert loaded["version"] == _SETTINGS_VERSION
         assert loaded["version"] == 6
 
-    def test_save_firmware_cache_stamps_version(self, adapter):
-        adapter.save_firmware_cache({"snes": {"files": []}})
-        cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
-        with open(cache_path) as f:
-            loaded = json.load(f)
-        assert loaded["version"] == _FIRMWARE_CACHE_VERSION
-
-
-# ── Version mismatch on load — caches discarded ──────────────────────────────
-
-
-class TestVersionMismatchOnLoad:
-    def test_load_firmware_cache_version_mismatch_discards(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump({"version": 999, "snes": {"files": []}}, f)
-        result = adapter.load_firmware_cache()
-        assert result == {"version": _FIRMWARE_CACHE_VERSION}
-        assert "snes" not in result
-
-    def test_load_firmware_cache_no_version_discards(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump({"snes": {"files": []}}, f)
-        result = adapter.load_firmware_cache()
-        assert result == {"version": _FIRMWARE_CACHE_VERSION}
-        assert "snes" not in result
-
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────
 
@@ -185,32 +150,6 @@ class TestLoadingEdgeCases:
         assert result["steam_input_mode"] == "default"
         assert result["romm_allow_insecure_ssl"] is False
 
-    def test_load_firmware_cache_missing_file_returns_empty(self, adapter):
-        result = adapter.load_firmware_cache()
-        assert result == {"version": _FIRMWARE_CACHE_VERSION}
-
-    def test_load_firmware_cache_corrupt_json_returns_empty(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
-        with open(cache_path, "w") as f:
-            f.write("CORRUPT{{{")
-        result = adapter.load_firmware_cache()
-        assert result == {"version": _FIRMWARE_CACHE_VERSION}
-
-    def test_load_firmware_cache_valid_version_returns_data(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump({"version": _FIRMWARE_CACHE_VERSION, "snes": {"files": []}}, f)
-        result = adapter.load_firmware_cache()
-        assert result["snes"] == {"files": []}
-        assert result["version"] == _FIRMWARE_CACHE_VERSION
-
-    def test_load_firmware_cache_non_dict_json_returns_empty(self, adapter):
-        cache_path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
-        with open(cache_path, "w") as f:
-            json.dump([1, 2, 3], f)
-        result = adapter.load_firmware_cache()
-        assert result == {"version": _FIRMWARE_CACHE_VERSION}
-
     def test_load_settings_fixes_permissions(self, adapter):
         settings_path = os.path.join(adapter._settings_dir, "settings.json")
         with open(settings_path, "w") as f:
@@ -255,34 +194,3 @@ class TestLoadSaveSyncState:
     def test_load_non_dict_json_returns_none(self, adapter):
         self._write(adapter, json.dumps([1, 2, 3]))
         assert adapter.load_save_sync_state() is None
-
-
-class TestFirmwareCachePersisterAdapter:
-    def test_save_writes_through_persistence_adapter(self, adapter):
-        wrapper = FirmwareCachePersisterAdapter(adapter)
-        wrapper.save({"items": [{"id": 1, "file_name": "bios.bin"}], "cached_at": 1700.0})
-
-        path = os.path.join(adapter._runtime_dir, "firmware_cache.json")
-        with open(path) as f:
-            on_disk = json.load(f)
-        # PersistenceAdapter.save_firmware_cache stamps the version key
-        assert on_disk["items"] == [{"id": 1, "file_name": "bios.bin"}]
-        assert on_disk["cached_at"] == 1700.0
-        assert on_disk["version"] == _FIRMWARE_CACHE_VERSION
-
-    def test_save_then_load_round_trip(self, adapter):
-        wrapper = FirmwareCachePersisterAdapter(adapter)
-        payload = {"items": [{"id": 7, "file_name": "scph5501.bin"}], "cached_at": 42.0}
-        wrapper.save(payload)
-
-        loaded = wrapper.load()
-        assert loaded["items"] == payload["items"]
-        assert loaded["cached_at"] == payload["cached_at"]
-        assert loaded["version"] == _FIRMWARE_CACHE_VERSION
-
-    def test_load_returns_empty_dict_when_missing(self, adapter):
-        wrapper = FirmwareCachePersisterAdapter(adapter)
-        # No file written yet — should mirror PersistenceAdapter.load_firmware_cache
-        # behaviour and return the version-stamped empty dict, never None.
-        loaded = wrapper.load()
-        assert loaded == {"version": _FIRMWARE_CACHE_VERSION}

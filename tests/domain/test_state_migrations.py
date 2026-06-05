@@ -6,7 +6,6 @@ from domain.state_migrations import (
     _migrate_v5_to_v6,
     fold_legacy_save_sync_settings,
     migrate_settings,
-    migrate_state,
 )
 
 
@@ -477,27 +476,3 @@ class TestFoldLegacySaveSyncSettings:
         fold_legacy_save_sync_settings(settings, raw)
         assert settings == settings_before
         assert raw == raw_before
-
-
-class TestMigrateState:
-    def test_migrate_state_passthrough(self):
-        data = {"version": 1, "shortcut_registry": {"1": {"app_id": 123}}}
-        result = migrate_state(data)
-        assert result is data  # returns same object unchanged
-
-    def test_migrate_state_empty_dict(self):
-        data = {}
-        result = migrate_state(data)
-        assert result == {}
-
-    def test_migrate_state_preserves_all_keys(self):
-        data = {
-            "version": 1,
-            "shortcut_registry": {},
-            "installed_roms": {},
-            "last_sync": "2024-01-01T00:00:00",
-            "sync_stats": {"platforms": 3, "roms": 42},
-        }
-        result = migrate_state(data)
-        assert result["sync_stats"]["roms"] == 42
-        assert result["last_sync"] == "2024-01-01T00:00:00"

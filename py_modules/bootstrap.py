@@ -26,7 +26,6 @@ from adapters.machine_id import MachineIdAdapter
 from adapters.migration_file import MigrationFileAdapter
 from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import (
-    FirmwareCachePersisterAdapter,
     PersistenceAdapter,
     SettingsPersisterAdapter,
 )
@@ -80,7 +79,6 @@ if TYPE_CHECKING:
         DebugLogger,
         DownloadFileStore,
         EventEmitter,
-        FirmwareCachePersister,
         FirmwareFileStore,
         GamelistXmlEditor,
         HostnameReader,
@@ -157,7 +155,6 @@ class CallbackBundle:
     get_retroarch_save_sorting: RetroArchSaveSortingProvider
     get_core_name: CoreNameProviderFn
     settings_persister: SettingsPersister
-    firmware_cache_persister: FirmwareCachePersister
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
     uow_factory: UnitOfWorkFactory
@@ -295,7 +292,6 @@ def bootstrap(
     gamelist_editor = GamelistXmlEditorAdapter(logger=logger)
 
     persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
-    firmware_cache_persister = FirmwareCachePersisterAdapter(persistence)
     settings = persistence.load_settings()
     # One-time JSON→JSON lift (ADR-0003): fold the legacy save-sync knobs +
     # device_name out of save_sync_state.json before the schema bump stamps
@@ -355,7 +351,6 @@ def bootstrap(
         get_retroarch_save_sorting=retroarch_config.get_retroarch_save_sorting,
         get_core_name=retroarch_core_info.get_corename,
         settings_persister=settings_persister,
-        firmware_cache_persister=firmware_cache_persister,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
         uow_factory=uow_factory,

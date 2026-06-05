@@ -1,38 +1,21 @@
-"""On-disk persistence Protocols for plugin settings and cache files.
+"""On-disk persistence Protocols for plugin settings and metadata.
 
-Services delegate disk round-trips for settings and the firmware
-listing cache to these Protocols so atomic writes, locking, and
-corrupt-file recovery stay in adapters. Each Protocol carries a
-domain-specific method name (``save_settings`` / ``save``) rather than a
-generic ``__call__`` so the type checker rejects mis-wires between the
-plugin-level persisters.
+Services delegate disk round-trips for settings to these Protocols so
+atomic writes, locking, and corrupt-file recovery stay in adapters. Each
+Protocol carries a domain-specific method name (e.g. ``save_settings``)
+rather than a generic ``__call__`` so the type checker rejects mis-wires
+between the plugin-level persisters.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Protocol
 
 
 class SettingsPersister(Protocol):
     """Persist the live settings dict (``settings.json``)."""
 
     def save_settings(self) -> None: ...
-
-
-class FirmwareCachePersister(Protocol):
-    """Read/write the on-disk firmware list cache.
-
-    Owns the round-trip for the cached firmware listing consumed by
-    ``FirmwareService``. Path, file format, and version handling are
-    adapter concerns — services see only the dict payload they
-    previously wrote. ``load`` returns an empty dict (not ``None``)
-    when no cached payload is available so callers can probe with
-    ``"items" in data`` without a None-check.
-    """
-
-    def save(self, data: dict[str, Any]) -> None: ...
-
-    def load(self) -> dict[str, Any]: ...
 
 
 class PluginMetadataReader(Protocol):

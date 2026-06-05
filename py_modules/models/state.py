@@ -32,9 +32,9 @@ class ShortcutRegistryEntry(TypedDict):
 
 
 class InstalledRomEntry(TypedDict):
-    """One installed ROM record inside ``installed_roms``.
+    """One installed ROM record — the ``rom_installs`` / ``RomInstall`` projection handed across service boundaries.
 
-    Keyed by ``rom_id`` (string). ``rom_dir`` is set only for ROMs
+    Identified by ``rom_id``. ``rom_dir`` is set only for ROMs
     extracted from a multi-file archive (otherwise the parent directory
     is inferred from ``file_path``).
     """

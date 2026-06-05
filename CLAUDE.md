@@ -120,7 +120,7 @@ utilities) / `models/` (data shapes). `import-linter` enforces direction. `[CP]`
   split across `transport`/`determinism`/`persistence`/`paths`/`infra`/`files`/`cross_service`; import via
   `from services.protocols import X`), never on concrete adapter classes. (Canonical dependency inversion.) Carve-out:
   sub-services within a single bounded context (e.g. all of `services/saves/`) may hold concrete peer-service refs in
-  their `*ServiceConfig` dataclass when they share an aggregate (e.g. `SaveSyncState`). The `[CP]` Protocol rule applies
+  their `*ServiceConfig` dataclass when they share an aggregate (e.g. `RomSaveState`). The `[CP]` Protocol rule applies
   to services across bounded contexts and to adapters. `[ours]` A method that one sub-service calls on a peer is part of
   that peer's **public** surface — no leading underscore. The `_` prefix is reserved for genuinely class-internal
   helpers, so `reportPrivateUsage` stays coherent with this carve-out: peers call public methods, not private ones.
@@ -219,7 +219,7 @@ Protocol names carry a suffix that signals shape, so the call site reads correct
   `CoreNameProviderFn`).
 - `…Store` — file-store Protocols (e.g. `CoverArtFileStore`).
 - `…Cache` — cache Protocols (e.g. `SgdbArtworkCache`).
-- `…Persister` — persistence Protocols (e.g. `StatePersister`, `FirmwareCachePersister`).
+- `…Persister` — persistence Protocols (e.g. `SettingsPersister`).
 - Bare names — pervasive cross-cutting primitives (`Clock`, `Sleeper`, `UuidGen`, `DebugLogger`).
 
 When a sibling Protocol set mixes shapes (e.g. `RetroArchConfigReader` next to `RetroArchSaveSortingProvider`), that mix
@@ -286,7 +286,7 @@ they share a brand-name prefix.
 - `adapters/romm/` qualifies: `http.py` is the internal HTTP transport for `romm_api.py`; the two share types and only
   `romm_api.py` is the public surface.
 - `services/saves/` qualifies: facade + sub-services (`sync_engine/`, `slots/`, `status/`, `versions.py`) share a
-  `SaveSyncState` aggregate.
+  `RomSaveState` aggregate.
 - `adapters/retroarch/` would NOT qualify: `retroarch_config.py` (RetroArch.cfg reader) and `retroarch_core_info.py`
   (core lookup) share nothing but a brand name. False cohesion.
 - `adapters/steam/` would NOT qualify: would mix Steam (`steam_config.py`) with SteamGridDB (`steamgriddb.py`,

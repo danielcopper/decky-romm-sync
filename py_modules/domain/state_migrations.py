@@ -176,9 +176,3 @@ def _migrate_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
         data.pop("romm_pass", None)
     data["version"] = 6
     return data
-
-
-def migrate_state(data: dict[str, Any]) -> dict[str, Any]:
-    """Bring *data* from any older state schema to the current version."""
-    # No migrations at v1 — infrastructure for future changes
-    return data

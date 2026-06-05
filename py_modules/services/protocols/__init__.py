@@ -9,8 +9,7 @@ The package is organised topically — consumers always deep-import via
 
 - ``transport``: external system clients (RomM REST, SGDB REST, Steam IPC).
 - ``determinism``: ``Clock`` / ``UuidGen`` / ``Sleeper`` test seams.
-- ``persistence``: on-disk plugin state, settings, save-sync state,
-  firmware cache.
+- ``persistence``: on-disk plugin settings and plugin metadata.
 - ``paths``: RetroDECK path getters, system/core resolution, ES-DE
   read/write seams.
 - ``infra``: cross-cutting callable seams (event emit, debug log,
@@ -70,7 +69,6 @@ from services.protocols.paths import (
     SystemResolver,
 )
 from services.protocols.persistence import (
-    FirmwareCachePersister,
     PluginMetadataReader,
     SettingsPersister,
 )
@@ -119,7 +117,6 @@ __all__ = [
     "DownloadFileStore",
     "DownloadQueueCleanup",
     "EventEmitter",
-    "FirmwareCachePersister",
     "FirmwareCacheRepository",
     "FirmwareFileStore",
     "GamelistXmlEditor",

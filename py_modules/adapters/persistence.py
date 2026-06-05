@@ -1,8 +1,9 @@
-"""Persistence adapter — pure I/O for settings and cache JSON files.
+"""Persistence adapter — pure I/O for ``settings.json`` and the legacy save-sync read.
 
-Handles atomic writes, file locking, and schema version stamping.
-Migration logic lives in ``domain/state_migrations.py``.
-No ``import decky``.
+Handles atomic writes, file locking, and schema version stamping for
+``settings.json``, plus the one-time legacy ``save_sync_state.json`` read that
+feeds the settings fold. Migration logic lives in
+``domain/state_migrations.py``. No ``import decky``.
 """
 
 import contextlib
@@ -12,7 +13,6 @@ import logging
 import os
 from typing import Any
 
-_FIRMWARE_CACHE_VERSION = 1
 _SETTINGS_VERSION = 6
 _LOCK_EXT = ".lock"
 
@@ -39,7 +39,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 
 
 class PersistenceAdapter:
-    """Thin I/O layer for JSON persistence files used by the plugin.
+    """Thin I/O layer for ``settings.json`` and the legacy save-sync read.
+
+    Reads and writes ``settings.json`` and performs the one-time legacy
+    ``save_sync_state.json`` read consumed by the settings fold.
 
     Parameters
     ----------
@@ -47,7 +50,7 @@ class PersistenceAdapter:
         Absolute path to the directory that holds ``settings.json``
         (typically ``decky.DECKY_PLUGIN_SETTINGS_DIR``).
     runtime_dir:
-        Absolute path to the directory that holds the cache JSON files
+        Absolute path to the directory that holds ``save_sync_state.json``
         (typically ``decky.DECKY_PLUGIN_RUNTIME_DIR``).
     logger:
         A standard-library ``logging.Logger`` instance.
@@ -62,23 +65,13 @@ class PersistenceAdapter:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _locked_write(self, path: str, data: dict[str, Any], *, rotate_to: str | None = None) -> None:
-        """Atomic write of *data* to *path* under an exclusive file lock.
-
-        When ``rotate_to`` is provided, the existing file at ``path`` is
-        atomically renamed to that path before the new contents are
-        written — a one-deep backup that callers can fall back to if a
-        crash leaves the primary file empty or corrupt. Missing primary
-        is fine: rotation is a no-op in that case.
-        """
+    def _locked_write(self, path: str, data: dict[str, Any]) -> None:
+        """Atomic write of *data* to *path* under an exclusive file lock."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp_path = path + ".tmp"
         lock_fd = os.open(path + _LOCK_EXT, os.O_WRONLY | os.O_CREAT, 0o600)
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            if rotate_to is not None:
-                with contextlib.suppress(FileNotFoundError):
-                    os.replace(path, rotate_to)
             fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
                 with os.fdopen(fd, "w") as f:
@@ -131,34 +124,6 @@ class PersistenceAdapter:
         self._locked_write(settings_path, data)
 
     # ------------------------------------------------------------------
-    # Firmware cache
-    # ------------------------------------------------------------------
-
-    def load_firmware_cache(self) -> dict[str, Any]:
-        """Read ``firmware_cache.json`` with version check.
-
-        Returns an empty cache dict if the file is missing, corrupt, or
-        has a version mismatch (stale/incompatible schema).
-        """
-        cache_path = os.path.join(self._runtime_dir, "firmware_cache.json")
-        try:
-            with open(cache_path) as f:
-                loaded = json.load(f)
-            if not isinstance(loaded, dict):
-                return {"version": _FIRMWARE_CACHE_VERSION}
-            if loaded.get("version") != _FIRMWARE_CACHE_VERSION:
-                return {"version": _FIRMWARE_CACHE_VERSION}
-            return loaded
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {"version": _FIRMWARE_CACHE_VERSION}
-
-    def save_firmware_cache(self, data: dict[str, Any]) -> None:
-        """Atomic write of *data* to ``firmware_cache.json`` with flock, stamping version."""
-        data["version"] = _FIRMWARE_CACHE_VERSION
-        cache_path = os.path.join(self._runtime_dir, "firmware_cache.json")
-        self._locked_write(cache_path, data)
-
-    # ------------------------------------------------------------------
     # Save-sync state (legacy read — consumed only by the settings fold)
     # ------------------------------------------------------------------
 
@@ -197,22 +162,3 @@ class SettingsPersisterAdapter:
 
     def save_settings(self) -> None:
         self._persistence.save_settings(self._settings)
-
-
-class FirmwareCachePersisterAdapter:
-    """Adapter view exposing the ``FirmwareCachePersister`` Protocol.
-
-    Wraps a :class:`PersistenceAdapter` and forwards ``save`` / ``load``
-    to its ``save_firmware_cache`` / ``load_firmware_cache`` methods.
-    Lives in the adapters layer so services depend only on the Protocol,
-    never on this class.
-    """
-
-    def __init__(self, persistence: PersistenceAdapter) -> None:
-        self._persistence = persistence
-
-    def save(self, data: dict[str, Any]) -> None:
-        self._persistence.save_firmware_cache(data)
-
-    def load(self) -> dict[str, Any]:
-        return self._persistence.load_firmware_cache()

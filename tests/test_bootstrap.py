@@ -18,7 +18,6 @@ from bootstrap import (
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_download_file_store import FakeDownloadFileStore
-from fakes.fake_firmware_cache_persister import FakeFirmwareCachePersister
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
@@ -216,7 +215,6 @@ class TestWireServices:
             "get_retroarch_save_sorting": MagicMock(return_value=(True, False)),
             "get_core_name": MagicMock(return_value="Snes9x"),
             "settings_persister": MagicMock(),
-            "firmware_cache_persister": FakeFirmwareCachePersister(),
             "core_info_provider": FakeCoreInfoProvider(),
             "log_debug": MagicMock(),
             "plugin_metadata": FakePluginMetadataReader(version="0.14.0"),
@@ -263,7 +261,6 @@ class TestWireServices:
                 get_retroarch_save_sorting=deps["get_retroarch_save_sorting"],
                 get_core_name=deps["get_core_name"],
                 settings_persister=deps["settings_persister"],
-                firmware_cache_persister=deps["firmware_cache_persister"],
                 log_debug=deps["log_debug"],
                 plugin_metadata=deps["plugin_metadata"],
                 uow_factory=deps["uow_factory"],
