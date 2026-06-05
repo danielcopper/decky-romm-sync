@@ -80,10 +80,10 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Tooling**: mise manages node, pnpm, python, uv. Venv auto-creates at `.venv` (via `_.python.venv` in mise.toml)
   using uv as the underlying tool; `mise run setup` installs Python deps via `uv pip install` (uv is the canonical
   Python package manager in this project).
-- **Pre-commit hook** (`.githooks/pre-commit`, wired by `mise run setup` via `core.hooksPath`): runs `ruff format` +
-  `ruff check` on staged Python files. Stays fast (<2s) so commits don't become friction — heavy validation
-  (basedpyright, lint-imports, cosmic bans, pytest) is CI-only on PR push, never in the commit hook. CI + branch
-  protection enforces correctness; don't re-introduce heavy checks here.
+- **Pre-commit hook** (`.githooks/pre-commit`, wired by `mise run setup` via `core.hooksPath`): formats staged files —
+  `ruff format` + `ruff check` (Python), `prettier --write` (TS/TSX), and `deno fmt` (Markdown). Stays fast (<2s) so
+  commits don't become friction — heavy validation (basedpyright, lint-imports, cosmic bans, pytest) is CI-only on PR
+  push, never in the commit hook. CI + branch protection enforces correctness; don't re-introduce heavy checks here.
 
 ## Code Quality
 

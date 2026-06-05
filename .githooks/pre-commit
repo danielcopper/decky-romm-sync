@@ -5,9 +5,9 @@
 # this hook fast (<2s) so commits don't become friction; CI + branch protection
 # is where correctness is enforced.
 #
-# Two independent sections — Python (ruff) and frontend (prettier). A no-op or
-# missing tool in one section must NOT skip the other, so each section guards
-# itself rather than exiting the whole hook.
+# Three independent sections — Python (ruff), frontend (prettier), and
+# Markdown (deno fmt). A no-op or missing tool in one section must NOT skip the
+# others, so each section guards itself rather than exiting the whole hook.
 
 # --- Python: format + lint staged files with ruff -------------------------
 # Find ruff — prefer Mason binary, fall back to PATH
@@ -56,6 +56,30 @@ else
         $PRETTIER --write $STAGED_FE
 
         for file in $STAGED_FE; do
+            if [ -f "$file" ]; then
+                git add "$file"
+            fi
+        done
+    fi
+fi
+
+# --- Markdown: format staged Markdown with deno fmt -----------------------
+# Find deno — prefer the mise-managed binary, fall back to PATH
+DENO="$(mise which deno 2>/dev/null)"
+if [ -z "$DENO" ]; then
+    DENO="$(command -v deno 2>/dev/null)"
+fi
+if [ -z "$DENO" ]; then
+    echo "pre-commit: deno not found (run 'mise run setup'), skipping Markdown format"
+else
+    # Get staged Markdown files, minus the paths deno.json excludes. Skip if none.
+    STAGED_MD=$(git diff --cached --name-only --diff-filter=ACM -- '*.md' \
+        | grep -vE '^(CHANGELOG\.md$|site/|node_modules/|\.worktrees/)')
+    if [ -n "$STAGED_MD" ]; then
+        # Format staged files (deno.json: proseWrap=always, lineWidth=120), then re-stage
+        $DENO fmt $STAGED_MD
+
+        for file in $STAGED_MD; do
             if [ -f "$file" ]; then
                 git add "$file"
             fi

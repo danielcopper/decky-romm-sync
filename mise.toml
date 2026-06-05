@@ -3,6 +3,7 @@ node = "lts"
 pnpm = "latest"
 python = "3.11"  # match Decky Loader's embedded Python (libpython3.11)
 uv = "latest"    # mise creates venvs via uv internally; expose it so the setup task can install deps without bootstrapping pip
+deno = "2"       # markdown formatter (deno fmt) — pre-commit hook + CI markdown-format check; matches CI's v2.x
 
 [env]
 _.python.venv = { path = ".venv", create = true }
