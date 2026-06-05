@@ -284,6 +284,8 @@ CREATE TABLE sync_runs (
 --   retrodeck_home_path_previous  pending-migration previous home (TEXT)
 --   save_sort_settings            {sort_by_content, sort_by_core} (JSON)
 --   save_sort_settings_previous   pending save-sort change (JSON)
+--   device_id                     server-issued device identity (TEXT)
+--   platform_names                platform_slug -> display_name cache (JSON)
 -- Schema version is NOT a kv_config key — it is tracked in PRAGMA user_version
 -- by the migration runner (adapters/sqlite_migrations.py, #781).
 -- -----------------------------------------------------------------------------

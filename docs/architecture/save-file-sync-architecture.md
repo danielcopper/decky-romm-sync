@@ -134,7 +134,8 @@ unit-tested.
 - **`local_file`** — `{filename, path, size, mtime}` for a file on disk, or `None` if no local file exists for this
   filename.
 - **`server_saves_in_slot`** — RomM save dicts already filtered to the active slot.
-- **`files_state`** — the per-filename slice of `save_sync_state.json` (may be empty for a never-synced file). Carries
+- **`files_state`** — the per-filename baseline from the ROM's save state — the `FileSyncState` value object on the
+  `RomSaveState` aggregate (persisted in the `rom_save_files` table), may be empty for a never-synced file. Carries
   `tracked_save_id`, `last_sync_hash`, `last_sync_server_updated_at`, `last_sync_local_mtime`, etc.
 - **`device_id`** — this device's RomM-server ID (used to find our entry in `server_save.device_syncs`).
 - **`local_hash`** — pre-computed MD5 of `local_file`, or `None`.
@@ -837,10 +838,8 @@ If the RomM server is unreachable when a sync runs:
 ### Local delta-based accumulation
 
 Playtime is tracked per-ROM in the SQLite `rom_playtime` table (the `Playtime` aggregate), independent of the `saves`
-lifecycle. (The legacy `save_sync_state.json` `playtime.<rom_id>` section is no longer written by `PlaytimeService` and
-no longer read by anyone — uninstalling a ROM now deletes only its files and `rom_installs` row, leaving playtime and
-saves intact per [ADR-0007](../adr/0007-rom-retention-identity-anchor.md). The dormant JSON section is dropped in the
-JSON-state teardown stream.)
+lifecycle. Uninstalling a ROM deletes only its files and `rom_installs` row, leaving playtime and saves intact per
+[ADR-0007](../adr/0007-rom-retention-identity-anchor.md).
 
 Session tracking:
 
@@ -864,89 +863,89 @@ After each play session, the backend updates the ROM's `last_played` timestamp o
 library sorted correctly by recent activity. When a RomM playtime API becomes available in the future, the locally
 accumulated `playtime_seconds` can be synced to RomM as well.
 
-## State Schema — save_sync_state.json
+## Save-Sync State — the `RomSaveState` aggregate
 
-Save sync state is stored in a separate file from the main `state.json` to avoid bloating the core state with per-ROM
-sync metadata.
+Per-ROM save-sync state lives in SQLite — there is no JSON file. The per-ROM scalars are the `RomSaveState` aggregate
+(`domain/rom_save_state.py`), backed by the `rom_save_states` table; the per-file baselines are `FileSyncState` value
+objects (one per filename), backed by the `rom_save_files` table. Both are reached through the Unit of Work as
+`uow.rom_save_states`, which spans the two tables (sync sqlite3 run via `run_in_executor`, per
+[ADR-0004](../adr/0004-sync-sqlite-unit-of-work.md)).
 
-Location: `~/homebrew/data/decky-romm-sync/save_sync_state.json`
+The canonical source for the table DDL, columns, and aggregate invariants is [database-design.md](database-design.md).
+This page describes the state conceptually; the field reference below maps each logical field to its column.
 
 The save-sync **feature toggles** (`save_sync_enabled`, `sync_before_launch`, `sync_after_exit`, `default_slot`,
-`autocleanup_limit`) and the **device label** (`device_name`) live in `settings.json`, not here — they are user-intent
-config, not synced relational state (ADR-0003). `StateService` reads and writes them through the live settings dict;
-only `device_id` / `server_device_id` (server-issued identity) remain on this file.
+`autocleanup_limit`) and the **device label** (`device_name`) live in `settings.json`, not in this aggregate — they are
+user-intent config, not synced relational state (ADR-0003). Device identity is `kv_config['device_id']` (see the
+[Device Registration](#device-registration) section above), not a field on the per-ROM aggregate.
+
+The logical shape of a single ROM's save state — the scalars as a `rom_save_states` row plus its child `rom_save_files`
+rows — looks like this:
 
 ```json
 {
-  "version": 1,
-  "device_id": "550e8400-e29b-41d4-a716-446655440000",
-  "server_device_id": "81445610-e5a1-46b5-9389-9d159f99c21c",
-  "saves": {
-    "42": {
-      "system": "gba",
-      "active_slot": "default",
-      "slot_confirmed": true,
-      "last_synced_core": "mgba_libretro",
-      "own_upload_ids": [18],
-      "last_sync_check_at": "2026-02-17T10:31:00+00:00",
-      "files": {
-        "game.srm": {
-          "tracked_save_id": 18,
-          "last_sync_hash": "d41d8cd98f00b204e9800998ecf8427e",
-          "last_sync_at": "2026-02-17T10:30:00+00:00",
-          "last_sync_server_updated_at": "2026-02-17T10:30:00+00:00",
-          "last_sync_server_save_id": 18,
-          "last_sync_server_size": 32768,
-          "last_sync_local_mtime": 1739789395.0,
-          "last_sync_local_size": 32768
-        }
+  "42": {
+    "system": "gba",
+    "active_slot": "default",
+    "slot_confirmed": true,
+    "last_synced_core": "mgba_libretro",
+    "own_upload_ids": [18],
+    "last_sync_check_at": "2026-02-17T10:31:00+00:00",
+    "files": {
+      "game.srm": {
+        "tracked_save_id": 18,
+        "last_sync_hash": "d41d8cd98f00b204e9800998ecf8427e",
+        "last_sync_at": "2026-02-17T10:30:00+00:00",
+        "last_sync_server_updated_at": "2026-02-17T10:30:00+00:00",
+        "last_sync_server_save_id": 18,
+        "last_sync_server_size": 32768,
+        "last_sync_local_mtime": 1739789395.0,
+        "last_sync_local_size": 32768
       }
-    }
-  },
-  "playtime": {
-    "42": {
-      "total_seconds": 7200,
-      "session_count": 3,
-      "last_session_start": null,
-      "last_session_duration_sec": 1800,
-      "note_id": 456
     }
   }
 }
 ```
 
+Per-ROM playtime is a separate aggregate (`Playtime`, `rom_playtime` table) — see
+[Playtime Tracking](#playtime-tracking) above.
+
 ### Field reference
 
-| Field                                               | Type                   | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| --------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                                           | integer                | State schema version (currently 1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `device_id`                                         | string (UUID v4)       | Unique identifier for this machine, generated on first use                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `server_device_id`                                  | string / null          | RomM server device UUID. Null until first device registration.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `saves`                                             | object                 | Per-ROM sync metadata, keyed by `rom_id` (string)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `saves.<id>.system`                                 | string                 | RetroDECK system slug (e.g. `"gba"`, `"snes"`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `saves.<id>.active_slot`                            | string                 | Which RomM slot this game syncs to (e.g. `"default"`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `saves.<id>.slot_confirmed`                         | boolean                | Whether user has explicitly chosen their slot (see "Slot Setup Wizard")                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `saves.<id>.last_synced_core`                       | string / null          | RetroArch core used at last sync (for core change detection, e.g. `"mgba_libretro"`)                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `saves.<id>.own_upload_ids`                         | array of integer       | Save ids this device originally POSTed. Drives the `uploaded_by_us` indicator on the SAVES tab.                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `saves.<id>.last_sync_check_at`                     | ISO-8601 string / null | Timestamp of the most recent `_sync_rom_saves` run for this rom (regardless of whether files transferred).                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `saves.<id>.files`                                  | object                 | Per-file sync state, keyed by filename (e.g. `"game.srm"`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `saves.<id>.files.<fn>.tracked_save_id`             | integer / null         | Most recent RomM save id this device tracked. Used to exclude the active save from the Previous Versions dropdown and as an uploader-attribution hint; **not** consulted by `compute_sync_action` (the algorithm picks newest by `updated_at`).                                                                                                                                                                                                                                                                              |
-| `saves.<id>.files.<fn>.last_sync_hash`              | MD5 hex string         | Hash of the save file at last sync. Drift baseline used by matrix rows 7/8/9/10/11/12.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `saves.<id>.files.<fn>.last_sync_at`                | ISO-8601 string        | Timestamp of last successful sync.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `saves.<id>.files.<fn>.last_sync_server_updated_at` | ISO-8601 string        | Server's `updated_at` at last sync.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `saves.<id>.files.<fn>.last_sync_server_save_id`    | integer                | RomM save id for the most recently synced server save.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `saves.<id>.files.<fn>.last_sync_server_size`       | integer                | Server file size at last sync.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `saves.<id>.files.<fn>.last_sync_local_mtime`       | float                  | Local file mtime (epoch seconds) at last sync.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `saves.<id>.files.<fn>.last_sync_local_size`        | integer                | Local file size (bytes) at last sync.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `playtime`                                          | object                 | **Legacy / dormant — no live reader.** Per-ROM playtime now lives in the SQLite `rom_playtime` table (the `Playtime` aggregate); `PlaytimeService` no longer writes this JSON section and `RomRemovalService` no longer reads it (uninstall keeps playtime per [ADR-0007](../adr/0007-rom-retention-identity-anchor.md)). It is dropped in the JSON-state teardown stream. The same fields below (`total_seconds`, `session_count`, `last_session_start`, `last_session_duration_sec`, `note_id`) back the SQLite aggregate. |
-| `playtime.<id>.total_seconds`                       | integer                | Accumulated playtime in seconds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `playtime.<id>.session_count`                       | integer                | Number of completed play sessions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `playtime.<id>.last_session_start`                  | ISO-8601 / null        | Start time of current session (null when not playing).                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `playtime.<id>.last_session_duration_sec`           | integer / null         | Duration of last completed session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `playtime.<id>.note_id`                             | integer / null         | Cached RomM note ID for playtime storage (avoids ROM detail fetch).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+The `saves.<id>.*` fields are columns on the `rom_save_states` table (one row per ROM); the `saves.<id>.files.<fn>.*`
+fields are columns on the `rom_save_files` table (one row per `(rom_id, filename)`). The `saves.<id>` / `files.<fn>`
+notation here mirrors the logical shape above — see [database-design.md](database-design.md) for the physical column
+names and constraints.
+
+| Field                                               | Type                   | Description                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `saves`                                             | object                 | Per-ROM sync metadata, keyed by `rom_id` (string)                                                                                                                                                                                                                                                                                                                                                                                       |
+| `saves.<id>.system`                                 | string                 | RetroDECK system slug (e.g. `"gba"`, `"snes"`)                                                                                                                                                                                                                                                                                                                                                                                          |
+| `saves.<id>.emulator`                               | string                 | Emulator tag (default `"retroarch"`); forms the RomM save-folder path `saves/{system}/{rom_id}/{emulator}/`.                                                                                                                                                                                                                                                                                                                            |
+| `saves.<id>.active_slot`                            | string                 | Which RomM slot this game syncs to (e.g. `"default"`)                                                                                                                                                                                                                                                                                                                                                                                   |
+| `saves.<id>.slot_confirmed`                         | boolean                | Whether user has explicitly chosen their slot (see "Slot Setup Wizard")                                                                                                                                                                                                                                                                                                                                                                 |
+| `saves.<id>.last_synced_core`                       | string / null          | RetroArch core used at last sync (for core change detection, e.g. `"mgba_libretro"`)                                                                                                                                                                                                                                                                                                                                                    |
+| `saves.<id>.own_upload_ids`                         | array of integer       | Save ids this device originally POSTed. Drives the `uploaded_by_us` indicator on the SAVES tab.                                                                                                                                                                                                                                                                                                                                         |
+| `saves.<id>.slots`                                  | object                 | Merged slot listing (read-model cache): per slot, its `source` / `count` / latest `updated_at`.                                                                                                                                                                                                                                                                                                                                         |
+| `saves.<id>.last_sync_check_at`                     | ISO-8601 string / null | Timestamp of the most recent `_sync_rom_saves` run for this rom (regardless of whether files transferred).                                                                                                                                                                                                                                                                                                                              |
+| `saves.<id>.files`                                  | object                 | Per-file sync state, keyed by filename (e.g. `"game.srm"`)                                                                                                                                                                                                                                                                                                                                                                              |
+| `saves.<id>.files.<fn>.tracked_save_id`             | integer / null         | Most recent RomM save id this device tracked. Used to exclude the active save from the Previous Versions dropdown and as an uploader-attribution hint; **not** consulted by `compute_sync_action` (the algorithm picks newest by `updated_at`).                                                                                                                                                                                         |
+| `saves.<id>.files.<fn>.last_sync_hash`              | MD5 hex string         | Hash of the save file at last sync. Drift baseline used by matrix rows 7/8/9/10/11/12.                                                                                                                                                                                                                                                                                                                                                  |
+| `saves.<id>.files.<fn>.last_sync_at`                | ISO-8601 string        | Timestamp of last successful sync.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `saves.<id>.files.<fn>.last_sync_server_updated_at` | ISO-8601 string        | Server's `updated_at` at last sync.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `saves.<id>.files.<fn>.last_sync_server_save_id`    | integer                | RomM save id for the most recently synced server save.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `saves.<id>.files.<fn>.last_sync_server_size`       | integer                | Server file size at last sync.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `saves.<id>.files.<fn>.last_sync_local_mtime`       | float                  | Local file mtime (epoch seconds) at last sync.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `saves.<id>.files.<fn>.last_sync_local_size`        | integer                | Local file size (bytes) at last sync.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `playtime`                                          | object                 | Per-ROM playtime lives in the `rom_playtime` table (the `Playtime` aggregate), a separate aggregate from saves — `RomRemovalService` keeps playtime on uninstall per [ADR-0007](../adr/0007-rom-retention-identity-anchor.md). The fields below (`total_seconds`, `session_count`, `last_session_start`, `last_session_duration_sec`, `note_id`) are its columns, keyed by `rom_id`. See [Playtime Tracking](#playtime-tracking) above. |
+| `playtime.<id>.total_seconds`                       | integer                | Accumulated playtime in seconds.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `playtime.<id>.session_count`                       | integer                | Number of completed play sessions.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `playtime.<id>.last_session_start`                  | ISO-8601 / null        | Start time of current session (null when not playing).                                                                                                                                                                                                                                                                                                                                                                                  |
+| `playtime.<id>.last_session_duration_sec`           | integer / null         | Duration of last completed session.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `playtime.<id>.note_id`                             | integer / null         | Cached RomM note ID for playtime storage (avoids ROM detail fetch).                                                                                                                                                                                                                                                                                                                                                                     |
 
 The save-sync feature toggles (`save_sync_enabled`, `sync_before_launch`, `sync_after_exit`, `default_slot`,
-`autocleanup_limit`) and the device label (`device_name`) live in `settings.json` (ADR-0003), not in this file.
+`autocleanup_limit`) and the device label (`device_name`) live in `settings.json` (ADR-0003), not in this aggregate.
 `save_sync_enabled` is the master feature toggle; `sync_before_launch` / `sync_after_exit` gate the automatic pre-launch
 / post-exit syncs; `default_slot` is the slot new games adopt (`"default"`); `autocleanup_limit` caps retained save
 versions per slot on the server (10).
@@ -957,32 +956,15 @@ next sync as long as the underlying state still produces matrix row 12.
 
 ### Legacy field migration
 
-`SaveSyncState.from_dict` (`py_modules/domain/save_state.py`) performs idempotent schema migrations every time the
-plugin loads — the typed aggregate is rebuilt from the on-disk JSON, legacy keys are dropped at construction, and the
-next `to_dict`/persist produces a clean file. Each strip below disappears from disk on the next state write:
+The per-file schema migrations that the old JSON aggregate ran at load time are moot: SQLite starts empty and no JSON
+state is imported into it (this is a beta plugin — the library re-syncs from RomM). There is no on-disk aggregate to
+rebuild, so the old `active_core` → `last_synced_core` rename and the `dismissed_newer_save_id` strip no longer happen.
 
-- **`saves.<id>.active_core`** → renamed to `saves.<id>.last_synced_core` (per-game; `last_synced_core` wins if both are
-  present).
-- **`saves.<id>.files.<fn>.dismissed_newer_save_id`** → dropped. Was used by the removed newer-in-slot detection. Users
-  upgrading from v0.15.x and earlier may have this field; it's silently removed.
-- **`settings` block + `device_name`** → no longer parsed from or written to this file. The save-sync feature toggles
-  and the device label moved to `settings.json` (ADR-0003); a one-time `settings.json` schema bump (v3 → v4) reads the
-  legacy values out of `save_sync_state.json` and folds them in. On the next state write they disappear from this file.
-  The legacy `settings.conflict_mode` / `settings.clock_skew_tolerance_sec` keys (dropped in earlier releases) are not
-  carried over.
-
-The dropped `pending_conflicts`, `dismissed_saves_state`, and other obsolete sync-state fields are simply not loaded.
-They never appear in the rebuilt aggregate, and the next state write produces a clean file.
-
-### SaveSyncState SQLite cutover status
-
-The game-detail panel's cached has-saves badge (`get_cached_game_detail`) no longer reads the in-memory
-`SaveSyncState.saves` dict — it reads the `rom_save_states` aggregate through the Unit of Work (the per-file
-`last_sync_hash` → the `synced`/`unknown` status the badge renders), the lightweight counterpart to the live
-`getSaveStatus` flow above. With that and the playtime cutover, the legacy `SaveSyncState` container has **no live
-reader** and is fully dead pending teardown; the live save-sync engine still persists through `save_sync_state.json`
-(the SaveService SQLite migration is a separate cutover stream). `domain/save_state.py` is removed in the teardown
-stream, not here.
+The one surviving legacy read is a single one-time settings fold at bootstrap. `fold_legacy_save_sync_settings`
+(`py_modules/domain/state_migrations.py`) lifts the old `settings` block (the save-sync feature toggles) plus
+`device_name` out of any pre-existing `save_sync_state.json` and folds them into `settings.json` — the `settings.json`
+v3 → v4 schema bump. After that fold, `save_sync_state.json` is never read or written again; the file is not a
+persistence store anymore.
 
 ## Session Detection
 

@@ -3,44 +3,49 @@
 ## Overview
 
 This page is the canonical home for the **aggregate domain model** behind the SQLite persistence migration (epic
-[#271](https://github.com/danielcopper/decky-romm-sync/issues/271)). The migration replaces the current JSON state files
-with a SQLite database whose tables back a set of Cosmic Python aggregates.
+[#271](https://github.com/danielcopper/decky-romm-sync/issues/271)). The migration replaced the JSON state files with a
+SQLite database whose tables back a set of Cosmic Python aggregates.
 
-The migration is phased. The **enforcement infrastructure** (the decorator, the linters, and the type-check rule that
-keep aggregates honest, [#788](https://github.com/danielcopper/decky-romm-sync/issues/788)), the full **aggregate set**
-(the 8 aggregate roots, their fields, and their mutation methods), the **SQLite schema** (the migration framework +
-`001_initial.sql`,
+The migration **and its teardown are complete**. The **enforcement infrastructure** (the decorator, the linters, and the
+type-check rule that keep aggregates honest, [#788](https://github.com/danielcopper/decky-romm-sync/issues/788)), the
+full **aggregate set** (the 8 aggregate roots, their fields, and their mutation methods), the **SQLite schema** (the
+migration framework + `001_initial.sql`,
 [#780](https://github.com/danielcopper/decky-romm-sync/issues/780)/[#781](https://github.com/danielcopper/decky-romm-sync/issues/781)),
 the per-aggregate **Repository Protocols** ([#782](https://github.com/danielcopper/decky-romm-sync/issues/782)), and the
 runtime **Unit of Work** + concrete `sqlite3` repository adapters
-([#783](https://github.com/danielcopper/decky-romm-sync/issues/783)) are all in place — documented below. The service
-cutover ([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)) is in flight, vertical by vertical.
+([#783](https://github.com/danielcopper/decky-romm-sync/issues/783)) are all in place — documented below. SQLite,
+reached through the Unit of Work, is the **sole live persistence path for relational state**; the only remaining live
+JSON file is `settings.json`.
 
-The cutover is a **hard cut** — SQLite starts empty, the JSON state is not migrated into it, and each JSON-era state
-class is deleted once its last consumer moves over. The **library/roms slice has landed**: the live sync path now writes
-`roms` (the synced-ROM registry), `sync_runs` (the start→complete/cancel/error lifecycle that replaces the JSON
-`last_sync`/`sync_stats` scalars), and the `kv_config` `platform_slug → display_name` cache row, all through Repository
-Protocols + the Unit of Work. The **metadata slice has landed**: `rom_metadata` is now written by the reporter's
-per-unit commit — the same write Unit of Work as the `roms` upsert (Rom row first, then metadata, so the `rom_id` FK is
-satisfied at commit and a ROM and its cached metadata land atomically) — and `MetadataService`/`GameDetailService` read
-it back from SQLite (the JSON `metadata_cache` is no longer read by either). The **playtime slice has landed**:
-`PlaytimeService` now records sessions and reconciles RomM-note totals through the `rom_playtime` aggregate (session-end
-folds the duration in a short write UoW, then pushes to RomM outside the transaction; opening a game's detail page
-triggers a pull-only reconcile that reads the RomM note and folds its total into `rom_playtime` via `reconcile_total` —
-total-only, never writing a note). The **rom-removal + startup-healing slice has landed**:
-`RomRemovalService.remove_rom`/`uninstall_all_roms` and `StartupHealingService.prune_stale_installed_roms` now read and
-delete `rom_installs` through the Unit of Work instead of the JSON `installed_roms` dict — an uninstall (or stale prune)
-deletes only the on-disk files and the `rom_installs` row, never the `roms` identity row, playtime, saves, or metadata
-([ADR-0007](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0007-rom-retention-identity-anchor.md)).
-The **read-consumers slice has landed**: the last in-memory `shortcut_registry` readers moved to SQLite —
-`GameDetailService` resolves the ROM, install record, cached save state, cached metadata, and platform-name cache in one
-read Unit of Work (the has-saves badge now reads `rom_save_states`, the platform display name the `kv_config` cache,
-both degrading gracefully when absent); `AchievementsService` reads each ROM's `ra_id` from `roms`;
-`SettingsService.apply_steam_input_setting` reads the bound `shortcut_app_id`s from `roms` (skipping unbound NULL rows).
-With that, the in-memory `shortcut_registry` dict has **no live service reader**, and `SaveSyncState` is **fully dead**
-— both `.playtime` (already dropped) and `.saves` (GameDetailService was the last reader) now have no live reader. Those
-JSON-era state classes — `SaveSyncState`, the in-memory `shortcut_registry` dict — and the now-dead JSON
-`metadata_cache` store are deleted in the teardown stream.
+The cutover ([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)) was a **hard cut** — SQLite started
+empty, the JSON state was not migrated into it, and each JSON-era state class was deleted once its last consumer moved
+over. Each vertical landed in turn:
+
+- **library/roms** — the live sync path writes `roms` (the synced-ROM registry), `sync_runs` (the
+  start→complete/cancel/error lifecycle that replaced the JSON `last_sync`/`sync_stats` scalars), and the `kv_config`
+  `platform_slug → display_name` cache row, all through Repository Protocols + the Unit of Work.
+- **metadata** — `rom_metadata` is written by the reporter's per-unit commit, the same write Unit of Work as the `roms`
+  upsert (Rom row first, then metadata, so the `rom_id` FK is satisfied at commit and a ROM and its cached metadata land
+  atomically); `MetadataService`/`GameDetailService` read it back from SQLite.
+- **playtime** — `PlaytimeService` records sessions and reconciles RomM-note totals through the `rom_playtime` aggregate
+  (session-end folds the duration in a short write UoW, then pushes to RomM outside the transaction; opening a game's
+  detail page triggers a pull-only reconcile that folds the RomM note's total into `rom_playtime` via `reconcile_total`
+  — total-only, never writing a note).
+- **rom-removal + startup-healing** — `RomRemovalService.remove_rom`/`uninstall_all_roms` and
+  `StartupHealingService.prune_stale_installed_roms` read and delete `rom_installs` through the Unit of Work; an
+  uninstall (or stale prune) deletes only the on-disk files and the `rom_installs` row, never the `roms` identity row,
+  playtime, saves, or metadata
+  ([ADR-0007](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0007-rom-retention-identity-anchor.md)).
+- **read-consumers** — `GameDetailService` resolves the ROM, install record, cached save state, cached metadata, and
+  platform-name cache in one read Unit of Work (the has-saves badge reads `rom_save_states`, the platform display name
+  the `kv_config` cache, both degrading gracefully when absent); `AchievementsService` reads each ROM's `ra_id` from
+  `roms`; `SettingsService.apply_steam_input_setting` reads the bound `shortcut_app_id`s from `roms` (skipping unbound
+  NULL rows).
+
+With every consumer moved over, the teardown completed: the JSON-era state class `SaveSyncState`
+(`domain/save_state.py`), the dead JSON stores (`RegistryStoreAdapter`, `MetadataCacheStoreAdapter`), the dead
+persisters, and the in-memory state dicts (`shortcut_registry`, `metadata_cache`, and the catch-all `state` dict) are
+all **deleted**.
 
 ## What an aggregate is here
 
@@ -129,10 +134,8 @@ comment on the offending line:
 rom.cover_path = path  # pragma: no aggregate-check
 ```
 
-**It is a no-op until aggregates exist.** No class carries `@cosmic_aggregate` yet, so the aggregate-name set is empty
-and the check finds nothing. It activates automatically as the aggregate roots land in later PRs — the moment a
-`@cosmic_aggregate` class appears, any `aggregate.field = ...` in a service starts failing CI. Old JSON-era containers
-(e.g. `SaveSyncState`) don't carry the decorator, so they keep working until the cutover wave replaces them.
+**The check is active.** The 8 aggregate roots all carry `@cosmic_aggregate`, so the aggregate-name set is populated and
+any `aggregate.field = ...` assignment in a service fails CI. The escape hatch above is the only way past it.
 
 ### 3. import-linter — domain is stdlib + self only
 
@@ -252,12 +255,13 @@ rule) maps 1:1 onto these tables.
 | `sync_runs`       | `SyncRun`                   | `id`                         | one row per sync run (history) |
 | `kv_config`       | misc singleton scalars      | `key`                        | per key                        |
 
-`SyncRun` carries its own invariants, so per CONTEXT.md it gets a typed table rather than untyped `kv_config` rows.
-`kv_config` is reserved for the truly miscellaneous: `retrodeck_home_path` (+ its pending-migration `_previous`),
-`save_sort_settings` (+ `_previous`), and the `platform_names` cache — a single `platform_slug → display_name` JSON blob
-the library sync refreshes every run so offline reads (the DangerZone label, the game-detail platform name) show
-"Nintendo 64" rather than the bare `n64` slug when RomM is unreachable. The schema version is **not** a `kv_config` key
-— it is tracked in `PRAGMA user_version` by the [migration runner](#the-migration-framework)
+`SyncRun` carries its own invariants, so per CONTEXT.md it gets a typed table rather than untyped `kv_config` rows. The
+full live `kv_config` key set is `device_id` (the server-issued device identity), `platform_names` (the JSON-encoded
+`platform_slug → display_name` cache), `retrodeck_home_path` (+ its pending-migration `_previous`), and
+`save_sort_settings` (+ `_previous`) — the truly miscellaneous singleton scalars. The `platform_names` cache is a single
+JSON blob the library sync refreshes every run so offline reads (the DangerZone label, the game-detail platform name)
+show "Nintendo 64" rather than the bare `n64` slug when RomM is unreachable. The schema version is **not** a `kv_config`
+key — it is tracked in `PRAGMA user_version` by the [migration runner](#the-migration-framework)
 ([#781](https://github.com/danielcopper/decky-romm-sync/issues/781)).
 
 `SyncRun` is a **history** table, not a single "last run" row: a 1-row table would let a newly-started run
@@ -350,10 +354,8 @@ full per-connection PRAGMA set for runtime Unit-of-Work connections is applied b
 explicitly.
 
 **Database location.** The database is `romm_sync.db` in the plugin runtime directory
-(`decky.DECKY_PLUGIN_RUNTIME_DIR`), alongside today's JSON state files. With the cutover
-([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)) under way the live path now reads and writes it;
-DB-init is hard-failing (a migration failure aborts startup rather than degrading silently) so a corrupt or unmigratable
-database never serves stale reads.
+(`decky.DECKY_PLUGIN_RUNTIME_DIR`). The live path reads and writes it; DB-init is hard-failing (a migration failure
+aborts startup rather than degrading silently) so a corrupt or unmigratable database never serves stale reads.
 
 ### How to add a v2 migration
 
@@ -401,35 +403,35 @@ in `bootstrap()` and threaded into every migrated service's `*ServiceConfig` as 
 [ADR-0006](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0006-narrow-unit-of-work-scope.md) a
 service opens the UoW only around its DB reads/writes, never across the server/file I/O or the frontend ack.
 
-## Coming in later PRs
+## Cutover status
 
-With the aggregate set, the schema, the Repository Protocols, and the runtime UoW in place, the service cutover
-([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)) lands vertical by vertical. Already migrated:
-firmware, downloads + the launcher read path (the latter since removed — the launcher no longer reads SQLite at all; the
-launch command is baked into the shortcut's `launch_options` and the `rom-launcher` exec wrapper just runs it, per
-[ADR-0009](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md)),
-the saves vertical, the library/roms slice (registry → `roms`, sync lifecycle → `sync_runs`, the platform-name cache →
-`kv_config`), the metadata slice (`rom_metadata` written by the reporter's per-unit commit;
-`MetadataService`/`GameDetailService` read it from SQLite), the playtime slice (`PlaytimeService` records sessions and
-reconciles RomM-note totals through `rom_playtime` — at session-end and pull-only on detail-page view), the
-rom-removal + startup-healing slice (`RomRemovalService` and `StartupHealingService.prune_stale_installed_roms`
-read/delete `rom_installs` through the UoW; the JSON `installed_roms` dict is no longer read by either), the
-read-consumers slice (`GameDetailService`/`AchievementsService`/`SettingsService` read the synced-shortcut registry,
-install record, save state, and `ra_id` from SQLite — the in-memory `shortcut_registry` dict has no live service reader
-and `SaveSyncState` is fully dead), and the migration slice. After the migration slice, `MigrationService` reads the
-RetroDECK-home and save-sort change-detection markers from `kv_config` (Bucket 2 per
-[ADR-0003](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0003-json-sqlite-persistence-boundary.md))
-and relocates installed-ROM file paths through `uow.rom_installs.relocate`; `SyncReporter.get_rom_by_steam_app_id` tests
-installed-ness via `uow.rom_installs.get`; and the two interim readers of the same markers moved with it —
-`StartupHealingService.prune_stale_installed_roms` reads the pending-migration home from `kv_config`, and
-`RomInfoService` reads the save-sort markers from `kv_config`. The `retrodeck_home_path*` and `save_sort_settings*`
-markers have no live JSON-state reader and are dropped from `PluginState`. Still downstream:
+The service cutover ([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)) landed vertical by vertical and
+is complete. Every slice migrated:
 
-- **Teardown** — with `SaveSyncState` (`.playtime` and `.saves`) and the in-memory `shortcut_registry` dict now
-  reader-free, the dead persisters, the `RegistryStoreAdapter`/`MetadataCacheStoreAdapter` JSON stores,
-  `domain/save_state.py`, and the in-memory state dict are deleted. (`installed_roms` is no longer read by any service,
-  but it stays on `PluginState`/the JSON state dict until the teardown stream removes the test seeding that still
-  populates it.)
+- **firmware** and **downloads** (the launcher's old SQLite read path was since removed — the launcher no longer reads
+  SQLite at all; the launch command is baked into the shortcut's `launch_options` and the `rom-launcher` exec wrapper
+  just runs it, per
+  [ADR-0009](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md)).
+- the **saves** vertical.
+- the **library/roms** slice (registry → `roms`, sync lifecycle → `sync_runs`, the platform-name cache → `kv_config`).
+- the **metadata** slice (`rom_metadata` written by the reporter's per-unit commit;
+  `MetadataService`/`GameDetailService` read it from SQLite).
+- the **playtime** slice (`PlaytimeService` records sessions and reconciles RomM-note totals through `rom_playtime` —
+  session-end push + pull-only reconcile-on-view).
+- the **rom-removal + startup-healing** slice (`RomRemovalService` and
+  `StartupHealingService.prune_stale_installed_roms` read/delete `rom_installs` through the UoW).
+- the **read-consumers** slice (`GameDetailService`/`AchievementsService`/`SettingsService` read the synced-shortcut
+  registry, install record, save state, and `ra_id` from SQLite).
+- the **migration** slice — `MigrationService` reads the RetroDECK-home and save-sort change-detection markers from
+  `kv_config` (Bucket 2 per
+  [ADR-0003](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0003-json-sqlite-persistence-boundary.md))
+  and relocates installed-ROM file paths through `uow.rom_installs.relocate`; `SyncReporter.get_rom_by_steam_app_id`
+  tests installed-ness via `uow.rom_installs.get`; `StartupHealingService.prune_stale_installed_roms` reads the
+  pending-migration home from `kv_config`; and `RomInfoService` reads the save-sort markers from `kv_config`.
+
+With every consumer moved over, the teardown completed: the dead persisters, the `RegistryStoreAdapter` /
+`MetadataCacheStoreAdapter` JSON stores, `domain/save_state.py` (`SaveSyncState`), and the in-memory state dicts
+(`shortcut_registry`, `metadata_cache`, `installed_roms`, and the catch-all `state` dict) are all deleted.
 
 Chapter 8+ of the Cosmic Python book (domain events + message bus) is explicitly out of scope for this epic; the
 triggers for revisiting that scope are recorded in `CLAUDE.md`.

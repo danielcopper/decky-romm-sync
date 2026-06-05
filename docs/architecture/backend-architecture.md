@@ -36,7 +36,6 @@ bootstrap.py (composition root: bootstrap() builds adapters, wire_services() bui
 │   SteamGridDbAdapter / SgdbArtworkCacheAdapter — SGDB   │
 │   PersistenceAdapter (+ persister adapters) — JSON I/O  │
 │   SqliteUnitOfWork (+ repository adapters) — SQLite I/O │
-│   MetadataCacheStoreAdapter                             │
 │   CoverArtFileStore / DownloadFile                      │
 │   FirmwareFile / MigrationFile / RomFile / SaveFile     │
 │   RetroDeckPaths / RetroArchConfig / RetroArchCoreInfo  │
@@ -195,27 +194,25 @@ Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip p
 
 Adapters own all I/O and implement the Protocols defined in `services/protocols/`. Selected adapters:
 
-| Module                                                                     | Role                                                                                                                                                                    |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `romm/http.py`                                                             | `RommHttpAdapter` — HTTP transport: auth, SSL, retry, User-Agent, platform map                                                                                          |
-| `romm/romm_api.py`                                                         | `RommApiAdapter` — RomM REST surface (saves, ROMs, platforms, firmware, devices, notes) over the HTTP transport                                                         |
-| `steam_config.py`                                                          | `SteamConfigAdapter` — Steam VDF read/write, grid dir, shortcut icon write, Steam Input config                                                                          |
-| `steamgriddb.py`                                                           | `SteamGridDbAdapter` — SteamGridDB REST client                                                                                                                          |
-| `sgdb_artwork_cache.py`                                                    | `SgdbArtworkCacheAdapter` — on-disk SGDB artwork cache                                                                                                                  |
-| `cover_art_file_store.py`                                                  | `CoverArtFileStoreAdapter` — RomM cover art staging on disk                                                                                                             |
-| `persistence.py`                                                           | `PersistenceAdapter` + per-domain persister adapters — settings/state/cache/save-sync JSON I/O                                                                          |
-| `repositories/`                                                            | `SqliteUnitOfWork` + per-aggregate repository adapters — SQLite I/O (the live persistence path; see [Database Design](database-design.md))                              |
-| `sqlite_migrations.py`                                                     | `apply_migrations` — schema migration runner (`db/migrations/NNN_*.sql`, `PRAGMA user_version`)                                                                         |
-| `registry_store.py`                                                        | `RegistryStoreAdapter` — JSON shortcut-registry reads/writes; no longer wired (the library slice moved to `roms`), kept until teardown for the not-yet-migrated readers |
-| `metadata_cache_store.py`                                                  | `MetadataCacheStoreAdapter` — metadata cache reads/writes                                                                                                               |
-| `download_file.py`                                                         | `DownloadFileAdapter` — download filesystem                                                                                                                             |
-| `firmware_file.py` / `migration_file.py` / `rom_files.py` / `save_file.py` | per-subtree filesystem adapters (BIOS, RetroDECK migration, ROM removal, local saves)                                                                                   |
-| `retrodeck_paths.py`                                                       | `RetroDeckPathsAdapter` — reads `retrodeck.json` for ROMs/saves/BIOS/home paths                                                                                         |
-| `retroarch_config.py`                                                      | `RetroArchConfigAdapter` — reads `retroarch.cfg` save-sort flags                                                                                                        |
-| `retroarch_core_info.py`                                                   | `RetroArchCoreInfoAdapter` — reads RetroArch `.info` files (`corename`, metadata)                                                                                       |
-| `es_de_config.py`                                                          | `CoreResolver` + `GamelistXmlEditorAdapter` — ES-DE `es_systems.xml` / `gamelist.xml`                                                                                   |
-| `system_clock.py` / `system_uuid_gen.py` / `asyncio_sleeper.py`            | concrete `Clock` / `UuidGen` / `Sleeper` seams                                                                                                                          |
-| `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` version reader, settings-aware debug logger                                                                                 |
+| Module                                                                     | Role                                                                                                                                                                          |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `romm/http.py`                                                             | `RommHttpAdapter` — HTTP transport: auth, SSL, retry, User-Agent, platform map                                                                                                |
+| `romm/romm_api.py`                                                         | `RommApiAdapter` — RomM REST surface (saves, ROMs, platforms, firmware, devices, notes) over the HTTP transport                                                               |
+| `steam_config.py`                                                          | `SteamConfigAdapter` — Steam VDF read/write, grid dir, shortcut icon write, Steam Input config                                                                                |
+| `steamgriddb.py`                                                           | `SteamGridDbAdapter` — SteamGridDB REST client                                                                                                                                |
+| `sgdb_artwork_cache.py`                                                    | `SgdbArtworkCacheAdapter` — on-disk SGDB artwork cache                                                                                                                        |
+| `cover_art_file_store.py`                                                  | `CoverArtFileStoreAdapter` — RomM cover art staging on disk                                                                                                                   |
+| `persistence.py`                                                           | `PersistenceAdapter` + per-domain persister adapters — `settings.json` read/write plus the one-time legacy `save_sync_state.json` read that feeds the bootstrap settings fold |
+| `repositories/`                                                            | `SqliteUnitOfWork` + per-aggregate repository adapters — SQLite I/O (the live persistence path; see [Database Design](database-design.md))                                    |
+| `sqlite_migrations.py`                                                     | `apply_migrations` — schema migration runner (`db/migrations/NNN_*.sql`, `PRAGMA user_version`)                                                                               |
+| `download_file.py`                                                         | `DownloadFileAdapter` — download filesystem                                                                                                                                   |
+| `firmware_file.py` / `migration_file.py` / `rom_files.py` / `save_file.py` | per-subtree filesystem adapters (BIOS, RetroDECK migration, ROM removal, local saves)                                                                                         |
+| `retrodeck_paths.py`                                                       | `RetroDeckPathsAdapter` — reads `retrodeck.json` for ROMs/saves/BIOS/home paths                                                                                               |
+| `retroarch_config.py`                                                      | `RetroArchConfigAdapter` — reads `retroarch.cfg` save-sort flags                                                                                                              |
+| `retroarch_core_info.py`                                                   | `RetroArchCoreInfoAdapter` — reads RetroArch `.info` files (`corename`, metadata)                                                                                             |
+| `es_de_config.py`                                                          | `CoreResolver` + `GamelistXmlEditorAdapter` — ES-DE `es_systems.xml` / `gamelist.xml`                                                                                         |
+| `system_clock.py` / `system_uuid_gen.py` / `asyncio_sleeper.py`            | concrete `Clock` / `UuidGen` / `Sleeper` seams                                                                                                                                |
+| `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` version reader, settings-aware debug logger                                                                                       |
 
 #### PersistenceAdapter notes
 
@@ -239,7 +236,7 @@ documented in [Database Design](database-design.md). Selected modules:
 | `sync_diff.py`                                                                    | ROM classification and platform/collection diff computation for the sync preview                                                                                                                       |
 | `preview_delta.py`                                                                | `PreviewDelta` shape for the sync preview                                                                                                                                                              |
 | `work_unit.py`                                                                    | `WorkUnit` — the per-unit sync work item                                                                                                                                                               |
-| `save_state.py`                                                                   | `SaveSyncState` aggregate + `from_dict`/`to_dict` (schema migrations live here)                                                                                                                        |
+| `rom_save_state.py`                                                               | `RomSaveState` aggregate + `FileSyncState` value object — per-ROM save-sync state, backed by `rom_save_states` + `rom_save_files`                                                                      |
 | `save_path.py` / `save_attribution.py` / `save_status*.py` / `save_extensions.py` | save path resolution, uploader attribution, status DTO building                                                                                                                                        |
 | `firmware_paths.py` / `bios.py`                                                   | BIOS path computation and status formatting; `bios.py` also holds the BIOS status dataclasses (`AvailableCore`, `BiosFileEntry`, `BiosStatus`)                                                         |
 | `iso_time.py`                                                                     | `parse_iso` / `parse_iso_to_epoch` — ISO-8601 timestamp parsing (stdlib only)                                                                                                                          |
@@ -249,7 +246,7 @@ documented in [Database Design](database-design.md). Selected modules:
 | `sgdb_artwork.py`                                                                 | SGDB asset-type/endpoint maps and `to_signed_app_id`                                                                                                                                                   |
 | `installed_roms.py` / `rom_files.py`                                              | installed-ROM detection, M3U generation, launch-file detection                                                                                                                                         |
 | `retroarch_core_info.py`                                                          | `parse_core_info` — pure parser for RetroArch `.info` files                                                                                                                                            |
-| `state_migrations.py`                                                             | `migrate_settings` / `migrate_state` for the main state files                                                                                                                                          |
+| `state_migrations.py`                                                             | `migrate_settings` (`settings.json`) + `fold_legacy_save_sync_settings` (one-time legacy `save_sync_state.json` fold); `migrate_state` is a vestigial v1 no-op kept as future-migration scaffolding    |
 | `sync_state.py`                                                                   | `SyncState` enum (idle, running, cancelling)                                                                                                                                                           |
 | `emulator_tag.py` / `version.py`                                                  | emulator-tag formatting, version parsing, core-change detection                                                                                                                                        |
 
@@ -259,8 +256,8 @@ Protocol into services). The full pattern, source catalog, and decisions log are
 
 ### Models (`py_modules/models/`)
 
-TypedDicts and dataclasses describing on-disk and in-flight data shapes (`state.py`, `metadata.py`,
-`metadata_patches.py`, `registry_patches.py`). Models import nothing from the other layers.
+TypedDicts and dataclasses describing on-disk and in-flight data shapes (`state.py`, `metadata.py`). Models import
+nothing from the other layers.
 
 ### Other
 
@@ -275,19 +272,20 @@ TypedDicts and dataclasses describing on-disk and in-flight data shapes (`state.
 
 The composition root has two functions:
 
-1. **`bootstrap()`** — builds every adapter and loads + migrates settings, plugin state, and the metadata cache so the
-   persister adapters bind the live mutable dicts at construction. Returns a typed `BootstrapResult` carrying four
-   bundles (`adapters`, `stores`, `callbacks`, `runtime_adapters`) plus a small `handles` struct for Plugin-only
-   outputs.
+1. **`bootstrap()`** — builds every adapter, applies the SQLite schema migrations, and loads + migrates `settings.json`
+   (folding in the one-time legacy `save_sync_state.json` settings) so the settings persister binds the live mutable
+   `settings` dict at construction. Returns a typed `BootstrapResult` carrying four bundles (`adapters`, `stores`,
+   `callbacks`, `runtime_adapters`) plus a small `handles` struct for Plugin-only outputs.
 
 2. **`wire_services()`** — takes a `WiringConfig` (the four bundles plus `min_required_version`) and constructs every
    service, injecting each one's `*ServiceConfig`. Returns a dict of named service instances.
 
 The two-phase split exists because adapter instantiation and state loading happen first (`bootstrap()`), then `main.py`
-composes the runtime bundle (event loop, `decky.emit`) and calls `wire_services()` so services receive references to the
-fully-populated state dicts. Some services are constructed before others to satisfy ordering constraints (e.g.
-`MigrationService` before `SaveService` so save sync observes fresh save-sort state). Forward references between peers
-are threaded via `LateBinding`.
+composes the runtime bundle (event loop, `decky.emit`) and calls `wire_services()`. Services receive the `settings` dict
+(the only field on `StateBundle`) plus the SQLite Unit-of-Work factory / repository handles for all relational state —
+no plural in-memory state dicts remain. Some services are constructed before others to satisfy ordering constraints
+(e.g. `MigrationService` before `SaveService` so save sync observes fresh save-sort state). Forward references between
+peers are threaded via `LateBinding`.
 
 Per the process-boundary rule, adapter instantiation never happens in `main.py`, and no service wiring happens in
 `bootstrap.py`'s caller other than via `wire_services()`.
@@ -301,8 +299,7 @@ package, organised topically (consumers always deep-import `from services.protoc
   `RommDeviceApi`, `RommFirmwareApi`, `RommPlaytimeApi`, `RommLibraryApi`, `RommConnectionApi`, `RommPlatformReader`,
   `RommAchievementsApi`, `RommSyncApi`, `RommVersion`), `SteamConfigStore`, `SteamGridDbApi`.
 - **`determinism`** — `Clock` / `UuidGen` / `Sleeper` test seams.
-- **`persistence`** — `StatePersister`, `SettingsPersister`, `MetadataCachePersister`, `MetadataCacheStore`,
-  `FirmwareCachePersister`, `SaveSyncStatePersister`, `ShortcutRegistryStore`, `PluginMetadataReader`.
+- **`persistence`** — `SettingsPersister`, `PluginMetadataReader`.
 - **`paths`** — `RetroDeckPaths`, `SystemResolver`, `CoreInfoProvider`, `CoreResolverFn`, `CoreNameProviderFn`,
   `RetroArchConfigReader`, `RetroArchCoreInfoReader`, `RetroArchSaveSortingProvider`, `GamelistXmlEditor`.
 - **`infra`** — cross-cutting callable seams: `EventEmitter`, `DebugLogger`, `PathExistsReader`, `HostnameReader`,
@@ -389,10 +386,9 @@ call site: services may not call `datetime.now()` / `asyncio.sleep()` / `time.ti
 
 `scripts/check_aggregate_field_assignment.py` (also bundled into `mise run lint`) is a small custom AST linter that
 enforces the **mutation-only-via-methods** rule for aggregates — a rule no type checker can express directly. It
-collects the class names decorated with `@cosmic_aggregate` in `domain/`, then scans `services/` for
-`<aggregate>.<field> = ...` assignments and fails CI on any it finds. The escape hatch is a trailing
-`# pragma: no aggregate-check` on the offending line. It is a no-op until aggregate roots exist (the decorator set is
-empty today) and activates automatically as they land. Full detail in [Database Design](database-design.md).
+collects the class names decorated with `@cosmic_aggregate` in `domain/` (currently the 8 aggregate roots), then scans
+`services/` for `<aggregate>.<field> = ...` assignments and fails CI on any it finds. The escape hatch is a trailing
+`# pragma: no aggregate-check` on the offending line. Full detail in [Database Design](database-design.md).
 
 ### 4. Enforced: underscore prefix
 
@@ -411,26 +407,26 @@ underscore, which keeps `reportPrivateUsage` coherent with the saves-style peer-
 Every service receives its dependencies through a single `*ServiceConfig` dataclass. Cross-service dependencies are
 Protocol-typed (services never import each other's concrete classes). Selected wiring:
 
-| Service                     | Key injected dependencies                                                                                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **LibraryService**          | `RommLibraryApi`, `SteamConfigStore`, `ArtworkManager`, `Clock`/`UuidGen`/`Sleeper`, `SettingsPersister`, `UnitOfWorkFactory` (roms / sync_runs / kv_config / rom_metadata)      |
-| **MetadataService**         | `UnitOfWorkFactory` (reads `rom_metadata` / `roms`)                                                                                                                              |
-| **SaveService**             | `RommApi`, `RetryStrategy`, `SaveFileStore`, `SaveSyncStatePersister`, `Clock`, `RetroDeckPaths`, core-name/active-core providers, migration-detect callbacks                    |
-| **DownloadService**         | `RommApi`, `DownloadFileStore`, `RetroDeckPaths`, `Clock`/`Sleeper`                                                                                                              |
-| **FirmwareService**         | `RommApi`, `FirmwareFileStore`, `FirmwareCachePersister`, `CoreInfoProvider`, `RetroDeckPaths`                                                                                   |
-| **SteamGridService**        | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `UnitOfWorkFactory` (sgdb_id on `roms`), `PendingSyncReader`                                                |
-| **MigrationService**        | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback                                                                           |
-| **GameDetailService**       | `BiosChecker`, `AchievementsReader` (cross-service), `Clock`, `UnitOfWorkFactory` (one read UoW over `roms` / `rom_installs` / `rom_save_states` / `rom_metadata` / `kv_config`) |
-| **AchievementsService**     | `RommAchievementsApi`, `Clock`, `DebugLogger`, `UnitOfWorkFactory` (reads `ra_id` from `roms`)                                                                                   |
-| **SettingsService**         | `SteamConfigStore`, `SettingsPersister`, `UnitOfWorkFactory` (reads bound `shortcut_app_id`s from `roms`)                                                                        |
-| **PlaytimeService**         | `RommPlaytimeApi`, `RetryStrategy`, `Clock`, `UnitOfWorkFactory` (reads/writes `rom_playtime`)                                                                                   |
-| **RomRemovalService**       | `RomFileStore`, `RetroDeckPaths`, `DownloadQueueCleanup` peer, `UnitOfWorkFactory` (reads/deletes `rom_installs`)                                                                |
-| **ShortcutRemovalService**  | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`)                                                                |
-| **SessionLifecycleService** | `Session*` cross-service seams (playtime / post-exit sync / achievement sync / migration reader)                                                                                 |
-| **LaunchGateService**       | `LaunchGateRomLookup`, `LaunchGateInstalledChecker`, `LaunchGateSaveStatusReader` cross-service seams                                                                            |
-| **ConnectionService**       | `RommConnectionApi`, `SettingsPersister`, `min_required_version`                                                                                                                 |
+| Service                     | Key injected dependencies                                                                                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LibraryService**          | `RommLibraryApi`, `SteamConfigStore`, `ArtworkManager`, `Clock`/`UuidGen`/`Sleeper`, `SettingsPersister`, `UnitOfWorkFactory` (roms / sync_runs / kv_config / rom_metadata)                     |
+| **MetadataService**         | `UnitOfWorkFactory` (reads `rom_metadata` / `roms`)                                                                                                                                             |
+| **SaveService**             | `RommApi`, `RetryStrategy`, `SaveFileStore`, `UnitOfWorkFactory` (`rom_save_states` / `rom_save_files`), `Clock`, `RetroDeckPaths`, core-name/active-core providers, migration-detect callbacks |
+| **DownloadService**         | `RommApi`, `DownloadFileStore`, `RetroDeckPaths`, `Clock`/`Sleeper`                                                                                                                             |
+| **FirmwareService**         | `RommApi`, `FirmwareFileStore`, `CoreInfoProvider`, `RetroDeckPaths`, `UnitOfWorkFactory` (`firmware_cache`)                                                                                    |
+| **SteamGridService**        | `SteamGridDbApi`, `RommApi`, `SteamConfigStore`, `SgdbArtworkCache`, `UnitOfWorkFactory` (sgdb_id on `roms`), `PendingSyncReader`                                                               |
+| **MigrationService**        | `MigrationFileStore`, `RetroDeckPaths`, save-sort/active-core/core-name providers, BIOS-index callback                                                                                          |
+| **GameDetailService**       | `BiosChecker`, `AchievementsReader` (cross-service), `Clock`, `UnitOfWorkFactory` (one read UoW over `roms` / `rom_installs` / `rom_save_states` / `rom_metadata` / `kv_config`)                |
+| **AchievementsService**     | `RommAchievementsApi`, `Clock`, `DebugLogger`, `UnitOfWorkFactory` (reads `ra_id` from `roms`)                                                                                                  |
+| **SettingsService**         | `SteamConfigStore`, `SettingsPersister`, `UnitOfWorkFactory` (reads bound `shortcut_app_id`s from `roms`)                                                                                       |
+| **PlaytimeService**         | `RommPlaytimeApi`, `RetryStrategy`, `Clock`, `UnitOfWorkFactory` (reads/writes `rom_playtime`)                                                                                                  |
+| **RomRemovalService**       | `RomFileStore`, `RetroDeckPaths`, `DownloadQueueCleanup` peer, `UnitOfWorkFactory` (reads/deletes `rom_installs`)                                                                               |
+| **ShortcutRemovalService**  | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`)                                                                               |
+| **SessionLifecycleService** | `Session*` cross-service seams (playtime / post-exit sync / achievement sync / migration reader)                                                                                                |
+| **LaunchGateService**       | `LaunchGateRomLookup`, `LaunchGateInstalledChecker`, `LaunchGateSaveStatusReader` cross-service seams                                                                                           |
+| **ConnectionService**       | `RommConnectionApi`, `SettingsPersister`, `min_required_version`                                                                                                                                |
 
-Most services also receive shared state (`state`, `settings`, `metadata_cache`, `save_sync_state`), the event loop, the
-logger, and the `DebugLogger` Protocol through their config. As the SQLite cutover proceeds, services that no longer
-read the in-memory dicts drop them: `GameDetailService`/`AchievementsService` no longer take `state`, and
-`SettingsService` reads bound shortcuts from `roms` rather than the in-memory `shortcut_registry`.
+Most services also receive the `settings` dict (`StateBundle`'s only field), the runtime infrastructure (event loop,
+logger, the `DebugLogger` Protocol), and the `UnitOfWorkFactory` for relational state through their config. The old
+in-memory `state` / `metadata_cache` / `save_sync_state` / `shortcut_registry` dicts are gone — every relational
+read/write goes through the Unit of Work.

@@ -55,7 +55,7 @@ opens one connection, exposes the repositories, and commits on clean exit / roll
 database reads/writes, never network/file I/O or a frontend round-trip; cross-operation consistency comes from the
 operation's own serialization (the per-ROM save lock, the single library-sync task), not from holding a UoW open.
 
-### Persistence boundary (settings.json / save_sync_state.json / SQLite)
+### Persistence boundary (settings.json / SQLite)
 
 Where a piece of persisted state lives is a deliberate decision driven by what the data _is_, not which file it
 historically lived in. Per [ADR-0003](docs/adr/0003-json-sqlite-persistence-boundary.md), three buckets, and the bucket
@@ -71,28 +71,27 @@ picks the store:
 3. **Synced / derived relational state with real invariants** — per-ROM groups, history, caches of remote data →
    **SQLite aggregates**.
 
-`save_sync_state.json` is the _legacy_ JSON home for bucket-3 save state and for `device_id`; it is replaced by SQLite
-at the cutover. As of #822 it no longer holds the save-sync toggles or `device_name` (those moved to `settings.json`,
-settings schema v4) — only `device_id` remains until the cutover folds it into `kv_config`.
+`device_id` now lives in the `kv_config` table; bucket-3 save state lives in SQLite aggregates. `save_sync_state.json`
+is a dead store — never written, read exactly once at bootstrap for the one-time legacy settings fold. As of #822 it no
+longer held the save-sync toggles or `device_name` (those moved to `settings.json`, settings schema v4).
 
 ### Cutover
 
-The hard cut from JSON state files to SQLite ([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)).
-"Hard" means **SQLite starts empty** — the JSON state is not migrated into it, and the JSON-era domain classes are
-deleted in the same wave. Bucket-1 config (`settings.json`) and the change-detection markers are unaffected by the
-cutover; only the relational save/library/playtime state is re-derived from scratch (re-synced from RomM, re-pruned
-against disk). The JSON→JSON moves that _precede_ the cutover (e.g. #822) are explicitly **not** cutover work — they
-ship independently because they touch no SQLite.
+The hard cut from JSON state files to SQLite ([#784](https://github.com/danielcopper/decky-romm-sync/issues/784)) has
+landed. "Hard" means **SQLite started empty** — the JSON state was not migrated into it, and the JSON-era domain classes
+(`SaveSyncState`, `PluginState`) and `domain/save_state.py` were deleted in the same wave. Bucket-1 config
+(`settings.json`) and the change-detection markers were unaffected; only the relational save/library/playtime state was
+re-derived from scratch (re-synced from RomM, re-pruned against disk).
 
 ### kv_config
 
 A key-value table for small singleton configuration values that don't justify their own aggregate or table. One row per
 key.
 
-Intended residents (per [ADR-0003](docs/adr/0003-json-sqlite-persistence-boundary.md); the table is created-but-unused
-until the cutover): the RetroDECK home path marker (`retrodeck_home_path` + its pending-migration `_previous`), the
-save-sort settings markers (`save_sort_settings` + `_previous`), and `device_id` (server-issued identity, folded in at
-the cutover). The schema version is **not** a `kv_config` key — it lives in `PRAGMA user_version`.
+Residents (per [ADR-0003](docs/adr/0003-json-sqlite-persistence-boundary.md)): the RetroDECK home path marker
+(`retrodeck_home_path` + its pending-migration `_previous`), the save-sort settings markers (`save_sort_settings` +
+`_previous`), `device_id` (server-issued identity), and `platform_names` (platform_slug → display_name cache). The
+schema version is **not** a `kv_config` key — it lives in `PRAGMA user_version`.
 
 **Not** a dumping ground: anything with its own lifecycle, invariants, or repeat-row potential gets its own aggregate.
 `kv_config` is for the truly small, the truly singleton, and the truly miscellaneous.
