@@ -150,9 +150,9 @@ For decky-romm-sync (RetroDECK-only):
 
 ### System Override Map
 
-Override keys are RetroDECK **system** names (the normalized value from `resolve_system` / `platform_map`), not raw
-RomM platform slugs — this keeps the extension lookup aligned with the save directory, cores, and gamelists, which are
-all system-keyed.
+Override keys are RetroDECK **system** names (the normalized value from `resolve_system` / `platform_map`), not raw RomM
+platform slugs — this keeps the extension lookup aligned with the save directory, cores, and gamelists, which are all
+system-keyed.
 
 ```python
 _DEFAULT_EXTENSIONS = (".srm", ".rtc", ".sav")
