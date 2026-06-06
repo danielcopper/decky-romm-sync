@@ -1032,6 +1032,75 @@ class TestCheckPlatformBiosSlugNormalization:
         assert resolver.calls == [(slug, None)]
 
 
+class TestCheckPlatformBiosNoBiosCarriesCores:
+    """check_platform_bios ships cores even when the platform needs no firmware (#922).
+
+    No-BIOS platforms (Master System, NES, ...) with multiple cores still drive the
+    per-game core menu, gated on ``available_cores.length > 1``. The ``needs_bios=False``
+    branches must therefore carry ``active_core`` / ``active_core_label`` /
+    ``available_cores`` so the menu can render.
+    """
+
+    @pytest.mark.asyncio
+    async def test_server_reachable_no_firmware_carries_cores(self):
+        """Server reachable, no firmware for the platform → cores still surfaced."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        core_info = FakeCoreInfoProvider(
+            active_core=("genesisplusgx_libretro.so", "Genesis Plus GX"),
+            available_cores=[
+                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
+                {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+            ],
+        )
+        fw = _make_firmware_service(core_info=core_info)
+        fw._bios_registry = {"platforms": {}}
+        fw._bios_files_index = {}
+
+        # No firmware on the server matches the platform → collect_firmware_status
+        # returns nothing, hitting the empty-files needs_bios=False branch.
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=[])
+
+        result = await fw.check_platform_bios("sms")
+
+        assert result["needs_bios"] is False
+        assert result["active_core"] == "genesisplusgx_libretro.so"
+        assert result["active_core_label"] == "Genesis Plus GX"
+        assert result["available_cores"] == [
+            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
+            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+        ]
+        assert len(result["available_cores"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_offline_no_registry_carries_cores(self, plugin, fw):
+        """Server unreachable + no registry entries → cores still surfaced."""
+        core_info = FakeCoreInfoProvider(
+            active_core=("genesisplusgx_libretro.so", "Genesis Plus GX"),
+            available_cores=[
+                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
+                {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+            ],
+        )
+        fw = _make_firmware_service(romm_api=plugin._romm_api, core_info=core_info)
+        fw._bios_registry = {"platforms": {}}
+        fw._bios_files_index = {}
+        fw._loop = asyncio.get_event_loop()
+
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            result = await fw.check_platform_bios("sms")
+
+        assert result["needs_bios"] is False
+        assert result["active_core"] == "genesisplusgx_libretro.so"
+        assert result["active_core_label"] == "Genesis Plus GX"
+        assert result["available_cores"] == [
+            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
+            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+        ]
+        assert len(result["available_cores"]) == 2
+
+
 class TestDownloadRequiredFirmware:
     @pytest.mark.asyncio
     async def test_downloads_required_only(self, plugin, fw, tmp_path):
@@ -2035,6 +2104,39 @@ class TestCheckPlatformBiosCached:
         assert result is not None
         assert result["needs_bios"] is False
         assert result["cached_at"] == 1000.0
+
+    def test_no_bios_platform_still_carries_available_cores(self):
+        """No-BIOS platform with multiple cores → needs_bios=False still ships the cores.
+
+        Master System needs no firmware but has multiple cores; the per-game core
+        menu (gated on ``available_cores.length > 1``) must still render, so the
+        ``needs_bios=False`` branch carries ``active_core`` / ``active_core_label``
+        / ``available_cores`` (#922).
+        """
+        fw, core_info = self._make_service(
+            firmware_cache=[
+                {"file_path": "bios/snes/some.bin", "file_name": "some.bin", "file_size_bytes": 100, "md5_hash": ""}
+            ],
+            firmware_cache_epoch=1000.0,
+        )
+
+        core_info.active_core = ("genesisplusgx_libretro.so", "Genesis Plus GX")
+        core_info.available_cores = [
+            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
+            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+        ]
+        result = fw.check_platform_bios_cached("sms")
+
+        assert result is not None
+        assert result["needs_bios"] is False
+        assert result["cached_at"] == 1000.0
+        assert result["active_core"] == "genesisplusgx_libretro.so"
+        assert result["active_core_label"] == "Genesis Plus GX"
+        assert result["available_cores"] == [
+            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
+            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+        ]
+        assert len(result["available_cores"]) == 2
 
     def test_returns_bios_status_from_cache(self, tmp_path):
         """Cache populated with matching firmware → full BIOS status with cached_at."""

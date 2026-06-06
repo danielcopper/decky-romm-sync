@@ -286,7 +286,13 @@ class FirmwareService:
         files = collect_firmware_status(items, registry_platform, active_core_so)
 
         if not files:
-            return {"needs_bios": False, "cached_at": self._firmware_cache_epoch}
+            return {
+                "needs_bios": False,
+                "active_core": active_core_so,
+                "active_core_label": active_core_label,
+                "available_cores": self._core_info.get_available_cores(system),
+                "cached_at": self._firmware_cache_epoch,
+            }
 
         server_count = len(files)
         local_count = sum(1 for f in files if f.downloaded)
@@ -583,7 +589,12 @@ class FirmwareService:
             files = collect_firmware_status(items, registry_platform, active_core_so)
         except Exception:
             if not registry_platform:
-                return {"needs_bios": False}
+                return {
+                    "needs_bios": False,
+                    "active_core": active_core_so,
+                    "active_core_label": active_core_label,
+                    "available_cores": self._core_info.get_available_cores(system),
+                }
             bios_base = self._retrodeck_paths.bios_path()
             registry_items = [
                 {
@@ -598,7 +609,12 @@ class FirmwareService:
             files = collect_firmware_status(registry_items, registry_platform, active_core_so)
 
         if not files:
-            return {"needs_bios": False}
+            return {
+                "needs_bios": False,
+                "active_core": active_core_so,
+                "active_core_label": active_core_label,
+                "available_cores": self._core_info.get_available_cores(system),
+            }
 
         server_count = len(files)
         local_count = sum(1 for f in files if f.downloaded)
