@@ -442,6 +442,28 @@ class TestPlatformMap:
         assert "snes" in pm
         assert len(pm) > 50  # Should have many entries
 
+    def test_missing_config_returns_empty_map(self, tmp_path):
+        """A plugin_dir with no config.json degrades to an empty map, not an error.
+
+        ``resolve_system`` then falls back to its verbatim pass-through (ADR-0010
+        §5) rather than raising into the synchronous game-detail builder.
+        """
+        import logging
+
+        adapter = RommHttpAdapter({}, str(tmp_path), logging.getLogger("test"), "decky-romm-sync/9.9.9")
+        assert adapter.load_platform_map() == {}
+        # resolve_system survives the empty map and passes the slug through unchanged.
+        assert adapter.resolve_system("dc") == "dc"
+
+    def test_corrupt_config_returns_empty_map(self, tmp_path):
+        """A corrupt (non-JSON) config.json degrades to an empty map, not an error."""
+        import logging
+
+        (tmp_path / "config.json").write_text("{ this is not valid json")
+        adapter = RommHttpAdapter({}, str(tmp_path), logging.getLogger("test"), "decky-romm-sync/9.9.9")
+        assert adapter.load_platform_map() == {}
+        assert adapter.resolve_system("dc") == "dc"
+
 
 # ============================================================================
 # _translate_http_error

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         CoreInfoProvider,
         GamelistXmlEditor,
         RetroDeckPaths,
+        SystemResolver,
     )
 
 
@@ -33,15 +34,17 @@ class CoreServiceConfig:
     """Frozen wiring bundle handed to ``CoreService.__init__``.
 
     Carries the runtime infrastructure (event loop, logger), the
-    ES-DE read/write seams, the bundled RetroDECK paths provider,
-    and the cross-service BIOS checker. Bundled here so the ctor
-    stays within the S107 parameter budget.
+    ES-DE read/write seams, the platform-slug-to-system resolver, the
+    bundled RetroDECK paths provider, and the cross-service BIOS
+    checker. Bundled here so the ctor stays within the S107 parameter
+    budget.
     """
 
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     core_info: CoreInfoProvider
     gamelist_editor: GamelistXmlEditor
+    resolve_system: SystemResolver
     retrodeck_paths: RetroDeckPaths
     bios_checker: BiosChecker
 
@@ -54,13 +57,15 @@ class CoreService:
         self._logger = config.logger
         self._core_info = config.core_info
         self._gamelist_editor = config.gamelist_editor
+        self._resolve_system = config.resolve_system
         self._retrodeck_paths = config.retrodeck_paths
         self._bios_checker = config.bios_checker
 
     async def get_available_cores(self, platform_slug: str) -> dict[str, Any]:
         """Return available cores for a platform along with the active selection."""
-        cores = self._core_info.get_available_cores(platform_slug)
-        active_so, active_label = self._core_info.get_active_core(platform_slug)
+        system = self._resolve_system(platform_slug)
+        cores = self._core_info.get_available_cores(system)
+        active_so, active_label = self._core_info.get_active_core(system)
         return {
             "cores": cores,
             "active_core": active_so,
@@ -70,10 +75,10 @@ class CoreService:
     def _set_system_core_io(
         self,
         retrodeck_home: str,
-        platform_slug: str,
+        system: str,
         core_label: str,
     ) -> None:
-        self._gamelist_editor.set_system_override(retrodeck_home, platform_slug, core_label or None)
+        self._gamelist_editor.set_system_override(retrodeck_home, system, core_label or None)
         self._core_info.reset_cache()
 
     async def set_system_core(self, platform_slug: str, core_label: str) -> dict[str, Any]:
@@ -89,12 +94,13 @@ class CoreService:
         retrodeck_home = self._retrodeck_paths.retrodeck_home()
         if not retrodeck_home:
             return {"success": False, "message": "RetroDECK home not found"}
+        system = self._resolve_system(platform_slug)
         try:
             await self._loop.run_in_executor(
                 None,
                 self._set_system_core_io,
                 retrodeck_home,
-                platform_slug,
+                system,
                 core_label,
             )
             bios = await self._bios_checker.check_platform_bios(platform_slug)
@@ -106,11 +112,11 @@ class CoreService:
     def _set_game_core_io(
         self,
         retrodeck_home: str,
-        platform_slug: str,
+        system: str,
         rom_path: str,
         core_label: str,
     ) -> None:
-        self._gamelist_editor.set_game_override(retrodeck_home, platform_slug, rom_path, core_label or None)
+        self._gamelist_editor.set_game_override(retrodeck_home, system, rom_path, core_label or None)
         self._core_info.reset_cache()
 
     async def set_game_core(self, platform_slug: str, rom_path: str, core_label: str) -> dict[str, Any]:
@@ -125,12 +131,13 @@ class CoreService:
         retrodeck_home = self._retrodeck_paths.retrodeck_home()
         if not retrodeck_home:
             return {"success": False, "message": "RetroDECK home not found"}
+        system = self._resolve_system(platform_slug)
         try:
             await self._loop.run_in_executor(
                 None,
                 self._set_game_core_io,
                 retrodeck_home,
-                platform_slug,
+                system,
                 rom_path,
                 core_label,
             )

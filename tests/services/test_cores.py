@@ -41,6 +41,23 @@ class FakeGamelistEditor:
         return True
 
 
+class FakeSystemResolver:
+    """In-memory ``SystemResolver`` for tests.
+
+    Maps known RomM platform slugs to RetroDECK systems and records each
+    call so tests can assert resolution happened. Unknown slugs fall
+    through unchanged, mirroring the real resolver's pass-through.
+    """
+
+    def __init__(self, mapping: dict[str, str] | None = None) -> None:
+        self.mapping = mapping if mapping is not None else {}
+        self.calls: list[tuple[str, str | None]] = []
+
+    def __call__(self, platform_slug: str, platform_fs_slug: str | None = None) -> str:
+        self.calls.append((platform_slug, platform_fs_slug))
+        return self.mapping.get(platform_slug, platform_slug)
+
+
 class FakeBiosChecker:
     """In-memory ``BiosChecker`` for tests (only implements the async entry CoreService uses)."""
 
@@ -82,6 +99,17 @@ def gamelist_editor() -> FakeGamelistEditor:
 
 
 @pytest.fixture
+def resolve_system() -> FakeSystemResolver:
+    return FakeSystemResolver(
+        mapping={
+            "dc": "dreamcast",
+            "sms": "mastersystem",
+            "neo-geo-pocket": "ngp",
+        }
+    )
+
+
+@pytest.fixture
 def bios_checker() -> FakeBiosChecker:
     return FakeBiosChecker()
 
@@ -92,13 +120,22 @@ def retrodeck_paths() -> FakeRetroDeckPaths:
 
 
 @pytest.fixture
-def service(event_loop, logger, core_info, gamelist_editor, bios_checker, retrodeck_paths) -> CoreService:
+def service(
+    event_loop,
+    logger,
+    core_info,
+    gamelist_editor,
+    resolve_system,
+    bios_checker,
+    retrodeck_paths,
+) -> CoreService:
     return CoreService(
         config=CoreServiceConfig(
             loop=event_loop,
             logger=logger,
             core_info=core_info,
             gamelist_editor=gamelist_editor,
+            resolve_system=resolve_system,
             retrodeck_paths=retrodeck_paths,
             bios_checker=bios_checker,
         ),
@@ -252,3 +289,65 @@ class TestSetGameCore:
         assert gamelist_editor.game_calls == [
             ("/home/deck/retrodeck", "n64", "n64/zelda.z64", "Mupen64Plus"),
         ]
+
+
+# ── slug → system normalization ────────────────────────────────────────
+#
+# The raw RomM platform_slug (dc, sms, neo-geo-pocket) must be resolved to
+# the RetroDECK system (dreamcast, mastersystem, ngp) BEFORE it reaches the
+# ES-DE core read/write seams. The BIOS recheck, by contrast, stays on the
+# RAW slug — that is BIOS space, owned by FirmwareService.
+
+
+class TestSlugNormalization:
+    @pytest.mark.parametrize(
+        ("slug", "system"),
+        [
+            ("dc", "dreamcast"),
+            ("sms", "mastersystem"),
+            ("neo-geo-pocket", "ngp"),
+            ("snes", "snes"),  # identity: slug already equals system
+        ],
+    )
+    def test_get_available_cores_resolves_system(self, event_loop, service, core_info, resolve_system, slug, system):
+        event_loop.run_until_complete(service.get_available_cores(slug))
+        # Both read seams receive the NORMALIZED system, not the raw slug.
+        assert core_info.available_cores_calls == [system]
+        assert core_info.active_core_calls == [(system, None)]
+        assert resolve_system.calls == [(slug, None)]
+
+    @pytest.mark.parametrize(
+        ("slug", "system"),
+        [
+            ("dc", "dreamcast"),
+            ("sms", "mastersystem"),
+            ("neo-geo-pocket", "ngp"),
+            ("snes", "snes"),
+        ],
+    )
+    def test_set_system_core_resolves_system_keeps_raw_bios(
+        self, event_loop, service, gamelist_editor, bios_checker, slug, system
+    ):
+        event_loop.run_until_complete(service.set_system_core(slug, "Core"))
+        # ES-DE write seam receives the NORMALIZED system.
+        assert gamelist_editor.system_calls == [("/home/deck/retrodeck", system, "Core")]
+        # BIOS recheck receives the RAW slug.
+        assert bios_checker.calls == [(slug, None)]
+
+    @pytest.mark.parametrize(
+        ("slug", "system"),
+        [
+            ("dc", "dreamcast"),
+            ("sms", "mastersystem"),
+            ("neo-geo-pocket", "ngp"),
+            ("snes", "snes"),
+        ],
+    )
+    def test_set_game_core_resolves_system_keeps_raw_bios(
+        self, event_loop, service, gamelist_editor, bios_checker, slug, system
+    ):
+        event_loop.run_until_complete(service.set_game_core(slug, f"{slug}/game.rom", "Core"))
+        # ES-DE write seam receives the NORMALIZED system; rom_path is verbatim.
+        assert gamelist_editor.game_calls == [("/home/deck/retrodeck", system, f"{slug}/game.rom", "Core")]
+        # BIOS recheck receives the RAW slug (filename derived from rom_path).
+        assert bios_checker.calls == [(slug, f"{slug}/game.rom")]

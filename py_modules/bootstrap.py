@@ -539,6 +539,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             firmware_file_store=cfg.adapters.firmware_file_store,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.adapters.core_info_provider,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
@@ -601,6 +602,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             logger=cfg.runtime.logger,
             core_info=cfg.adapters.core_info_provider,
             gamelist_editor=cfg.adapters.gamelist_editor,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             bios_checker=firmware_service,
         ),

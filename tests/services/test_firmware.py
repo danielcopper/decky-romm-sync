@@ -24,6 +24,24 @@ from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 
 
+class FakeSystemResolver:
+    """In-memory ``SystemResolver`` for tests.
+
+    Maps known RomM platform slugs to RetroDECK systems and records each
+    call. Unknown slugs fall through unchanged, mirroring the real
+    resolver's pass-through. Used to assert the core read seams receive a
+    normalized system while BIOS-folder lookups stay on the raw slug.
+    """
+
+    def __init__(self, mapping: dict[str, str] | None = None) -> None:
+        self.mapping = mapping if mapping is not None else {}
+        self.calls: list[tuple[str, str | None]] = []
+
+    def __call__(self, platform_slug: str, platform_fs_slug: str | None = None) -> str:
+        self.calls.append((platform_slug, platform_fs_slug))
+        return self.mapping.get(platform_slug, platform_slug)
+
+
 def _make_clock() -> FakeClock:
     """Return a fresh FakeClock pinned to a synthetic instant."""
     return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
@@ -57,6 +75,7 @@ def _make_firmware_service(
     firmware_file_store=None,
     retrodeck_paths: FakeRetroDeckPaths | None = None,
     core_info: FakeCoreInfoProvider | None = None,
+    resolve_system: FakeSystemResolver | None = None,
     logger=None,
     load_registry: bool = True,
 ) -> FirmwareService:
@@ -78,6 +97,7 @@ def _make_firmware_service(
             firmware_file_store=firmware_file_store if firmware_file_store is not None else FirmwareFileAdapter(),
             retrodeck_paths=retrodeck_paths if retrodeck_paths is not None else FakeRetroDeckPaths(),
             core_info=core_info if core_info is not None else FakeCoreInfoProvider(),
+            resolve_system=resolve_system if resolve_system is not None else FakeSystemResolver(),
             uow_factory=uow_factory if uow_factory is not None else FakeUnitOfWorkFactory(),
         ),
     )
@@ -243,6 +263,49 @@ class TestGetFirmwareStatus:
         dc_plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
         assert len(dc_plat["files"]) == 2
         assert all(not f["downloaded"] for f in dc_plat["files"])  # get_firmware_status files are dicts
+
+    @pytest.mark.asyncio
+    async def test_enrich_resolves_system_for_cores_keeps_raw_slug_for_platform(self, tmp_path):
+        """Per-platform core reads get the NORMALIZED system; entry slug stays raw.
+
+        ``_enrich_platform_map`` keys ``platform_slug`` / ``has_games`` /
+        BIOS-folder file lookups on the raw RomM/BIOS-folder slug (ADR-0010 §4)
+        but must feed the resolved RetroDECK system to the ``get_active_core`` /
+        ``get_available_cores`` seams (ADR-0010 §2).
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        core_info = FakeCoreInfoProvider(
+            active_core=("flycast_libretro.so", "Flycast"),
+            available_cores=[{"label": "Flycast", "so": "flycast_libretro.so"}],
+        )
+        resolver = FakeSystemResolver(mapping={"dc": "dreamcast"})
+        fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "bios_dc.bin",
+                "file_path": "bios/dc/bios_dc.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+        result = await fw.get_firmware_status()
+
+        dc_plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        # Entry identity stays on the RAW slug.
+        assert dc_plat["platform_slug"] == "dc"
+        # Active-core data resolved under the NORMALIZED system surfaces on the entry.
+        assert dc_plat["active_core"] == "flycast_libretro.so"
+        assert dc_plat["available_cores"] == [{"label": "Flycast", "so": "flycast_libretro.so"}]
+        # Both core read seams received the NORMALIZED system, not the raw slug.
+        assert core_info.active_core_calls == [("dreamcast", None)]
+        assert core_info.available_cores_calls == ["dreamcast"]
+        assert resolver.calls == [("dc", None)]
 
     @pytest.mark.asyncio
     async def test_has_games_reflects_synced_roms(self, plugin, fw):
@@ -915,6 +978,60 @@ class TestCheckPlatformBiosRequired:
         assert classifications["alien.bin"] == "unknown"
 
 
+class TestCheckPlatformBiosSlugNormalization:
+    """check_platform_bios resolves slug→system for cores, keeps raw slug for BIOS.
+
+    The firmware ``file_path`` and bios registry are keyed on the raw RomM
+    platform slug (BIOS-folder vocabulary, ADR-0010 §4). The active-core /
+    available-cores reads must instead receive the resolved RetroDECK system.
+    """
+
+    @pytest.mark.parametrize(
+        ("slug", "system"),
+        [
+            ("dc", "dreamcast"),
+            ("sms", "mastersystem"),
+            ("neo-geo-pocket", "ngp"),
+            ("gba", "gba"),  # identity: slug already equals system
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_resolves_system_for_cores_keeps_raw_slug_for_bios(self, slug, system):
+        from unittest.mock import AsyncMock, MagicMock
+
+        core_info = FakeCoreInfoProvider(
+            active_core=("flycast_libretro.so", "Flycast"),
+            available_cores=[{"label": "Flycast", "so": "flycast_libretro.so"}],
+        )
+        resolver = FakeSystemResolver(mapping={"dc": "dreamcast", "sms": "mastersystem", "neo-geo-pocket": "ngp"})
+        fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "boot.bin",
+                "file_path": f"bios/{slug}/boot.bin",
+                "file_size_bytes": 512,
+                "md5_hash": "",
+            },
+        ]
+        fw._bios_registry = {"platforms": {slug: {"boot.bin": {"description": "Boot", "required": True, "md5": ""}}}}
+        fw._bios_files_index = {"boot.bin": {"description": "Boot", "required": True, "md5": "", "platform": slug}}
+
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+        result = await fw.check_platform_bios(slug)
+
+        # RAW slug matched the firmware file_path + registry, so a file is found.
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 1
+        # Both core read seams received the NORMALIZED system.
+        assert core_info.active_core_calls == [(system, None)]
+        assert core_info.available_cores_calls == [system]
+        assert resolver.calls == [(slug, None)]
+
+
 class TestDownloadRequiredFirmware:
     @pytest.mark.asyncio
     async def test_downloads_required_only(self, plugin, fw, tmp_path):
@@ -968,6 +1085,62 @@ class TestDownloadRequiredFirmware:
         assert result["downloaded"] == 1
         assert 1 in download_called_ids
         assert 2 not in download_called_ids
+
+    @pytest.mark.asyncio
+    async def test_resolves_system_for_active_core_keeps_raw_slug_for_filter(self):
+        """Active-core read gets the NORMALIZED system; the firmware filter stays raw.
+
+        ``download_required_firmware`` keys the firmware-slug filter on the raw
+        RomM/BIOS-folder slug (ADR-0010 §4) but must resolve the slug to a
+        RetroDECK system before the ``get_active_core`` read (ADR-0010 §2) so the
+        per-core required flags use the correct active core.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        core_info = FakeCoreInfoProvider(active_core=("flycast_libretro.so", "Flycast"))
+        resolver = FakeSystemResolver(mapping={"dc": "dreamcast"})
+        fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "boot.bin",
+                "file_path": "bios/dc/boot.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        # Per-core required flag keyed on the active-core .so resolved via the system.
+        fw._bios_files_index = {
+            "boot.bin": {
+                "description": "Boot",
+                "required": False,
+                "cores": {"flycast_libretro.so": {"required": True}},
+                "platform": "dc",
+            },
+        }
+        # run_in_executor returns the firmware list (the only executor call before
+        # the batch); download_firmware is awaited directly and is patched below.
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+        download_called_ids: list[int] = []
+
+        async def fake_download_firmware(fw_id):
+            download_called_ids.append(fw_id)
+            return {"success": True}
+
+        with patch.object(fw, "download_firmware", side_effect=fake_download_firmware):
+            result = await fw.download_required_firmware("dc")
+
+        # RAW slug matched the firmware file_path filter, so the file is considered.
+        # The per-core required flag (keyed on the active core from the NORMALIZED
+        # system) marked it required, so it was downloaded.
+        assert result["downloaded"] == 1
+        assert download_called_ids == [1]
+        # get_active_core received the NORMALIZED system, not the raw slug.
+        assert core_info.active_core_calls == [("dreamcast", None)]
+        assert resolver.calls == [("dc", None)]
 
     @pytest.mark.asyncio
     async def test_skips_already_downloaded_required(self, plugin, fw, tmp_path):
@@ -1824,6 +1997,7 @@ class TestCheckPlatformBiosCached:
         firmware_cache=None,
         firmware_cache_epoch: float = 0,
         bios_registry=None,
+        resolve_system=None,
     ) -> tuple[FirmwareService, FakeCoreInfoProvider]:
         import logging
 
@@ -1832,6 +2006,7 @@ class TestCheckPlatformBiosCached:
             plugin_dir="/fake",
             logger=logging.getLogger("test"),
             core_info=core_info,
+            resolve_system=resolve_system,
         )
         fw._firmware_cache = firmware_cache
         fw._firmware_cache_epoch = firmware_cache_epoch
@@ -1911,6 +2086,52 @@ class TestCheckPlatformBiosCached:
 
         api.list_firmware.assert_not_called()
         api.get_firmware.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("slug", "system"),
+        [
+            ("dc", "dreamcast"),
+            ("sms", "mastersystem"),
+            ("neo-geo-pocket", "ngp"),
+            ("gba", "gba"),  # identity: slug already equals system
+        ],
+    )
+    def test_resolves_system_for_cores_keeps_raw_slug_for_bios(self, tmp_path, slug, system):
+        """Core read seams get the NORMALIZED system; BIOS folder lookup uses RAW slug.
+
+        The firmware cache ``file_path`` and the registry are keyed on the raw
+        platform slug (BIOS-folder vocabulary). The active-core / available-cores
+        reads must instead receive the resolved RetroDECK system.
+        """
+        resolver = FakeSystemResolver(mapping={"dc": "dreamcast", "sms": "mastersystem", "neo-geo-pocket": "ngp"})
+        fw, core_info = self._make_service(
+            firmware_cache=[
+                {
+                    "file_path": f"bios/{slug}/boot.bin",
+                    "file_name": "boot.bin",
+                    "file_size_bytes": 512,
+                    "md5_hash": "abc",
+                    "id": 1,
+                },
+            ],
+            firmware_cache_epoch=7.0,
+            bios_registry={"platforms": {slug: {"boot.bin": {"required": True, "md5": "abc"}}}},
+            resolve_system=resolver,
+        )
+        core_info.active_core = ("flycast_libretro.so", "Flycast")
+        core_info.available_cores = [{"label": "Flycast", "so": "flycast_libretro.so"}]
+
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
+            result = fw.check_platform_bios_cached(slug)
+
+        assert result is not None
+        # The RAW slug matched the cache + registry, so a file is found.
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 1
+        # Both core read seams received the NORMALIZED system.
+        assert core_info.active_core_calls == [(system, None)]
+        assert core_info.available_cores_calls == [system]
+        assert resolver.calls == [(slug, None)]
 
 
 class TestFirmwareCachePersistence:

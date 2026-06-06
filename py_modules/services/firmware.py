@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         FirmwareFileStore,
         RetroDeckPaths,
         RommFirmwareApi,
+        SystemResolver,
         UnitOfWorkFactory,
     )
 
@@ -57,6 +58,7 @@ class FirmwareServiceConfig:
     firmware_file_store: FirmwareFileStore
     retrodeck_paths: RetroDeckPaths
     core_info: CoreInfoProvider
+    resolve_system: SystemResolver
     uow_factory: UnitOfWorkFactory
 
 
@@ -76,6 +78,7 @@ class FirmwareService:
         self._firmware_file_store = config.firmware_file_store
         self._retrodeck_paths = config.retrodeck_paths
         self._core_info = config.core_info
+        self._resolve_system = config.resolve_system
         self._uow_factory = config.uow_factory
         self._bios_registry: dict[str, Any] = {}
         self._bios_files_index: dict[str, dict[str, Any]] | None = None
@@ -263,8 +266,9 @@ class FirmwareService:
         if self._firmware_cache is None:
             return None
 
+        system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        active_core_so, active_core_label = self._core_info.get_active_core(platform_slug, rom_filename=rom_filename)
+        active_core_so, active_core_label = self._core_info.get_active_core(system, rom_filename=rom_filename)
 
         registry_platform = {}
         for slug in fw_slugs:
@@ -300,7 +304,7 @@ class FirmwareService:
             "files": [asdict(f) for f in files],
             "active_core": active_core_so,
             "active_core_label": active_core_label,
-            "available_cores": self._core_info.get_available_cores(platform_slug),
+            "available_cores": self._core_info.get_available_cores(system),
             "cached_at": self._firmware_cache_epoch,
         }
 
@@ -352,13 +356,20 @@ class FirmwareService:
             return {rom.platform_slug for rom in uow.roms.iter_all() if rom.platform_slug}
 
     def _enrich_platform_map(self, platforms_map, installed_slugs):
-        """Add core info and game-installed flags to each platform entry."""
+        """Add core info and game-installed flags to each platform entry.
+
+        The core read seams key by the resolved RetroDECK ``system`` (ADR-0010
+        §2), so each entry's raw RomM/BIOS-folder slug is normalized before the
+        ``get_active_core`` / ``get_available_cores`` calls; ``has_games`` and the
+        BIOS-folder file lookups stay on the raw slug (their own vocabulary).
+        """
         for plat in platforms_map.values():
             slug = plat["platform_slug"]
-            core_so, core_label = self._core_info.get_active_core(slug)
+            system = self._resolve_system(slug)
+            core_so, core_label = self._core_info.get_active_core(system)
             plat["active_core"] = core_so
             plat["active_core_label"] = core_label
-            plat["available_cores"] = self._core_info.get_available_cores(slug)
+            plat["available_cores"] = self._core_info.get_available_cores(system)
             plat["files"] = [self._enrich_firmware_file(f, core_so=core_so) for f in plat["files"]]
             plat["has_games"] = slug in installed_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
@@ -529,8 +540,9 @@ class FirmwareService:
             resp["downloaded"] = 0
             return resp
 
+        system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        core_so, _ = self._core_info.get_active_core(platform_slug)
+        core_so, _ = self._core_info.get_active_core(system)
 
         platform_firmware = [
             fw
@@ -548,8 +560,9 @@ class FirmwareService:
 
     async def check_platform_bios(self, platform_slug, rom_filename=None):
         """Check if RomM has firmware for this platform and whether it's downloaded."""
+        system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        active_core_so, active_core_label = self._core_info.get_active_core(platform_slug, rom_filename=rom_filename)
+        active_core_so, active_core_label = self._core_info.get_active_core(system, rom_filename=rom_filename)
 
         # Build combined registry entries for this platform from all mapped slugs
         registry_platform = {}
@@ -605,7 +618,7 @@ class FirmwareService:
             "files": [asdict(f) for f in files],
             "active_core": active_core_so,
             "active_core_label": active_core_label,
-            "available_cores": self._core_info.get_available_cores(platform_slug),
+            "available_cores": self._core_info.get_available_cores(system),
         }
 
     def _delete_platform_bios_io(self, platform_slug, files):
