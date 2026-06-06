@@ -153,6 +153,26 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+  # Branch-protection shim: the `sonarcloud` job is skipped on Dependabot PRs
+  # (no SONAR_TOKEN access), and a skipped required check never reports success,
+  # which would deadlock every Dependabot PR. This gate always reports, passing
+  # when SonarCloud succeeded or was skipped and failing only when it failed.
+  # Make THIS job the required status check instead of `sonarcloud`.
+  sonar-gate:
+    runs-on: ubuntu-latest
+    needs: [sonarcloud]
+    if: always()
+    steps:
+      - name: Require SonarCloud to pass (skipped on Dependabot PRs)
+        env:
+          SONAR_RESULT: ${{ needs.sonarcloud.result }}
+        run: |
+          echo "SonarCloud job result: $SONAR_RESULT"
+          if [ "$SONAR_RESULT" = "failure" ] || [ "$SONAR_RESULT" = "cancelled" ]; then
+            echo "::error::SonarCloud did not pass"
+            exit 1
+          fi
+
   markdownlint:
     runs-on: ubuntu-latest
     steps:

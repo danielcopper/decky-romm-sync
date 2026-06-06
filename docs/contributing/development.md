@@ -100,8 +100,10 @@ See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Code Quality
 
-- **SonarCloud** — CI-based analysis on every PR and push to main. Quality Gate enforces 80% coverage on new code, 0
-  bugs, 0 vulnerabilities.
+- **SonarCloud** — CI-based analysis on every human PR and push to main. Quality Gate enforces 80% coverage on new code,
+  0 bugs, 0 vulnerabilities. The scan is skipped on Dependabot PRs (no `SONAR_TOKEN` access in that restricted context);
+  the required status check is the `sonar-gate` job, which passes when SonarCloud succeeded or was skipped and fails
+  only when it failed — so dependency PRs aren't deadlocked on a check that can never run for them.
 - **Ruff** — Python linting in CI. Expanded ruleset includes B (bugbear), SIM (simplify), UP (pyupgrade), RUF
   (ruff-specific), and ARG (unused arguments) in addition to the base E/F rules.
 - **basedpyright** — Type checking in CI. Checks all source files including the test suite (tests/ is not excluded).
