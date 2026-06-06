@@ -9,8 +9,8 @@ Common issues and how to fix them.
 **Symptom**: A game for a system that requires BIOS files (PlayStation, Saturn, Dreamcast, etc.) fails to launch or
 shows a black screen.
 
-**Fix**: Check the game's detail page — if the BIOS indicator is orange, you're missing required BIOS files. Go to
-**BIOS Files** in the QAM and tap **Download All** for the relevant platform. See [BIOS Management](bios-management.md)
+**Fix**: Check the game's detail page — if the BIOS indicator is orange, you're missing required BIOS files. Go to the
+**System** tab in the QAM and tap **Download All** for the relevant platform. See [BIOS Management](bios-management.md)
 for details.
 
 ### ROM not downloaded
@@ -161,7 +161,7 @@ games affected. This only removes local save files — saves already uploaded to
 ### Delete BIOS Files
 
 Deletes downloaded BIOS files for a specific platform. Shows each platform that has BIOS files present locally. You can
-re-download them later from the BIOS Manager.
+re-download them later from the **System** tab.
 
 <!-- Screenshot: Danger Zone page showing removal options and whitelist -->
 

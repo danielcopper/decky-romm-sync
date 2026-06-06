@@ -198,6 +198,9 @@ class Plugin:
     async def set_game_core(self, platform_slug, rom_path, core_label):
         return await self._core_service.set_game_core(platform_slug, rom_path, core_label)
 
+    async def get_platform_core_info(self, platform_slug):
+        return await self._core_service.get_available_cores(platform_slug)
+
     # ── Firmware delegation to FirmwareService ──────────────
 
     async def get_firmware_status(self):

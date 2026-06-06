@@ -262,13 +262,17 @@ class FirmwareService:
 
         Returns None if the firmware cache is empty (never fetched).
         Includes ``cached_at`` timestamp so the frontend can decide staleness.
+        The active core is resolved only to drive core-aware BIOS filtering — it
+        is an INPUT to ``collect_firmware_status``, never served back to the UI.
+        Core info (active core, available cores) reaches the frontend through the
+        dedicated ``get_platform_core_info`` path, not this BIOS payload (#923).
         """
         if self._firmware_cache is None:
             return None
 
         system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        active_core_so, active_core_label = self._core_info.get_active_core(system, rom_filename=rom_filename)
+        active_core_so, _ = self._core_info.get_active_core(system, rom_filename=rom_filename)
 
         registry_platform = {}
         for slug in fw_slugs:
@@ -288,9 +292,6 @@ class FirmwareService:
         if not files:
             return {
                 "needs_bios": False,
-                "active_core": active_core_so,
-                "active_core_label": active_core_label,
-                "available_cores": self._core_info.get_available_cores(system),
                 "cached_at": self._firmware_cache_epoch,
             }
 
@@ -308,9 +309,6 @@ class FirmwareService:
             "required_downloaded": sum(1 for f in required_files if f.downloaded),
             "unknown_count": sum(1 for f in files if f.classification == "unknown"),
             "files": [asdict(f) for f in files],
-            "active_core": active_core_so,
-            "active_core_label": active_core_label,
-            "available_cores": self._core_info.get_available_cores(system),
             "cached_at": self._firmware_cache_epoch,
         }
 
@@ -565,10 +563,17 @@ class FirmwareService:
         return {"success": True, "message": msg, "downloaded": downloaded}
 
     async def check_platform_bios(self, platform_slug, rom_filename=None):
-        """Check if RomM has firmware for this platform and whether it's downloaded."""
+        """Check if RomM has firmware for this platform and whether it's downloaded.
+
+        Returns BIOS status only. The active core is resolved purely to filter the
+        firmware list by what THIS core needs (an INPUT to ``collect_firmware_status``
+        so ``required_count`` / the missing-BIOS badge stay core-aware); it is never
+        served back to the UI. Core info reaches the frontend through the dedicated
+        ``get_platform_core_info`` path, not this payload (#923).
+        """
         system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        active_core_so, active_core_label = self._core_info.get_active_core(system, rom_filename=rom_filename)
+        active_core_so, _ = self._core_info.get_active_core(system, rom_filename=rom_filename)
 
         # Build combined registry entries for this platform from all mapped slugs
         registry_platform = {}
@@ -589,12 +594,7 @@ class FirmwareService:
             files = collect_firmware_status(items, registry_platform, active_core_so)
         except Exception:
             if not registry_platform:
-                return {
-                    "needs_bios": False,
-                    "active_core": active_core_so,
-                    "active_core_label": active_core_label,
-                    "available_cores": self._core_info.get_available_cores(system),
-                }
+                return {"needs_bios": False}
             bios_base = self._retrodeck_paths.bios_path()
             registry_items = [
                 {
@@ -609,12 +609,7 @@ class FirmwareService:
             files = collect_firmware_status(registry_items, registry_platform, active_core_so)
 
         if not files:
-            return {
-                "needs_bios": False,
-                "active_core": active_core_so,
-                "active_core_label": active_core_label,
-                "available_cores": self._core_info.get_available_cores(system),
-            }
+            return {"needs_bios": False}
 
         server_count = len(files)
         local_count = sum(1 for f in files if f.downloaded)
@@ -632,9 +627,6 @@ class FirmwareService:
             "required_downloaded": sum(1 for f in required_files if f.downloaded),
             "unknown_count": sum(1 for f in files if f.classification == "unknown"),
             "files": [asdict(f) for f in files],
-            "active_core": active_core_so,
-            "active_core_label": active_core_label,
-            "available_cores": self._core_info.get_available_cores(system),
         }
 
     def _delete_platform_bios_io(self, platform_slug, files):

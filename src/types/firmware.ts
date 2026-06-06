@@ -26,6 +26,27 @@ export interface AvailableCore {
   is_default: boolean;
 }
 
+/**
+ * Response shape of the `get_platform_core_info` callable — the dedicated
+ * single-platform core-info path, decoupled from the per-game BIOS payload
+ * (#923). The per-game detail page (`RomMPlaySection` / `RomMGameInfoPanel`)
+ * reads core data from here. The System tab's multi-platform overview instead
+ * reads core data off the `get_firmware_status` payload (`FirmwarePlatformExt`),
+ * which enumerates every platform in one call — see that interface below.
+ */
+export interface CoreInfo {
+  cores: AvailableCore[];
+  active_core: string | null;
+  active_core_label: string | null;
+}
+
+/**
+ * Per-platform entry in the `get_firmware_status` overview. Carries the
+ * platform's active/available cores alongside its BIOS file state so the System
+ * tab can render the combined core+BIOS overview for every platform from one
+ * call. This is the system-wide overview path — distinct from the per-game
+ * `check_platform_bios` payload, which no longer carries any core fields (#923).
+ */
 export interface FirmwarePlatformExt extends FirmwarePlatform {
   has_games?: boolean;
   all_downloaded?: boolean;
@@ -61,9 +82,6 @@ export interface BiosStatus {
   required_downloaded?: number;
   unknown_count?: number;
   files?: BiosFileStatus[];
-  active_core?: string;
-  active_core_label?: string;
-  available_cores?: AvailableCore[];
 }
 
 export interface FirmwareDownloadResult {

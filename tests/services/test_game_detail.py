@@ -549,7 +549,11 @@ class TestGetBiosStatusFound:
 
     @pytest.mark.asyncio
     async def test_returns_bios_status(self, plugin, game_detail_service):
-        """ROM with needs_bios=True returns full bios_status dict + pre-computed level/label."""
+        """ROM with needs_bios=True returns the BIOS status dict + pre-computed level/label.
+
+        The BIOS payload carries no core fields after #923 — core info is served via
+        the dedicated ``get_platform_core_info`` path.
+        """
         _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
         mock_check = AsyncMock(
             return_value={
@@ -560,9 +564,6 @@ class TestGetBiosStatusFound:
                 "required_count": 2,
                 "required_downloaded": 1,
                 "files": [{"file_name": "gba_bios.bin", "downloaded": True}],
-                "active_core": "mgba_libretro.so",
-                "active_core_label": "mGBA",
-                "available_cores": [],
             }
         )
         game_detail_service._bios_checker.check_platform_bios = mock_check
@@ -576,10 +577,51 @@ class TestGetBiosStatusFound:
         assert bs["all_downloaded"] is False
         assert bs["required_count"] == 2
         assert bs["required_downloaded"] == 1
-        assert bs["active_core_label"] == "mGBA"
-        # Pre-computed display fields removed from the frontend.
+        # bios_level/bios_label are computed against the active core's required
+        # counts (core-aware badge) by the BIOS checker, NOT a platform default.
         assert result["bios_level"] == "partial"
         assert result["bios_label"] == "1/2 required"
+
+    @pytest.mark.asyncio
+    async def test_badge_keys_off_active_core(self, plugin, game_detail_service):
+        """The missing-BIOS badge is computed against the ACTIVE CORE's requirements (#923).
+
+        Two cores for the same platform produce different ``required_count`` /
+        ``required_downloaded`` from ``check_platform_bios`` (it filters by the
+        active core). ``get_bios_status`` derives bios_level/label straight from
+        those counts — so the badge follows the active core, not a platform default.
+        """
+        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
+
+        # gpSP requires gba_bios.bin and it is missing → missing badge.
+        gpsp_payload = {
+            "needs_bios": True,
+            "server_count": 1,
+            "local_count": 0,
+            "all_downloaded": False,
+            "required_count": 1,
+            "required_downloaded": 0,
+            "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
+        }
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(return_value=gpsp_payload)
+        result = await game_detail_service.get_bios_status(42)
+        assert result["bios_level"] == "missing"
+        assert result["bios_label"] == "Missing"
+
+        # mGBA treats gba_bios.bin as optional → required_count 0 → no missing badge.
+        mgba_payload = {
+            "needs_bios": True,
+            "server_count": 1,
+            "local_count": 0,
+            "all_downloaded": False,
+            "required_count": 0,
+            "required_downloaded": 0,
+            "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
+        }
+        game_detail_service._bios_checker.check_platform_bios = AsyncMock(return_value=mgba_payload)
+        result = await game_detail_service.get_bios_status(42)
+        assert result["bios_level"] == "ok"
+        assert result["bios_label"] == "OK"
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_bios_needed(self, plugin, game_detail_service):

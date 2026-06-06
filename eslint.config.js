@@ -7,7 +7,22 @@ import eslintConfigPrettier from "eslint-config-prettier";
 import globals from "globals";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "defaults", "bin", "coverage", ".worktrees", "py_modules/vdf"] },
+  // `.venv` (local uv/mise Python env) and `site` (local mkdocs build output) are
+  // gitignored build artifacts that don't exist in a clean CI checkout; ignoring
+  // them keeps local `pnpm lint` from choking on their minified vendored JS.
+  {
+    ignores: [
+      "dist",
+      "node_modules",
+      "defaults",
+      "bin",
+      "coverage",
+      ".worktrees",
+      ".venv",
+      "site",
+      "py_modules/vdf",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   react.configs.flat.recommended,

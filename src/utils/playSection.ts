@@ -7,14 +7,22 @@
  * sectionRefresh.ts. Anything stateful belongs in the component itself.
  */
 
-import type { AvailableCore, BiosStatus, SaveStatus, SaveSyncDisplay } from "../types";
+import type { AvailableCore, CoreInfo, SaveStatus, SaveSyncDisplay } from "../types";
 import { hasAnySaveConflict } from "./saveStatus";
 import { formatTimeAgo } from "./formatters";
 
+/** BIOS-only fields for the play-section row. Core data (active core, available
+ *  cores) is sourced independently via `extractCoreInfo` from the dedicated
+ *  `get_platform_core_info` path — it no longer rides the BIOS payload (#923). */
 export interface BiosInfoFields {
   biosNeeded: boolean;
   biosStatus: "ok" | "partial" | "missing" | null;
   biosLabel: string;
+}
+
+/** Core-selection fields for the play-section row, derived from the dedicated
+ *  `get_platform_core_info` path (#923), decoupled from BIOS status. */
+export interface CoreInfoFields {
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
   availableCores: AvailableCore[];
@@ -51,22 +59,30 @@ export function applySaveSyncDisplay(
   return { status: "none", label: "No saves" };
 }
 
-/** Project a BiosStatus + pre-computed level/label into the narrow set of
- *  fields the play-section row needs. `bios_level` and `bios_label` are
- *  computed by the backend so the frontend never re-derives them. */
-export function extractBiosInfo(
-  b: BiosStatus,
-  level: "ok" | "partial" | "missing" | null,
-  label: string | null,
-): BiosInfoFields {
-  const activeCoreLabel = b.active_core_label ?? null;
-  const availableCores = b.available_cores ?? [];
-  const defaultCore = availableCores.find((c) => c.is_default);
-  const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
+/** Project the backend's pre-computed BIOS level/label into the BIOS-only fields
+ *  the play-section row needs. `level` and `label` are computed by the backend
+ *  so the frontend never re-derives them. Callers only reach this when the
+ *  backend reported a BIOS need (a truthy `bios_status`), so `biosNeeded` is
+ *  always `true` here. Core data is sourced separately via `extractCoreInfo`
+ *  (the BIOS payload no longer carries it, #923). */
+export function extractBiosInfo(level: "ok" | "partial" | "missing" | null, label: string | null): BiosInfoFields {
   return {
     biosNeeded: true,
     biosStatus: level,
     biosLabel: label ?? "",
+  };
+}
+
+/** Project a CoreInfo response (from the dedicated `get_platform_core_info`
+ *  path, #923) into the core-selection fields the play-section row needs. The
+ *  active core is "default" when it equals the platform default or no override
+ *  is set. */
+export function extractCoreInfo(coreInfo: CoreInfo): CoreInfoFields {
+  const activeCoreLabel = coreInfo.active_core_label ?? null;
+  const availableCores = coreInfo.cores;
+  const defaultCore = availableCores.find((c) => c.is_default);
+  const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
+  return {
     activeCoreLabel,
     activeCoreIsDefault,
     availableCores,

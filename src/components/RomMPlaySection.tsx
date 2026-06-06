@@ -36,6 +36,7 @@ import {
   testConnection,
   getSaveStatus,
   getBiosStatus,
+  getPlatformCoreInfo,
   getSgdbResolution,
   getRomMetadata,
   refreshCoverArtwork,
@@ -48,14 +49,21 @@ import {
   debugLog,
 } from "../api/backend";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
-import type { AvailableCore, BiosStatus, SaveStatus } from "../types";
+import type { BiosStatus, SaveStatus } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
-import { applySaveSyncDisplay, extractBiosInfo, resolveSaveSyncLabel, timeoutMs } from "../utils/playSection";
+import {
+  applySaveSyncDisplay,
+  extractBiosInfo,
+  extractCoreInfo,
+  resolveSaveSyncLabel,
+  timeoutMs,
+} from "../utils/playSection";
 import {
   refreshAchievementsInBackground,
   refreshActiveSlotInBackground,
   refreshBiosInBackground,
+  refreshCoreInfoInBackground,
 } from "../utils/sectionRefresh";
 
 /** Track which appIds have had auto-artwork applied this session */
@@ -166,12 +174,19 @@ async function loadCached(
     if (cachedBios) {
       setter((prev) => ({
         ...prev,
-        ...extractBiosInfo(cachedBios as BiosStatus, cached.bios_level ?? null, cached.bios_label ?? null),
+        ...extractBiosInfo(cached.bios_level ?? null, cached.bios_label ?? null),
       }));
     }
 
     if (staleFields.includes("bios")) {
       refreshBiosInBackground(romId, cancelled, setter);
+    }
+
+    // Core info: sourced from its OWN path (#923), independent of BIOS status.
+    // Fetched non-blocking so the core button / badge can render once cores are
+    // known, regardless of whether the platform needs BIOS.
+    if (cached.platform_slug) {
+      refreshCoreInfoInBackground(cached.platform_slug, cancelled, setter);
     }
   } catch (e) {
     detach(debugLog(`RomMPlaySection: loadCached error: ${e}`));
@@ -243,24 +258,27 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       }
     };
 
-    const handleCoreChange = async () => {
+    const handleCoreChange = async (detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
       const rid = romIdRef.current;
       if (!rid) return;
-      const result = await getBiosStatus(rid);
+      // Core data comes from the dedicated core-info path (#923), keyed on the
+      // event's platform_slug to avoid a stale-closure read of InfoState. BIOS
+      // level/label still come from the (now core-free) BIOS status — the active
+      // core just switched, so the BIOS requirements may have changed.
+      const [coreInfo, biosResult] = await Promise.all([
+        getPlatformCoreInfo(detail.platform_slug),
+        getBiosStatus(rid),
+      ]);
       if (cancelled) return;
-      const b = result.bios_status;
-      if (!b) return;
-      const activeCoreLabel = b.active_core_label ?? null;
-      const availableCores = b.available_cores ?? [];
-      const defaultCore = availableCores.find((c) => c.is_default);
-      const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
       setInfo((prev) => ({
         ...prev,
-        activeCoreLabel,
-        activeCoreIsDefault,
-        availableCores,
-        biosStatus: result.bios_level,
-        biosLabel: result.bios_label ?? "",
+        ...extractCoreInfo(coreInfo),
+        // The new core may need different (or no) BIOS — re-derive biosNeeded
+        // from the refreshed status so the missing-BIOS badge keys off the
+        // active core, not the core that was active at mount (#923).
+        biosNeeded: !!biosResult.bios_status,
+        biosStatus: biosResult.bios_level,
+        biosLabel: biosResult.bios_label ?? "",
       }));
     };
 
@@ -293,7 +311,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
                 await handleSaveSyncSettingsChange(detail);
                 break;
               case "core_changed":
-                await handleCoreChange();
+                await handleCoreChange(detail);
                 break;
               case "save_sync":
                 await handleSaveSyncChange(detail);
@@ -660,31 +678,31 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   const handleChangeGameCore = async (coreLabel: string) => {
     if (!info.platformSlug || !info.romFile) return;
+    const platformSlug = info.platformSlug;
     const romPath = `./${info.romFile}`;
-    detach(debugLog(`handleChangeGameCore: slug=${info.platformSlug} romPath=${romPath} coreLabel=${coreLabel}`));
+    detach(debugLog(`handleChangeGameCore: slug=${platformSlug} romPath=${romPath} coreLabel=${coreLabel}`));
     try {
-      const result = await setGameCore(info.platformSlug, romPath, coreLabel);
-      detach(debugLog(`handleChangeGameCore: result=${JSON.stringify(result)}`));
+      const result = await setGameCore(platformSlug, romPath, coreLabel);
+      detach(debugLog(`handleChangeGameCore: result success=${result.success}`));
       if (result.success) {
         toaster.toast({ title: "RomM Sync", body: `Core set to ${coreLabel}` });
-        // Use bios_status from the set_game_core response directly (avoids cache staleness).
-        // For pre-computed level/label, re-fetch via getBiosStatus which ships them.
-        const bios = result.bios_status;
-        detach(debugLog(`handleChangeGameCore: bios active_core_label=${bios?.active_core_label}`));
-        if (bios && info.romId) {
-          const newLabel = bios.active_core_label ?? null;
-          const cores = bios.available_cores ?? info.availableCores;
-          const defaultC = cores.find((c: AvailableCore) => c.is_default);
-          const refreshed = await getBiosStatus(info.romId).catch(() => ({
-            bios_status: null as BiosStatus | null,
-            bios_level: null as "ok" | "partial" | "missing" | null,
-            bios_label: null as string | null,
-          }));
+        if (info.romId) {
+          // Core data comes from the dedicated core-info path (#923), no longer
+          // from the BIOS payload. BIOS level/label still come from getBiosStatus.
+          const [coreInfo, refreshed] = await Promise.all([
+            getPlatformCoreInfo(platformSlug),
+            getBiosStatus(info.romId).catch(() => ({
+              bios_status: null as BiosStatus | null,
+              bios_level: null as "ok" | "partial" | "missing" | null,
+              bios_label: null as string | null,
+            })),
+          ]);
           setInfo((prev) => ({
             ...prev,
-            activeCoreLabel: newLabel,
-            activeCoreIsDefault: !newLabel || (defaultC != null && newLabel === defaultC.label),
-            availableCores: cores,
+            ...extractCoreInfo(coreInfo),
+            // Re-derive biosNeeded from the refreshed status so the missing-BIOS
+            // badge keys off the now-active core (#923).
+            biosNeeded: !!refreshed.bios_status,
             biosStatus: refreshed.bios_level,
             biosLabel: refreshed.bios_label ?? "",
           }));
@@ -692,7 +710,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)
         invalidateCachedGameDetail(appId);
         globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: info.platformSlug } }),
+          new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platformSlug } }),
         );
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });

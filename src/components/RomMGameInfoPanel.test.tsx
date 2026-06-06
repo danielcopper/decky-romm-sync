@@ -228,6 +228,13 @@ describe("RomMGameInfoPanel", () => {
     vi.mocked(backend.getInstalledRom).mockResolvedValue(null);
     vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
     vi.mocked(backend.checkPlatformBios).mockResolvedValue({ needs_bios: false });
+    // Core info comes from the dedicated get_platform_core_info path (#923),
+    // decoupled from BIOS status. Default: no cores. Tests opt into shapes.
+    vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+      cores: [],
+      active_core: null,
+      active_core_label: null,
+    });
     vi.mocked(backend.getSaveStatus).mockResolvedValue({
       rom_id: 0,
       files: [],
@@ -965,10 +972,15 @@ describe("RomMGameInfoPanel", () => {
           server_count: 1,
           local_count: 1,
           all_downloaded: true,
-          active_core_label: "FROM_CORE_CHANGED",
         } as never,
         metadata: makeMetadata(),
         stale_fields: [],
+      });
+      // Core data comes from the dedicated path (#923), keyed on the event slug.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "from_core_changed.so",
+        active_core_label: "FROM_CORE_CHANGED",
+        cores: [{ core_so: "from_core_changed.so", label: "FROM_CORE_CHANGED", is_default: true }],
       });
       await act(async () => {
         globalThis.dispatchEvent(
@@ -981,12 +993,13 @@ describe("RomMGameInfoPanel", () => {
       });
       expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
       expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalled();
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes");
       // biosStatus now non-null → BIOS tab visible. Removing the
       // handler's `setState((prev) => ({ ..., biosStatus }))` line
       // makes this assertion fail.
       expect(container.textContent).toContain("BIOS");
-      // Switch to the BIOS tab and assert the new active_core_label
-      // reached the rendered Emulator column.
+      // Switch to the BIOS tab and assert the new active core label (from the
+      // dedicated core-info path) reached the rendered Emulator column.
       await act(async () => {
         globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         await Promise.resolve();
@@ -1001,16 +1014,22 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 60,
+        platform_slug: "snes",
         save_sync_enabled: true,
         bios_status: {
           platform_slug: "snes",
           server_count: 1,
           local_count: 1,
           all_downloaded: true,
-          active_core_label: "INITIAL_CORE",
         } as never,
         metadata: makeMetadata(),
         stale_fields: [],
+      });
+      // Initial core label from the dedicated path (loadData background fetch).
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "initial_core.so",
+        active_core_label: "INITIAL_CORE",
+        cores: [{ core_so: "initial_core.so", label: "INITIAL_CORE", is_default: true }],
       });
       const view = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -1718,6 +1737,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 55,
+        platform_slug: "snes",
         bios_status: {
           needs_bios: true,
           platform_slug: "snes",
@@ -1726,8 +1746,6 @@ describe("RomMGameInfoPanel", () => {
           all_downloaded: false,
           required_count: 2,
           required_downloaded: 1,
-          active_core_label: "Snes9x",
-          available_cores: [{ core_so: "snes9x_libretro", label: "Snes9x", is_default: true }],
           files: [
             {
               file_name: "bios.smc",
@@ -1747,6 +1765,12 @@ describe("RomMGameInfoPanel", () => {
         } as never,
         metadata: makeMetadata(),
         stale_fields: [],
+      });
+      // Core info (label map + Emulator column) from the dedicated path (#923).
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "snes9x_libretro",
+        active_core_label: "Snes9x",
+        cores: [{ core_so: "snes9x_libretro", label: "Snes9x", is_default: true }],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -1883,23 +1907,29 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).not.toContain("BIOS");
     });
 
-    it("biosStatusFromCache spreads the cached fields onto needs_bios=true", async () => {
+    it("biosStatusFromCache drives BIOS tab; active core comes from the dedicated path (#923)", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 1,
+        platform_slug: "snes",
         bios_status: {
           platform_slug: "snes",
           server_count: 1,
           local_count: 1,
           all_downloaded: true,
-          active_core_label: "MyCore",
         } as never,
         metadata: makeMetadata(),
         stale_fields: [],
       });
+      // Active core label is served from get_platform_core_info, not bios_status.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "mycore.so",
+        active_core_label: "MyCore",
+        cores: [{ core_so: "mycore.so", label: "MyCore", is_default: true }],
+      });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      // Active core label spread from cache reaches the BIOS tab.
+      // Active core label from the dedicated path reaches the BIOS tab's Emulator column.
       await act(async () => {
         globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
         await Promise.resolve();

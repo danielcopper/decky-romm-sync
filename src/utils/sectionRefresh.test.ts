@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from "react";
 import {
   refreshActiveSlotInBackground,
   refreshBiosInBackground,
+  refreshCoreInfoInBackground,
   refreshAchievementsInBackground,
 } from "./sectionRefresh";
 import * as backend from "../api/backend";
@@ -16,6 +17,10 @@ interface BiosState {
   biosNeeded: boolean;
   biosStatus: "ok" | "partial" | "missing" | null;
   biosLabel: string;
+  unrelated: string;
+}
+
+interface CoreState {
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
   availableCores: Array<{ core_so: string; label: string; is_default: boolean }>;
@@ -130,8 +135,9 @@ describe("refreshBiosInBackground", () => {
   it("merges the projected BIOS fields when not cancelled and payload present", async () => {
     vi.mocked(backend.getBiosStatus).mockResolvedValueOnce({
       bios_status: {
-        active_core_label: "Mupen64Plus-Next",
-        available_cores: [{ core_so: "x.so", label: "Mupen64Plus-Next", is_default: true }],
+        needs_bios: true,
+        server_count: 1,
+        local_count: 1,
       },
       bios_level: "ok",
       bios_label: "BIOS OK",
@@ -146,9 +152,6 @@ describe("refreshBiosInBackground", () => {
       biosNeeded: false,
       biosStatus: null,
       biosLabel: "",
-      activeCoreLabel: null,
-      activeCoreIsDefault: true,
-      availableCores: [],
       unrelated: "keep",
     });
     expect(next.biosNeeded).toBe(true);
@@ -158,7 +161,7 @@ describe("refreshBiosInBackground", () => {
 
   it("skips the setter when cancelled at call time", async () => {
     vi.mocked(backend.getBiosStatus).mockResolvedValueOnce({
-      bios_status: { available_cores: [] },
+      bios_status: { needs_bios: true },
       bios_level: "ok",
       bios_label: "ok",
     } as unknown as Awaited<ReturnType<typeof backend.getBiosStatus>>);
@@ -183,7 +186,7 @@ describe("refreshBiosInBackground", () => {
 
     cancelled = true;
     d.resolve({
-      bios_status: { available_cores: [] },
+      bios_status: { needs_bios: true },
       bios_level: "ok",
       bios_label: "ok",
     });
@@ -215,6 +218,82 @@ describe("refreshBiosInBackground", () => {
     // Non-vacuous catch assertion: the `.catch` calls debugLog with the error.
     expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
       expect.stringContaining("Background BIOS status fetch error"),
+    );
+  });
+});
+
+describe("refreshCoreInfoInBackground", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("merges the projected core fields from the dedicated path (#923) when not cancelled", async () => {
+    vi.mocked(backend.getPlatformCoreInfo).mockResolvedValueOnce({
+      active_core: "parallel_n64_libretro.so",
+      active_core_label: "ParaLLEl N64",
+      cores: [
+        { core_so: "mupen64plus_next_libretro.so", label: "Mupen64Plus-Next", is_default: true },
+        { core_so: "parallel_n64_libretro.so", label: "ParaLLEl N64", is_default: false },
+      ],
+    });
+
+    const setter = vi.fn<(updater: (prev: CoreState) => CoreState) => void>();
+    refreshCoreInfoInBackground("n64", () => false, setter as unknown as Dispatch<SetStateAction<CoreState>>);
+    await flushMicrotasks();
+
+    expect(backend.getPlatformCoreInfo).toHaveBeenCalledWith("n64");
+    expect(setter).toHaveBeenCalledOnce();
+    const next = setter.mock.calls[0]![0]({
+      activeCoreLabel: null,
+      activeCoreIsDefault: true,
+      availableCores: [],
+      unrelated: "keep",
+    });
+    expect(next.activeCoreLabel).toBe("ParaLLEl N64");
+    // Active core differs from the default → not default.
+    expect(next.activeCoreIsDefault).toBe(false);
+    expect(next.availableCores).toHaveLength(2);
+    expect(next.unrelated).toBe("keep");
+  });
+
+  it("skips the setter when cancelled at call time", async () => {
+    vi.mocked(backend.getPlatformCoreInfo).mockResolvedValueOnce({
+      active_core: null,
+      active_core_label: null,
+      cores: [],
+    });
+    const setter = vi.fn();
+    refreshCoreInfoInBackground("n64", () => true, setter);
+    await flushMicrotasks();
+    expect(setter).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the cancelled closure after the await", async () => {
+    const d = deferred<Awaited<ReturnType<typeof backend.getPlatformCoreInfo>>>();
+    vi.mocked(backend.getPlatformCoreInfo).mockReturnValueOnce(
+      d.promise as unknown as ReturnType<typeof backend.getPlatformCoreInfo>,
+    );
+
+    let cancelled = false;
+    const setter = vi.fn();
+    refreshCoreInfoInBackground("n64", () => cancelled, setter);
+
+    cancelled = true;
+    d.resolve({ active_core: null, active_core_label: null, cores: [] });
+    await flushMicrotasks();
+
+    expect(setter).not.toHaveBeenCalled();
+  });
+
+  it("logs the error and skips the setter when the fetch rejects", async () => {
+    vi.mocked(backend.getPlatformCoreInfo).mockRejectedValueOnce(new Error("network"));
+    vi.mocked(backend.debugLog).mockResolvedValue(undefined);
+    const setter = vi.fn();
+    refreshCoreInfoInBackground("n64", () => false, setter);
+    await flushMicrotasks();
+
+    expect(setter).not.toHaveBeenCalled();
+    // Non-vacuous catch assertion: the `.catch` calls debugLog with the error.
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+      expect.stringContaining("Background core info fetch error"),
     );
   });
 });

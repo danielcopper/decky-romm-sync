@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { resolveSaveSyncLabel, applySaveSyncDisplay, extractBiosInfo, timeoutMs } from "./playSection";
-import type { BiosStatus, SaveStatus, SaveSyncDisplay } from "../types";
+import { resolveSaveSyncLabel, applySaveSyncDisplay, extractBiosInfo, extractCoreInfo, timeoutMs } from "./playSection";
+import type { CoreInfo, SaveStatus, SaveSyncDisplay } from "../types";
 
 describe("resolveSaveSyncLabel", () => {
   beforeEach(() => {
@@ -78,51 +78,53 @@ describe("applySaveSyncDisplay", () => {
 });
 
 describe("extractBiosInfo", () => {
-  const baseBios: BiosStatus = {
-    needs_bios: true,
-    platform_slug: "n64",
-    server_count: 5,
-    local_count: 5,
-    all_downloaded: true,
-    active_core_label: "Mupen64Plus-Next",
-    available_cores: [
-      { core_so: "mupen64plus_next_libretro.so", label: "Mupen64Plus-Next", is_default: true },
-      { core_so: "parallel_n64_libretro.so", label: "ParaLLEl N64", is_default: false },
-    ],
-  } as BiosStatus;
-
-  it("projects BiosStatus into the narrow play-section fields", () => {
-    const result = extractBiosInfo(baseBios, "ok", "BIOS OK");
+  it("projects the pre-computed level/label into the BIOS-only play-section fields (no core fields, #923)", () => {
+    const result = extractBiosInfo("ok", "BIOS OK");
     expect(result.biosNeeded).toBe(true);
     expect(result.biosStatus).toBe("ok");
     expect(result.biosLabel).toBe("BIOS OK");
+    // Core fields no longer ride the BIOS payload — they come from extractCoreInfo.
+    expect(result).not.toHaveProperty("activeCoreLabel");
+    expect(result).not.toHaveProperty("availableCores");
+  });
+
+  it("coerces null label to empty string", () => {
+    const result = extractBiosInfo(null, null);
+    expect(result.biosLabel).toBe("");
+    expect(result.biosStatus).toBeNull();
+  });
+});
+
+describe("extractCoreInfo", () => {
+  const baseCoreInfo: CoreInfo = {
+    active_core: "mupen64plus_next_libretro.so",
+    active_core_label: "Mupen64Plus-Next",
+    cores: [
+      { core_so: "mupen64plus_next_libretro.so", label: "Mupen64Plus-Next", is_default: true },
+      { core_so: "parallel_n64_libretro.so", label: "ParaLLEl N64", is_default: false },
+    ],
+  };
+
+  it("projects CoreInfo into the core-selection play-section fields", () => {
+    const result = extractCoreInfo(baseCoreInfo);
     expect(result.activeCoreLabel).toBe("Mupen64Plus-Next");
     expect(result.activeCoreIsDefault).toBe(true);
     expect(result.availableCores).toHaveLength(2);
   });
 
   it("marks activeCoreIsDefault=false when active core differs from default", () => {
-    const bios = { ...baseBios, active_core_label: "ParaLLEl N64" } as BiosStatus;
-    const result = extractBiosInfo(bios, "ok", "BIOS OK");
+    const result = extractCoreInfo({ ...baseCoreInfo, active_core_label: "ParaLLEl N64" });
     expect(result.activeCoreIsDefault).toBe(false);
   });
 
   it("marks activeCoreIsDefault=true when no active core is set", () => {
-    const bios = { ...baseBios, active_core_label: null } as unknown as BiosStatus;
-    const result = extractBiosInfo(bios, "ok", "BIOS OK");
+    const result = extractCoreInfo({ ...baseCoreInfo, active_core: null, active_core_label: null });
     expect(result.activeCoreIsDefault).toBe(true);
     expect(result.activeCoreLabel).toBeNull();
   });
 
-  it("coerces null label to empty string", () => {
-    const result = extractBiosInfo(baseBios, null, null);
-    expect(result.biosLabel).toBe("");
-    expect(result.biosStatus).toBeNull();
-  });
-
-  it("defaults availableCores to [] when missing", () => {
-    const bios = { ...baseBios, available_cores: undefined } as unknown as BiosStatus;
-    const result = extractBiosInfo(bios, "ok", "BIOS OK");
+  it("defaults availableCores to [] when cores missing", () => {
+    const result = extractCoreInfo({ active_core: null, active_core_label: null, cores: [] });
     expect(result.availableCores).toEqual([]);
   });
 });

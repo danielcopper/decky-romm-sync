@@ -60,7 +60,7 @@ nav:
       - Configuration: user-guide/configuration.md
       - Syncing Your Library: user-guide/syncing-your-library.md
       - Managing Games: user-guide/managing-games.md
-      - BIOS Management: user-guide/bios-management.md
+      - BIOS &amp; Emulator Cores: user-guide/bios-management.md
       - Save Sync: user-guide/save-sync.md
       - Save File Extensions: user-guide/save-file-extensions.md
       - Save Sync Support Matrix: user-guide/save-sync-support-matrix.md

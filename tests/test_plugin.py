@@ -654,6 +654,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # Read-only library / sync state queries.
     "get_cached_game_detail",
     "get_available_cores",
+    "get_platform_core_info",
     "get_platforms",
     "get_collections",
     "sync_heartbeat",

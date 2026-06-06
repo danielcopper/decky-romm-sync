@@ -166,10 +166,62 @@ class TestGetAvailableCores:
         assert result["cores"] == []
 
 
+# ── get_platform_core_info (the dedicated core-info path, #923) ─────────
+
+
+class TestGetPlatformCoreInfoPath:
+    """The ``get_platform_core_info`` callable is backed by ``get_available_cores``.
+
+    Core info (active core + available cores) is served via its OWN path, fully
+    decoupled from the BIOS firmware status (#923). ``main.get_platform_core_info``
+    delegates straight to ``CoreService.get_available_cores`` — exercised here via
+    the service method that backs the callable.
+    """
+
+    def test_serves_active_core_and_available_cores(self, event_loop, service, core_info):
+        core_info.available_cores = [
+            {"core_so": "snes9x_libretro", "label": "Snes9x", "is_default": True},
+            {"core_so": "bsnes_libretro", "label": "bsnes", "is_default": False},
+        ]
+        core_info.active_core = ("bsnes_libretro", "bsnes")
+        result = event_loop.run_until_complete(service.get_available_cores("snes"))
+        assert result == {
+            "cores": core_info.available_cores,
+            "active_core": "bsnes_libretro",
+            "active_core_label": "bsnes",
+        }
+
+    def test_independent_of_bios_checker(self, event_loop, service, bios_checker):
+        # The core-info path never consults the BIOS checker.
+        event_loop.run_until_complete(service.get_available_cores("snes"))
+        assert bios_checker.calls == []
+
+
 # ── set_system_core ────────────────────────────────────────────────────
 
 
 class TestSetSystemCore:
+    def test_bios_status_carries_no_core_fields(self, event_loop, service, bios_checker):
+        # After #923 the BIOS checker returns BIOS status only; set_system_core
+        # threads that payload through verbatim, so the response's bios_status
+        # carries no core fields.
+        bios_checker.payload = {
+            "needs_bios": True,
+            "server_count": 1,
+            "local_count": 0,
+            "all_downloaded": False,
+            "required_count": 1,
+            "required_downloaded": 0,
+            "unknown_count": 0,
+            "files": [],
+        }
+        result = event_loop.run_until_complete(service.set_system_core("snes", "Snes9x"))
+        assert result["success"] is True
+        bios = result["bios_status"]
+        assert "active_core" not in bios
+        assert "active_core_label" not in bios
+        assert "available_cores" not in bios
+
     def test_happy_path(self, event_loop, service, core_info, gamelist_editor, bios_checker):
         bios_checker.payload = {"needs_bios": True, "files": []}
         result = event_loop.run_until_complete(service.set_system_core("snes", "Snes9x"))

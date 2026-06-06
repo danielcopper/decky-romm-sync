@@ -211,6 +211,17 @@ class TestCoreCallableDelegation:
         plugin._core_service.set_game_core.assert_awaited_once_with("snes", "/path", "core_a")
         assert result == {"success": True}
 
+    @pytest.mark.asyncio
+    async def test_get_platform_core_info_delegates(self, plugin):
+        # Core info is served via its OWN path (CoreService.get_available_cores),
+        # independent of the BIOS firmware status (#923).
+        plugin._core_service.get_available_cores = AsyncMock(
+            return_value={"cores": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
+        )
+        result = await plugin.get_platform_core_info("snes")
+        plugin._core_service.get_available_cores.assert_awaited_once_with("snes")
+        assert result == {"cores": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
+
 
 class TestFirmwareCallableDelegation:
     @pytest.mark.asyncio

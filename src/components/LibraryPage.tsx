@@ -115,7 +115,7 @@ interface LibraryPageProps {
 }
 
 export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
-  const [activeTab, setActiveTab] = useState<"platforms" | "collections" | "bios">("platforms");
+  const [activeTab, setActiveTab] = useState<"platforms" | "collections" | "system">("platforms");
 
   // --- Platforms tab state ---
   const [syncPlatforms, setSyncPlatforms] = useState<PlatformSyncSetting[]>([]);
@@ -147,7 +147,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     return favs[0] ?? null;
   }, [collections]);
 
-  // --- BIOS tab state ---
+  // --- System tab state (per-system emulator core + BIOS files) ---
   const [biosPlatforms, setBiosPlatforms] = useState<FirmwarePlatformExt[]>([]);
   const [biosLoading, setBiosLoading] = useState(true);
   const [biosError, setBiosError] = useState("");
@@ -155,7 +155,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [biosStatus, setBiosStatus] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const biosLoaded = useRef(false);
+  const systemLoaded = useRef(false);
 
   // Load sync platforms on mount
   useEffect(() => {
@@ -198,7 +198,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     setActiveTab("collections");
   };
 
-  async function refreshBios() {
+  async function refreshSystem() {
     setBiosLoading(true);
     setBiosError("");
     try {
@@ -215,11 +215,11 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     setBiosLoading(false);
   }
 
-  // Load BIOS data lazily on first switch to BIOS tab
+  // Load System data (core + BIOS) lazily on first switch to the System tab
   useEffect(() => {
-    if (activeTab === "bios" && !biosLoaded.current) {
-      biosLoaded.current = true;
-      detach(refreshBios());
+    if (activeTab === "system" && !systemLoaded.current) {
+      systemLoaded.current = true;
+      detach(refreshSystem());
     }
   }, [activeTab]);
 
@@ -268,7 +268,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     }
   };
 
-  // --- BIOS tab handlers ---
+  // --- System tab handlers (BIOS downloads) ---
   const handleDownloadAll = async (platformSlug: string) => {
     setDownloading(platformSlug);
     setBiosStatus("");
@@ -276,7 +276,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
       const result = await downloadAllFirmware(platformSlug);
       if (result.success) {
         setBiosStatus(result.message || `Downloaded ${result.downloaded} files`);
-        await refreshBios();
+        await refreshSystem();
       } else {
         setBiosStatus(result.message || "Download failed");
       }
@@ -293,7 +293,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
       const result = await downloadRequiredFirmware(platformSlug);
       if (result.success) {
         setBiosStatus(result.message || `Downloaded ${result.downloaded} required files`);
-        await refreshBios();
+        await refreshSystem();
       } else {
         setBiosStatus(result.message || "Download failed");
       }
@@ -523,66 +523,73 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     const hasRequiredMissing = requiredCount > 0 && !allRequiredDone;
     const hasOptionalMissing = optionalMissing > 0;
 
+    const hasMultipleCores = !!platform.available_cores && platform.available_cores.length > 1;
+
     return (
       <PanelSection
         key={platform.platform_slug}
         title={`${platform.platform_slug}${needsAttention ? " — BIOS needed" : ""}`}
       >
+        {/* Emulator core selection is the primary per-system concern (#923),
+            shown above the BIOS file management. */}
+        {hasMultipleCores && (
+          <>
+            <PanelSectionRow>
+              <DropdownItem
+                label="Emulator Core"
+                rgOptions={[
+                  ...platform.available_cores!.map((c) => ({
+                    data: c.label,
+                    label: c.is_default ? `${c.label} (default)` : c.label,
+                  })),
+                ]}
+                selectedOption={
+                  platform.active_core_label || platform.available_cores!.find((c) => c.is_default)?.label || ""
+                }
+                onChange={(option: { data: string }) => {
+                  detach(
+                    (async () => {
+                      const defaultCore = platform.available_cores?.find((c) => c.is_default);
+                      const label = option.data === defaultCore?.label ? "" : option.data;
+                      detach(
+                        debugLog(
+                          `setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`,
+                        ),
+                      );
+                      try {
+                        const result = await setSystemCore(platform.platform_slug, label);
+                        detach(debugLog(`setSystemCore: result success=${result.success}`));
+                        if (result.success) {
+                          await refreshSystem();
+                          globalThis.dispatchEvent(
+                            new CustomEvent("romm_data_changed", {
+                              detail: { type: "core_changed", platform_slug: platform.platform_slug },
+                            }),
+                          );
+                        }
+                      } catch (e) {
+                        detach(debugLog(`setSystemCore: error: ${e}`));
+                      }
+                    })(),
+                  );
+                }}
+              />
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <div style={{ fontSize: "11px", color: "#ffb74d", padding: "0 16px 4px" }}>
+                Switching cores may affect save compatibility
+              </div>
+            </PanelSectionRow>
+          </>
+        )}
+        {platform.active_core_label && !hasMultipleCores && (
+          <PanelSectionRow>
+            <Field label="Emulator Core" description={platform.active_core_label} />
+          </PanelSectionRow>
+        )}
         <PanelSectionRow>
           <Field label={summaryLabel} description={summaryDescription} />
         </PanelSectionRow>
-        {platform.available_cores && platform.available_cores.length > 1 && (
-          <PanelSectionRow>
-            <DropdownItem
-              label="Active Core"
-              rgOptions={[
-                ...platform.available_cores.map((c) => ({
-                  data: c.label,
-                  label: c.is_default ? `${c.label} (default)` : c.label,
-                })),
-              ]}
-              selectedOption={
-                platform.active_core_label || platform.available_cores.find((c) => c.is_default)?.label || ""
-              }
-              onChange={(option: { data: string }) => {
-                detach(
-                  (async () => {
-                    const defaultCore = platform.available_cores?.find((c) => c.is_default);
-                    const label = option.data === defaultCore?.label ? "" : option.data;
-                    detach(
-                      debugLog(
-                        `setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`,
-                      ),
-                    );
-                    try {
-                      const result = await setSystemCore(platform.platform_slug, label);
-                      detach(
-                        debugLog(
-                          `setSystemCore: result success=${result.success} active_core_label=${result.bios_status?.active_core_label}`,
-                        ),
-                      );
-                      if (result.success) {
-                        await refreshBios();
-                        globalThis.dispatchEvent(
-                          new CustomEvent("romm_data_changed", {
-                            detail: { type: "core_changed", platform_slug: platform.platform_slug },
-                          }),
-                        );
-                      }
-                    } catch (e) {
-                      detach(debugLog(`setSystemCore: error: ${e}`));
-                    }
-                  })(),
-                );
-              }}
-            />
-          </PanelSectionRow>
-        )}
-        {platform.active_core_label && (!platform.available_cores || platform.available_cores.length <= 1) && (
-          <PanelSectionRow>
-            <Field label="Core" description={platform.active_core_label} />
-          </PanelSectionRow>
-        )}
         <PanelSectionRow>
           <ButtonItem
             layout="below"
@@ -721,12 +728,12 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
             flex: 1,
             minWidth: 0,
             padding: "10px 0",
-            opacity: activeTab === "bios" ? 1 : 0.5,
-            borderBottom: activeTab === "bios" ? "2px solid #1a9fff" : "2px solid transparent",
+            opacity: activeTab === "system" ? 1 : 0.5,
+            borderBottom: activeTab === "system" ? "2px solid #1a9fff" : "2px solid transparent",
           }}
-          onClick={() => setActiveTab("bios")}
+          onClick={() => setActiveTab("system")}
         >
-          BIOS
+          System
         </DialogButton>
       </Focusable>
 
@@ -734,12 +741,12 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
 
       {activeTab === "collections" && <>{renderCollectionsContent()}</>}
 
-      {activeTab === "bios" && (
+      {activeTab === "system" && (
         <>
-          <PanelSection title="BIOS Files">
+          <PanelSection title="System">
             <PanelSectionRow>
-              <div style={{ fontSize: "11px", color: "#ffb74d", padding: "0 16px 4px" }}>
-                Switching cores may affect save compatibility
+              <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 16px 4px" }}>
+                Per-system emulator core and BIOS files. The active core determines which BIOS files a system needs.
               </div>
             </PanelSectionRow>
             {biosLoading && (

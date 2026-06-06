@@ -1,7 +1,12 @@
-# BIOS Management
+# BIOS and Emulator Core Management
 
 Some emulated systems require BIOS files to run games. Without the correct BIOS files, games for those systems will fail
 to launch. The plugin can download BIOS files directly from your RomM server.
+
+Which BIOS files a system needs depends on the **emulator core** in use — some cores need BIOS, some don't. Because the
+two concerns are related but independent, the plugin presents the **active core** and its **BIOS state** together in one
+place: the **System** tab. Core selection and BIOS file management can each be used on their own — they share a screen
+only because the active core determines which BIOS files matter.
 
 ## What Are BIOS Files?
 
@@ -22,23 +27,30 @@ status indicator:
 - **Green** — "BIOS ready (X files)" — all BIOS files are downloaded
 - **Orange** — "BIOS required — X/Y downloaded" — some files are missing
 
+The "BIOS missing" indicator is computed against the **active core** for that game — so switching to a core that needs
+no BIOS (or that treats a file as optional) clears the warning, while switching to a core that requires a missing file
+surfaces it.
+
 Tap the BIOS status indicator to see a detailed list of individual files and which ones are present or missing.
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "3/5 downloaded" -->
 
 ![BIOS file list overlay showing individual required files with checkmarks and "Missing" labels](../assets/screenshot-bios.jpg)
 
-## BIOS Manager
+## System Tab
 
-The dedicated BIOS management page shows all platforms that have firmware files on your RomM server.
+The **System** tab is the per-system emulator settings page: for each platform it shows the **active emulator core**
+first, then the BIOS files that core needs.
 
-1. From the main QAM page, tap **BIOS Files**
-2. Platforms with synced games that need BIOS files appear first, marked with "BIOS needed"
-3. Each platform shows how many files are downloaded vs. available (e.g. "3 / 5 files")
-4. Tap **Show Files** to see the individual file list for a platform
-5. Tap **Download All** to download all missing BIOS files for a platform
+1. From the main QAM page, open the library management page and tap **System**
+2. Platforms with synced games that still need required BIOS files appear first, marked with "BIOS needed"
+3. For platforms with more than one available core, an **Emulator Core** dropdown is shown at the top of the platform's
+   section — this is the primary per-system control
+4. Below the core, each platform shows how many BIOS files are downloaded vs. available (e.g. "3 / 5 files")
+5. Tap **Show Files** to see the individual file list for a platform
+6. Tap **Download All** to download all missing BIOS files for a platform
 
-<!-- Screenshot: BIOS Manager page showing platforms with download counts and Download All buttons -->
+<!-- Screenshot: System tab showing per-platform Emulator Core dropdown above BIOS download counts -->
 
 BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use subdirectories
 — for example, Dreamcast BIOS goes into `bios/dc/` and PS2 BIOS goes into `bios/pcsx2/bios/`. The plugin handles the
@@ -68,8 +80,8 @@ your setup.
   replacement
 - With **gpSP**, `gba_bios.bin` is shown as _required_ — gpSP cannot run without it
 
-The active core name appears as a badge in both the game detail page BIOS indicator and the BIOS Manager. This tells you
-at a glance which core the plugin is filtering for.
+The active core name appears in both the game detail page (the **Emulator** column) and the **System** tab. This tells
+you at a glance which core the plugin is filtering for.
 
 **How the core is determined:**
 
@@ -90,19 +102,20 @@ showing all files.
 You can change the active emulator core directly from the plugin, without leaving Game Mode. Changes are written to
 ES-DE's `gamelist.xml` so they persist across sessions and are picked up by both the plugin and ES-DE.
 
-### Per-Platform (BIOS Manager)
+### Per-Platform (System Tab)
 
-In the BIOS Manager, platforms with multiple available cores show an **Active Core** dropdown. Changing this sets the
-default core for all games on that platform.
+In the **System** tab, platforms with multiple available cores show an **Emulator Core** dropdown as the first control
+in the platform's section, above the BIOS file list. Changing it sets the default core for all games on that platform. A
+"Switching cores may affect save compatibility" note appears under the dropdown for platforms that offer a choice.
 
-1. Open the BIOS Manager from the main QAM page
+1. Open the library management page from the main QAM page and tap **System**
 2. Find the platform you want to change
-3. Use the **Active Core** dropdown to select a different core
-4. The BIOS file list updates immediately to show files relevant to the new core
+3. Use the **Emulator Core** dropdown to select a different core
+4. The BIOS file list below updates immediately to show files relevant to the new core
 
-This writes a system-wide override to ES-DE's `gamelist.xml`. ES-DE will pick up the change on next launch. The BIOS
-Manager works even when your RomM server is offline — core switching and BIOS status are available, only download
-buttons are disabled.
+This writes a system-wide override to ES-DE's `gamelist.xml`. ES-DE will pick up the change on next launch. The System
+tab works even when your RomM server is offline — core switching and BIOS status are available, only download buttons
+are disabled.
 
 ### Per-Game (Game Detail Page)
 

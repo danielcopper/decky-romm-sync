@@ -979,11 +979,13 @@ class TestCheckPlatformBiosRequired:
 
 
 class TestCheckPlatformBiosSlugNormalization:
-    """check_platform_bios resolves slug→system for cores, keeps raw slug for BIOS.
+    """check_platform_bios resolves slug→system for the active-core INPUT, keeps raw slug for BIOS.
 
     The firmware ``file_path`` and bios registry are keyed on the raw RomM
-    platform slug (BIOS-folder vocabulary, ADR-0010 §4). The active-core /
-    available-cores reads must instead receive the resolved RetroDECK system.
+    platform slug (BIOS-folder vocabulary, ADR-0010 §4). The active-core read used
+    to filter the firmware list must instead receive the resolved RetroDECK system.
+    The method no longer reads ``get_available_cores`` — core info is served via the
+    dedicated ``get_platform_core_info`` path (#923).
     """
 
     @pytest.mark.parametrize(
@@ -1026,24 +1028,25 @@ class TestCheckPlatformBiosSlugNormalization:
         # RAW slug matched the firmware file_path + registry, so a file is found.
         assert result["needs_bios"] is True
         assert result["server_count"] == 1
-        # Both core read seams received the NORMALIZED system.
+        # The active-core read seam received the NORMALIZED system.
         assert core_info.active_core_calls == [(system, None)]
-        assert core_info.available_cores_calls == [system]
+        # The BIOS path no longer reads available cores at all.
+        assert core_info.available_cores_calls == []
         assert resolver.calls == [(slug, None)]
 
 
-class TestCheckPlatformBiosNoBiosCarriesCores:
-    """check_platform_bios ships cores even when the platform needs no firmware (#922).
+class TestCheckPlatformBiosNoCoreFields:
+    """check_platform_bios returns BIOS status only — never core fields (#923).
 
-    No-BIOS platforms (Master System, NES, ...) with multiple cores still drive the
-    per-game core menu, gated on ``available_cores.length > 1``. The ``needs_bios=False``
-    branches must therefore carry ``active_core`` / ``active_core_label`` /
-    ``available_cores`` so the menu can render.
+    Core data (active_core / active_core_label / available_cores) is served through
+    the dedicated ``get_platform_core_info`` path, not the BIOS payload. Both the
+    ``needs_bios=False`` (empty / offline) branches and the ``needs_bios=True`` branch
+    must be free of core fields.
     """
 
     @pytest.mark.asyncio
-    async def test_server_reachable_no_firmware_carries_cores(self):
-        """Server reachable, no firmware for the platform → cores still surfaced."""
+    async def test_server_reachable_no_firmware_omits_core_fields(self):
+        """Server reachable, no firmware for the platform → no core fields."""
         from unittest.mock import AsyncMock, MagicMock
 
         core_info = FakeCoreInfoProvider(
@@ -1064,18 +1067,16 @@ class TestCheckPlatformBiosNoBiosCarriesCores:
 
         result = await fw.check_platform_bios("sms")
 
-        assert result["needs_bios"] is False
-        assert result["active_core"] == "genesisplusgx_libretro.so"
-        assert result["active_core_label"] == "Genesis Plus GX"
-        assert result["available_cores"] == [
-            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
-            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
-        ]
-        assert len(result["available_cores"]) == 2
+        assert result == {"needs_bios": False}
+        assert "active_core" not in result
+        assert "active_core_label" not in result
+        assert "available_cores" not in result
+        # The BIOS path never reads the available-cores seam.
+        assert core_info.available_cores_calls == []
 
     @pytest.mark.asyncio
-    async def test_offline_no_registry_carries_cores(self, plugin, fw):
-        """Server unreachable + no registry entries → cores still surfaced."""
+    async def test_offline_no_registry_omits_core_fields(self, plugin, fw):
+        """Server unreachable + no registry entries → no core fields."""
         core_info = FakeCoreInfoProvider(
             active_core=("genesisplusgx_libretro.so", "Genesis Plus GX"),
             available_cores=[
@@ -1091,14 +1092,62 @@ class TestCheckPlatformBiosNoBiosCarriesCores:
         with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
             result = await fw.check_platform_bios("sms")
 
-        assert result["needs_bios"] is False
-        assert result["active_core"] == "genesisplusgx_libretro.so"
-        assert result["active_core_label"] == "Genesis Plus GX"
-        assert result["available_cores"] == [
-            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
-            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+        assert result == {"needs_bios": False}
+        assert "active_core" not in result
+        assert "available_cores" not in result
+        assert core_info.available_cores_calls == []
+
+    @pytest.mark.asyncio
+    async def test_needs_bios_true_omits_core_fields(self, tmp_path):
+        """needs_bios=True branch carries BIOS counts/files only — no core fields."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        core_info = FakeCoreInfoProvider(
+            active_core=("gpsp_libretro", "gpSP"),
+            available_cores=[
+                {"label": "gpSP", "so": "gpsp_libretro"},
+                {"label": "mGBA", "so": "mgba_libretro"},
+            ],
+        )
+        fw = _make_firmware_service(core_info=core_info)
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "gba_bios.bin",
+                "file_path": "bios/gba/gba_bios.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
         ]
-        assert len(result["available_cores"]) == 2
+        fw._bios_registry = {
+            "platforms": {
+                "gba": {
+                    "gba_bios.bin": {
+                        "description": "GBA BIOS",
+                        "required": True,
+                        "firmware_path": "gba_bios.bin",
+                        "md5": "",
+                        "cores": {"gpsp_libretro": {"required": True}},
+                    },
+                },
+            },
+        }
+        fw._bios_files_index = {
+            "gba_bios.bin": {**fw._bios_registry["platforms"]["gba"]["gba_bios.bin"], "platform": "gba"},
+        }
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+            result = await fw.check_platform_bios("gba")
+
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 1
+        assert "active_core" not in result
+        assert "active_core_label" not in result
+        assert "available_cores" not in result
+        assert core_info.available_cores_calls == []
 
 
 class TestDownloadRequiredFirmware:
@@ -1536,8 +1585,9 @@ class TestPerCoreFiltering:
         assert "gb_bios.bin" in file_names  # present but not used by active
         assert "sgb_bios.bin" in file_names  # present but not used by active
         assert result["server_count"] == 3
-        assert result["active_core"] == "gpsp_libretro"
-        assert result["active_core_label"] == "gpSP"
+        # Core fields are never served from the BIOS payload (#923).
+        assert "active_core" not in result
+        assert "active_core_label" not in result
         # gpSP requires gba_bios.bin
         gba_file = next(f for f in result["files"] if f["file_name"] == "gba_bios.bin")
         assert gba_file["required"] is True
@@ -1670,7 +1720,8 @@ class TestPerCoreFiltering:
 
         assert result["needs_bios"] is True
         assert result["server_count"] == 1
-        assert result["active_core"] is None
+        # Core fields are never served from the BIOS payload (#923).
+        assert "active_core" not in result
         # Falls back to OR-logic: required=True
         assert result["files"][0]["required"] is True
 
@@ -2105,13 +2156,13 @@ class TestCheckPlatformBiosCached:
         assert result["needs_bios"] is False
         assert result["cached_at"] == 1000.0
 
-    def test_no_bios_platform_still_carries_available_cores(self):
-        """No-BIOS platform with multiple cores → needs_bios=False still ships the cores.
+    def test_no_bios_platform_omits_core_fields(self):
+        """No-BIOS platform → needs_bios=False carries no core fields (#923).
 
-        Master System needs no firmware but has multiple cores; the per-game core
-        menu (gated on ``available_cores.length > 1``) must still render, so the
-        ``needs_bios=False`` branch carries ``active_core`` / ``active_core_label``
-        / ``available_cores`` (#922).
+        Master System needs no firmware. After #923, core info is served via the
+        dedicated ``get_platform_core_info`` path, so the BIOS payload omits
+        ``active_core`` / ``active_core_label`` / ``available_cores`` entirely — the
+        method must never read the available-cores seam.
         """
         fw, core_info = self._make_service(
             firmware_cache=[
@@ -2128,18 +2179,14 @@ class TestCheckPlatformBiosCached:
         result = fw.check_platform_bios_cached("sms")
 
         assert result is not None
-        assert result["needs_bios"] is False
-        assert result["cached_at"] == 1000.0
-        assert result["active_core"] == "genesisplusgx_libretro.so"
-        assert result["active_core_label"] == "Genesis Plus GX"
-        assert result["available_cores"] == [
-            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
-            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
-        ]
-        assert len(result["available_cores"]) == 2
+        assert result == {"needs_bios": False, "cached_at": 1000.0}
+        assert "active_core" not in result
+        assert "active_core_label" not in result
+        assert "available_cores" not in result
+        assert core_info.available_cores_calls == []
 
     def test_returns_bios_status_from_cache(self, tmp_path):
-        """Cache populated with matching firmware → full BIOS status with cached_at."""
+        """Cache populated with matching firmware → BIOS status with cached_at, no core fields."""
         fw, core_info = self._make_service(
             firmware_cache=[
                 {
@@ -2163,8 +2210,11 @@ class TestCheckPlatformBiosCached:
         assert result["cached_at"] == 42.0
         assert result["server_count"] == 1
         assert result["local_count"] == 0
-        assert result["active_core"] == "mgba_libretro.so"
-        assert result["active_core_label"] == "mGBA"
+        # Core fields are never served from the BIOS payload (#923).
+        assert "active_core" not in result
+        assert "active_core_label" not in result
+        assert "available_cores" not in result
+        assert core_info.available_cores_calls == []
         assert len(result["files"]) == 1
         assert result["files"][0]["file_name"] == "gba_bios.bin"
 
@@ -2199,11 +2249,12 @@ class TestCheckPlatformBiosCached:
         ],
     )
     def test_resolves_system_for_cores_keeps_raw_slug_for_bios(self, tmp_path, slug, system):
-        """Core read seams get the NORMALIZED system; BIOS folder lookup uses RAW slug.
+        """Active-core INPUT gets the NORMALIZED system; BIOS folder lookup uses RAW slug.
 
         The firmware cache ``file_path`` and the registry are keyed on the raw
-        platform slug (BIOS-folder vocabulary). The active-core / available-cores
-        reads must instead receive the resolved RetroDECK system.
+        platform slug (BIOS-folder vocabulary). The active-core read used to filter
+        the firmware list must instead receive the resolved RetroDECK system. After
+        #923 the method no longer reads ``get_available_cores`` at all.
         """
         resolver = FakeSystemResolver(mapping={"dc": "dreamcast", "sms": "mastersystem", "neo-geo-pocket": "ngp"})
         fw, core_info = self._make_service(
@@ -2230,9 +2281,10 @@ class TestCheckPlatformBiosCached:
         # The RAW slug matched the cache + registry, so a file is found.
         assert result["needs_bios"] is True
         assert result["server_count"] == 1
-        # Both core read seams received the NORMALIZED system.
+        # The active-core read seam received the NORMALIZED system.
         assert core_info.active_core_calls == [(system, None)]
-        assert core_info.available_cores_calls == [system]
+        # The BIOS path no longer reads available cores at all.
+        assert core_info.available_cores_calls == []
         assert resolver.calls == [(slug, None)]
 
 

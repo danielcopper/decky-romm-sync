@@ -24,6 +24,7 @@ import {
   getRomMetadata,
   getInstalledRom,
   checkPlatformBios,
+  getPlatformCoreInfo,
   getSaveStatus,
   getArtworkBase64,
   getAchievements,
@@ -40,6 +41,7 @@ import type {
   RomMetadata,
   InstalledRom,
   BiosStatus,
+  CoreInfo,
   SaveStatus,
   SyncConflict,
   Achievement,
@@ -75,6 +77,9 @@ interface PanelState {
   metadata: RomMetadata | null;
   coverBase64: string | null;
   biosStatus: BiosStatus | null;
+  // Core info comes from the dedicated get_platform_core_info path (#923), not
+  // from biosStatus — the two concerns are decoupled.
+  coreInfo: CoreInfo | null;
   saveSyncEnabled: boolean;
   saveStatus: SaveStatus | null;
   conflicts: SyncConflict[];
@@ -221,7 +226,28 @@ function startBackgroundRefreshes(
     bgPromises.push(refreshMetadataInBackground(romId, cancelled, setter));
   }
 
+  // Core info from its own path (#923), decoupled from BIOS status.
+  if (cached.platform_slug) {
+    bgPromises.push(refreshCoreInfoInBackground(cached.platform_slug, cancelled, setter));
+  }
+
   return Promise.all(bgPromises);
+}
+
+/** Fetch active-core + available-cores for a platform from the dedicated
+ *  `get_platform_core_info` path (#923) and merge into panel state. */
+function refreshCoreInfoInBackground(
+  platformSlug: string,
+  cancelled: () => boolean,
+  setter: React.Dispatch<React.SetStateAction<PanelState>>,
+): Promise<void> {
+  return getPlatformCoreInfo(platformSlug)
+    .then((coreInfo) => {
+      if (!cancelled()) {
+        setter((prev) => ({ ...prev, coreInfo }));
+      }
+    })
+    .catch(() => {});
 }
 
 /** Cache-first initial render. Resolves the cached game detail for this appId,
@@ -267,6 +293,7 @@ async function loadData(
       metadata: cached.metadata as RomMetadata | null,
       coverBase64: null, // Will be filled by background fetch
       biosStatus,
+      coreInfo: null, // Will be filled by background fetch (get_platform_core_info)
       saveSyncEnabled: cached.save_sync_enabled ?? false,
       saveStatus,
       conflicts,
@@ -312,6 +339,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     metadata: null,
     coverBase64: null,
     biosStatus: null,
+    coreInfo: null,
     saveSyncEnabled: false,
     saveStatus: null,
     conflicts: [],
@@ -406,10 +434,15 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null }));
     };
 
-    const handleCoreChange = async () => {
-      // Re-fetch cached game detail to pick up new core info
+    const handleCoreChange = async (detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
+      // Re-fetch cached game detail to pick up the new core-aware BIOS status.
       invalidateCachedGameDetail(appId);
-      const cached = await getCachedGameDetail(appId);
+      // Core info comes from its own path (#923), keyed on the event's
+      // platform_slug; BIOS status is re-read from the (now core-free) cache.
+      const [coreInfo, cached] = await Promise.all([
+        getPlatformCoreInfo(detail.platform_slug).catch((): CoreInfo | null => null),
+        getCachedGameDetail(appId),
+      ]);
       if (cancelled || !cached.found) return;
       let biosStatus: BiosStatus | null = null;
       if (cached.bios_status) {
@@ -418,7 +451,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
           ...cached.bios_status,
         };
       }
-      setState((prev) => ({ ...prev, biosStatus }));
+      setState((prev) => ({ ...prev, biosStatus, coreInfo: coreInfo ?? prev.coreInfo }));
     };
 
     const handleMetadataChange = async (detail: Extract<RommDataChangedDetail, { type: "metadata" }>) => {
@@ -457,7 +490,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
                 await handleBiosChange(detail);
                 break;
               case "core_changed":
-                await handleCoreChange();
+                await handleCoreChange(detail);
                 break;
               case "metadata":
                 await handleMetadataChange(detail);
@@ -768,12 +801,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       ),
     );
 
-    // Build core_so -> label lookup from available_cores
+    // Build core_so -> label lookup from the dedicated core-info path (#923).
     const coreLabelMap: Record<string, string> = {};
-    if (bios.available_cores) {
-      for (const c of bios.available_cores) {
-        coreLabelMap[c.core_so] = c.label;
-      }
+    for (const c of state.coreInfo?.cores ?? []) {
+      coreLabelMap[c.core_so] = c.label;
     }
 
     // Filter out unknown files (not in registry) — they're noise from the server
@@ -877,8 +908,8 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       ),
     );
 
-    if (bios.active_core_label) {
-      coreColumn.push(infoRow("core", "Active Core", bios.active_core_label));
+    if (state.coreInfo?.active_core_label) {
+      coreColumn.push(infoRow("core", "Active Core", state.coreInfo.active_core_label));
     } else {
       coreColumn.push(infoRow("core", "Active Core", "Default"));
     }

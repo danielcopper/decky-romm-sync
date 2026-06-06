@@ -72,13 +72,15 @@ vi.mock("../utils/formatters", () => ({
 }));
 vi.mock("../utils/playSection", () => ({
   applySaveSyncDisplay: vi.fn(() => ({ status: null, label: "" })),
-  extractBiosInfo: vi.fn((b: { active_core_label?: string }) => ({
+  extractBiosInfo: vi.fn(() => ({
     biosNeeded: true,
     biosStatus: "ok",
     biosLabel: "OK",
-    activeCoreLabel: b.active_core_label ?? null,
+  })),
+  extractCoreInfo: vi.fn((c: { active_core_label?: string | null; cores?: unknown[] }) => ({
+    activeCoreLabel: c.active_core_label ?? null,
     activeCoreIsDefault: true,
-    availableCores: [],
+    availableCores: c.cores ?? [],
   })),
   resolveSaveSyncLabel: vi.fn(() => "synced label"),
   // timeoutMs returns a Promise that never resolves — Promise.race with
@@ -90,6 +92,7 @@ vi.mock("../utils/sectionRefresh", () => ({
   refreshAchievementsInBackground: vi.fn(),
   refreshActiveSlotInBackground: vi.fn(),
   refreshBiosInBackground: vi.fn(),
+  refreshCoreInfoInBackground: vi.fn(),
 }));
 vi.mock("../utils/connectionState", () => ({
   setRommConnectionState: vi.fn(),
@@ -244,12 +247,31 @@ describe("RomMPlaySection", () => {
       biosNeeded: true,
       biosStatus: "ok",
       biosLabel: "OK",
+    });
+    vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
       activeCoreLabel: null,
       activeCoreIsDefault: true,
       availableCores: [],
     });
+    // refreshCoreInfoInBackground (mocked) merges the current extractCoreInfo
+    // mock result into state so the core button / menu render as in production,
+    // where the dedicated core-info path (#923) populates these fields. The
+    // extractCoreInfo mock ignores its argument, so the dummy CoreInfo is fine.
+    vi.mocked(sectionRefresh.refreshCoreInfoInBackground).mockImplementation((_slug, cancelled, setter) => {
+      if (cancelled()) return;
+      const coreFields = playSectionUtils.extractCoreInfo({ cores: [], active_core: null, active_core_label: null });
+      act(() => {
+        setter((prev) => ({ ...prev, ...coreFields }));
+      });
+    });
     vi.mocked(playSectionUtils.resolveSaveSyncLabel).mockReturnValue("synced label");
     vi.mocked(playSectionUtils.timeoutMs).mockImplementation(() => new Promise(() => {}));
+    // Default core-info path — empty cores. Tests opt into specific shapes.
+    vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+      cores: [],
+      active_core: null,
+      active_core_label: null,
+    });
 
     // Steam globals — appStore for the synchronous overview read.
     stubAppStore({ [testAppId]: {} });
@@ -363,7 +385,7 @@ describe("RomMPlaySection", () => {
       expect(sectionRefresh.refreshBiosInBackground).not.toHaveBeenCalled();
     });
 
-    it("applies cached fields and dispatches active-slot/achievements/BIOS background refreshes", async () => {
+    it("applies cached fields and dispatches active-slot/achievements/BIOS/core background refreshes", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 99,
@@ -380,7 +402,6 @@ describe("RomMPlaySection", () => {
           server_count: 1,
           local_count: 1,
           all_downloaded: true,
-          active_core_label: "Snes9x",
         },
         bios_level: "ok",
         bios_label: "OK",
@@ -406,16 +427,18 @@ describe("RomMPlaySection", () => {
         expect.any(Function),
         expect.any(Function),
       );
-      // Assert exact arg shape: (cached.bios_status, cached.bios_level, cached.bios_label).
-      // Catches arg-order regressions that a bare .toHaveBeenCalled() would miss.
-      expect(playSectionUtils.extractBiosInfo).toHaveBeenCalledWith(
-        expect.objectContaining({
-          platform_slug: "snes",
-          active_core_label: "Snes9x",
-        }),
-        "ok",
-        "OK",
+      // Core info is fetched from its own path (#923), keyed on the platform slug,
+      // independent of the BIOS refresh.
+      expect(sectionRefresh.refreshCoreInfoInBackground).toHaveBeenCalledWith(
+        "snes",
+        expect.any(Function),
+        expect.any(Function),
       );
+      // Assert exact arg shape: (cached.bios_level, cached.bios_label). The BIOS
+      // status dict is no longer passed — extractBiosInfo takes only the
+      // pre-computed level/label (#923). Catches arg-order regressions that a
+      // bare .toHaveBeenCalled() would miss.
+      expect(playSectionUtils.extractBiosInfo).toHaveBeenCalledWith("ok", "OK");
       // resolveSaveSyncLabel is called with the cached save_sync_display.
       expect(playSectionUtils.resolveSaveSyncLabel).toHaveBeenCalledWith(
         expect.objectContaining({ status: "synced", label: "label" }),
@@ -1018,7 +1041,7 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
     });
 
-    it("core_changed: calls getBiosStatus and updates core/biosStatus on success", async () => {
+    it("core_changed: reads core data from getPlatformCoreInfo (not BIOS) + BIOS level from getBiosStatus", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 60,
@@ -1026,17 +1049,22 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
+      // Core data comes from the dedicated path (#923), keyed on the event slug.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "blastem.so",
+        active_core_label: "BlastEm",
+        cores: [
+          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
+          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        ],
+      });
+      // BIOS level/label come from the (now core-free) BIOS status.
       vi.mocked(backend.getBiosStatus).mockResolvedValue({
         bios_status: {
           platform_slug: "snes",
           server_count: 0,
           local_count: 0,
           all_downloaded: true,
-          active_core_label: "Snes9x",
-          available_cores: [
-            { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-            { core_so: "blastem.so", label: "BlastEm", is_default: false },
-          ],
         },
         bios_level: "ok",
         bios_label: "All BIOS present",
@@ -1050,8 +1078,63 @@ describe("RomMPlaySection", () => {
         );
         await Promise.resolve();
         await Promise.resolve();
+        await Promise.resolve();
       });
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes");
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(60);
+    });
+
+    it("core_changed: no-BIOS → needs-BIOS switch surfaces the missing-BIOS badge (#923)", async () => {
+      // Mount with a core that needs no BIOS: cached has no bios_status, so the
+      // badge starts hidden (biosNeeded=false).
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 60,
+        platform_slug: "snes",
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("BIOS");
+
+      // Switch to a core whose BIOS is missing — getBiosStatus now returns a
+      // populated bios_status + missing level. The badge must appear: biosNeeded
+      // is re-derived from the refreshed status, not the (stale) mount value.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "blastem.so",
+        active_core_label: "BlastEm",
+        cores: [
+          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
+          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        ],
+      });
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: {
+          platform_slug: "snes",
+          server_count: 3,
+          local_count: 0,
+          all_downloaded: false,
+        },
+        bios_level: "missing",
+        bios_label: "0/3",
+      });
+      vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
+        biosNeeded: true,
+        biosStatus: "missing",
+        biosLabel: "0/3",
+      });
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "core_changed", platform_slug: "snes" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("BIOS");
+      expect(container.textContent).toContain("0/3");
     });
 
     it("core_changed: skips when no romId", async () => {
@@ -1059,6 +1142,7 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       vi.mocked(backend.getBiosStatus).mockClear();
+      vi.mocked(backend.getPlatformCoreInfo).mockClear();
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
@@ -1068,30 +1152,7 @@ describe("RomMPlaySection", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getBiosStatus)).not.toHaveBeenCalled();
-    });
-
-    it("core_changed: bios_status null → no setInfo follow-on", async () => {
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
-        found: true,
-        rom_id: 60,
-      });
-      render(<RomMPlaySection appId={testAppId} />);
-      await flushAsync();
-      vi.mocked(backend.getBiosStatus).mockResolvedValue({
-        bios_status: null,
-        bios_level: null,
-        bios_label: null,
-      });
-      // No throw; the handler short-circuits at `if (!b) return`.
-      await act(async () => {
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", {
-            detail: { type: "core_changed", platform_slug: "snes" },
-          }),
-        );
-        await Promise.resolve();
-      });
-      expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalled();
+      expect(vi.mocked(backend.getPlatformCoreInfo)).not.toHaveBeenCalled();
     });
 
     it("save_sync: matching rom_id → fetches save status (when detail.save_status not provided)", async () => {
@@ -1935,11 +1996,6 @@ describe("RomMPlaySection", () => {
           server_count: 0,
           local_count: 0,
           all_downloaded: true,
-          available_cores: [
-            { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-            { core_so: "blastem.so", label: "BlastEm", is_default: false },
-          ],
-          active_core_label: "Snes9x",
         },
         bios_level: "ok",
         bios_label: "OK",
@@ -1948,6 +2004,18 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+      });
+      // Core data is sourced from the dedicated get_platform_core_info path (#923),
+      // which feeds extractCoreInfo. The core button gates on availableCores > 1.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "snes9x.so",
+        active_core_label: "Snes9x",
+        cores: [
+          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
+          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        ],
+      });
+      vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
         activeCoreLabel: "Snes9x",
         activeCoreIsDefault: true,
         availableCores: [
@@ -1957,21 +2025,17 @@ describe("RomMPlaySection", () => {
       });
     }
 
-    it("happy path: setGameCore + cache invalidate + dispatches core_changed", async () => {
+    it("happy path: setGameCore + getPlatformCoreInfo + cache invalidate + dispatches core_changed", async () => {
       await setupCoreAction();
       vi.mocked(backend.setGameCore).mockResolvedValue({
         success: true,
         message: "ok",
+        // bios_status from set_game_core no longer carries core fields (#923).
         bios_status: {
           needs_bios: false,
           server_count: 0,
           local_count: 0,
           all_downloaded: true,
-          available_cores: [
-            { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-            { core_so: "blastem.so", label: "BlastEm", is_default: false },
-          ],
-          active_core_label: "BlastEm",
         },
       });
       vi.mocked(backend.getBiosStatus).mockResolvedValue({
@@ -1985,6 +2049,7 @@ describe("RomMPlaySection", () => {
       // Click the core button to open the core menu. Find core button via title.
       const coreItems = await openCoreMenuAndGetItems(testAppId);
       vi.mocked(toaster.toast).mockClear();
+      vi.mocked(backend.getPlatformCoreInfo).mockClear();
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {
@@ -1994,6 +2059,8 @@ describe("RomMPlaySection", () => {
           await blastEm.props.onClick?.();
         });
         expect(vi.mocked(backend.setGameCore)).toHaveBeenCalledWith("snes", "./mario.sfc", "BlastEm");
+        // Core display refreshed via the dedicated path, not the BIOS payload (#923).
+        expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes");
         expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Core set to BlastEm" }));
         expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
         const ev = listener.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.detail.type === "core_changed");
@@ -2096,11 +2163,6 @@ describe("RomMPlaySection", () => {
           server_count: 0,
           local_count: 0,
           all_downloaded: true,
-          available_cores: [
-            { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-            { core_so: "blastem.so", label: "BlastEm", is_default: false },
-          ],
-          active_core_label: "Snes9x",
         },
         bios_level: "ok",
         bios_label: "OK",
@@ -2109,6 +2171,9 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+      });
+      // Core list / active core now come from the dedicated path (#923).
+      vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
         activeCoreLabel: "Snes9x",
         activeCoreIsDefault: true,
         availableCores: [
@@ -2247,9 +2312,6 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "missing",
         biosLabel: "0/3",
-        activeCoreLabel: null,
-        activeCoreIsDefault: true,
-        availableCores: [],
       });
       const { container, getByText } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
@@ -2284,9 +2346,6 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
-        activeCoreLabel: null,
-        activeCoreIsDefault: true,
-        availableCores: [],
       });
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
@@ -2298,12 +2357,12 @@ describe("RomMPlaySection", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
+        platform_slug: "snes",
         bios_status: {
           platform_slug: "snes",
           server_count: 0,
           local_count: 0,
           all_downloaded: true,
-          available_cores: [{ core_so: "x.so", label: "OnlyOne", is_default: true }],
         },
         bios_level: "ok",
         bios_label: "OK",
@@ -2312,6 +2371,9 @@ describe("RomMPlaySection", () => {
         biosNeeded: true,
         biosStatus: "ok",
         biosLabel: "OK",
+      });
+      // Single core from the dedicated path → button hidden.
+      vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
         activeCoreLabel: "OnlyOne",
         activeCoreIsDefault: true,
         availableCores: [{ core_so: "x.so", label: "OnlyOne", is_default: true }],

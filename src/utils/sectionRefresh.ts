@@ -8,9 +8,8 @@
  */
 
 import type { Dispatch, SetStateAction } from "react";
-import type { BiosStatus } from "../types";
-import { getSaveStatus, getBiosStatus, getAchievementProgress, debugLog } from "../api/backend";
-import { extractBiosInfo, type BiosInfoFields } from "./playSection";
+import { getSaveStatus, getBiosStatus, getPlatformCoreInfo, getAchievementProgress, debugLog } from "../api/backend";
+import { extractBiosInfo, extractCoreInfo, type BiosInfoFields, type CoreInfoFields } from "./playSection";
 
 interface ActiveSlotFields {
   activeSlot: string | null;
@@ -46,11 +45,30 @@ export function refreshBiosInBackground<S extends BiosInfoFields>(
       if (!cancelled() && b) {
         setter((prev) => ({
           ...prev,
-          ...extractBiosInfo(b as BiosStatus, result.bios_level, result.bios_label),
+          ...extractBiosInfo(result.bios_level, result.bios_label),
         }));
       }
     })
     .catch((e) => debugLog(`Background BIOS status fetch error: ${e}`));
+}
+
+/** Refresh core-selection state from the dedicated `get_platform_core_info`
+ *  path (#923), fully decoupled from BIOS status. Keyed on the platform slug. */
+export function refreshCoreInfoInBackground<S extends CoreInfoFields>(
+  platformSlug: string,
+  cancelled: () => boolean,
+  setter: Dispatch<SetStateAction<S>>,
+): void {
+  getPlatformCoreInfo(platformSlug)
+    .then((coreInfo) => {
+      if (!cancelled()) {
+        setter((prev) => ({
+          ...prev,
+          ...extractCoreInfo(coreInfo),
+        }));
+      }
+    })
+    .catch((e) => debugLog(`Background core info fetch error: ${e}`));
 }
 
 export function refreshAchievementsInBackground<S extends AchievementFields>(

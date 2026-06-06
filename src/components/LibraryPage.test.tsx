@@ -229,7 +229,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -261,7 +261,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -271,7 +271,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getFirmwareStatus)).toHaveBeenCalledTimes(1);
@@ -1121,7 +1121,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1137,7 +1137,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1153,7 +1153,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1169,7 +1169,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1181,7 +1181,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1197,7 +1197,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1240,7 +1240,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1268,7 +1268,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1292,7 +1292,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1314,7 +1314,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1364,7 +1364,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1387,7 +1387,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1412,7 +1412,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1455,7 +1455,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1499,7 +1499,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1535,7 +1535,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1571,7 +1571,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1607,7 +1607,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1644,7 +1644,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1681,7 +1681,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1722,7 +1722,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1766,7 +1766,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1798,7 +1798,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1830,7 +1830,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1863,7 +1863,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1890,7 +1890,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1915,13 +1915,13 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
       expect(capturedDropdowns.length).toBe(1);
       const dropdown = capturedDropdowns[0]!;
-      expect(dropdown.label).toBe("Active Core");
+      expect(dropdown.label).toBe("Emulator Core");
       expect(dropdown.rgOptions?.map((o) => o.data)).toEqual(["snes9x", "mesen-s"]);
       expect(dropdown.rgOptions?.[0]?.label).toBe("snes9x (default)");
       expect(dropdown.selectedOption).toBe("snes9x");
@@ -1945,7 +1945,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1989,7 +1989,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -2021,7 +2021,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -2060,7 +2060,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -2082,7 +2082,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        fireEvent.click(getByText("BIOS"));
+        fireEvent.click(getByText("System"));
         await Promise.resolve();
         await Promise.resolve();
       });

@@ -14,12 +14,12 @@ import type {
   FirmwareDownloadResult,
   BiosStatus,
   BiosFileStatus,
+  CoreInfo,
   RomMetadata,
   SaveSyncSettings,
   SaveStatus,
   SaveSyncDisplay,
   SyncConflict,
-  AvailableCore,
   RommErrorCode,
   SyncPreview,
   AchievementSummary,
@@ -72,9 +72,6 @@ export interface CachedGameDetail {
     all_downloaded: boolean;
     required_count?: number;
     required_downloaded?: number;
-    active_core?: string;
-    active_core_label?: string;
-    available_cores?: AvailableCore[];
     cached_at?: number;
     files?: BiosFileStatus[];
   } | null;
@@ -237,6 +234,10 @@ export const setGameCore = callable<
   [string, string, string],
   { success: boolean; message?: string; bios_status?: BiosStatus }
 >("set_game_core");
+// Dedicated core-info path (#923) — active core + available cores for a
+// platform, decoupled from the BIOS firmware status. The per-game detail page
+// and the per-system System tab read core data from here.
+export const getPlatformCoreInfo = callable<[string], CoreInfo>("get_platform_core_info");
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 export const debugLog = callable<[string], void>("debug_log");
 const frontendLog = callable<[string, string], void>("frontend_log");
