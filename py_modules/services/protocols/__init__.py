@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from services.protocols.cross_service import (
     AchievementsReader,
+    ActiveCoreReader,
     ArtworkManager,
     ArtworkRemover,
     BiosChecker,
@@ -104,6 +105,7 @@ from services.protocols.uow import UnitOfWork, UnitOfWorkFactory
 
 __all__ = [
     "AchievementsReader",
+    "ActiveCoreReader",
     "ArtworkManager",
     "ArtworkRemover",
     "BiosChecker",

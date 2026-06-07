@@ -34,6 +34,21 @@ class BiosChecker(Protocol):
     async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict[str, Any]: ...
 
 
+class ActiveCoreReader(Protocol):
+    """Per-ROM active-core resolution consumed by the read-path core consumers.
+
+    The composition root satisfies this with ``ActiveCoreResolver``. Consumers
+    (BIOS status, per-core save dir, save-emulator tag, core-change detection,
+    and the launch-bake sites) ask "which ``.so`` will this ROM launch with?"
+    and operate entirely in ``.so`` space — the resolver runs the stored
+    ``emulator_override`` LABEL through ``label_to_core_so`` so no consumer ever
+    sees the raw DB label. ``(None, None)`` means the system has no configured
+    core; a stale override degrades to the system default rather than raising.
+    """
+
+    def active_core_for_rom(self, rom_id: int) -> tuple[str | None, str | None]: ...
+
+
 class AchievementsReader(Protocol):
     """Achievement data access consumed by GameDetailService."""
 
