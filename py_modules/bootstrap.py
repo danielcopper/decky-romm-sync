@@ -394,6 +394,20 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     bios_files_index_binding: LateBinding[dict[str, dict[str, Any]]] = LateBinding("bios_files_index")
     pending_sync_binding: LateBinding[dict[int, dict[str, Any]]] = LateBinding("pending_sync")
 
+    # The single read-path core resolver (B1): folds the per-game
+    # emulator_override pin over the system-layer ES-DE resolution. Built first
+    # (no service deps) so every per-game-core read consumer — migration, saves,
+    # game-detail, cores — draws from the SAME seam and the read-path core never
+    # diverges from the launched core.
+    active_core_resolver = ActiveCoreResolver(
+        config=ActiveCoreResolverConfig(
+            uow_factory=cfg.callbacks.uow_factory,
+            core_info=cfg.adapters.core_info_provider,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
+            logger=cfg.runtime.logger,
+        ),
+    )
+
     # MigrationService is constructed before SaveService so that
     # save_sync_service can receive a bound reference to
     # ``migration_service.detect_save_sort_change``. SaveService must observe
@@ -409,7 +423,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             get_bios_files_index=bios_files_index_binding.get,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
-            get_active_core=cfg.adapters.core_info_provider.get_active_core,
+            active_core=active_core_resolver,
             get_core_name=cfg.callbacks.get_core_name,
             uow_factory=cfg.callbacks.uow_factory,
         ),
@@ -425,7 +439,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         logger=cfg.runtime.logger,
         clock=cfg.runtime.clock,
         retrodeck_paths=cfg.callbacks.retrodeck_paths,
-        get_active_core=cfg.adapters.core_info_provider.get_active_core,
+        active_core=active_core_resolver,
         hostname_provider=cfg.runtime.hostname_provider,
         machine_id_provider=cfg.runtime.machine_id_provider,
         log_debug=cfg.callbacks.log_debug,
@@ -584,6 +598,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             uow_factory=cfg.callbacks.uow_factory,
             bios_checker=firmware_service,
             achievements=achievements_service,
+            active_core=active_core_resolver,
         ),
     )
 
@@ -594,15 +609,6 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             logger=cfg.runtime.logger,
             settings_persister=cfg.callbacks.settings_persister,
             steam_config=cfg.adapters.steam_config,
-        ),
-    )
-
-    active_core_resolver = ActiveCoreResolver(
-        config=ActiveCoreResolverConfig(
-            uow_factory=cfg.callbacks.uow_factory,
-            core_info=cfg.adapters.core_info_provider,
-            resolve_system=cfg.adapters.http_adapter.resolve_system,
-            logger=cfg.runtime.logger,
         ),
     )
 

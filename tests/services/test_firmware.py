@@ -510,7 +510,7 @@ class TestDeletePlatformBios:
         )
 
         # Mock check_platform_bios with the REAL output shape: asdict dicts.
-        async def mock_check(slug, rom_filename=None):
+        async def mock_check(slug, active_core_so=None):
             return {
                 "needs_bios": True,
                 "server_count": 1,
@@ -620,7 +620,7 @@ class TestDeletePlatformBios:
     async def test_delete_platform_bios_no_files(self, fw):
         """Deleting BIOS when none exist returns success with 0."""
 
-        async def mock_check(slug, rom_filename=None):
+        async def mock_check(slug, active_core_so=None):
             return {"needs_bios": False}
 
         fw.check_platform_bios = mock_check
@@ -633,7 +633,7 @@ class TestDeletePlatformBios:
     async def test_delete_platform_bios_skips_not_downloaded(self, fw, tmp_path):
         """Only files with downloaded=True are deleted (real asdict dict shape)."""
 
-        async def mock_check(slug, rom_filename=None):
+        async def mock_check(slug, active_core_so=None):
             return {
                 "needs_bios": True,
                 "server_count": 2,
@@ -1865,6 +1865,85 @@ class TestPerCoreFiltering:
         assert gb_file["used_by_active"] is False
 
 
+class TestCheckPlatformBiosPreResolvedCore:
+    """R8: ``check_platform_bios`` takes a pre-resolved ``active_core_so``.
+
+    The per-game game-detail path resolves the active ``.so`` upstream (folding
+    the ``emulator_override`` pin) and passes it in; the platform-level callers
+    pass ``None`` to mean "use the system default". The filter's ``required_count``
+    must follow the pre-resolved core, not the system default.
+    """
+
+    def _gba_two_core_service(self, fw, firmware_list):
+        """Wire a gba registry where gpSP requires gba_bios.bin and mGBA does not."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        fw._bios_registry = {
+            "platforms": {
+                "gba": {
+                    "gba_bios.bin": {
+                        "description": "GBA BIOS",
+                        "required": True,
+                        "firmware_path": "gba_bios.bin",
+                        "md5": "",
+                        "cores": {"mgba_libretro": {"required": False}, "gpsp_libretro": {"required": True}},
+                    },
+                },
+            },
+        }
+        fw._bios_files_index = {
+            "gba_bios.bin": {**fw._bios_registry["platforms"]["gba"]["gba_bios.bin"], "platform": "gba"},
+        }
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+    @pytest.mark.asyncio
+    async def test_pre_resolved_core_drives_filter_over_system_default(self, fw, tmp_path):
+        """A passed-in ``active_core_so`` overrides the system default for required_count.
+
+        The system default (set on the fake) is mGBA — which treats gba_bios.bin as
+        optional. Passing the per-game override ``gpsp_libretro`` flips the file to
+        required, proving the pre-resolved core (not the system default) feeds the
+        filter and that ``get_active_core`` is NOT consulted when a core is supplied.
+        """
+        firmware_list = [
+            {"id": 1, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "md5_hash": ""},
+        ]
+        self._gba_two_core_service(fw, firmware_list)
+        # System default = mGBA (optional). The per-game override should win.
+        fw._core_info.active_core = ("mgba_libretro", "mGBA")
+
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+            result = await fw.check_platform_bios("gba", active_core_so="gpsp_libretro")
+
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 1  # gpSP requires gba_bios.bin
+        # The pre-resolved core short-circuits the system-default read entirely.
+        assert fw._core_info.active_core_calls == []
+
+    @pytest.mark.asyncio
+    async def test_none_falls_back_to_system_default(self, fw, tmp_path):
+        """``active_core_so=None`` resolves the system default via ``get_active_core``.
+
+        Same registry, no per-game core: the platform-level path reads the system
+        default (mGBA → optional) so ``required_count`` is 0 — the opposite of the
+        override case, locking in the result-flip.
+        """
+        firmware_list = [
+            {"id": 1, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "md5_hash": ""},
+        ]
+        self._gba_two_core_service(fw, firmware_list)
+        fw._core_info.active_core = ("mgba_libretro", "mGBA")
+
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "bios"))):
+            result = await fw.check_platform_bios("gba")
+
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 0  # mGBA treats gba_bios.bin as optional
+        # None → the system default was read once for the system "gba".
+        assert fw._core_info.active_core_calls == [("gba", None)]
+
+
 class TestLoadBiosRegistryErrors:
     """Tests for load_bios_registry error handling."""
 
@@ -2515,7 +2594,7 @@ class TestDeletePlatformBiosIOLogsWarnings:
         fake_files.remove_failures.add("/fake/bios/scph5501.bin")
         fw._firmware_file_store = fake_files
 
-        async def mock_check(slug, rom_filename=None):
+        async def mock_check(slug, active_core_so=None):
             return {
                 "needs_bios": True,
                 "files": [

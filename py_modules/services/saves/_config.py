@@ -15,9 +15,9 @@ if TYPE_CHECKING:
     import logging
 
     from services.protocols import (
+        ActiveCoreReader,
         Clock,
         CoreNameProviderFn,
-        CoreResolverFn,
         DebugLogger,
         EventEmitter,
         HostnameReader,
@@ -65,11 +65,12 @@ class SaveServiceConfig:
         paths. SaveService consumes ``saves_path()`` and ``roms_path()``;
         the BIOS and home accessors are unused here but the Protocol
         is bundled so every service shares a uniform shape.
-    get_active_core:
-        Callable resolving the active RetroArch core for a system/game.
-        Returns ``(core_so, label)`` tuple; either may be None if
-        unresolved. This is an ES-DE question (``which core runs this
-        ROM?``).
+    active_core:
+        ``ActiveCoreReader`` seam resolving the active RetroArch core for a
+        ROM by ``rom_id``. Returns ``(core_so, label)``; either may be None if
+        unresolved. Folds the per-game ``emulator_override`` pin over the
+        system-layer ES-DE resolution so the per-core save dir / save-emulator
+        tag / core-change warning key off the same core the ROM launches with.
     hostname_provider:
         ``HostnameReader`` Protocol seam — supplies the local device
         hostname used as the registered device name during initial
@@ -87,8 +88,8 @@ class SaveServiceConfig:
         ``"mgba_libretro"`` -> ``"mGBA"``). When
         ``sort_savefiles_enable`` is active on RetroArch, this is the
         authoritative name used for the per-core save subdirectory — it
-        is NOT the same as the ES-DE UI label returned by
-        ``get_active_core`` (see the Config-Source-Parsers wiki page
+        is NOT the same as the ES-DE UI label returned by the
+        ``active_core`` reader (see the Config-Source-Parsers wiki page
         for the one-parser-per-source rationale). When resolution fails
         at runtime (the callable returns ``None``), SaveService warns
         and falls back to the parent directory path; see
@@ -138,7 +139,7 @@ class SaveServiceConfig:
     logger: logging.Logger
     clock: Clock
     retrodeck_paths: RetroDeckPaths
-    get_active_core: CoreResolverFn
+    active_core: ActiveCoreReader
     hostname_provider: HostnameReader
     machine_id_provider: MachineIdReader
     log_debug: DebugLogger

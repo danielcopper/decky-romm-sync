@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 
     from services.protocols import (
         Clock,
-        CoreResolverFn,
         DebugLogger,
         RetryStrategy,
         RommSaveApi,
@@ -54,9 +53,7 @@ class SlotsServiceConfig:
     status, rom_info), the core resolver used to stamp the upload
     emulator tag, the Protocol-typed RomM adapter and retry strategy,
     runtime infrastructure (loop, logger, clock), the Protocol-typed
-    filesystem adapter, the ``DebugLogger`` seam, and the ES-DE core
-    resolver used during slot migration to build the emulator tag for
-    re-upload.
+    filesystem adapter, and the ``DebugLogger`` seam.
     """
 
     settings: dict[str, Any]
@@ -72,7 +69,6 @@ class SlotsServiceConfig:
     clock: Clock
     save_file_store: SaveFileStore
     log_debug: DebugLogger
-    get_active_core: CoreResolverFn
 
 
 class SlotsService:
@@ -113,7 +109,6 @@ class SlotsService:
             logger=config.logger,
             save_file_store=config.save_file_store,
             log_debug=config.log_debug,
-            get_active_core=config.get_active_core,
         )
         self._deleter = SlotDeleter(
             settings=config.settings,

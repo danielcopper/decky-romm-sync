@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +21,7 @@ if TYPE_CHECKING:
     import logging
 
     from services.protocols import (
-        CoreResolverFn,
+        ActiveCoreReader,
         DebugLogger,
         EventEmitter,
         RetryStrategy,
@@ -42,7 +41,7 @@ class StatusServiceConfig:
     repositories), the peer save sub-services (sync_engine, rom_info),
     the Protocol-typed RomM adapter and retry strategy, the plugin event
     loop, the standard-library logger, the ``DebugLogger`` seam, the
-    ES-DE core resolver, and the event emitter used to push background
+    per-ROM active-core resolver, and the event emitter used to push background
     status updates to the frontend.
     """
 
@@ -55,7 +54,7 @@ class StatusServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     log_debug: DebugLogger
-    get_active_core: CoreResolverFn
+    active_core: ActiveCoreReader
     emit: EventEmitter
 
 
@@ -73,7 +72,7 @@ class StatusService:
         self._loop = config.loop
         self._logger = config.logger
         self._log_debug = config.log_debug
-        self._get_active_core = config.get_active_core
+        self._active_core = config.active_core
         self._emit = config.emit
 
     def _status_entry_from_outcome(
@@ -333,7 +332,6 @@ class StatusService:
 
         with self._uow_factory() as uow:
             save_entry = uow.rom_save_states.get(rom_id)
-            installed = uow.rom_installs.get(rom_id)
         if not save_entry:
             return {"changed": False}  # Never synced
 
@@ -342,16 +340,13 @@ class StatusService:
         if not stored_core or not system:
             return {"changed": False}
 
-        # Resolve ROM filename for per-game core detection
-        rom_filename = None
-        if installed and installed.file_path:
-            rom_filename = os.path.basename(installed.file_path)
-
-        # Core labels come from ES-DE config which may differ from RetroArch's
-        # corename (e.g. "Snes9x - Current" vs "Snes9x"). Aligning with RetroArch
-        # core names is tracked in #208.
+        # The active core is the per-game resolution (the emulator_override pin
+        # folded over the system default), keyed by rom_id so it never diverges
+        # from the launched core. Core labels come from ES-DE config which may
+        # differ from RetroArch's corename (e.g. "Snes9x - Current" vs "Snes9x").
+        # Aligning with RetroArch core names is tracked in #208.
         try:
-            active_core, active_label = self._get_active_core(system, rom_filename)
+            active_core, active_label = self._active_core.active_core_for_rom(rom_id)
         except Exception:
             return {"changed": False}
 

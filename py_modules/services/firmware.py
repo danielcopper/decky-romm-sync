@@ -257,22 +257,38 @@ class FirmwareService:
         except Exception as e:
             self._logger.warning(f"Failed to clear persisted firmware cache: {e}")
 
-    def check_platform_bios_cached(self, platform_slug, rom_filename=None):
+    def _resolve_bios_filter_core(self, system: str, active_core_so: str | None) -> str | None:
+        """Return the ``.so`` to filter the firmware list against.
+
+        A non-``None`` ``active_core_so`` is the pre-resolved per-game core (the
+        game-detail path runs ``ActiveCoreReader`` upstream) and is used as-is.
+        ``None`` is the platform-level callers' "use the system default" signal —
+        resolved here via the system-layer ``get_active_core(system)``.
+        """
+        if active_core_so is not None:
+            return active_core_so
+        core_so, _ = self._core_info.get_active_core(system)
+        return core_so
+
+    def check_platform_bios_cached(self, platform_slug, active_core_so=None):
         """Return BIOS status from in-memory cache only — no HTTP.
 
         Returns None if the firmware cache is empty (never fetched).
         Includes ``cached_at`` timestamp so the frontend can decide staleness.
-        The active core is resolved only to drive core-aware BIOS filtering — it
-        is an INPUT to ``collect_firmware_status``, never served back to the UI.
-        Core info (active core, available cores) reaches the frontend through the
-        dedicated ``get_platform_core_info`` path, not this BIOS payload (#923).
+        ``active_core_so`` is the pre-resolved core that drives core-aware BIOS
+        filtering — it is an INPUT to ``collect_firmware_status``, never served
+        back to the UI. ``None`` means "use the system default" (resolved here
+        via ``get_active_core(system)``); the per-game game-detail path passes
+        the ROM's resolved ``.so`` directly. Core info (active core, available
+        cores) reaches the frontend through the dedicated
+        ``get_platform_core_info`` path, not this BIOS payload (#923).
         """
         if self._firmware_cache is None:
             return None
 
         system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        active_core_so, _ = self._core_info.get_active_core(system, rom_filename=rom_filename)
+        active_core_so = self._resolve_bios_filter_core(system, active_core_so)
 
         registry_platform = {}
         for slug in fw_slugs:
@@ -562,18 +578,21 @@ class FirmwareService:
             msg += f" ({len(errors)} failed: {', '.join(errors)})"
         return {"success": True, "message": msg, "downloaded": downloaded}
 
-    async def check_platform_bios(self, platform_slug, rom_filename=None):
+    async def check_platform_bios(self, platform_slug, active_core_so=None):
         """Check if RomM has firmware for this platform and whether it's downloaded.
 
-        Returns BIOS status only. The active core is resolved purely to filter the
-        firmware list by what THIS core needs (an INPUT to ``collect_firmware_status``
-        so ``required_count`` / the missing-BIOS badge stay core-aware); it is never
-        served back to the UI. Core info reaches the frontend through the dedicated
-        ``get_platform_core_info`` path, not this payload (#923).
+        Returns BIOS status only. ``active_core_so`` is the pre-resolved core used
+        to filter the firmware list by what THIS core needs (an INPUT to
+        ``collect_firmware_status`` so ``required_count`` / the missing-BIOS badge
+        stay core-aware); it is never served back to the UI. ``None`` means "use
+        the system default" (resolved here via ``get_active_core(system)``); the
+        per-game game-detail path passes the ROM's resolved ``.so``. Core info
+        reaches the frontend through the dedicated ``get_platform_core_info``
+        path, not this payload (#923).
         """
         system = self._resolve_system(platform_slug)
         fw_slugs = firmware_paths.resolve_firmware_slugs(platform_slug)
-        active_core_so, _ = self._core_info.get_active_core(system, rom_filename=rom_filename)
+        active_core_so = self._resolve_bios_filter_core(system, active_core_so)
 
         # Build combined registry entries for this platform from all mapped slugs
         registry_platform = {}

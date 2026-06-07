@@ -8,6 +8,7 @@ import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
@@ -96,9 +97,6 @@ def plugin(tmp_path, fake_romm_api):
         ),
     )
 
-    def _no_active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
-        return (None, None)
-
     def _no_core_name(core_so: str) -> str | None:
         return None
 
@@ -116,7 +114,7 @@ def plugin(tmp_path, fake_romm_api):
             get_bios_files_index=lambda: p._firmware_service.bios_files_index,
             retrodeck_paths=FakeRetroDeckPaths(),
             get_retroarch_save_sorting=_default_save_sorting,
-            get_active_core=_no_active_core,
+            active_core=FakeActiveCoreResolver(default=(None, None)),
             get_core_name=_no_core_name,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
@@ -1376,7 +1374,7 @@ class TestMigrationFailureInjection:
             "get_bios_files_index": dict,
             "retrodeck_paths": FakeRetroDeckPaths(),
             "get_retroarch_save_sorting": lambda: (False, False),
-            "get_active_core": lambda system, rom_filename: (None, None),
+            "active_core": FakeActiveCoreResolver(default=(None, None)),
             "get_core_name": lambda core_so: None,
             "uow_factory": FakeUnitOfWorkFactory(uow=uow),
         }

@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_save_api import FakeSaveApi
 
@@ -532,7 +533,7 @@ class TestEmulatorTag:
         """When core resolver returns a core, upload uses retroarch-{core} tag."""
         svc, fake = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
         )
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
@@ -555,7 +556,7 @@ class TestEmulatorTag:
 
     def test_upload_uses_fallback_when_no_core(self, tmp_path):
         """When the resolved core is None, upload falls back to 'retroarch'."""
-        svc, fake = make_service(tmp_path)  # default: get_active_core returns (None, None)
+        svc, fake = make_service(tmp_path)  # default: active_core returns (None, None)
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -574,6 +575,26 @@ class TestEmulatorTag:
         assert len(upload_calls) == 1
         _name, args, _kwargs = upload_calls[0]
         assert args[2] == "retroarch"
+
+    def test_resolve_core_differs_by_per_game_override(self, tmp_path):
+        """RESULT-FLIP: two installed gba ROMs, one pinned + one default, stamp different cores.
+
+        ``SyncEngine.resolve_core`` feeds the upload emulator tag. The pinned ROM
+        resolves to its override core; the NULL ROM resolves to the system default.
+        The stamped core flips on the override alone — keyed by rom_id, never by a
+        per-call filename argument.
+        """
+        active_core = FakeActiveCoreResolver(
+            default=("snes9x_libretro", "Snes9x"),
+            per_rom={42: ("supafaust_libretro", "Supafaust")},
+        )
+        svc, _ = make_service(tmp_path, active_core=active_core)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pinned.gba")
+        _install_rom(svc, tmp_path, rom_id=43, system="gba", file_name="default.gba")
+
+        assert svc._sync_engine.resolve_core(42) == "supafaust_libretro"
+        assert svc._sync_engine.resolve_core(43) == "snes9x_libretro"
+        assert active_core.calls == [42, 43]
 
     @pytest.mark.asyncio
     async def test_delete_platform_saves(self, tmp_path):
@@ -751,7 +772,7 @@ class TestCheckCoreChange:
         """Returns changed=True with core names when active core differs from stored."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
+            active_core=FakeActiveCoreResolver(default=("supafaust_libretro", "Supafaust")),
         )
         svc._config.settings["save_sync_enabled"] = True
         _seed_save_state(
@@ -775,7 +796,7 @@ class TestCheckCoreChange:
         """Returns changed=False when active core matches stored core."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
+            active_core=FakeActiveCoreResolver(default=("snes9x_libretro", "Snes9x")),
         )
         svc._config.settings["save_sync_enabled"] = True
         _seed_save_state(
@@ -805,7 +826,7 @@ class TestCheckCoreChange:
         """Returns changed=False when save entry exists but last_synced_core is None."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
+            active_core=FakeActiveCoreResolver(default=("snes9x_libretro", "Snes9x")),
         )
         svc._config.settings["save_sync_enabled"] = True
         _seed_save_state(
@@ -822,10 +843,10 @@ class TestCheckCoreChange:
         assert result == {"changed": False}
 
     def test_active_core_resolution_fails(self, tmp_path):
-        """Returns changed=False when get_active_core returns (None, None)."""
+        """Returns changed=False when the resolver returns (None, None)."""
         svc, _ = make_service(
             tmp_path,
-            # default: get_active_core returns (None, None)
+            # default: active_core returns (None, None)
         )
         svc._config.settings["save_sync_enabled"] = True
         _seed_save_state(
@@ -845,7 +866,7 @@ class TestCheckCoreChange:
         """Returns changed=False when save sync is disabled regardless of state."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("supafaust_libretro", "Supafaust"),
+            active_core=FakeActiveCoreResolver(default=("supafaust_libretro", "Supafaust")),
         )
         # save_sync_enabled defaults to False
         _seed_save_state(
@@ -861,23 +882,43 @@ class TestCheckCoreChange:
 
         assert result == {"changed": False}
 
-    def test_rom_filename_resolved_for_per_game_core(self, tmp_path):
-        """When installed_roms has file_path, the basename is passed to get_active_core."""
-        received_args: list[tuple[str, str | None]] = []
+    def test_check_core_change_differs_by_per_game_override(self, tmp_path):
+        """RESULT-FLIP: two ROMs on one platform, one pinned + one NULL, differ by override.
 
-        def capture_core(system_name, rom_filename=None):
-            received_args.append((system_name, rom_filename))
-            return ("supafaust_libretro", "Supafaust")
-
-        svc, _ = make_service(tmp_path, get_active_core=capture_core)
+        The pinned ROM resolves to the override core (≠ its stored core) → changed;
+        the NULL ROM resolves to the same system default it was synced with →
+        unchanged. The per-rom seam is keyed by ``rom_id`` — the outcome flips on
+        the override alone, not on any per-call argument.
+        """
+        # rom 42: override resolves to a DIFFERENT core than what was synced.
+        # rom 43: default resolves to the SAME core it was synced with.
+        active_core = FakeActiveCoreResolver(
+            default=("snes9x_libretro", "Snes9x"),
+            per_rom={42: ("supafaust_libretro", "Supafaust")},
+        )
+        svc, _ = make_service(tmp_path, active_core=active_core)
         svc._config.settings["save_sync_enabled"] = True
-        _install_rom(svc, tmp_path, rom_id=42, system="snes", file_name="mario.sfc")
-        _seed_save_state(svc, 42, self._make_save_entry(system="snes"), platform_slug="snes")
+        _seed_save_state(
+            svc,
+            42,
+            self._make_save_entry(system="snes", last_synced_core="snes9x_libretro"),
+            platform_slug="snes",
+        )
+        _seed_save_state(
+            svc,
+            43,
+            self._make_save_entry(system="snes", last_synced_core="snes9x_libretro"),
+            platform_slug="snes",
+        )
 
-        svc.check_core_change(42)
+        pinned = svc.check_core_change(42)
+        plain = svc.check_core_change(43)
 
-        assert len(received_args) == 1
-        assert received_args[0] == ("snes", "mario.sfc")
+        # The override flips the outcome: pinned ROM sees a core change, NULL does not.
+        assert pinned["changed"] is True
+        assert pinned["new_core"] == "supafaust_libretro"
+        assert plain == {"changed": False}
+        assert active_core.calls == [42, 43]
 
 
 class TestPathTraversalDefense:

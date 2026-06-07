@@ -19,7 +19,6 @@ those sub-modules together and exposes the surface peer save services
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -35,8 +34,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from services.protocols import (
+        ActiveCoreReader,
         Clock,
-        CoreResolverFn,
         DebugLogger,
         HostnameReader,
         MachineIdReader,
@@ -63,8 +62,8 @@ class SyncEngineConfig:
     SQLite repositories), the peer save sub-service (rom_info), the
     Protocol-typed RomM adapter and retry strategy, runtime
     infrastructure (loop, logger, clock), the Protocol-typed filesystem
-    adapter, the ``DebugLogger`` seam, the ES-DE core resolver, the
-    hostname provider + machine-id provider + settings persister used for
+    adapter, the ``DebugLogger`` seam, the per-ROM active-core resolver,
+    the hostname provider + machine-id provider + settings persister used for
     device registration,
     the plugin version string passed to the server on register/update,
     and the optional sort-change and migration-pending callbacks
@@ -81,7 +80,7 @@ class SyncEngineConfig:
     clock: Clock
     save_file_store: SaveFileStore
     log_debug: DebugLogger
-    get_active_core: CoreResolverFn
+    active_core: ActiveCoreReader
     hostname_provider: HostnameReader
     machine_id_provider: MachineIdReader
     settings_persister: SettingsPersister
@@ -105,7 +104,7 @@ class SyncEngine:
         self._clock = config.clock
         self._save_file_store = config.save_file_store
         self._log_debug = config.log_debug
-        self._get_active_core = config.get_active_core
+        self._active_core = config.active_core
         self._hostname_provider = config.hostname_provider
         self._machine_id_provider = config.machine_id_provider
         self._settings_persister = config.settings_persister
@@ -124,7 +123,6 @@ class SyncEngine:
             clock=config.clock,
             save_file_store=config.save_file_store,
             log_debug=config.log_debug,
-            get_active_core=config.get_active_core,
         )
         self._devices = DeviceRegistry(
             uow_factory=config.uow_factory,
@@ -171,16 +169,16 @@ class SyncEngine:
     def resolve_core(self, rom_id: int) -> str | None:
         """Resolve the active RetroArch core for a ROM, or ``None``.
 
-        Reads the install record for the ROM's launch filename so the ES-DE
-        core resolver can answer per-game; system comes from the save-path
-        resolver. Used to stamp the upload emulator tag.
+        Gates on the install record (an uninstalled ROM has no launch and
+        nothing to stamp), then resolves the per-game active core by ``rom_id``
+        through the shared :class:`ActiveCoreResolver` — folding the per-game
+        ``emulator_override`` pin over the system default. Used to stamp the
+        upload emulator tag.
         """
         info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
             return None
-        system = info["system"]
-        rom_filename = os.path.basename(info.get("file_path", "")) or None
-        core_so, _label = self._get_active_core(system, rom_filename)
+        core_so, _label = self._active_core.active_core_for_rom(rom_id)
         return core_so
 
     # ------------------------------------------------------------------

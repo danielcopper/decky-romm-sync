@@ -218,8 +218,10 @@ class Plugin:
     async def download_required_firmware(self, platform_slug):
         return await self._firmware_service.download_required_firmware(platform_slug)
 
-    async def check_platform_bios(self, platform_slug, rom_filename=None):
-        return await self._firmware_service.check_platform_bios(platform_slug, rom_filename=rom_filename)
+    async def check_platform_bios(self, platform_slug):
+        # Platform-level BIOS check (the frontend callable sends only the slug);
+        # no per-game core to thread, so the system default drives the filter.
+        return await self._firmware_service.check_platform_bios(platform_slug)
 
     async def get_bios_status(self, rom_id):
         return await self._game_detail_service.get_bios_status(rom_id)

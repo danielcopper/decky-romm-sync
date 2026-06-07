@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from services.protocols import (
-        CoreResolverFn,
         DebugLogger,
         RetryStrategy,
         RommSaveApi,
@@ -51,7 +50,6 @@ class SetupWizard:
         logger: logging.Logger,
         save_file_store: SaveFileStore,
         log_debug: DebugLogger,
-        get_active_core: CoreResolverFn,
     ) -> None:
         self._settings = settings
         self._uow_factory = uow_factory
@@ -63,7 +61,6 @@ class SetupWizard:
         self._logger = logger
         self._save_file_store = save_file_store
         self._log_debug = log_debug
-        self._get_active_core = get_active_core
 
     def _read_save_state(self, rom_id: int) -> RomSaveState | None:
         with self._uow_factory() as uow:

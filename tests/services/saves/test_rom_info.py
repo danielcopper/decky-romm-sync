@@ -1,5 +1,7 @@
 """Tests for RomInfoService — per-ROM save path resolution and local save discovery."""
 
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+
 from tests.services.saves._helpers import (
     _create_save,
     _install_rom,
@@ -150,7 +152,7 @@ class TestGetRomSaveInfo:
         """Pending migration: previous (OLD) sort settings override current (NEW) (#238)."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
@@ -170,7 +172,7 @@ class TestGetRomSaveInfo:
         """No pending migration: use current sort settings (#238)."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
@@ -197,7 +199,7 @@ class TestGetRomSaveInfo:
         """
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
@@ -225,7 +227,7 @@ class TestGetRomSaveInfo:
         """sort_by_core=False (RetroDECK default) → no core subdir."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
@@ -241,7 +243,7 @@ class TestGetRomSaveInfo:
         """sort_by_core=True with resolvable corename → saves_dir ends in /{system}/{corename}."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
@@ -252,11 +254,44 @@ class TestGetRomSaveInfo:
         assert result is not None
         assert result["saves_dir"].endswith("saves/gba/mGBA")
 
+    def test_save_dir_differs_by_per_game_override(self, tmp_path):
+        """RESULT-FLIP: two gba ROMs, one pinned to gpSP + one default, get different save dirs.
+
+        With sort_by_core active, the per-core save subdir is named after the
+        resolved core's ``.info`` corename. The override ROM resolves to gpSP →
+        ``/gpSP`` subdir; the NULL ROM resolves to the default mGBA → ``/mGBA``.
+        The save dir flips on the per-game override alone — proving the per-core
+        layout keys off the same core the ROM launches with, not a platform default.
+        """
+        active_core = FakeActiveCoreResolver(
+            default=("mgba_libretro", "mGBA"),
+            per_rom={42: ("gpsp_libretro", "gpSP")},
+        )
+        svc, _ = make_service(
+            tmp_path,
+            active_core=active_core,
+            # The .info corename mirrors the ES-DE label here for test simplicity.
+            get_core_name=lambda core_so: "gpSP" if core_so == "gpsp_libretro" else "mGBA",
+        )
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pinned.gba")
+        _install_rom(svc, tmp_path, rom_id=43, system="gba", file_name="default.gba")
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
+
+        pinned = svc._rom_info.get_rom_save_info(42)
+        plain = svc._rom_info.get_rom_save_info(43)
+
+        assert pinned is not None
+        assert plain is not None
+        assert pinned["saves_dir"].endswith("saves/gba/gpSP")
+        assert plain["saves_dir"].endswith("saves/gba/mGBA")
+        # Each ROM's save dir was resolved by its own rom_id.
+        assert active_core.calls == [42, 43]
+
     def test_sort_by_core_uses_corename_not_es_de_label(self, tmp_path):
         """The RetroArch .info corename (``Snes9x``) must be used, not the ES-DE label (``Snes9x - Current``)."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x - Current"),
+            active_core=FakeActiveCoreResolver(default=("snes9x_libretro", "Snes9x - Current")),
             get_core_name=lambda core_so: "Snes9x",
         )
         _install_rom(svc, tmp_path, system="snes", file_name="mario.sfc")
@@ -276,7 +311,7 @@ class TestGetRomSaveInfo:
         """
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
             get_core_name=lambda core_so: None,  # .info unreadable / field missing
         )
         _install_rom(svc, tmp_path)
@@ -295,12 +330,12 @@ class TestGetRomSaveInfo:
     def test_sort_by_core_falls_back_when_get_core_name_returns_none(self, tmp_path, caplog):
         """``get_core_name`` returns ``None`` (.info unreadable) → warns and falls back.
 
-        ``get_active_core`` succeeded so ``core_so`` is identified in the
+        the resolver succeeded so ``core_so`` is identified in the
         diagnostic log to help the user locate the unreadable .info file.
         """
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("mgba_libretro", "mGBA"),
+            active_core=FakeActiveCoreResolver(default=("mgba_libretro", "mGBA")),
             get_core_name=lambda core_so: None,
         )
         _install_rom(svc, tmp_path)
@@ -316,14 +351,14 @@ class TestGetRomSaveInfo:
         assert "core_so=mgba_libretro" in warnings[0]
 
     def test_sort_by_core_falls_back_when_active_core_unresolved(self, tmp_path, caplog):
-        """sort_by_core=True but get_active_core returns (None, None) → warn + fall back.
+        """sort_by_core=True but the resolver returns (None, None) → warn + fall back.
 
         When ES-DE cannot determine the active core, ``core_so`` is ``None`` and
         the log records ``core_so=unresolved``.
         """
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: (None, None),
+            active_core=FakeActiveCoreResolver(default=(None, None)),
             get_core_name=lambda core_so: "mGBA",
         )
         _install_rom(svc, tmp_path)
@@ -339,22 +374,22 @@ class TestGetRomSaveInfo:
         assert "core_so=unresolved" in warnings[0]
 
     def test_resolve_retroarch_corename_happy_path(self, tmp_path):
-        """Direct test of the helper: both callbacks resolve → (corename, core_so) tuple returned."""
+        """Direct test of the helper: both seams resolve → (corename, core_so) tuple returned."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x - Current"),
+            active_core=FakeActiveCoreResolver(default=("snes9x_libretro", "Snes9x - Current")),
             get_core_name=lambda core_so: "Snes9x",
         )
-        assert svc._rom_info.resolve_retroarch_corename("snes", "mario.sfc") == ("Snes9x", "snes9x_libretro")
+        assert svc._rom_info.resolve_retroarch_corename(42) == ("Snes9x", "snes9x_libretro")
 
     def test_resolve_retroarch_corename_returns_none_tuple_when_core_so_empty(self, tmp_path):
-        """ES-DE returns (None, None) → helper returns (None, None)."""
+        """The resolver returns (None, None) → helper returns (None, None)."""
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: (None, None),
+            active_core=FakeActiveCoreResolver(default=(None, None)),
             get_core_name=lambda core_so: "Snes9x",
         )
-        assert svc._rom_info.resolve_retroarch_corename("snes", "mario.sfc") == (None, None)
+        assert svc._rom_info.resolve_retroarch_corename(42) == (None, None)
 
     def test_resolve_retroarch_corename_preserves_core_so_when_corename_empty(self, tmp_path):
         """Empty corename with resolved core_so → (None, core_so).
@@ -365,7 +400,7 @@ class TestGetRomSaveInfo:
         """
         svc, _ = make_service(
             tmp_path,
-            get_active_core=lambda system_name, rom_filename=None: ("snes9x_libretro", "Snes9x"),
+            active_core=FakeActiveCoreResolver(default=("snes9x_libretro", "Snes9x")),
             get_core_name=lambda core_so: "",
         )
-        assert svc._rom_info.resolve_retroarch_corename("snes", "mario.sfc") == (None, "snes9x_libretro")
+        assert svc._rom_info.resolve_retroarch_corename(42) == (None, "snes9x_libretro")

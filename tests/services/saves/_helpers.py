@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from conftest import _make_retry
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
@@ -49,7 +50,7 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
             saves=str(tmp_path / "saves"),
             roms=str(tmp_path / "retrodeck" / "roms"),
         ),
-        "get_active_core": lambda system_name, rom_filename=None: (None, None),
+        "active_core": FakeActiveCoreResolver(default=(None, None)),
         "hostname_provider": FakeHostnameReader(),
         "machine_id_provider": FakeMachineIdReader(),
         "log_debug": lambda _msg: None,

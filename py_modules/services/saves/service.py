@@ -67,7 +67,7 @@ class SaveService:
                 uow_factory=config.uow_factory,
                 save_file_store=config.save_file_store,
                 retrodeck_paths=config.retrodeck_paths,
-                get_active_core=config.get_active_core,
+                active_core=config.active_core,
                 get_core_name=config.get_core_name,
                 logger=config.logger,
             ),
@@ -85,7 +85,7 @@ class SaveService:
                 clock=config.clock,
                 save_file_store=config.save_file_store,
                 log_debug=config.log_debug,
-                get_active_core=config.get_active_core,
+                active_core=config.active_core,
                 hostname_provider=config.hostname_provider,
                 machine_id_provider=config.machine_id_provider,
                 settings_persister=config.settings_persister,
@@ -106,7 +106,7 @@ class SaveService:
                 loop=config.loop,
                 logger=config.logger,
                 log_debug=config.log_debug,
-                get_active_core=config.get_active_core,
+                active_core=config.active_core,
                 emit=config.emit,
             ),
         )
@@ -141,7 +141,6 @@ class SaveService:
                 clock=config.clock,
                 save_file_store=config.save_file_store,
                 log_debug=config.log_debug,
-                get_active_core=config.get_active_core,
             ),
         )
 

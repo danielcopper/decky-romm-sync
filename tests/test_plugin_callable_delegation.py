@@ -264,11 +264,10 @@ class TestFirmwareCallableDelegation:
     @pytest.mark.asyncio
     async def test_check_platform_bios_delegates(self, plugin):
         plugin._firmware_service.check_platform_bios = AsyncMock(return_value={"present": []})
-        result = await plugin.check_platform_bios("snes", "rom.bin")
-        plugin._firmware_service.check_platform_bios.assert_awaited_once_with(
-            "snes",
-            rom_filename="rom.bin",
-        )
+        # The frontend callable sends only the slug; main.py threads no per-game
+        # core, so the system default drives the BIOS filter (active_core_so=None).
+        result = await plugin.check_platform_bios("snes")
+        plugin._firmware_service.check_platform_bios.assert_awaited_once_with("snes")
         assert result == {"present": []}
 
     @pytest.mark.asyncio

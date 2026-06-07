@@ -29,7 +29,13 @@ if TYPE_CHECKING:
     from domain.rom import Rom
     from domain.rom_install import RomInstall
     from domain.rom_save_state import RomSaveState
-    from services.protocols import AchievementsReader, BiosChecker, Clock, UnitOfWorkFactory
+    from services.protocols import (
+        AchievementsReader,
+        ActiveCoreReader,
+        BiosChecker,
+        Clock,
+        UnitOfWorkFactory,
+    )
 
 # kv_config key for the offline ``platform_slug → display_name`` cache the library
 # sync refreshes every run. Read here so the game-detail panel shows "Super
@@ -50,8 +56,10 @@ class GameDetailServiceConfig:
     SQLite Unit-of-Work factory (the read seam over the ``roms`` /
     ``rom_installs`` / ``rom_save_states`` / ``rom_metadata`` / ``kv_config``
     aggregates), and the Protocol-typed reader adapters (``BiosChecker``,
-    ``AchievementsReader``) GameDetailService consults to assemble the
-    game-detail payload.
+    ``AchievementsReader``, ``ActiveCoreReader``) GameDetailService consults to
+    assemble the game-detail payload. The active-core resolver answers "which
+    ``.so`` will this ROM launch with?" so the core-aware BIOS filter keys off
+    the per-game pin, not a platform default.
     """
 
     settings: dict[str, Any]
@@ -60,6 +68,7 @@ class GameDetailServiceConfig:
     uow_factory: UnitOfWorkFactory
     bios_checker: BiosChecker
     achievements: AchievementsReader
+    active_core: ActiveCoreReader
 
 
 class GameDetailService:
@@ -72,6 +81,7 @@ class GameDetailService:
         self._uow_factory = config.uow_factory
         self._bios_checker = config.bios_checker
         self._achievements = config.achievements
+        self._active_core = config.active_core
 
     @staticmethod
     def _resolve_rom_file(install: RomInstall | None, rom: Rom) -> str:
@@ -224,7 +234,8 @@ class GameDetailService:
         bios_level = None
         bios_label = None
         if platform_slug:
-            cached_bios = self._bios_checker.check_platform_bios_cached(platform_slug, rom_filename=rom_file or None)
+            active_core_so, _ = self._active_core.active_core_for_rom(rom_id)
+            cached_bios = self._bios_checker.check_platform_bios_cached(platform_slug, active_core_so=active_core_so)
             if cached_bios and cached_bios.get("needs_bios"):
                 bios_obj = format_bios_status(cached_bios, platform_slug, cached_at=cached_bios.get("cached_at", 0.0))
                 bios_status = asdict(bios_obj)
@@ -273,11 +284,10 @@ class GameDetailService:
         """
         rom_id = int(rom_id)
 
-        # Short read UoW: resolve platform_slug + rom_file, then await the BIOS
-        # check OUTSIDE the transaction (ADR-0006 — no network I/O in the UoW).
+        # Short read UoW: resolve platform_slug, then await the BIOS check OUTSIDE
+        # the transaction (ADR-0006 — no network I/O in the UoW).
         with self._uow_factory() as uow:
             rom = uow.roms.get(rom_id)
-            install = uow.rom_installs.get(rom_id) if rom is not None else None
 
         if rom is None:
             return {"bios_status": None, "bios_level": None, "bios_label": None}
@@ -286,10 +296,12 @@ class GameDetailService:
         if not platform_slug:
             return {"bios_status": None, "bios_level": None, "bios_label": None}
 
-        rom_file = self._resolve_rom_file(install, rom)
+        # The core-aware BIOS filter keys off the per-game active core (the pin
+        # over the system default), resolved by rom_id from the shared seam.
+        active_core_so, _ = self._active_core.active_core_for_rom(rom_id)
 
         try:
-            bios = await self._bios_checker.check_platform_bios(platform_slug, rom_filename=rom_file or None)
+            bios = await self._bios_checker.check_platform_bios(platform_slug, active_core_so=active_core_so)
             if bios.get("needs_bios"):
                 bios_obj = format_bios_status(bios, platform_slug)
                 return {

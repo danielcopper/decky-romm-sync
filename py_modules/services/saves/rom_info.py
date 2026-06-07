@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from models.state import SaveSortSettings
 
     from services.protocols import (
+        ActiveCoreReader,
         CoreNameProviderFn,
-        CoreResolverFn,
         RetroDeckPaths,
         SaveFileStore,
         UnitOfWorkFactory,
@@ -48,14 +48,14 @@ class RomInfoServiceConfig:
     Holds the Unit-of-Work factory (the ``rom_installs`` aggregate is the
     source of truth for installed-ROM file records — WS3 — and ``kv_config``
     holds the save-sort markers), the Protocol-typed filesystem adapter, the
-    RetroDECK runtime-path accessor, the ES-DE core resolver, the RetroArch
-    core-name provider, and the standard-library logger.
+    RetroDECK runtime-path accessor, the per-ROM active-core resolver, the
+    RetroArch core-name provider, and the standard-library logger.
     """
 
     uow_factory: UnitOfWorkFactory
     save_file_store: SaveFileStore
     retrodeck_paths: RetroDeckPaths
-    get_active_core: CoreResolverFn
+    active_core: ActiveCoreReader
     get_core_name: CoreNameProviderFn
     logger: logging.Logger
 
@@ -68,7 +68,7 @@ class RomInfoService:
         self._uow_factory = config.uow_factory
         self._save_file_store = config.save_file_store
         self._retrodeck_paths = config.retrodeck_paths
-        self._get_active_core = config.get_active_core
+        self._active_core = config.active_core
         self._get_core_name = config.get_core_name
         self._logger = config.logger
 
@@ -116,7 +116,7 @@ class RomInfoService:
         core_name: str | None = None
         if sort_by_core:
             rom_filename = os.path.basename(file_path)
-            core_name, core_so = self.resolve_retroarch_corename(system, rom_filename)
+            core_name, core_so = self.resolve_retroarch_corename(int(rom_id))
             if core_name is None:
                 self._logger.warning(
                     "SaveService: unable to resolve RetroArch corename for "
@@ -148,31 +148,32 @@ class RomInfoService:
             "file_path": file_path,
         }
 
-    def resolve_retroarch_corename(self, system: str, rom_filename: str) -> tuple[str | None, str | None]:
-        """Resolve the RetroArch ``corename`` for a system/ROM.
+    def resolve_retroarch_corename(self, rom_id: int) -> tuple[str | None, str | None]:
+        """Resolve the RetroArch ``corename`` for a ROM by ``rom_id``.
 
-        Asks ES-DE (via ``get_active_core``) **which** core is active for
-        this ROM, then asks the RetroArch ``.info`` parser (via
+        Asks the per-ROM ``ActiveCoreReader`` **which** core is active for
+        this ROM (the per-game ``emulator_override`` pin folded over the
+        system default), then asks the RetroArch ``.info`` parser (via
         ``get_core_name``) **what** RetroArch calls that core in its own
         subsystem — which is the authoritative name used for per-core save
         subdirectories when ``sort_savefiles_enable`` is active.
 
         One parser per source: the ES-DE label (second element of the
-        ``get_active_core`` tuple) is NOT a valid substitute for the
-        RetroArch corename. See the Config-Source-Parsers wiki page and
-        the reference implementation in ``MigrationService``.
+        resolver tuple) is NOT a valid substitute for the RetroArch
+        corename. See the Config-Source-Parsers wiki page and the reference
+        implementation in ``MigrationService``.
 
         Returns ``(corename, core_so)``. Either element may be ``None``
         when resolution fails at that step: ``core_so`` is ``None`` when
-        ES-DE cannot determine the active core, ``corename`` is ``None``
-        when ``.info`` parsing returns nothing. Returning the tuple —
+        the resolver cannot determine the active core, ``corename`` is
+        ``None`` when ``.info`` parsing returns nothing. Returning the tuple —
         rather than just ``corename`` — lets callers include ``core_so``
         in diagnostic logs so users can identify which ``.info`` file
         is at fault. Callers choose their own fallback strategy (e.g.
         warn and fall back for critical-path SaveService flows; skip
         and warn for one-shot migrations).
         """
-        core_so, _label = self._get_active_core(system, rom_filename)
+        core_so, _label = self._active_core.active_core_for_rom(rom_id)
         if not core_so:
             return (None, None)
         corename = self._get_core_name(core_so)

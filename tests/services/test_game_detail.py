@@ -7,6 +7,7 @@ import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_retry, _make_testable_plugin
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
@@ -89,7 +90,7 @@ def plugin(tmp_path):
                 saves=saves_path,
                 roms=str(tmp_path / "retrodeck" / "roms"),
             ),
-            get_active_core=lambda system_name, rom_filename=None: (None, None),
+            active_core=FakeActiveCoreResolver(default=(None, None)),
             hostname_provider=FakeHostnameReader(),
             machine_id_provider=FakeMachineIdReader(),
             log_debug=p._log_debug,
@@ -157,7 +158,17 @@ def clock():
 
 
 @pytest.fixture
-def game_detail_service(plugin, clock):
+def active_core_resolver():
+    """Per-ROM active-core resolver fake the game-detail BIOS path resolves through.
+
+    Defaults to ``(None, None)`` (system default); result-flip tests seed
+    ``per_rom`` so two ROMs on one platform resolve to different cores.
+    """
+    return FakeActiveCoreResolver(default=(None, None))
+
+
+@pytest.fixture
+def game_detail_service(plugin, clock, active_core_resolver):
     """Create a GameDetailService wired to the plugin's shared UoW and pinned clock."""
     return GameDetailService(
         config=GameDetailServiceConfig(
@@ -167,6 +178,7 @@ def game_detail_service(plugin, clock):
             uow_factory=FakeUnitOfWorkFactory(uow=plugin._uow),
             bios_checker=plugin._firmware_service,
             achievements=plugin._achievements_service,
+            active_core=active_core_resolver,
         ),
     )
 
@@ -635,38 +647,65 @@ class TestGetBiosStatusFound:
         assert result["bios_label"] is None
 
     @pytest.mark.asyncio
-    async def test_uses_rom_file_from_install(self, plugin, game_detail_service):
-        """Uses the install record's file_path basename for per-game core detection."""
-        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba", fs_name="registry_file.gba")
-        _install_rom(plugin, plugin._tmp_path, rom_id=42, system="gba", file_name="installed_file.gba")
+    async def test_passes_resolved_per_game_core_to_bios_check(self, plugin, game_detail_service, active_core_resolver):
+        """The per-game active core (resolved by rom_id) is threaded into the BIOS filter.
 
-        captured_args = {}
+        The BIOS check no longer receives a ROM filename — game-detail resolves
+        the active ``.so`` through ``ActiveCoreReader`` (which folds the per-game
+        emulator_override pin) and passes the resolved core in, so the core-aware
+        filter keys off the pin rather than a platform default.
+        """
+        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba")
+        active_core_resolver.per_rom[42] = ("gpsp_libretro", "gpSP")
 
-        async def capture_check(slug, rom_filename=None):
-            captured_args["slug"] = slug
-            captured_args["rom_filename"] = rom_filename
+        captured = {}
+
+        async def capture_check(slug, active_core_so=None):
+            captured["slug"] = slug
+            captured["active_core_so"] = active_core_so
             return {"needs_bios": False}
 
         game_detail_service._bios_checker.check_platform_bios = capture_check
 
         await game_detail_service.get_bios_status(42)
-        assert captured_args["rom_filename"] == "installed_file.gba"
+        assert captured["slug"] == "gba"
+        assert captured["active_core_so"] == "gpsp_libretro"
+        assert active_core_resolver.calls == [42]
 
     @pytest.mark.asyncio
-    async def test_uses_fs_name_when_not_installed(self, plugin, game_detail_service):
-        """Falls back to Rom.fs_name when no install record exists."""
-        _seed_rom(plugin, 42, app_id=50000, name="Game", platform_slug="gba", fs_name="registry_file.gba")
+    async def test_bios_check_differs_by_per_game_override(self, plugin, game_detail_service, active_core_resolver):
+        """RESULT-FLIP: two gba ROMs, one pinned to gpSP + one default, drive different BIOS results.
 
-        captured_args = {}
+        gpSP requires ``gba_bios.bin`` → missing badge; the default core treats it
+        as optional → ok. The badge flips on the per-game override alone, proving
+        the resolved core (not a platform default) feeds the BIOS filter.
+        """
+        _seed_rom(plugin, 42, app_id=50000, name="Pinned", platform_slug="gba")
+        _seed_rom(plugin, 43, app_id=50001, name="Default", platform_slug="gba")
+        active_core_resolver.per_rom[42] = ("gpsp_libretro", "gpSP")
+        # rom 43 falls through to the default (None, None) → system default.
 
-        async def capture_check(slug, rom_filename=None):
-            captured_args["rom_filename"] = rom_filename
+        async def fake_check(slug, active_core_so=None):
+            if active_core_so == "gpsp_libretro":
+                return {
+                    "needs_bios": True,
+                    "server_count": 1,
+                    "local_count": 0,
+                    "all_downloaded": False,
+                    "required_count": 1,
+                    "required_downloaded": 0,
+                    "files": [{"file_name": "gba_bios.bin", "downloaded": False}],
+                }
             return {"needs_bios": False}
 
-        game_detail_service._bios_checker.check_platform_bios = capture_check
+        game_detail_service._bios_checker.check_platform_bios = fake_check
 
-        await game_detail_service.get_bios_status(42)
-        assert captured_args["rom_filename"] == "registry_file.gba"
+        pinned = await game_detail_service.get_bios_status(42)
+        plain = await game_detail_service.get_bios_status(43)
+
+        assert pinned["bios_level"] == "missing"
+        assert plain["bios_status"] is None
+        assert active_core_resolver.calls == [42, 43]
 
 
 class TestGetBiosStatusNotFound:
