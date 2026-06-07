@@ -122,6 +122,26 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     setDownloading(null);
   };
 
+  const handleSystemCoreChange = async (platform: FirmwarePlatformExt, optionData: string) => {
+    const defaultCore = platform.available_cores?.find((c) => c.is_default);
+    const label = optionData === defaultCore?.label ? "" : optionData;
+    detach(debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${optionData})`));
+    try {
+      const result = await setSystemCore(platform.platform_slug, label);
+      detach(debugLog(`setSystemCore: result success=${result.success}`));
+      if (result.success) {
+        await refreshSystem();
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "core_changed", platform_slug: platform.platform_slug },
+          }),
+        );
+      }
+    } catch (e) {
+      detach(debugLog(`setSystemCore: error: ${e}`));
+    }
+  };
+
   const withGames = biosPlatforms.filter((p) => p.has_games);
   const withoutGames = biosPlatforms.filter((p) => !p.has_games);
 
@@ -175,33 +195,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
                 selectedOption={
                   platform.active_core_label || platform.available_cores!.find((c) => c.is_default)?.label || ""
                 }
-                onChange={(option: { data: string }) => {
-                  detach(
-                    (async () => {
-                      const defaultCore = platform.available_cores?.find((c) => c.is_default);
-                      const label = option.data === defaultCore?.label ? "" : option.data;
-                      detach(
-                        debugLog(
-                          `setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${option.data})`,
-                        ),
-                      );
-                      try {
-                        const result = await setSystemCore(platform.platform_slug, label);
-                        detach(debugLog(`setSystemCore: result success=${result.success}`));
-                        if (result.success) {
-                          await refreshSystem();
-                          globalThis.dispatchEvent(
-                            new CustomEvent("romm_data_changed", {
-                              detail: { type: "core_changed", platform_slug: platform.platform_slug },
-                            }),
-                          );
-                        }
-                      } catch (e) {
-                        detach(debugLog(`setSystemCore: error: ${e}`));
-                      }
-                    })(),
-                  );
-                }}
+                onChange={(option: { data: string }) => detach(handleSystemCoreChange(platform, option.data))}
               />
             </PanelSectionRow>
             <PanelSectionRow>
