@@ -22,26 +22,12 @@ class FakeGamelistEditor:
 
     def __init__(self) -> None:
         self.system_calls: list[tuple[str, str, str | None]] = []
-        self.game_calls: list[tuple[str, str, str, str | None]] = []
         self.system_side_effect: BaseException | None = None
-        self.game_side_effect: BaseException | None = None
 
     def set_system_override(self, retrodeck_home: str, system_name: str, core_label: str | None) -> bool:
         if self.system_side_effect is not None:
             raise self.system_side_effect
         self.system_calls.append((retrodeck_home, system_name, core_label))
-        return True
-
-    def set_game_override(
-        self,
-        retrodeck_home: str,
-        system_name: str,
-        rom_path: str,
-        core_label: str | None,
-    ) -> bool:
-        if self.game_side_effect is not None:
-            raise self.game_side_effect
-        self.game_calls.append((retrodeck_home, system_name, rom_path, core_label))
         return True
 
 

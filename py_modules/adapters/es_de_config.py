@@ -2,10 +2,10 @@
 
 Owns the I/O for resolving active RetroArch cores from ES-DE's
 ``gamelist.xml`` / ``es_systems.xml`` / ``core_defaults.json``, and for
-writing per-system / per-game core overrides back to ``gamelist.xml``.
-The read side resolves at the system layer only (per-system
+writing the per-system core override back to ``gamelist.xml``. Both the
+read and write sides operate at the system layer only (per-system
 ``<alternativeEmulator>`` → es_systems default → ``core_defaults``);
-per-game core selection is read from the ``roms`` store, not gamelist.
+per-game core selection lives in the ``roms`` store, not gamelist.
 """
 
 from __future__ import annotations
@@ -464,7 +464,7 @@ class CoreResolver:
 
 
 class GamelistXmlEditorAdapter:
-    """Writes per-system and per-game core overrides into ES-DE's gamelist.xml.
+    """Writes the per-system core override into ES-DE's gamelist.xml.
 
     Implements ``GamelistXmlEditor`` Protocol structurally. Reads
     happen through :class:`CoreResolver`; this class only writes.
@@ -500,53 +500,6 @@ class GamelistXmlEditorAdapter:
         self.write_gamelist_atomic(path, content)
         action = "cleared" if not core_label else f"set to '{core_label}'"
         self._logger.info("es_de_config: system override for %s %s (%s)", system_name, action, path)
-        return True
-
-    def set_game_override(self, retrodeck_home, system_name, rom_path, core_label):
-        """Set or clear per-game core override in gamelist.xml.
-
-        ``rom_path`` is the relative path for the game (e.g.
-        ``"./Pokemon.gba"``). If ``core_label`` is None/empty, removes
-        the ``altemulator`` from the game entry. Creates the game entry
-        if not found. Preserves all other content.
-        """
-        path = self.gamelist_path(retrodeck_home, system_name)
-        raw = self.read_gamelist_raw(path)
-
-        if raw:
-            parsed = self.parse_gamelist_preserving(raw)
-            if parsed is None:
-                self._logger.warning("es_de_config: failed to parse %s for writing", path)
-                return False
-            alt_label = parsed["alt_emulator_label"]
-            games = parsed["games"]
-        else:
-            alt_label = None
-            games = []
-
-        # Find or create the game entry
-        found = False
-        new_games_xml = []
-        for game in games:
-            if game["path"] == rom_path:
-                found = True
-                # Rebuild this game entry with updated altemulator
-                new_games_xml.append(self.rebuild_game_xml(game["raw_xml"], core_label))
-            else:
-                new_games_xml.append(game["raw_xml"])
-
-        if not found and core_label:
-            escaped_path = self.escape_xml(rom_path)
-            escaped_label = self.escape_xml(core_label)
-            game_xml = (
-                f"<game>\n    <path>{escaped_path}</path>\n    <altemulator>{escaped_label}</altemulator>\n  </game>"
-            )
-            new_games_xml.append(game_xml)
-
-        content = self.reconstruct_gamelist(alt_label, new_games_xml)
-        self.write_gamelist_atomic(path, content)
-        action = "cleared" if not core_label else f"set to '{core_label}'"
-        self._logger.info("es_de_config: game override for %s [%s] %s (%s)", system_name, rom_path, action, path)
         return True
 
     # -- internal helpers (static, used by CoreResolver too) -----------------
@@ -706,86 +659,4 @@ class GamelistXmlEditorAdapter:
             parts.append(f"\n  <alternativeEmulator>\n    <label>{escaped}</label>\n  </alternativeEmulator>")
         parts.extend(f"\n  {game_xml}" for game_xml in games_xml_list)
         parts.append("\n</gameList>\n")
-        return "".join(parts)
-
-    @staticmethod
-    def _rebuild_start_handler(state, elements):
-        """Create a start_element handler for rebuild_game_xml."""
-
-        def start_element(name, attrs):
-            state["path"].append(name)
-            state["text"] = ""
-            if name == "altemulator":
-                state["skip_altemulator"] = True
-                return
-            if state["skip_altemulator"] or name == "game":
-                return
-            attr_str = GamelistXmlEditorAdapter._build_attr_str(attrs)
-            elements.append(("open", f"<{name}{attr_str}>"))
-
-        return start_element
-
-    @staticmethod
-    def _rebuild_end_handler(state, elements):
-        """Create an end_element handler for rebuild_game_xml."""
-
-        def end_element(name):
-            if name == "altemulator":
-                state["skip_altemulator"] = False
-                state["path"].pop()
-                state["text"] = ""
-                return
-            if state["skip_altemulator"]:
-                state["path"].pop()
-                state["text"] = ""
-                return
-            if name == "game" and len(state["path"]) == 1:
-                state["path"].pop()
-                state["text"] = ""
-                return
-            if state["text"]:
-                elements.append(("text", GamelistXmlEditorAdapter.escape_xml(state["text"])))
-            elements.append(("close", f"</{name}>"))
-            state["path"].pop()
-            state["text"] = ""
-
-        return end_element
-
-    @staticmethod
-    def rebuild_game_xml(raw_xml, core_label):
-        """Rebuild a ``<game>`` XML string with updated ``<altemulator>`` value.
-
-        If ``core_label`` is ``None``/empty, removes ``<altemulator>``
-        entirely. Preserves all other child elements.
-        """
-        try:
-            from xml.parsers import expat
-        except ImportError:
-            return raw_xml
-
-        elements: list[tuple[str, str]] = []
-        state = {"path": [], "text": "", "skip_altemulator": False}
-
-        parser = expat.ParserCreate()
-        parser.StartElementHandler = GamelistXmlEditorAdapter._rebuild_start_handler(state, elements)
-        parser.EndElementHandler = GamelistXmlEditorAdapter._rebuild_end_handler(state, elements)
-
-        def char_data(data):
-            if not state["skip_altemulator"]:
-                state["text"] += data
-
-        parser.CharacterDataHandler = char_data
-
-        try:
-            parser.Parse(raw_xml.encode("utf-8"), True)
-        except expat.ExpatError:
-            return raw_xml  # fallback: return unchanged
-
-        # Reconstruct
-        parts = ["<game>"]
-        for _, data in elements:
-            parts.append(data)
-        if core_label:
-            parts.append(f"<altemulator>{GamelistXmlEditorAdapter.escape_xml(core_label)}</altemulator>")
-        parts.append("</game>")
         return "".join(parts)
