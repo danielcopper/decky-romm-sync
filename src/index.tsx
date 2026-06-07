@@ -4,6 +4,7 @@ import { FaGamepad } from "react-icons/fa";
 import { MainPage } from "./components/MainPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { LibraryPage } from "./components/LibraryPage";
+import { SystemPage } from "./components/SystemPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
 import { initUnitSyncManager } from "./utils/syncManager";
@@ -50,7 +51,7 @@ import type {
 } from "./types";
 import { removeShortcut, setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 
-type Page = "main" | "settings" | "library" | "data" | "downloads";
+type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
 
 // Module-level page state survives QAM remounts (e.g. after modal close)
 let currentPage: Page = "main";
@@ -108,6 +109,9 @@ const QAMPanel: FC = () => {
       break;
     case "downloads":
       content = <DownloadQueue onBack={() => setPage("main")} />;
+      break;
+    case "system":
+      content = <SystemPage onBack={() => setPage("main")} />;
       break;
     default:
       content = <MainPage onNavigate={(p) => setPage(p)} />;

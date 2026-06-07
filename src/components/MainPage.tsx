@@ -53,7 +53,7 @@ import type {
 } from "../types";
 import { detach } from "../utils/detach";
 
-type Page = "settings" | "library" | "data" | "downloads";
+type Page = "settings" | "library" | "data" | "downloads" | "system";
 
 interface MainPageProps {
   onNavigate: (page: Page) => void;
@@ -687,6 +687,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => onNavigate("library")}>
             Library
+          </ButtonItem>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => onNavigate("system")}>
+            System
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>

@@ -236,7 +236,7 @@ export const setGameCore = callable<
 >("set_game_core");
 // Dedicated core-info path (#923) — active core + available cores for a
 // platform, decoupled from the BIOS firmware status. The per-game detail page
-// and the per-system System tab read core data from here.
+// and the per-system System page read core data from here.
 export const getPlatformCoreInfo = callable<[string], CoreInfo>("get_platform_core_info");
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 export const debugLog = callable<[string], void>("debug_log");

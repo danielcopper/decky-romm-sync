@@ -1444,6 +1444,14 @@ describe("MainPage", () => {
       expect(onNavigate).toHaveBeenCalledWith("library");
     });
 
+    it("clicking System invokes onNavigate('system')", async () => {
+      const onNavigate = vi.fn();
+      const { container } = render(<MainPage onNavigate={onNavigate} />);
+      await flushAsync();
+      fireEvent.click(buttonByExactText(container, "System")!);
+      expect(onNavigate).toHaveBeenCalledWith("system");
+    });
+
     it("clicking Settings invokes onNavigate('settings')", async () => {
       const onNavigate = vi.fn();
       const { container } = render(<MainPage onNavigate={onNavigate} />);
