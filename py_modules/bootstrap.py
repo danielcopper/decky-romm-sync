@@ -425,6 +425,8 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
             active_core=active_core_resolver,
             get_core_name=cfg.callbacks.get_core_name,
+            core_info=cfg.adapters.core_info_provider,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
@@ -514,6 +516,8 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             log_debug=cfg.callbacks.log_debug,
             artwork=artwork_service,
             uow_factory=cfg.callbacks.uow_factory,
+            core_info=cfg.adapters.core_info_provider,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
         ),
     )
     pending_sync_binding.set(lambda: sync_service.pending_sync)
@@ -529,6 +533,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             clock=cfg.runtime.clock,
             sleeper=cfg.runtime.sleeper,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
+            core_info=cfg.adapters.core_info_provider,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )

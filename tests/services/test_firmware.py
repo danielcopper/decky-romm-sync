@@ -146,6 +146,8 @@ def plugin():
             log_debug=p._log_debug,
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
+            core_info=FakeCoreInfoProvider(),
+            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
         ),
     )
     return p

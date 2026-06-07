@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.preview_delta import PreviewDelta
-from domain.shortcut_data import build_shortcuts_data
+from domain.shortcut_data import build_shortcuts_data, label_to_core_so
 from domain.sync_diff import (
     classify_roms,
     compute_collection_diff,
@@ -44,8 +44,10 @@ if TYPE_CHECKING:
     from services.protocols import (
         ArtworkManager,
         Clock,
+        CoreInfoProvider,
         EventEmitter,
         Sleeper,
+        SystemResolver,
         UnitOfWorkFactory,
         UuidGen,
     )
@@ -81,7 +83,9 @@ class SyncOrchestratorConfig:
     apply-phase artwork download. The ``reporter``
     field is a :class:`LateBinding` because :class:`LibraryService`
     constructs the orchestrator before the reporter exists; the façade
-    plugs the reader in via ``set()`` once the reporter is built.
+    plugs the reader in via ``set()`` once the reporter is built. The
+    ``core_info`` read seam and ``resolve_system`` resolver bake each
+    ROM's ``emulator_override`` into ``launch_options`` at sync time.
     """
 
     settings: dict[str, Any]
@@ -97,6 +101,8 @@ class SyncOrchestratorConfig:
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
     artwork: ArtworkManager
+    core_info: CoreInfoProvider
+    resolve_system: SystemResolver
 
 
 class SyncOrchestrator:
@@ -116,6 +122,8 @@ class SyncOrchestrator:
         self._fetcher = config.fetcher
         self._artwork = config.artwork
         self._reporter = config.reporter
+        self._core_info = config.core_info
+        self._resolve_system = config.resolve_system
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -187,7 +195,8 @@ class SyncOrchestrator:
                 await self._fetch_preview_unit(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships)
 
             installed_paths = await self._loop.run_in_executor(None, self._scan_installed_paths)
-            shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir, installed_paths)
+            core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, all_roms)
+            shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir, installed_paths, core_overrides)
             platform_name_set = {u.name for u in work_queue if u.type == "platform"}
             slug_to_name = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
             registry, last_synced_platforms, last_synced_collections = await self._loop.run_in_executor(
@@ -646,7 +655,8 @@ class SyncOrchestrator:
         installed_paths = await self._loop.run_in_executor(
             None, self._read_installed_paths, {rom["id"] for rom in unit_roms}
         )
-        shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir, installed_paths)
+        core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, unit_roms)
+        shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir, installed_paths, core_overrides)
 
         # Download artwork for this unit. Empty unit_roms is a defensive
         # guard — an empty platform that survived planning still has no
@@ -811,6 +821,39 @@ class SyncOrchestrator:
             cancelled=cancelled,
             stale_rom_ids=[rom_id for rom_id, _app_id in stale],
         )
+
+    def _build_core_overrides(self, roms: list[dict[str, Any]]) -> dict[int, str]:
+        """Resolve each ROM's ``emulator_override`` LABEL to its ``.so`` for the bake.
+
+        Reads the per-game override LABELs in one ``get_all_emulator_overrides``
+        scan, then resolves each against the cores available for that ROM's
+        platform. Only ROMs in *roms* that carry an override AND whose LABEL still
+        resolves to a real core appear in the returned ``{rom_id: core_so}`` map —
+        a stale LABEL (no longer in ``available_cores``) is omitted with a WARNING
+        so :func:`build_shortcuts_data` bakes the PLAIN launch for it (never a
+        bogus ``None.so``). ROMs with no override never enter the map.
+        """
+        with self._uow_factory() as uow:
+            overrides = uow.roms.get_all_emulator_overrides()
+        if not overrides:
+            return {}
+        slug_by_id = {rom["id"]: rom.get("platform_slug", "") for rom in roms}
+        resolved: dict[int, str] = {}
+        for rom_id, label in overrides.items():
+            if rom_id not in slug_by_id:
+                continue
+            system = self._resolve_system(slug_by_id[rom_id])
+            core_so = label_to_core_so(self._core_info.get_available_cores(system), label)
+            if core_so is None:
+                self._logger.warning(
+                    "sync: emulator override '%s' for rom_id=%s no longer resolves on %s; baking the plain launch",
+                    label,
+                    rom_id,
+                    system,
+                )
+                continue
+            resolved[rom_id] = core_so
+        return resolved
 
     def _scan_installed_paths(self) -> dict[int, str]:
         """Read ``{rom_id: file_path}`` for the whole installed library in one scan.

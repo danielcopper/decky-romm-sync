@@ -7,6 +7,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -86,6 +87,8 @@ def plugin(clock):
             log_debug=p._log_debug,
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
+            core_info=FakeCoreInfoProvider(),
+            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
         ),
     )
     p._achievements_service = AchievementsService(

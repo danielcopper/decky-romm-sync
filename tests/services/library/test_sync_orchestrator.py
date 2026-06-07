@@ -190,7 +190,7 @@ class TestShortcutDataFormat:
 
         from domain.shortcut_data import build_shortcuts_data
 
-        result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {})
+        result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {}, {})
         exe = result[0]["exe"]
         assert exe.endswith("/bin/rom-launcher"), f"Exe path should end with /bin/rom-launcher, got: {exe}"
         assert "decky-romm-sync" in exe, f"Exe path should contain plugin name, got: {exe}"
@@ -199,7 +199,7 @@ class TestShortcutDataFormat:
         """An installed ROM's launch_options is the full RetroDECK launch command."""
         from domain.shortcut_data import build_shortcuts_data
 
-        result = build_shortcuts_data([{"id": 42, "name": "Game"}], "/plugin", {42: "/roms/n64/game.z64"})
+        result = build_shortcuts_data([{"id": 42, "name": "Game"}], "/plugin", {42: "/roms/n64/game.z64"}, {})
         assert result[0]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/n64/game.z64"'
 
     def test_start_dir_is_parent_of_exe(self, plugin):
@@ -208,8 +208,58 @@ class TestShortcutDataFormat:
 
         from domain.shortcut_data import build_shortcuts_data
 
-        result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {})
+        result = build_shortcuts_data([{"id": 1, "name": "Game"}], decky.DECKY_PLUGIN_DIR, {}, {})
         assert result[0]["start_dir"] == os.path.dirname(result[0]["exe"])
+
+
+class TestBuildCoreOverrides:
+    """The ``core_overrides`` map both preview and apply pass to ``build_shortcuts_data``.
+
+    Maps ``rom_id -> resolved core_so`` for every ROM in the unit that carries a
+    still-valid ``emulator_override``; NULL pins never enter the map, and a stale
+    LABEL is omitted with a WARNING so the bake degrades to the plain launch.
+    """
+
+    def test_resolved_override_included_null_omitted(self, plugin):
+        """A resolvable pin maps to its ``.so``; a ROM with no pin is absent."""
+        plugin._core_info.available_cores = [
+            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+        ]
+        _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
+        _seed_install(plugin, 11, file_path="/roms/psx/b.chd", platform_slug="psx")
+        with plugin._uow:
+            plugin._uow.roms.set_emulator_override(10, "PCSX ReARMed")
+
+        roms = [{"id": 10, "platform_slug": "psx"}, {"id": 11, "platform_slug": "psx"}]
+        result = plugin._sync_service._orchestrator._build_core_overrides(roms)
+
+        assert result == {10: "pcsx_rearmed_libretro.so"}
+        assert 11 not in result
+
+    def test_stale_override_omitted_with_warning(self, plugin, caplog):
+        """A pin whose LABEL no longer resolves is omitted and a WARNING is logged."""
+        import logging
+
+        plugin._core_info.available_cores = [
+            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+        ]
+        _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
+        with plugin._uow:
+            plugin._uow.roms.set_emulator_override(10, "Removed Core")
+
+        roms = [{"id": 10, "platform_slug": "psx"}]
+        with caplog.at_level(logging.WARNING):
+            result = plugin._sync_service._orchestrator._build_core_overrides(roms)
+
+        assert result == {}
+        assert "Removed Core" in caplog.text
+        assert "no longer resolves" in caplog.text
+
+    def test_no_overrides_returns_empty(self, plugin):
+        """No pins anywhere → empty map (no available-cores lookups needed)."""
+        _seed_install(plugin, 10, file_path="/roms/n64/a.z64", platform_slug="n64")
+        result = plugin._sync_service._orchestrator._build_core_overrides([{"id": 10, "platform_slug": "n64"}])
+        assert result == {}
 
 
 class TestSyncPreview:
@@ -943,6 +993,96 @@ class TestDoSyncPerUnit:
         by_rom = {s["rom_id"]: s for s in unit_events[0]["shortcuts"]}
         assert by_rom[10]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/n64/installed.z64"'
         assert by_rom[11]["launch_options"] == ""
+
+    @pytest.mark.asyncio
+    async def test_apply_bakes_emulator_override_into_launch_options(self, plugin, fake_romm_api):
+        """A pinned ``emulator_override`` bakes the ``-e`` form; a NULL pin stays plain (R6).
+
+        Two installed ROMs on the same platform: rom 10 carries a resolvable
+        override (``-e`` baked), rom 11 has none (plain launch). Proves the
+        sync-apply ``core_overrides`` map drives ``build_shortcuts_data`` per-ROM.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        plugin._core_info.available_cores = [
+            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+        ]
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="PSX",
+            slug="psx",
+            roms=[{"id": 10, "name": "Pinned"}, {"id": 11, "name": "Plain"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_install(plugin, 10, file_path="/roms/psx/pinned.chd", platform_slug="psx")
+        _seed_install(plugin, 11, file_path="/roms/psx/plain.chd", platform_slug="psx")
+        with plugin._uow:
+            plugin._uow.roms.set_emulator_override(10, "PCSX ReARMed")
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        by_rom = {s["rom_id"]: s for s in unit_events[0]["shortcuts"]}
+        assert by_rom[10]["launch_options"] == (
+            "flatpak run net.retrodeck.retrodeck "
+            '-e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/pcsx_rearmed_libretro.so %ROM%" '
+            '"/roms/psx/pinned.chd"'
+        )
+        assert by_rom[11]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/psx/plain.chd"'
+        assert "-e" not in by_rom[11]["launch_options"]
+
+    @pytest.mark.asyncio
+    async def test_apply_stale_override_bakes_plain_with_warning(self, plugin, fake_romm_api, caplog):
+        """A stale override LABEL (no longer in available_cores) bakes PLAIN + WARNs (B4)."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        # available_cores no longer carries the pinned label → label_to_core_so → None.
+        plugin._core_info.available_cores = [
+            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+        ]
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="PSX",
+            slug="psx",
+            roms=[{"id": 10, "name": "Stale"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_install(plugin, 10, file_path="/roms/psx/stale.chd", platform_slug="psx")
+        with plugin._uow:
+            plugin._uow.roms.set_emulator_override(10, "Removed Core")
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        by_rom = {s["rom_id"]: s for s in unit_events[0]["shortcuts"]}
+        # Stale → PLAIN launch, never -e with a bogus core.
+        assert by_rom[10]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/psx/stale.chd"'
+        assert "-e" not in by_rom[10]["launch_options"]
+        assert "Removed Core" in caplog.text
+        assert "no longer resolves" in caplog.text
 
     @pytest.mark.asyncio
     async def test_skipped_unit_short_circuits_apply(self, plugin, fake_romm_api):

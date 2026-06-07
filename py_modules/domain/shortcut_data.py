@@ -60,13 +60,23 @@ def build_launch_options(invocation: str, path: str) -> str:
 
 
 def build_shortcuts_data(
-    roms: list[dict[str, Any]], plugin_dir: str, installed_paths: dict[int, str]
+    roms: list[dict[str, Any]],
+    plugin_dir: str,
+    installed_paths: dict[int, str],
+    core_overrides: dict[int, str],
 ) -> list[dict[str, Any]]:
     """Transform ROM list into shortcut data dicts for frontend AddShortcut calls.
 
     *installed_paths* maps ``rom_id`` to the resolved on-disk launch path. An
     installed ROM gets a full launch command in ``launch_options``; a ROM absent
     from the map gets ``""`` (empty placeholder) until it is downloaded.
+
+    *core_overrides* maps ``rom_id`` to the **already-resolved** ``.so`` filename
+    of a per-game emulator override — only ROMs whose ``emulator_override`` LABEL
+    resolved to a real core appear (the caller omits stale ones with a WARNING).
+    A ROM absent from the map follows the RetroDECK/ES-DE default (plain launch,
+    no ``-e``); a present ROM bakes the ``-e`` override into ``launch_options``.
+    Required so a new bake site can never silently skip the override.
     """
     exe = os.path.join(plugin_dir, "bin", "rom-launcher")
     start_dir = os.path.join(plugin_dir, "bin")
@@ -78,7 +88,10 @@ def build_shortcuts_data(
             "exe": exe,
             "start_dir": start_dir,
             "launch_options": (
-                build_launch_options(resolve_emulator_invocation(rom), installed_paths[rom["id"]])
+                build_launch_options(
+                    resolve_emulator_invocation(rom, core_overrides.get(rom["id"])),
+                    installed_paths[rom["id"]],
+                )
                 if rom["id"] in installed_paths
                 else ""
             ),

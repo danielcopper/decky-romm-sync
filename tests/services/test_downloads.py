@@ -8,6 +8,7 @@ import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
+from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
@@ -89,12 +90,17 @@ def plugin():
             log_debug=p._log_debug,
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
+            core_info=FakeCoreInfoProvider(),
+            resolve_system=p._resolve_system,
         ),
     )
     # Shared fake Unit of Work — install records flow through it, and tests
     # inspect ``uow.rom_installs`` after the service has run. Exposed as
     # ``p._uow`` for assertions.
     p._uow = FakeUnitOfWork()
+    # Shared core-info fake so a test can seed ``available_cores`` and assert the
+    # per-game override re-bakes the ``-e`` form on download_complete.
+    p._core_info = FakeCoreInfoProvider()
     p._download_service = DownloadService(
         config=DownloadServiceConfig(
             romm_api=p._romm_api,
@@ -109,6 +115,7 @@ def plugin():
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
+            core_info=p._core_info,
             uow_factory=FakeUnitOfWorkFactory(p._uow),
         ),
     )
@@ -933,6 +940,97 @@ class TestDoDownloadSingleFile:
         emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
         assert len(emit_calls) == 1
         assert emit_calls[0][0][1]["app_id"] is None
+
+
+class TestDoDownloadOverrideRebake:
+    """``download_complete`` re-bakes a per-game ``emulator_override`` into launch_options.
+
+    This is the load-bearing site (B2): the override lives on ``roms`` precisely so
+    it survives uninstall → reinstall, and reinstall flows through ``_do_download``.
+    """
+
+    async def _run_single_download(self, plugin, tmp_path, *, rom_id, override):
+        """Download one single-file ROM (bound) with ``override`` pre-pinned; return payload."""
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "psx"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "game.chd")
+        rom_detail = {
+            "id": rom_id,
+            "name": "PSX Game",
+            "fs_name": "game.chd",
+            "platform_slug": "psx",
+            "platform_name": "PlayStation",
+            "has_multiple_files": False,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 512)
+
+        _seed_rom(plugin._uow, rom_id, platform_slug="psx")
+        if override is not None:
+            with plugin._uow:
+                plugin._uow.roms.set_emulator_override(rom_id, override)
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[rom_id] = {"rom_id": rom_id, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(rom_id, rom_detail, target_path, "psx", "game.chd")
+
+        emit_calls = [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
+        assert len(emit_calls) == 1
+        return emit_calls[0][0][1], target_path
+
+    @pytest.mark.asyncio
+    async def test_reinstall_with_override_rebakes_e_form(self, plugin, tmp_path):
+        """An override-set ROM's reinstall emits ``-e`` baked launch_options (B2)."""
+        plugin._core_info.available_cores = [
+            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+        ]
+        payload, target_path = await self._run_single_download(plugin, tmp_path, rom_id=42, override="PCSX ReARMed")
+        assert payload["app_id"] == 1042
+        assert payload["launch_options"] == (
+            "flatpak run net.retrodeck.retrodeck "
+            '-e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/pcsx_rearmed_libretro.so %ROM%" '
+            f'"{target_path}"'
+        )
+
+    @pytest.mark.asyncio
+    async def test_reinstall_without_override_is_plain(self, plugin, tmp_path):
+        """A NULL-override ROM's reinstall emits the plain launch — no ``-e`` (B2)."""
+        plugin._core_info.available_cores = [
+            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+        ]
+        payload, target_path = await self._run_single_download(plugin, tmp_path, rom_id=43, override=None)
+        assert payload["launch_options"] == f'flatpak run net.retrodeck.retrodeck "{target_path}"'
+        assert "-e" not in payload["launch_options"]
+
+    @pytest.mark.asyncio
+    async def test_reinstall_with_stale_override_rebakes_plain_and_warns(self, plugin, tmp_path, caplog):
+        """A stale override LABEL reinstall emits the PLAIN launch + WARNs (B4)."""
+        import logging
+
+        # available_cores does not carry the pinned label → resolution returns None.
+        plugin._core_info.available_cores = [
+            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+        ]
+        with caplog.at_level(logging.WARNING):
+            payload, target_path = await self._run_single_download(plugin, tmp_path, rom_id=44, override="Removed Core")
+        assert payload["launch_options"] == f'flatpak run net.retrodeck.retrodeck "{target_path}"'
+        assert "-e" not in payload["launch_options"]
+        assert "Removed Core" in caplog.text
+        assert "no longer resolves" in caplog.text
 
 
 class TestDoDownloadMultiFile:

@@ -22,7 +22,7 @@ from domain.rom_files import (
     resolve_local_file_name,
 )
 from domain.rom_install import RomInstall
-from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
+from domain.shortcut_data import build_launch_options, label_to_core_so, resolve_emulator_invocation
 from lib.errors import error_response
 
 if TYPE_CHECKING:
@@ -30,8 +30,10 @@ if TYPE_CHECKING:
 
     from models.state import InstalledRomEntry
 
+    from domain.rom import Rom
     from services.protocols import (
         Clock,
+        CoreInfoProvider,
         DownloadFileStore,
         EventEmitter,
         RetroDeckPaths,
@@ -52,7 +54,10 @@ class DownloadServiceConfig:
 
     Holds the Protocol-typed adapters, runtime infrastructure, time/sleep
     seams, the SQLite Unit-of-Work factory, and path providers
-    DownloadService needs at construction time.
+    DownloadService needs at construction time. The ``core_info`` read
+    seam resolves a reinstalled ROM's ``emulator_override`` LABEL to its
+    ``.so`` so ``download_complete`` re-bakes the ``-e`` override into
+    ``launch_options`` (the override survives uninstall → reinstall).
     """
 
     romm_api: RommRomReader
@@ -64,6 +69,7 @@ class DownloadServiceConfig:
     clock: Clock
     sleeper: Sleeper
     retrodeck_paths: RetroDeckPaths
+    core_info: CoreInfoProvider
     uow_factory: UnitOfWorkFactory
 
 
@@ -80,6 +86,7 @@ class DownloadService:
         self._clock = config.clock
         self._sleeper = config.sleeper
         self._retrodeck_paths = config.retrodeck_paths
+        self._core_info = config.core_info
         self._uow_factory = config.uow_factory
 
         # Owned state
@@ -305,17 +312,46 @@ class DownloadService:
             cleanup=lambda: self._download_file_store.remove_file(target_path),
         )
 
-    def _resolve_bound_app_id(self, rom_id: int) -> int | None:
-        """Return the ROM's bound ``shortcut_app_id``, or ``None`` when unbound.
+    def _resolve_bound_app_id(self, rom_id: int) -> tuple[int | None, str | None]:
+        """Return the ROM's ``(shortcut_app_id, override_core_so)`` for the re-bake.
 
-        Read in a short read UoW so ``download_complete`` can carry the
-        exact Steam ``app_id`` for the just-downloaded ROM. ``None`` means
-        the ROM has no Steam shortcut yet (not synced) — the frontend
-        no-ops and the next sync writes the launch command at creation.
+        Read in a short read UoW so ``download_complete`` can carry the exact
+        Steam ``app_id`` for the just-downloaded ROM and re-bake any per-game
+        ``emulator_override`` into its ``launch_options``. ``app_id`` is ``None``
+        when the ROM has no Steam shortcut yet (not synced) — the frontend no-ops
+        and the next sync writes the launch command. ``override_core_so`` is the
+        resolved ``.so`` when the ROM carries a still-valid override (bake the
+        ``-e`` form), ``None`` when there is no override **or** the LABEL is stale
+        (bake the plain launch with a WARNING — never a bogus ``None.so``). This
+        is the load-bearing site: the override lives on ``roms`` so it survives
+        uninstall → reinstall, and reinstall goes through here.
         """
         with self._uow_factory() as uow:
             rom = uow.roms.get(int(rom_id))
-        return rom.shortcut_app_id if rom is not None else None
+        if rom is None:
+            return (None, None)
+        return (rom.shortcut_app_id, self._override_core_so(rom))
+
+    def _override_core_so(self, rom: Rom) -> str | None:
+        """Resolve *rom*'s ``emulator_override`` LABEL to a ``.so``, or ``None``.
+
+        ``None`` when the ROM has no override (plain launch) or the stored LABEL
+        no longer resolves to a core (stale → plain launch + WARNING). A resolved
+        LABEL yields its ``.so`` so the re-bake keeps the ``-e`` override form.
+        """
+        label = rom.emulator_override
+        if label is None:
+            return None
+        system = self._resolve_system(rom.platform_slug)
+        core_so = label_to_core_so(self._core_info.get_available_cores(system), label)
+        if core_so is None:
+            self._logger.warning(
+                "download: emulator override '%s' for rom_id=%s no longer resolves on %s; baking the plain launch",
+                label,
+                rom.rom_id,
+                system,
+            )
+        return core_so
 
     def _make_progress_callback(self, rom_id, rom_name, platform_name, file_name):
         """Build a throttled progress callback for a download."""
@@ -397,10 +433,12 @@ class DownloadService:
             self._download_queue[rom_id]["status"] = "completed"
             self._download_queue[rom_id]["progress"] = 1.0
             # Resolve the bound Steam ``shortcut_app_id`` for this rom_id (or
-            # ``None`` when the ROM hasn't been synced yet) so the frontend
+            # ``None`` when the ROM hasn't been synced yet) plus any per-game
+            # emulator override (resolved ``.so`` or ``None``) so the frontend
             # confirm-sets launch options on the exact shortcut without a
-            # full-library scan to re-resolve rom_id→app_id.
-            app_id = await self._loop.run_in_executor(None, self._resolve_bound_app_id, rom_id)
+            # full-library scan to re-resolve rom_id→app_id, and the re-bake keeps
+            # the ``-e`` override across uninstall → reinstall.
+            app_id, override_core_so = await self._loop.run_in_executor(None, self._resolve_bound_app_id, rom_id)
             await self._emit(
                 "download_complete",
                 {
@@ -409,7 +447,9 @@ class DownloadService:
                     "platform_name": platform_name,
                     "file_path": final_path,
                     "app_id": app_id,
-                    "launch_options": build_launch_options(resolve_emulator_invocation(rom_detail), final_path),
+                    "launch_options": build_launch_options(
+                        resolve_emulator_invocation(rom_detail, override_core_so), final_path
+                    ),
                 },
             )
             self._logger.info(f"Download complete: {rom_name} -> {final_path}")

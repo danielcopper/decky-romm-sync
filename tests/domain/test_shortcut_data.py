@@ -114,7 +114,7 @@ class TestBuildShortcutsData:
             },
             {"id": 2, "name": "Game B", "platform_name": "SNES", "platform_slug": "snes"},
         ]
-        result = build_shortcuts_data(roms, plugin_dir, {1: "/roms/n64/gamea.z64"})
+        result = build_shortcuts_data(roms, plugin_dir, {1: "/roms/n64/gamea.z64"}, {})
         assert len(result) == 2
         assert result[0]["rom_id"] == 1
         assert result[0]["name"] == "Game A"
@@ -131,17 +131,17 @@ class TestBuildShortcutsData:
 
     def test_installed_rom_gets_launch_command(self):
         roms = [{"id": 1, "name": "Game A"}]
-        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/n64/gamea.z64"})
+        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/n64/gamea.z64"}, {})
         assert result[0]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/n64/gamea.z64"'
 
     def test_installed_rom_path_with_spaces_is_quoted(self):
         roms = [{"id": 7, "name": "Spacey"}]
-        result = build_shortcuts_data(roms, "/plugin", {7: "/roms/dc/My Game.chd"})
+        result = build_shortcuts_data(roms, "/plugin", {7: "/roms/dc/My Game.chd"}, {})
         assert result[0]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/dc/My Game.chd"'
 
     def test_uninstalled_rom_gets_empty_launch_options(self):
         roms = [{"id": 2, "name": "Game B"}]
-        result = build_shortcuts_data(roms, "/plugin", {})
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
         assert result[0]["launch_options"] == ""
 
     def test_mixed_installed_and_uninstalled(self):
@@ -149,17 +149,40 @@ class TestBuildShortcutsData:
             {"id": 1, "name": "Installed"},
             {"id": 2, "name": "NotInstalled"},
         ]
-        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/snes/installed.sfc"})
+        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/snes/installed.sfc"}, {})
         assert result[0]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/snes/installed.sfc"'
         assert result[1]["launch_options"] == ""
 
+    def test_installed_rom_with_core_override_bakes_e_form(self):
+        # A rom_id present in core_overrides bakes the -e override into its launch.
+        roms = [{"id": 1, "name": "PSX Game"}]
+        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/psx/game.chd"}, {1: "pcsx_rearmed_libretro.so"})
+        assert result[0]["launch_options"] == (
+            "flatpak run net.retrodeck.retrodeck "
+            '-e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/pcsx_rearmed_libretro.so %ROM%" '
+            '"/roms/psx/game.chd"'
+        )
+
+    def test_installed_rom_absent_from_overrides_is_plain(self):
+        # A rom_id NOT in core_overrides follows the default — plain launch, no -e.
+        roms = [{"id": 1, "name": "Plain"}]
+        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/n64/g.z64"}, {2: "other_libretro.so"})
+        assert result[0]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/n64/g.z64"'
+        assert "-e" not in result[0]["launch_options"]
+
+    def test_uninstalled_rom_with_override_still_empty(self):
+        # An override on an UNINSTALLED rom can't bake — no path, empty placeholder.
+        roms = [{"id": 1, "name": "NotDownloaded"}]
+        result = build_shortcuts_data(roms, "/plugin", {}, {1: "pcsx_rearmed_libretro.so"})
+        assert result[0]["launch_options"] == ""
+
     def test_empty_roms(self):
-        result = build_shortcuts_data([], "/some/dir", {})
+        result = build_shortcuts_data([], "/some/dir", {}, {})
         assert result == []
 
     def test_missing_optional_fields(self):
         roms = [{"id": 5, "name": "Minimal"}]
-        result = build_shortcuts_data(roms, "/plugin", {})
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
         assert result[0]["rom_id"] == 5
         assert result[0]["platform_name"] == "Unknown"
         assert result[0]["platform_slug"] == ""
@@ -169,19 +192,19 @@ class TestBuildShortcutsData:
     def test_exe_path_contains_rom_launcher(self):
         plugin_dir = "/home/deck/homebrew/plugins/decky-romm-sync"
         roms = [{"id": 1, "name": "Game"}]
-        result = build_shortcuts_data(roms, plugin_dir, {})
+        result = build_shortcuts_data(roms, plugin_dir, {}, {})
         assert result[0]["exe"].endswith("/bin/rom-launcher")
 
     def test_start_dir_is_parent_of_exe(self):
         plugin_dir = "/home/deck/homebrew/plugins/decky-romm-sync"
         roms = [{"id": 1, "name": "Game"}]
-        result = build_shortcuts_data(roms, plugin_dir, {})
+        result = build_shortcuts_data(roms, plugin_dir, {}, {})
         assert result[0]["start_dir"] == os.path.dirname(result[0]["exe"])
 
     def test_multiple_roms_each_has_required_fields(self):
         required_fields = {"rom_id", "name", "exe", "start_dir", "launch_options", "platform_name", "platform_slug"}
         roms = [{"id": i, "name": f"Game {i}"} for i in range(5)]
-        result = build_shortcuts_data(roms, "/plugin", {})
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
         for item in result:
             for field in required_fields:
                 assert field in item, f"Missing field '{field}' in shortcut data"
