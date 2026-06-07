@@ -165,6 +165,38 @@ class TestGetAvailableCores:
         result = event_loop.run_until_complete(service.get_available_cores("snes"))
         assert result["cores"] == []
 
+    def test_system_level_read_passes_none_rom_filename(self, event_loop, service, core_info):
+        # No rom_filename → the active-core read is SYSTEM-LEVEL.
+        event_loop.run_until_complete(service.get_available_cores("snes"))
+        assert core_info.active_core_calls == [("snes", None)]
+
+    def test_per_game_read_forwards_rom_filename(self, event_loop, service, core_info):
+        # A rom_filename narrows the active-core read to the per-game
+        # <altemulator> override (#936). The available-cores list stays
+        # platform-wide (system-level), so it is read with the bare system only.
+        core_info.active_core = ("bsnes_libretro", "bsnes")
+        result = event_loop.run_until_complete(
+            service.get_available_cores("snes", rom_filename="mario.sfc"),
+        )
+        # Active read is per-game (filename forwarded to get_active_core).
+        assert core_info.active_core_calls == [("snes", "mario.sfc")]
+        # Available-cores enumeration never receives the filename — it is the
+        # platform-wide options list.
+        assert core_info.available_cores_calls == ["snes"]
+        assert result["active_core"] == "bsnes_libretro"
+        assert result["active_core_label"] == "bsnes"
+
+    def test_per_game_override_overrides_system_core(self, event_loop, service, core_info):
+        # The whole point of #936: with a filename, the per-game core surfaces
+        # instead of the system default. The fake returns whatever active_core
+        # is set; assert the filename reached the seam that resolves it.
+        core_info.active_core = ("parallel_n64_libretro", "ParaLLEl N64")
+        result = event_loop.run_until_complete(
+            service.get_available_cores("n64", rom_filename="zelda.z64"),
+        )
+        assert ("n64", "zelda.z64") in core_info.active_core_calls
+        assert result["active_core_label"] == "ParaLLEl N64"
+
 
 # ── get_platform_core_info (the dedicated core-info path, #923) ─────────
 

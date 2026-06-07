@@ -257,7 +257,7 @@ describe("RomMPlaySection", () => {
     // mock result into state so the core button / menu render as in production,
     // where the dedicated core-info path (#923) populates these fields. The
     // extractCoreInfo mock ignores its argument, so the dummy CoreInfo is fine.
-    vi.mocked(sectionRefresh.refreshCoreInfoInBackground).mockImplementation((_slug, cancelled, setter) => {
+    vi.mocked(sectionRefresh.refreshCoreInfoInBackground).mockImplementation((_slug, _romFile, cancelled, setter) => {
       if (cancelled()) return;
       const coreFields = playSectionUtils.extractCoreInfo({ cores: [], active_core: null, active_core_label: null });
       act(() => {
@@ -427,10 +427,12 @@ describe("RomMPlaySection", () => {
         expect.any(Function),
         expect.any(Function),
       );
-      // Core info is fetched from its own path (#923), keyed on the platform slug,
-      // independent of the BIOS refresh.
+      // Core info is fetched from its own path (#923), keyed on the platform slug
+      // AND the ROM filename (per-game override read-back, #936), independent of
+      // the BIOS refresh.
       expect(sectionRefresh.refreshCoreInfoInBackground).toHaveBeenCalledWith(
         "snes",
+        "test.sfc",
         expect.any(Function),
         expect.any(Function),
       );
@@ -1045,11 +1047,15 @@ describe("RomMPlaySection", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 60,
+        // The ROM filename is mirrored into romFileRef on load and forwarded to
+        // the per-game core read-back (#936).
+        rom_file: "mario.sfc",
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
-      // Core data comes from the dedicated path (#923), keyed on the event slug.
+      // Core data comes from the dedicated path (#923), keyed on the event slug
+      // AND the ROM filename (per-game override read-back, #936).
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "blastem.so",
         active_core_label: "BlastEm",
@@ -1080,7 +1086,8 @@ describe("RomMPlaySection", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes");
+      // The bare basename (sourced from romFileRef, not the event) is forwarded.
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "mario.sfc");
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(60);
     });
 
@@ -2060,7 +2067,8 @@ describe("RomMPlaySection", () => {
         });
         expect(vi.mocked(backend.setGameCore)).toHaveBeenCalledWith("snes", "./mario.sfc", "BlastEm");
         // Core display refreshed via the dedicated path, not the BIOS payload (#923).
-        expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes");
+        // The bare basename is forwarded so the per-game override reads back (#936).
+        expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "mario.sfc");
         expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Core set to BlastEm" }));
         expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
         const ev = listener.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.detail.type === "core_changed");

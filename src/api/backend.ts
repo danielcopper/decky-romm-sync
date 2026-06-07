@@ -236,8 +236,9 @@ export const setGameCore = callable<
 >("set_game_core");
 // Dedicated core-info path (#923) — active core + available cores for a
 // platform, decoupled from the BIOS firmware status. The per-game detail page
-// and the per-system System page read core data from here.
-export const getPlatformCoreInfo = callable<[string], CoreInfo>("get_platform_core_info");
+// passes the ROM filename so a per-game <altemulator> override is read back as
+// the active core (#936); the per-system System page omits it (system-level).
+export const getPlatformCoreInfo = callable<[string, string?], CoreInfo>("get_platform_core_info");
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 export const debugLog = callable<[string], void>("debug_log");
 const frontendLog = callable<[string, string], void>("frontend_log");

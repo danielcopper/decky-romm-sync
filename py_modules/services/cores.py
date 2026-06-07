@@ -61,11 +61,17 @@ class CoreService:
         self._retrodeck_paths = config.retrodeck_paths
         self._bios_checker = config.bios_checker
 
-    async def get_available_cores(self, platform_slug: str) -> dict[str, Any]:
-        """Return available cores for a platform along with the active selection."""
+    async def get_available_cores(self, platform_slug: str, rom_filename: str | None = None) -> dict[str, Any]:
+        """Return available cores for a platform along with the active selection.
+
+        The available-cores list is platform-wide (system-level). The active
+        selection is read per-game when ``rom_filename`` is provided, so a
+        ``<altemulator>`` per-game override surfaces instead of the system
+        core; ``None`` reads the system-level active core.
+        """
         system = self._resolve_system(platform_slug)
         cores = self._core_info.get_available_cores(system)
-        active_so, active_label = self._core_info.get_active_core(system)
+        active_so, active_label = self._core_info.get_active_core(system, rom_filename=rom_filename)
         return {
             "cores": cores,
             "active_core": active_so,

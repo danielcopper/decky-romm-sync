@@ -225,7 +225,7 @@ describe("refreshBiosInBackground", () => {
 describe("refreshCoreInfoInBackground", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("merges the projected core fields from the dedicated path (#923) when not cancelled", async () => {
+  it("forwards the ROM filename and flows a non-default per-game core back (gold icon, #936)", async () => {
     vi.mocked(backend.getPlatformCoreInfo).mockResolvedValueOnce({
       active_core: "parallel_n64_libretro.so",
       active_core_label: "ParaLLEl N64",
@@ -236,10 +236,17 @@ describe("refreshCoreInfoInBackground", () => {
     });
 
     const setter = vi.fn<(updater: (prev: CoreState) => CoreState) => void>();
-    refreshCoreInfoInBackground("n64", () => false, setter as unknown as Dispatch<SetStateAction<CoreState>>);
+    refreshCoreInfoInBackground(
+      "n64",
+      "zelda.z64",
+      () => false,
+      setter as unknown as Dispatch<SetStateAction<CoreState>>,
+    );
     await flushMicrotasks();
 
-    expect(backend.getPlatformCoreInfo).toHaveBeenCalledWith("n64");
+    // The ROM filename is forwarded so a per-game <altemulator> override reads
+    // back as the active core (#936).
+    expect(backend.getPlatformCoreInfo).toHaveBeenCalledWith("n64", "zelda.z64");
     expect(setter).toHaveBeenCalledOnce();
     const next = setter.mock.calls[0]![0]({
       activeCoreLabel: null,
@@ -261,7 +268,7 @@ describe("refreshCoreInfoInBackground", () => {
       cores: [],
     });
     const setter = vi.fn();
-    refreshCoreInfoInBackground("n64", () => true, setter);
+    refreshCoreInfoInBackground("n64", "zelda.z64", () => true, setter);
     await flushMicrotasks();
     expect(setter).not.toHaveBeenCalled();
   });
@@ -274,7 +281,7 @@ describe("refreshCoreInfoInBackground", () => {
 
     let cancelled = false;
     const setter = vi.fn();
-    refreshCoreInfoInBackground("n64", () => cancelled, setter);
+    refreshCoreInfoInBackground("n64", "zelda.z64", () => cancelled, setter);
 
     cancelled = true;
     d.resolve({ active_core: null, active_core_label: null, cores: [] });
@@ -287,7 +294,7 @@ describe("refreshCoreInfoInBackground", () => {
     vi.mocked(backend.getPlatformCoreInfo).mockRejectedValueOnce(new Error("network"));
     vi.mocked(backend.debugLog).mockResolvedValue(undefined);
     const setter = vi.fn();
-    refreshCoreInfoInBackground("n64", () => false, setter);
+    refreshCoreInfoInBackground("n64", "zelda.z64", () => false, setter);
     await flushMicrotasks();
 
     expect(setter).not.toHaveBeenCalled();
