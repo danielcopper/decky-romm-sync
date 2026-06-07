@@ -130,6 +130,26 @@ cores are available for the game's platform.
 A per-game override takes priority over the platform default. To reset back to the platform default, select the default
 core (marked with "(default)") from the menu — this clears the per-game override.
 
+### Per-game core switching limitation
+
+A per-game core override works for most ROMs, but **not** when the ROM filename contains certain special characters.
+This is an upstream RetroDECK bug, not a plugin limitation: RetroDECK matches the gamelist entry by treating the
+filename as an awk regular expression, so any regex metacharacter in the name breaks the match and the per-game
+`<altemulator>` override is silently ignored. RetroDECK then falls back to the system-wide core.
+
+The breaking characters are: `(` `)` `[` `]` `{` `}` `+` `*` `?` `|` `^` `$` `\`. A plain dot (`.`) is fine — it is a
+common part of filenames (e.g. `Tetris.gb`) and matches the literal dot. So:
+
+- `Tetris.gb` — per-game core switching works.
+- `Mario Golf - Advance Tour (USA).zip` — the parentheses break the match; the per-game override is ignored.
+
+When you switch the core per-game for a ROM whose filename contains one of these characters, the core-change dialog on
+the game detail page shows a "Per-Game Core Switch May Be Ignored" note. For clean filenames the note does not appear.
+
+**Workaround**: set the core **system-wide** for that platform instead, using the
+[Emulator Core dropdown on this System page](#per-platform-system-page). A system-wide override does not depend on the
+filename, so it always applies. This limitation will go away on its own once RetroDECK fixes the upstream match.
+
 ### Non-Default Core Indicator
 
 The CPU button changes color to indicate the active core status:

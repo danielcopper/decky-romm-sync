@@ -140,6 +140,7 @@ vi.mock("@decky/ui", () => {
     Menu: passthrough("div"),
     MenuItem: ({ children, onClick }: AnyProps) => createElement("button", { onClick }, children as never),
     Router: { CloseSideMenus: vi.fn(), Navigate: vi.fn() },
+    Navigation: { NavigateToExternalWeb: vi.fn(), Navigate: vi.fn() },
     // findSP locates Steam's <SteamRoot> iframe document for stylesheet
     // injection. Tests run in happy-dom — no Steam, no iframe — so the
     // safe stub returns undefined and the consumer's `!sp?.window?.document`

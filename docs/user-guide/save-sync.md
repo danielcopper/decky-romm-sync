@@ -109,16 +109,9 @@ The warning shows which core you're switching from and to. You can:
 - **Continue** — launch with the new core (your save may be overwritten)
 - **Cancel** — go back and switch the core back before launching
 
-### Per-game override warning (temporary)
-
-You may see a second warning box in the same dialog titled **Per-Game Core Switch Not Working**. This is a temporary
-notice about a RetroDECK bug (tracked in [#210](https://github.com/danielcopper/decky-romm-sync/issues/210)): per-game
-core overrides are currently ignored for ROMs whose filenames contain special characters like parentheses (`()`),
-brackets (`[]`), or other punctuation. For those ROMs, switching the core per-game has no effect — RetroDECK silently
-falls back to the system-wide core.
-
-**Workaround**: switch the core **system-wide** via the QAM panel (Core Switching) rather than per-game. This second
-warning will disappear from the dialog once RetroDECK fixes the underlying issue.
+For ROMs whose filenames contain special characters, the warning also notes that the per-game core override may be
+ignored by RetroDECK. See [Per-game core switching limitation](bios-management.md#per-game-core-switching-limitation) on
+the System page for what that means and how to work around it.
 
 ### Which cores are compatible?
 

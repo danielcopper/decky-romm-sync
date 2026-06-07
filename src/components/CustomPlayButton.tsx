@@ -116,6 +116,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const [dlProgress, setDlProgress] = useState<DownloadProgress | null>(null);
   const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
   const romIdRef = useRef<number | null>(null);
+  const romFileRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -153,6 +154,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         const rid = cached.rom_id!;
         setRomId(rid);
         romIdRef.current = rid;
+        romFileRef.current = cached.rom_file ?? null;
         if (cached.rom_name) setRomName(cached.rom_name);
 
         if (cached.installed) {
@@ -333,6 +335,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     return showCoreChangeModal(
       coreCheck.old_label ?? coreCheck.old_core ?? "Unknown",
       coreCheck.new_label ?? coreCheck.new_core ?? "Unknown",
+      romFileRef.current ?? undefined,
     );
   };
 
