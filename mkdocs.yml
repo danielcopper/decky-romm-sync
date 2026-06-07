@@ -72,6 +72,7 @@ nav:
       - Save File Sync Architecture: architecture/save-file-sync-architecture.md
       - Save Sync Coverage: architecture/save-sync-coverage.md
       - Config Source Parsers: architecture/config-source-parsers.md
+      - Core &amp; Emulator Selection: architecture/core-emulator-selection.md
       - Steam Non-Steam Shortcuts: architecture/steam-non-steam-shortcuts.md
       - Steam Remote Play & Cross-Device: architecture/steam-remote-play.md
   - Contributing:

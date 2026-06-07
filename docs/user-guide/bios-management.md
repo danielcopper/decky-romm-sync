@@ -103,13 +103,18 @@ you at a glance which core the plugin is filtering for.
 
 **How the core is determined:**
 
-1. If a per-game override exists in ES-DE's `gamelist.xml` (via `<altemulator>`), the plugin uses that first
-2. If no per-game override, the plugin checks for a per-system override in `gamelist.xml` (via `<alternativeEmulator>`)
+1. If you set a **per-game core** for this game in the plugin, that wins. (Per-game cores are stored by the plugin
+   itself — see [Per-Game (Game Detail Page)](#per-game-game-detail-page) below.)
+2. If no per-game core, the plugin checks for a **per-system override** in ES-DE's `gamelist.xml` (via
+   `<alternativeEmulator>`) — the System-page Emulator Core dropdown writes this.
 3. The plugin reads RetroDECK's ES-DE configuration (`es_systems.xml`) from the flatpak installation to find the default
    emulator for each platform — the first listed RetroArch core is treated as the default
 4. If the live configuration can't be read, the plugin falls back to a shipped `core_defaults.json` with RetroDECK's
    known defaults
 5. If all detection fails, all BIOS files for the platform are shown — the safe default
+
+Whatever this chain resolves to is the **same core the game launches on** — the plugin bakes the resolved core into the
+Steam shortcut, so the core shown for BIOS, saves, and the core badge always matches the core that runs.
 
 The detection chain ensures BIOS filtering works even when RetroDECK's configuration files aren't accessible (e.g. after
 an update changes paths). You'll see a "Core: mGBA" badge when detection is working, or no badge when falling back to
@@ -117,8 +122,13 @@ showing all files.
 
 ## Changing the Active Core
 
-You can change the active emulator core directly from the plugin, without leaving Game Mode. Changes are written to
-ES-DE's `gamelist.xml` so they persist across sessions and are picked up by both the plugin and ES-DE.
+You can change the active emulator core directly from the plugin, without leaving Game Mode. There are two scopes:
+
+- **Per-platform** changes are written to ES-DE's `gamelist.xml` (as a system-wide `<alternativeEmulator>`), so they
+  persist across sessions and are picked up by both the plugin and ES-DE.
+- **Per-game** changes are stored by the plugin itself and applied by baking the chosen core into the game's Steam
+  shortcut. They do **not** touch ES-DE's `gamelist.xml`, so they apply reliably for any ROM filename and survive
+  uninstalling and re-downloading the game.
 
 ### Per-Platform (System Page)
 
@@ -145,28 +155,30 @@ cores are available for the game's platform.
 3. Pick a core from the menu — the current core is marked with a checkmark
 4. The BIOS status, core badge, and game info panel update immediately
 
-A per-game override takes priority over the platform default. To reset back to the platform default, select the default
-core (marked with "(default)") from the menu — this clears the per-game override.
+A per-game core takes priority over the platform default. The menu also has a **Follow default / Reset** entry: tap it
+to drop the per-game core so the game follows its platform default again. Picking the default core from the list
+**pins** that core for the game; only **Follow default / Reset** clears the per-game choice.
 
-### Per-game core switching limitation
+When you set or reset a per-game core for an installed game, the plugin updates the game's Steam shortcut immediately
+and confirms the change landed before reporting success. If Steam can't accept the change in the current session, you'll
+see a "Core saved — restart Steam to apply" message — your choice is still saved; it takes effect after a Steam restart
+(or the next sync).
 
-A per-game core override works for most ROMs, but **not** when the ROM filename contains certain special characters.
-This is an upstream RetroDECK bug, not a plugin limitation: RetroDECK matches the gamelist entry by treating the
-filename as an awk regular expression, so any regex metacharacter in the name breaks the match and the per-game
-`<altemulator>` override is silently ignored. RetroDECK then falls back to the system-wide core.
+Per-game cores work for **any ROM filename**. The plugin bakes the chosen core directly into the game's launch command,
+so it does not rely on RetroDECK's gamelist lookup (which mishandles parentheses and other special characters in
+filenames) and is not affected by that upstream limitation.
 
-The breaking characters are: `(` `)` `[` `]` `{` `}` `+` `*` `?` `|` `^` `$` `\`. A plain dot (`.`) is fine — it is a
-common part of filenames (e.g. `Tetris.gb`) and matches the literal dot. So:
+### Per-game cores do not migrate
 
-- `Tetris.gb` — per-game core switching works.
-- `Mario Golf - Advance Tour (USA).zip` — the parentheses break the match; the per-game override is ignored.
+Two notes for anyone who set a per-game core before this version, or who edits ES-DE directly:
 
-When you switch the core per-game for a ROM whose filename contains one of these characters, the core-change dialog on
-the game detail page shows a "Per-Game Core Switch May Be Ignored" note. For clean filenames the note does not appear.
-
-**Workaround**: set the core **system-wide** for that platform instead, using the
-[Emulator Core dropdown on this System page](#per-platform-system-page). A system-wide override does not depend on the
-filename, so it always applies. This limitation will go away on its own once RetroDECK fixes the upstream match.
+- **Per-game cores set with an older plugin build are not carried over.** Earlier builds stored per-game cores in
+  ES-DE's `gamelist.xml`; the plugin now stores them itself and does not import the old entries. Re-apply any per-game
+  core once through the CPU-button menu and it sticks from then on (including across uninstall/re-download).
+- **A per-game core set directly in ES-DE is not seen by the plugin.** If you set a game's `<altemulator>` in ES-DE's
+  own interface, the plugin's BIOS badge, per-core save path, and core-change warning will **not** reflect it — those
+  follow the core the plugin knows about. ES-DE-native launches still honour your ES-DE setting. To keep the plugin's
+  badges and save paths in sync, set the per-game core through the plugin's CPU-button menu instead.
 
 ### Non-Default Core Indicator
 

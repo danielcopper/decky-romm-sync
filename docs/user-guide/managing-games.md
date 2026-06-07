@@ -84,14 +84,16 @@ The **Downloads** page (accessible from the main QAM panel) shows all active and
 
 ## Launching Games
 
-Select any installed game in the Steam Library and press **Play**. The plugin's launcher script:
+Select any installed game in the Steam Library and press **Play**. The full launch command is baked into the Steam
+shortcut when the game is synced or downloaded, so launching just runs that command:
 
-1. Looks up the ROM file path from the plugin's registry
-2. Launches RetroDECK with the correct ROM
-3. RetroDECK auto-detects the system from the ROM's directory path and uses the appropriate emulator
+1. The shortcut launches RetroDECK with the correct ROM path
+2. RetroDECK auto-detects the system from the ROM's directory path and uses the appropriate emulator
+3. If you picked a [per-game core](bios-management.md#per-game-game-detail-page), the chosen core is baked into the
+   command and used directly
 
-If the ROM is not downloaded, the launcher will request a download — you'll get a toast notification and can play once
-the download completes.
+If the ROM is not downloaded, pressing Play won't launch a game — download it first from the game's detail panel; the
+shortcut's command is filled in automatically when the download completes.
 
 ---
 

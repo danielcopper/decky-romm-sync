@@ -44,10 +44,15 @@ It owns no state, no path resolution, and no emulator knowledge. Steam hands it 
 shortcut's launch options and it runs exactly that.
 
 The launch command is **baked into the shortcut's `launch_options`** as `<emulator-invocation> "<resolved-rom-path>"`.
-The emulator invocation is a build-time variable (`resolve_emulator_invocation`, returning RetroDECK's
-`flatpak run net.retrodeck.retrodeck` today) — the seam where multi-emulator support
-([#129](https://github.com/danielcopper/decky-romm-sync/issues/129)) will branch per ROM. The ROM path is quoted so
-paths with spaces survive `exec "$@"`. `launch_options` carries:
+The emulator invocation is a build-time value rendered by the pure seam
+`domain/shortcut_data.resolve_emulator_invocation`, returning RetroDECK's `flatpak run net.retrodeck.retrodeck` today.
+That seam **renders** a chosen invocation; it does not **select** one. The per-ROM _selection_ (whether this ROM has a
+per-game emulator/core override, and which) is a **service-layer DB read** —
+[ADR-0011](0011-per-game-core-override-in-db-applied-via-e-flag.md)'s `ActiveCoreResolver.active_core_for_rom(rom_id)`,
+backed by `roms.emulator_override` — that resolves the core and passes it into the seam. The seam only turns the chosen
+core into a command string. Multi-emulator support ([#129](https://github.com/danielcopper/decky-romm-sync/issues/129))
+extends this single seam, not the launcher. The ROM path is quoted so paths with spaces survive `exec "$@"`.
+`launch_options` carries:
 
 - the **full command** for an installed ROM, written at **sync** (for ROMs already on disk), at **download-complete**
   (the moment a ROM becomes installed), and **re-resolved on RetroDECK-home migration** (a new
@@ -68,6 +73,22 @@ treated as orphans, and re-sync recreates them.
 Every `SetAppLaunchOptions` on an existing shortcut uses a **fire-then-poll confirm**: set the value, then poll
 `RegisterForAppDetails` until the read-back `strLaunchOptions` matches (confirming `""` against an empty read-back is
 valid), or time out. The Set is no longer a fire-and-forget with an assumed result.
+
+### Per-game emulator/core override — the `-e` invocation form
+
+A ROM with a per-game emulator/core override carries a different invocation in the same `launch_options` field. The seam
+renders RetroDECK's `-e` flag, which sets the emulator invocation directly and bypasses RetroDECK's gamelist lookup, so
+the override applies regardless of filename:
+
+```text
+flatpak run net.retrodeck.retrodeck -e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/<core>.so %ROM%" "<rom-path>"
+```
+
+`%EMULATOR_RETROARCH%` and `%ROM%` stay as ES-DE placeholders (RetroDECK resolves and single-quotes them at launch);
+only the in-sandbox cores directory is baked literally. A ROM **without** an override keeps the plain
+`flatpak run … "<rom-path>"` — `-e` is added only for overrides. The override LABEL is stored in
+`roms.emulator_override` and resolved to its `.so` by the service-layer read; the seam never reads the DB. The full
+storage + precedence + bake-site model is [ADR-0011](0011-per-game-core-override-in-db-applied-via-e-flag.md).
 
 ## Consequences
 
