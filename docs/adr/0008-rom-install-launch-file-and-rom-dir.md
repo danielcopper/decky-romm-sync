@@ -73,7 +73,9 @@ currently **blocked** on a version-aware RomM API gateway #143) and multi-emulat
   Switch) — it does **not** yet model per-file categories or multi-destination placement.
 - Vocabulary (`file_path` = launch target, `rom_dir` = dedicated folder) is recorded in `CONTEXT.md`.
 - A separate latent bug — the ES-DE per-game core override writes the gamelist `<path>` as a bare basename, which is
-  already wrong for folder-backed ROMs — is tracked as its own follow-up and is **not** fixed here.
+  wrong for folder-backed ROMs — was tracked as its own follow-up and has since been fixed (#864): the gamelist `<path>`
+  identity now derives from `file_path` + `rom_dir` (`domain/es_de_paths.py`), so folder-backed/multi-disc ROMs resolve
+  their per-game core, BIOS status, and save sort correctly.
 
 ## Alternatives considered
 

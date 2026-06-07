@@ -12,6 +12,8 @@ import os
 import re
 from typing import TYPE_CHECKING, Any
 
+from domain.es_de_paths import normalize_gamelist_path
+
 if TYPE_CHECKING:
     import logging
     from collections.abc import Callable
@@ -281,14 +283,15 @@ class CoreResolver:
         if not parsed:
             return None
 
-        # Match rom_filename against game paths
-        # rom_filename could be "Pokemon.gba" and path could be "./Pokemon.gba"
+        # Match the ES-DE gamelist identity against the game paths. ``rom_filename``
+        # is the gamelist <path> relative to the system ROM directory — a bare
+        # basename like "Pokemon.gba" for a single-file ROM, or a dedicated-dir
+        # path like "FF7/FF7.m3u" for a folder-backed ROM. Both sides normalize
+        # away the leading "./" so the comparison is drift-tolerant.
+        target = normalize_gamelist_path(rom_filename) if rom_filename else ""
         for game in parsed["games"]:
-            game_path = game.get("path", "")
-            # Normalize: strip leading "./" for comparison
-            normalized = game_path.lstrip("./") if game_path else ""
-            path_matches = normalized == rom_filename or game_path == rom_filename or game_path == f"./{rom_filename}"
-            if path_matches and game.get("altemulator"):
+            game_path = game.get("path") or ""
+            if target and normalize_gamelist_path(game_path) == target and game.get("altemulator"):
                 return game["altemulator"]
 
         return None
@@ -550,10 +553,12 @@ class GamelistXmlEditorAdapter:
     def set_game_override(self, retrodeck_home, system_name, rom_path, core_label):
         """Set or clear per-game core override in gamelist.xml.
 
-        ``rom_path`` is the relative path for the game (e.g.
-        ``"./Pokemon.gba"``). If ``core_label`` is None/empty, removes
-        the ``altemulator`` from the game entry. Creates the game entry
-        if not found. Preserves all other content.
+        ``rom_path`` is the relative gamelist ``<path>`` for the game — a
+        bare basename for a single-file ROM (e.g. ``"./Pokemon.gba"``) or a
+        dedicated-dir path for a folder-backed ROM (e.g. ``"./FF7/FF7.m3u"``).
+        If ``core_label`` is None/empty, removes the ``altemulator`` from the
+        game entry. Creates the game entry if not found. Preserves all other
+        content.
         """
         path = self.gamelist_path(retrodeck_home, system_name)
         raw = self.read_gamelist_raw(path)
@@ -569,18 +574,25 @@ class GamelistXmlEditorAdapter:
             alt_label = None
             games = []
 
-        # Find or create the game entry
+        # Find or create the game entry. Compare on the normalized gamelist
+        # identity (leading "./" stripped, surrounding whitespace trimmed) so an
+        # existing entry is matched despite "./"-drift or a folder-backed path —
+        # an exact-string match would miss it and append a duplicate <game>. An
+        # empty target never matches: a path-less <game> (``path`` is ``None``)
+        # or an empty ``rom_path`` must not false-rebuild an unrelated entry.
         found = False
+        target = normalize_gamelist_path(rom_path) if rom_path else ""
         new_games_xml = []
         for game in games:
-            if game["path"] == rom_path:
+            game_path = game.get("path") or ""
+            if target and normalize_gamelist_path(game_path) == target:
                 found = True
                 # Rebuild this game entry with updated altemulator
                 new_games_xml.append(self.rebuild_game_xml(game["raw_xml"], core_label))
             else:
                 new_games_xml.append(game["raw_xml"])
 
-        if not found and core_label:
+        if not found and core_label and rom_path:
             escaped_path = self.escape_xml(rom_path)
             escaped_label = self.escape_xml(core_label)
             game_xml = (
@@ -676,8 +688,9 @@ class GamelistXmlEditorAdapter:
         """Parse gamelist.xml into a structured representation that can be modified and reconstructed.
 
         Returns: ``{"alt_emulator_label": str | None, "games": [{"path":
-        str, "altemulator": str | None, "raw_xml": str}],
-        "other_content": str}`` or ``None`` on parse failure.
+        str | None, "altemulator": str | None, "raw_xml": str}],
+        "other_content": str}`` or ``None`` on parse failure. ``path`` is
+        ``None`` for a ``<game>`` with no ``<path>`` child.
         """
         try:
             from xml.parsers import expat

@@ -373,20 +373,36 @@ describe("RomMGameInfoPanel", () => {
       expect(backend.getRomMetadata).toHaveBeenCalledWith(99);
     });
 
-    it("forwards platform_slug + rom_file to the dedicated core-info path on mount (#936)", async () => {
+    it("forwards platform_slug + gamelist path to the dedicated core-info path on mount (#936)", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 99,
         platform_slug: "snes",
         rom_file: "mario.sfc",
+        rom_gamelist_path: "mario.sfc",
         metadata: makeMetadata(),
         stale_fields: [],
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
       // The background core-info fetch reads the per-game override by passing the
-      // bare basename alongside the platform slug.
+      // ES-DE gamelist identity alongside the platform slug.
       expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "mario.sfc");
+    });
+
+    it("forwards the dir-relative gamelist path for a folder-backed ROM on mount (#936)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 99,
+        platform_slug: "psx",
+        rom_file: "FF7.m3u",
+        rom_gamelist_path: "FF7/FF7.m3u",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("psx", "FF7/FF7.m3u");
     });
 
     it("skips metadata refresh when metadata exists AND not in stale_fields", async () => {
@@ -976,11 +992,13 @@ describe("RomMGameInfoPanel", () => {
       // and the BIOS tab is NOT visible. Then dispatch core_changed with a
       // cache response that DOES carry bios_status — the handler's setState
       // call is the only path that surfaces the BIOS tab. Mount carries a
-      // rom_file so romFileRef is populated for the per-game read-back (#936).
+      // rom_gamelist_path so gamelistPathRef is populated for the per-game
+      // read-back (#936).
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 60,
         rom_file: "mario.sfc",
+        rom_gamelist_path: "mario.sfc",
         save_sync_enabled: true,
         metadata: makeMetadata(),
         stale_fields: [],
@@ -1004,7 +1022,8 @@ describe("RomMGameInfoPanel", () => {
         stale_fields: [],
       });
       // Core data comes from the dedicated path (#923), keyed on the event slug
-      // AND the ROM filename from romFileRef (per-game override read-back, #936).
+      // AND the gamelist identity from gamelistPathRef (per-game override
+      // read-back, #936).
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "from_core_changed.so",
         active_core_label: "FROM_CORE_CHANGED",

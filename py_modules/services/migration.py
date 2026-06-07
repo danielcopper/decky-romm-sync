@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.es_de_paths import gamelist_entry_path
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
 from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
@@ -750,7 +751,11 @@ class MigrationService:
             return
         core_name: str | None = None
         if need_core:
-            core_name, core_so = self._resolve_retroarch_corename(system, os.path.basename(file_path))
+            # Per-game core resolution keys off the ES-DE gamelist identity —
+            # the dedicated-dir-relative path for a folder-backed ROM, basename
+            # otherwise — so folder-backed ROMs hit the right altemulator entry.
+            gamelist_path = gamelist_entry_path(file_path, install.rom_dir)
+            core_name, core_so = self._resolve_retroarch_corename(system, gamelist_path)
             if core_name is None:
                 # Fail loud — cannot resolve the RetroArch corename for this ROM's
                 # active core, so we can't build the correct sort-by-core path.
@@ -760,7 +765,7 @@ class MigrationService:
                     "Skipping save sort migration for %s/%s: unable to resolve "
                     "RetroArch corename from .info (core_so=%s)",
                     system,
-                    os.path.basename(file_path),
+                    gamelist_path,
                     core_so,
                 )
                 return

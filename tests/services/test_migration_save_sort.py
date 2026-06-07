@@ -834,6 +834,71 @@ class TestSortByCoreMigrationEndToEnd:
         assert os.sep + "Snes9x" + os.sep in new_path
         assert "Snes9x - Current" not in new_path
 
+    def test_folder_backed_rom_resolves_core_via_entry_path(self, tmp_path):
+        """A folder-backed ROM resolves its corename via the dir-relative entry path.
+
+        ``active_core`` must receive ``FF7/FF7.m3u`` (the ES-DE gamelist
+        identity), not the bare ``FF7.m3u`` basename, so a per-game core
+        override on a multi-disc ROM picks the right per-core save subdir.
+        """
+        roms_path = tmp_path / "roms"
+        saves_path = tmp_path / "saves"
+        roms_path.mkdir()
+        saves_path.mkdir()
+
+        rom_dir = roms_path / "psx" / "FF7"
+        rom_file = rom_dir / "FF7.m3u"
+        rom_dir.mkdir(parents=True)
+        rom_file.write_text("rom")
+        # sort_by_content places a folder-backed ROM's saves under the dedicated
+        # dir name (FF7), not the platform slug (psx).
+        old_save_dir = saves_path / "FF7"
+        old_save_dir.mkdir(parents=True)
+        (old_save_dir / "FF7.srm").write_text("save data")
+
+        installed_roms = {
+            "1": {
+                "system": "psx",
+                "file_path": str(rom_file),
+                "rom_dir": str(rom_dir),
+                "platform_slug": "psx",
+            }
+        }
+        old_settings: SaveSortSettings = {"sort_by_content": True, "sort_by_core": False}
+        new_settings: SaveSortSettings = {"sort_by_content": False, "sort_by_core": True}
+
+        captured = {}
+
+        def active_core(system_name: str, rom_filename: str | None = None) -> tuple[str | None, str | None]:
+            captured["rom_filename"] = rom_filename
+            return ("swanstation_libretro", "SwanStation - Current")
+
+        def get_core_name(core_so: str) -> str | None:
+            return "SwanStation"
+
+        svc, uow = _make_service(
+            tmp_path,
+            installed_roms=installed_roms,
+            state_overrides={
+                "save_sort_settings_previous": old_settings,
+                "save_sort_settings": new_settings,
+            },
+            active_core=active_core,
+            get_core_name=get_core_name,
+        )
+        svc._retrodeck_paths = FakeRetroDeckPaths(saves=str(saves_path), roms=str(roms_path))
+        with uow:
+            installs = list(uow.rom_installs.iter_all())
+
+        items = svc._collect_save_sorting_items(old_settings, new_settings, installs)
+
+        assert captured["rom_filename"] == os.path.join("FF7", "FF7.m3u")
+        assert len(items) == 1
+        _label, _old_path, new_path, _updater, _kind = items[0]
+        # new_settings is sort_by_core only → the destination dir is the
+        # resolved RetroArch corename subdir.
+        assert os.path.dirname(new_path).endswith(os.sep + "SwanStation")
+
     def test_skips_rom_and_warns_when_corename_unresolved(self, tmp_path, caplog):
         """When ``.info`` lookup returns None for a ROM that needs a
         corename, the ROM is skipped and a warning is logged. The item

@@ -76,6 +76,7 @@ export interface CachedGameDetail {
     files?: BiosFileStatus[];
   } | null;
   rom_file?: string;
+  rom_gamelist_path?: string;
   ra_id?: number | null;
   achievement_summary?: AchievementSummary | null;
   bios_level?: "ok" | "partial" | "missing" | null;

@@ -392,6 +392,7 @@ describe("RomMPlaySection", () => {
         rom_name: "Test ROM",
         platform_slug: "snes",
         rom_file: "test.sfc",
+        rom_gamelist_path: "test.sfc",
         save_sync_enabled: true,
         save_sync_display: { status: "synced", label: "label", last_sync_check_at: null },
         ra_id: 7,
@@ -428,8 +429,8 @@ describe("RomMPlaySection", () => {
         expect.any(Function),
       );
       // Core info is fetched from its own path (#923), keyed on the platform slug
-      // AND the ROM filename (per-game override read-back, #936), independent of
-      // the BIOS refresh.
+      // AND the ES-DE gamelist identity (per-game override read-back, #936),
+      // independent of the BIOS refresh.
       expect(sectionRefresh.refreshCoreInfoInBackground).toHaveBeenCalledWith(
         "snes",
         "test.sfc",
@@ -1047,15 +1048,16 @@ describe("RomMPlaySection", () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 60,
-        // The ROM filename is mirrored into romFileRef on load and forwarded to
-        // the per-game core read-back (#936).
+        // The gamelist identity is mirrored into gamelistPathRef on load and
+        // forwarded to the per-game core read-back (#936).
         rom_file: "mario.sfc",
+        rom_gamelist_path: "mario.sfc",
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
       // Core data comes from the dedicated path (#923), keyed on the event slug
-      // AND the ROM filename (per-game override read-back, #936).
+      // AND the gamelist identity (per-game override read-back, #936).
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "blastem.so",
         active_core_label: "BlastEm",
@@ -1086,9 +1088,45 @@ describe("RomMPlaySection", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // The bare basename (sourced from romFileRef, not the event) is forwarded.
+      // The gamelist identity (sourced from gamelistPathRef, not the event) is forwarded.
       expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "mario.sfc");
       expect(vi.mocked(backend.getBiosStatus)).toHaveBeenCalledWith(60);
+    });
+
+    it("core_changed: folder-backed ROM forwards the dir-relative gamelist path", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 61,
+        rom_file: "FF7.m3u",
+        // Folder-backed ROM: identity is the dedicated-dir-relative path.
+        rom_gamelist_path: "FF7/FF7.m3u",
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "beetle_psx.so",
+        active_core_label: "Beetle PSX",
+        cores: [{ core_so: "beetle_psx.so", label: "Beetle PSX", is_default: true }],
+      });
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: null,
+        bios_level: null,
+        bios_label: null,
+      });
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "core_changed", platform_slug: "psx" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The dir-relative gamelist identity reaches the per-game core read-back.
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("psx", "FF7/FF7.m3u");
     });
 
     it("core_changed: no-BIOS → needs-BIOS switch surfaces the missing-BIOS badge (#923)", async () => {
@@ -1992,12 +2030,13 @@ describe("RomMPlaySection", () => {
   // ------------------------------------------------------------------
 
   describe("handleChangeGameCore", () => {
-    async function setupCoreAction() {
+    async function setupCoreAction(gamelistPath = "mario.sfc") {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
         platform_slug: "snes",
         rom_file: "mario.sfc",
+        rom_gamelist_path: gamelistPath,
         bios_status: {
           platform_slug: "snes",
           server_count: 0,
@@ -2067,7 +2106,7 @@ describe("RomMPlaySection", () => {
         });
         expect(vi.mocked(backend.setGameCore)).toHaveBeenCalledWith("snes", "./mario.sfc", "BlastEm");
         // Core display refreshed via the dedicated path, not the BIOS payload (#923).
-        // The bare basename is forwarded so the per-game override reads back (#936).
+        // The gamelist identity is forwarded so the per-game override reads back (#936).
         expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "mario.sfc");
         expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Core set to BlastEm" }));
         expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
@@ -2079,6 +2118,36 @@ describe("RomMPlaySection", () => {
       } finally {
         globalThis.removeEventListener("romm_data_changed", listener);
       }
+    });
+
+    it("folder-backed ROM: write prefixes ./ to the gamelist path, read sends it raw", async () => {
+      await setupCoreAction("FF7/FF7.m3u");
+      vi.mocked(backend.setGameCore).mockResolvedValue({
+        success: true,
+        message: "ok",
+        bios_status: {
+          needs_bios: false,
+          server_count: 0,
+          local_count: 0,
+          all_downloaded: true,
+        },
+      });
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: null,
+        bios_level: null,
+        bios_label: null,
+      });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      const coreItems = await openCoreMenuAndGetItems(testAppId);
+      vi.mocked(backend.getPlatformCoreInfo).mockClear();
+      await act(async () => {
+        await coreItems[3]!.props.onClick?.();
+      });
+      // Write path: "./" + gamelistPath. Read path: gamelistPath raw.
+      expect(vi.mocked(backend.setGameCore)).toHaveBeenCalledWith("snes", "./FF7/FF7.m3u", "BlastEm");
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "FF7/FF7.m3u");
     });
 
     it("setGameCore failure → toasts result.message", async () => {
@@ -2126,12 +2195,13 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Failed to set core" }));
     });
 
-    it("missing platformSlug or romFile → no-op", async () => {
+    it("missing platformSlug or gamelistPath → no-op", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
         platform_slug: "",
         rom_file: "",
+        rom_gamelist_path: "",
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();

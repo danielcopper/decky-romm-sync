@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -257,17 +258,29 @@ async def _set_event_loop(plugin):
     plugin._playtime_service._loop = loop
 
 
-def _install_rom(plugin, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba"):
-    """Helper: seed a ``RomInstall`` record (Rom must already exist for the FK)."""
+def _install_rom(plugin, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba", rom_dir_name=None):
+    """Helper: seed a ``RomInstall`` record (Rom must already exist for the FK).
+
+    When ``rom_dir_name`` is given the install is folder-backed: the launch file
+    lives in a dedicated ``<roms>/<system>/<rom_dir_name>/`` directory and
+    ``rom_dir`` is set; otherwise it is a single-file install (``rom_dir`` None).
+    """
     from domain.rom_install import RomInstall
 
-    install_dir = tmp_path / "retrodeck" / "roms" / system
+    system_dir = tmp_path / "retrodeck" / "roms" / system
+    if rom_dir_name:
+        rom_dir = system_dir / rom_dir_name
+        file_path = rom_dir / file_name
+        rom_dir_value = str(rom_dir)
+    else:
+        file_path = system_dir / file_name
+        rom_dir_value = None
     with plugin._uow:
         plugin._uow.rom_installs.save(
             RomInstall(
                 rom_id=rom_id,
-                file_path=str(install_dir / file_name),
-                rom_dir=None,
+                file_path=str(file_path),
+                rom_dir=rom_dir_value,
                 platform_slug=system,
                 system=system,
                 installed_at="2025-01-01T00:00:00",
@@ -442,6 +455,68 @@ class TestGetCachedGameDetailInstalled:
         assert result["installed"] is False
         # No install record → rom_file falls back to Rom.fs_name.
         assert result["rom_file"] == "game_10.sfc"
+
+
+class TestGetCachedGameDetailGamelistPath:
+    """``rom_gamelist_path`` is the ES-DE identity; ``rom_file`` stays a basename."""
+
+    @pytest.mark.asyncio
+    async def test_single_file_gamelist_path_is_basename(self, plugin, game_detail_service):
+        """Single-file install: gamelist path and rom_file are both the basename."""
+        _seed_rom(plugin, 10, app_id=50000, name="Game", platform_slug="snes")
+        _install_rom(plugin, plugin._tmp_path, rom_id=10, system="snes", file_name="game.sfc")
+        result = game_detail_service.get_cached_game_detail(50000)
+        assert result["rom_gamelist_path"] == "game.sfc"
+        assert result["rom_file"] == "game.sfc"
+
+    @pytest.mark.asyncio
+    async def test_folder_backed_gamelist_path_is_relative(self, plugin, game_detail_service):
+        """Folder-backed install: gamelist path is dir-relative, rom_file stays basename."""
+        _seed_rom(plugin, 10, app_id=50000, name="FF7", platform_slug="ps")
+        _install_rom(
+            plugin,
+            plugin._tmp_path,
+            rom_id=10,
+            system="ps",
+            file_name="FF7.m3u",
+            rom_dir_name="FF7",
+        )
+        result = game_detail_service.get_cached_game_detail(50000)
+        assert result["rom_gamelist_path"] == os.path.join("FF7", "FF7.m3u")
+        # The core-change modal display key stays a bare basename.
+        assert result["rom_file"] == "FF7.m3u"
+
+    @pytest.mark.asyncio
+    async def test_gamelist_path_falls_back_to_fs_name(self, plugin, game_detail_service):
+        """No install record → gamelist path falls back to Rom.fs_name."""
+        _seed_rom(plugin, 10, app_id=50000, name="Game", platform_slug="snes", fs_name="game_10.sfc")
+        result = game_detail_service.get_cached_game_detail(50000)
+        assert result["rom_gamelist_path"] == "game_10.sfc"
+
+    @pytest.mark.asyncio
+    async def test_cached_bios_check_receives_entry_path_for_folder_rom(self, plugin, game_detail_service):
+        """Cached BIOS check is narrowed by the gamelist entry path, not the basename."""
+        _seed_rom(plugin, 10, app_id=50000, name="FF7", platform_slug="ps")
+        _install_rom(
+            plugin,
+            plugin._tmp_path,
+            rom_id=10,
+            system="ps",
+            file_name="FF7.m3u",
+            rom_dir_name="FF7",
+        )
+
+        captured = {}
+
+        def capture_cached(slug, rom_filename=None):
+            captured["slug"] = slug
+            captured["rom_filename"] = rom_filename
+            return {"needs_bios": False}
+
+        game_detail_service._bios_checker.check_platform_bios_cached = capture_cached
+
+        game_detail_service.get_cached_game_detail(50000)
+        assert captured["rom_filename"] == os.path.join("FF7", "FF7.m3u")
 
 
 class TestGetCachedGameDetailConflictFiltering:
@@ -667,6 +742,30 @@ class TestGetBiosStatusFound:
 
         await game_detail_service.get_bios_status(42)
         assert captured_args["rom_filename"] == "registry_file.gba"
+
+    @pytest.mark.asyncio
+    async def test_uses_gamelist_entry_path_for_folder_rom(self, plugin, game_detail_service):
+        """Folder-backed install: BIOS check is narrowed by the dir-relative entry path."""
+        _seed_rom(plugin, 42, app_id=50000, name="FF7", platform_slug="ps", fs_name="registry_file.m3u")
+        _install_rom(
+            plugin,
+            plugin._tmp_path,
+            rom_id=42,
+            system="ps",
+            file_name="FF7.m3u",
+            rom_dir_name="FF7",
+        )
+
+        captured_args = {}
+
+        async def capture_check(slug, rom_filename=None):
+            captured_args["rom_filename"] = rom_filename
+            return {"needs_bios": False}
+
+        game_detail_service._bios_checker.check_platform_bios = capture_check
+
+        await game_detail_service.get_bios_status(42)
+        assert captured_args["rom_filename"] == os.path.join("FF7", "FF7.m3u")
 
 
 class TestGetBiosStatusNotFound:

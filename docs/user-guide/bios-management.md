@@ -148,6 +148,11 @@ cores are available for the game's platform.
 A per-game override takes priority over the platform default. To reset back to the platform default, select the default
 core (marked with "(default)") from the menu — this clears the per-game override.
 
+Per-game core selection works for both single-file ROMs and folder-backed ones. Multi-disc titles and other ROMs that
+are extracted into their own folder (with an auto-generated `.m3u` launch file) are matched by their gamelist path
+relative to the platform's ROM directory (e.g. `FF7/FF7.m3u`), so their per-game core override, BIOS status, and active
+core badge resolve correctly — the same as single-file ROMs.
+
 ### Per-game core switching limitation
 
 A per-game core override works for most ROMs, but **not** when the ROM filename contains certain special characters.

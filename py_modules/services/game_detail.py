@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 from models.metadata import AchievementSummary
 
 from domain.bios import compute_bios_label, compute_bios_level, format_bios_status
+from domain.es_de_paths import gamelist_entry_path
 from domain.platform_names import decode_platform_names
 from domain.save_status import compute_save_sync_display
 
@@ -75,9 +76,29 @@ class GameDetailService:
 
     @staticmethod
     def _resolve_rom_file(install: RomInstall | None, rom: Rom) -> str:
-        """ROM filename from the install record, falling back to ``Rom.fs_name``."""
+        """ROM filename (bare basename) for the core-change modal display.
+
+        Falls back to ``Rom.fs_name`` when no install record exists. This is the
+        human-facing filename shown in the UI, not the ES-DE gamelist identity —
+        use ``_resolve_gamelist_entry_path`` for per-game core/BIOS resolution.
+        """
         if install is not None and install.file_path:
             return os.path.basename(install.file_path)
+        return rom.fs_name
+
+    @staticmethod
+    def _resolve_gamelist_entry_path(install: RomInstall | None, rom: Rom) -> str:
+        """ES-DE gamelist ``<path>`` identity for per-game core/BIOS resolution.
+
+        Derives the path ES-DE records in ``gamelist.xml`` relative to the
+        system ROM directory — a bare basename for a single-file ROM, the
+        dedicated-dir-relative path for a folder-backed ROM (ADR-0008). Falls
+        back to ``Rom.fs_name`` when no install record exists. This is the value
+        the per-game ``<altemulator>`` override is keyed by, so it must reach the
+        BIOS/core checkers instead of the display basename.
+        """
+        if install is not None and install.file_path:
+            return gamelist_entry_path(install.file_path, install.rom_dir)
         return rom.fs_name
 
     @staticmethod
@@ -201,6 +222,7 @@ class GameDetailService:
 
         installed = install is not None
         rom_file = self._resolve_rom_file(install, rom)
+        rom_gamelist_path = self._resolve_gamelist_entry_path(install, rom)
 
         # Save sync
         save_sync_enabled = bool(self._settings.get("save_sync_enabled", False))
@@ -224,7 +246,9 @@ class GameDetailService:
         bios_level = None
         bios_label = None
         if platform_slug:
-            cached_bios = self._bios_checker.check_platform_bios_cached(platform_slug, rom_filename=rom_file or None)
+            cached_bios = self._bios_checker.check_platform_bios_cached(
+                platform_slug, rom_filename=rom_gamelist_path or None
+            )
             if cached_bios and cached_bios.get("needs_bios"):
                 bios_obj = format_bios_status(cached_bios, platform_slug, cached_at=cached_bios.get("cached_at", 0.0))
                 bios_status = asdict(bios_obj)
@@ -258,6 +282,7 @@ class GameDetailService:
             "bios_level": bios_level,
             "bios_label": bios_label,
             "rom_file": rom_file,
+            "rom_gamelist_path": rom_gamelist_path,
             "ra_id": ra_id,
             "achievement_summary": achievement_summary,
             "stale_fields": stale_fields,
@@ -286,10 +311,10 @@ class GameDetailService:
         if not platform_slug:
             return {"bios_status": None, "bios_level": None, "bios_label": None}
 
-        rom_file = self._resolve_rom_file(install, rom)
+        rom_gamelist_path = self._resolve_gamelist_entry_path(install, rom)
 
         try:
-            bios = await self._bios_checker.check_platform_bios(platform_slug, rom_filename=rom_file or None)
+            bios = await self._bios_checker.check_platform_bios(platform_slug, rom_filename=rom_gamelist_path or None)
             if bios.get("needs_bios"):
                 bios_obj = format_bios_status(bios, platform_slug)
                 return {

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import os
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import detect_core_change
+from domain.es_de_paths import gamelist_entry_path
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_attribution import compute_uploaded_by_us
@@ -342,10 +342,11 @@ class StatusService:
         if not stored_core or not system:
             return {"changed": False}
 
-        # Resolve ROM filename for per-game core detection
+        # Resolve the ES-DE gamelist identity for per-game core detection — the
+        # dedicated-dir-relative path for folder-backed ROMs, basename otherwise.
         rom_filename = None
         if installed and installed.file_path:
-            rom_filename = os.path.basename(installed.file_path)
+            rom_filename = gamelist_entry_path(installed.file_path, installed.rom_dir)
 
         # Core labels come from ES-DE config which may differ from RetroArch's
         # corename (e.g. "Snes9x - Current" vs "Snes9x"). Aligning with RetroArch

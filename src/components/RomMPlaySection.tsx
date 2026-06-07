@@ -79,7 +79,10 @@ interface InfoState {
   romId: number | null;
   romName: string;
   platformSlug: string;
-  romFile: string;
+  // ES-DE gamelist <path> identity (relative to the system ROM dir) — keys the
+  // per-game core read-back and write, not a displayed filename. Basename for a
+  // single-file ROM, dedicated-dir-relative for a folder-backed one.
+  gamelistPath: string;
   lastPlayed: string;
   playtime: string;
   saveSyncEnabled: boolean;
@@ -110,7 +113,7 @@ async function loadCached(
   appId: number,
   cancelled: () => boolean,
   romIdRef: React.MutableRefObject<number | null>,
-  romFileRef: React.MutableRefObject<string>,
+  gamelistPathRef: React.MutableRefObject<string>,
   setter: React.Dispatch<React.SetStateAction<InfoState>>,
 ) {
   try {
@@ -119,7 +122,7 @@ async function loadCached(
 
     const romId = cached.rom_id!;
     romIdRef.current = romId;
-    romFileRef.current = cached.rom_file || "";
+    gamelistPathRef.current = cached.rom_gamelist_path || "";
 
     // Process save sync from backend-computed display fields
     let saveSyncStatus: "synced" | "conflict" | "none" | null = null;
@@ -135,7 +138,7 @@ async function loadCached(
       romId,
       romName: cached.rom_name || "",
       platformSlug: cached.platform_slug || "",
-      romFile: cached.rom_file || "",
+      gamelistPath: cached.rom_gamelist_path || "",
       saveSyncEnabled: cached.save_sync_enabled ?? false,
       saveSyncStatus,
       saveSyncLabel,
@@ -188,7 +191,7 @@ async function loadCached(
     // Fetched non-blocking so the core button / badge can render once cores are
     // known, regardless of whether the platform needs BIOS.
     if (cached.platform_slug) {
-      refreshCoreInfoInBackground(cached.platform_slug, cached.rom_file || "", cancelled, setter);
+      refreshCoreInfoInBackground(cached.platform_slug, cached.rom_gamelist_path || "", cancelled, setter);
     }
   } catch (e) {
     detach(debugLog(`RomMPlaySection: loadCached error: ${e}`));
@@ -213,7 +216,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     romId: null,
     romName: "",
     platformSlug: "",
-    romFile: "",
+    gamelistPath: "",
     lastPlayed: initialLastPlayed,
     playtime: initialPlaytime,
     saveSyncEnabled: false,
@@ -233,16 +236,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
   const [actionPending, setActionPending] = useState<string | null>(null);
   const romIdRef = useRef<number | null>(null);
-  // Mirror of the ROM filename, kept in a ref so the core_changed handler can
-  // read it without a stale `info` closure (it deliberately sources platform_slug
-  // from the event for the same reason). Drives the per-game core read-back (#936).
-  const romFileRef = useRef<string>("");
+  // Mirror of the ES-DE gamelist identity, kept in a ref so the core_changed
+  // handler can read it without a stale `info` closure (it deliberately sources
+  // platform_slug from the event for the same reason). Drives the per-game core
+  // read-back (#936); folder-backed ROMs carry the dedicated-dir-relative path.
+  const gamelistPathRef = useRef<string>("");
 
   // Cache-first load: render instantly from cached data, then check connection in background
   useEffect(() => {
     let cancelled = false;
 
-    detach(loadCached(appId, () => cancelled, romIdRef, romFileRef, setInfo));
+    detach(loadCached(appId, () => cancelled, romIdRef, gamelistPathRef, setInfo));
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
@@ -268,13 +272,13 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       const rid = romIdRef.current;
       if (!rid) return;
       // Core data comes from the dedicated core-info path (#923), keyed on the
-      // event's platform_slug and the ROM filename from a ref — both avoid a
-      // stale-closure read of InfoState. Passing the filename reads the per-game
+      // event's platform_slug and the gamelist identity from a ref — both avoid a
+      // stale-closure read of InfoState. Passing the identity reads the per-game
       // <altemulator> override back as the active core (#936). BIOS level/label
       // still come from the (now core-free) BIOS status — the active core just
       // switched, so the BIOS requirements may have changed.
       const [coreInfo, biosResult] = await Promise.all([
-        getPlatformCoreInfo(detail.platform_slug, romFileRef.current),
+        getPlatformCoreInfo(detail.platform_slug, gamelistPathRef.current),
         getBiosStatus(rid),
       ]);
       if (cancelled) return;
@@ -685,9 +689,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const handleChangeGameCore = async (coreLabel: string) => {
-    if (!info.platformSlug || !info.romFile) return;
+    if (!info.platformSlug || !info.gamelistPath) return;
     const platformSlug = info.platformSlug;
-    const romPath = `./${info.romFile}`;
+    const romPath = `./${info.gamelistPath}`;
     detach(debugLog(`handleChangeGameCore: slug=${platformSlug} romPath=${romPath} coreLabel=${coreLabel}`));
     try {
       const result = await setGameCore(platformSlug, romPath, coreLabel);
@@ -696,11 +700,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         toaster.toast({ title: "RomM Sync", body: `Core set to ${coreLabel}` });
         if (info.romId) {
           // Core data comes from the dedicated core-info path (#923), no longer
-          // from the BIOS payload. The ROM filename reads the per-game
+          // from the BIOS payload. The gamelist identity reads the per-game
           // <altemulator> override back as the active core (#936). BIOS
           // level/label still come from getBiosStatus.
           const [coreInfo, refreshed] = await Promise.all([
-            getPlatformCoreInfo(platformSlug, info.romFile),
+            getPlatformCoreInfo(platformSlug, info.gamelistPath),
             getBiosStatus(info.romId).catch(() => ({
               bios_status: null as BiosStatus | null,
               bios_level: null as "ok" | "partial" | "missing" | null,

@@ -7,6 +7,7 @@ conflict rollback in tests/services/saves/sync_engine/test_rollback.py.
 """
 
 import logging
+import os
 
 import pytest
 
@@ -16,6 +17,7 @@ from tests.services.saves._helpers import (
     _do_sync,
     _get_device_id,
     _install_rom,
+    _seed_install,
     _server_save,
     _set_device_id,
     _set_sort_settings,
@@ -690,6 +692,51 @@ class TestSyncEngineDelegates:
         assert entry["server_save_id"] == 77
         assert entry["server_size"] == 2048
         assert "created_at" in entry
+
+    def test_resolve_core_uses_basename_for_single_file_rom(self, tmp_path):
+        """resolve_core passes the bare basename for a single-file ROM."""
+        captured = {}
+
+        def _resolver(system_name, rom_filename=None):
+            captured["rom_filename"] = rom_filename
+            return ("mgba_libretro", "mGBA")
+
+        svc, _ = make_service(tmp_path, get_active_core=_resolver)
+        _install_rom(svc, tmp_path, system="gba", file_name="pokemon.gba")
+
+        result = svc._sync_engine.resolve_core(42)
+
+        assert captured["rom_filename"] == "pokemon.gba"
+        assert result == "mgba_libretro"
+
+    def test_resolve_core_uses_entry_path_for_folder_backed_rom(self, tmp_path):
+        """resolve_core passes the dir-relative entry path for a folder-backed ROM.
+
+        The active-core resolver must receive ``FF7/FF7.m3u`` so the per-game
+        altemulator override on a multi-disc ROM is honoured when stamping the
+        upload emulator tag.
+        """
+        captured = {}
+
+        def _resolver(system_name, rom_filename=None):
+            captured["rom_filename"] = rom_filename
+            return ("swanstation_libretro", "SwanStation")
+
+        svc, _ = make_service(tmp_path, get_active_core=_resolver)
+        rom_dir = str(tmp_path / "retrodeck" / "roms" / "psx" / "FF7")
+        _seed_install(
+            svc,
+            42,
+            file_path=os.path.join(rom_dir, "FF7.m3u"),
+            system="psx",
+            platform_slug="psx",
+            rom_dir=rom_dir,
+        )
+
+        result = svc._sync_engine.resolve_core(42)
+
+        assert captured["rom_filename"] == os.path.join("FF7", "FF7.m3u")
+        assert result == "swanstation_libretro"
 
     @pytest.mark.asyncio
     async def test_list_devices_delegates_to_device_registry(self, tmp_path):

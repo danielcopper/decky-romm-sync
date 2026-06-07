@@ -321,6 +321,26 @@ class TestSetGameCore:
         assert result["success"] is True
         assert bios_checker.calls == [("n64", "n64/zelda.z64")]
 
+    def test_folder_backed_entry_path_forwarded_to_bios_check(self, event_loop, service, bios_checker):
+        """A folder-backed gamelist entry path reaches the BIOS check unchanged."""
+        result = event_loop.run_until_complete(
+            service.set_game_core("psx", "FF7/FF7.m3u", "Beetle PSX"),
+        )
+        assert result["success"] is True
+        assert bios_checker.calls == [("psx", "FF7/FF7.m3u")]
+
+    def test_prefix_strip_preserves_dot_after_dotslash(self, event_loop, service, bios_checker):
+        """Only the leading ``./`` marker is stripped — a following dot survives.
+
+        A charset ``lstrip("./")`` would erase the dot of a hidden segment;
+        ``normalize_gamelist_path`` strips just the prefix, so ``.hidden`` is kept.
+        """
+        result = event_loop.run_until_complete(
+            service.set_game_core("psx", "./.hidden/FF7.m3u", "Beetle PSX"),
+        )
+        assert result["success"] is True
+        assert bios_checker.calls == [("psx", ".hidden/FF7.m3u")]
+
     def test_empty_rom_path_yields_none_filename(self, event_loop, service, gamelist_editor, bios_checker):
         result = event_loop.run_until_complete(service.set_game_core("n64", "", "Mupen64Plus"))
         assert result["success"] is True

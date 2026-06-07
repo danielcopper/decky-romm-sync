@@ -19,10 +19,10 @@ those sub-modules together and exposes the surface peer save services
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.es_de_paths import gamelist_entry_path
 from domain.rom_save_state import RomSaveState
 from services.saves._messages import DEVICE_NOT_REGISTERED, SAVE_SYNC_DISABLED
 from services.saves._settings import resolve_default_slot, save_sync_enabled, sync_after_exit, sync_before_launch
@@ -171,15 +171,16 @@ class SyncEngine:
     def resolve_core(self, rom_id: int) -> str | None:
         """Resolve the active RetroArch core for a ROM, or ``None``.
 
-        Reads the install record for the ROM's launch filename so the ES-DE
-        core resolver can answer per-game; system comes from the save-path
+        Reads the install record for the ROM's ES-DE gamelist identity so the
+        core resolver can answer per-game (the dedicated-dir-relative path for a
+        folder-backed ROM, basename otherwise); system comes from the save-path
         resolver. Used to stamp the upload emulator tag.
         """
         info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
             return None
         system = info["system"]
-        rom_filename = os.path.basename(info.get("file_path", "")) or None
+        rom_filename = gamelist_entry_path(info.get("file_path", ""), info.get("rom_dir")) or None
         core_so, _label = self._get_active_core(system, rom_filename)
         return core_so
 

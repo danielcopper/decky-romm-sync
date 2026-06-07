@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.es_de_paths import normalize_gamelist_path
+
 if TYPE_CHECKING:
     import asyncio
     import logging
@@ -129,10 +131,12 @@ class CoreService:
         """Set or clear the per-game core override.
 
         Empty ``core_label`` clears the per-game override (reverts to
-        the platform default). The BIOS recheck is narrowed by the ROM
-        filename derived from ``rom_path`` (stripping leading ``./``)
-        so the response reflects the per-game core selection. Returns
-        the same success/error shape as ``set_system_core``.
+        the platform default). ``rom_path`` is the ES-DE gamelist identity the
+        frontend sends (``rom_gamelist_path``) — a bare filename for a
+        single-file ROM, a dedicated-dir path for a folder-backed ROM. The BIOS
+        recheck is narrowed by that identity (normalized to strip the leading
+        ``./`` marker) so the response reflects the per-game core selection.
+        Returns the same success/error shape as ``set_system_core``.
         """
         retrodeck_home = self._retrodeck_paths.retrodeck_home()
         if not retrodeck_home:
@@ -147,7 +151,7 @@ class CoreService:
                 rom_path,
                 core_label,
             )
-            rom_filename = rom_path.lstrip("./") if rom_path else None
+            rom_filename = normalize_gamelist_path(rom_path) if rom_path else None
             bios = await self._bios_checker.check_platform_bios(platform_slug, rom_filename=rom_filename)
             return {"success": True, "bios_status": bios}
         except Exception as e:

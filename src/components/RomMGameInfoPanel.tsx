@@ -72,9 +72,11 @@ interface PanelState {
   romName: string;
   platformName: string;
   platformSlug: string;
-  // ROM filename (bare basename), threaded into the dedicated core-info path so
-  // a per-game <altemulator> override reads back as the active core (#936).
-  romFile: string;
+  // ES-DE gamelist <path> identity (relative to the system ROM dir), threaded
+  // into the dedicated core-info path so a per-game <altemulator> override reads
+  // back as the active core (#936). Basename for a single-file ROM,
+  // dedicated-dir-relative for a folder-backed one — not the displayed filename.
+  gamelistPath: string;
   installed: boolean;
   installedRom: InstalledRom | null;
   metadata: RomMetadata | null;
@@ -231,23 +233,25 @@ function startBackgroundRefreshes(
 
   // Core info from its own path (#923), decoupled from BIOS status.
   if (cached.platform_slug) {
-    bgPromises.push(refreshCoreInfoInBackground(cached.platform_slug, cached.rom_file || "", cancelled, setter));
+    bgPromises.push(
+      refreshCoreInfoInBackground(cached.platform_slug, cached.rom_gamelist_path || "", cancelled, setter),
+    );
   }
 
   return Promise.all(bgPromises);
 }
 
 /** Fetch active-core + available-cores for a platform from the dedicated
- *  `get_platform_core_info` path (#923) and merge into panel state. The ROM
- *  filename reads a per-game `<altemulator>` override back as the active core
+ *  `get_platform_core_info` path (#923) and merge into panel state. The gamelist
+ *  identity reads a per-game `<altemulator>` override back as the active core
  *  (#936). */
 function refreshCoreInfoInBackground(
   platformSlug: string,
-  romFile: string,
+  gamelistPath: string,
   cancelled: () => boolean,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
-  return getPlatformCoreInfo(platformSlug, romFile)
+  return getPlatformCoreInfo(platformSlug, gamelistPath)
     .then((coreInfo) => {
       if (!cancelled()) {
         setter((prev) => ({ ...prev, coreInfo }));
@@ -264,7 +268,7 @@ async function loadData(
   appId: number,
   cancelled: () => boolean,
   romIdRef: React.MutableRefObject<number | null>,
-  romFileRef: React.MutableRefObject<string>,
+  gamelistPathRef: React.MutableRefObject<string>,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
   try {
@@ -280,10 +284,10 @@ async function loadData(
     const romName = cached.rom_name || "";
     const platformName = cached.platform_name || "";
     const platformSlug = cached.platform_slug || "";
-    const romFile = cached.rom_file || "";
+    const gamelistPath = cached.rom_gamelist_path || "";
 
     romIdRef.current = romId;
-    romFileRef.current = romFile;
+    gamelistPathRef.current = gamelistPath;
 
     const biosStatus = biosStatusFromCache(cached.bios_status);
     const saveStatus = saveStatusFromCache(romId, cached.save_status);
@@ -297,7 +301,7 @@ async function loadData(
       romName,
       platformName,
       platformSlug,
-      romFile,
+      gamelistPath,
       installed: cached.installed ?? false,
       installedRom: null, // Will be filled by background fetch if installed
       metadata: cached.metadata as RomMetadata | null,
@@ -344,7 +348,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     romName: "",
     platformName: "",
     platformSlug: "",
-    romFile: "",
+    gamelistPath: "",
     installed: false,
     installedRom: null,
     metadata: null,
@@ -366,10 +370,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     slotsLoading: false,
   });
   const romIdRef = useRef<number | null>(null);
-  // Mirror of the ROM filename, kept in a ref so the core_changed handler can
-  // read it without a stale `state` closure (it sources platform_slug from the
-  // event for the same reason). Drives the per-game core read-back (#936).
-  const romFileRef = useRef<string>("");
+  // Mirror of the ES-DE gamelist identity, kept in a ref so the core_changed
+  // handler can read it without a stale `state` closure (it sources platform_slug
+  // from the event for the same reason). Drives the per-game core read-back
+  // (#936); folder-backed ROMs carry the dedicated-dir-relative path.
+  const gamelistPathRef = useRef<string>("");
   const [migration, setMigration] = useState(getMigrationState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
 
@@ -394,7 +399,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   useEffect(() => {
     let cancelled = false;
 
-    detach(loadData(appId, () => cancelled, romIdRef, romFileRef, setState));
+    detach(loadData(appId, () => cancelled, romIdRef, gamelistPathRef, setState));
 
     // Listen for uninstall events to update state (uses ref to avoid stale closure)
     const onUninstall = (e: Event) => {
@@ -453,12 +458,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // Re-fetch cached game detail to pick up the new core-aware BIOS status.
       invalidateCachedGameDetail(appId);
       // Core info comes from its own path (#923), keyed on the event's
-      // platform_slug and the ROM filename from a ref — both avoid a stale
-      // `state` closure. Passing the filename reads the per-game <altemulator>
+      // platform_slug and the gamelist identity from a ref — both avoid a stale
+      // `state` closure. Passing the identity reads the per-game <altemulator>
       // override back as the active core (#936). BIOS status is re-read from the
       // (now core-free) cache.
       const [coreInfo, cached] = await Promise.all([
-        getPlatformCoreInfo(detail.platform_slug, romFileRef.current).catch((): CoreInfo | null => null),
+        getPlatformCoreInfo(detail.platform_slug, gamelistPathRef.current).catch((): CoreInfo | null => null),
         getCachedGameDetail(appId),
       ]);
       if (cancelled || !cached.found) return;

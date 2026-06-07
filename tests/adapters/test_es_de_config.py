@@ -80,6 +80,22 @@ SAMPLE_GAMELIST_NO_OVERRIDE = """\
 </gameList>
 """
 
+# A <game> with no <path> child — parse_gamelist_preserving records its path as
+# None. Both read and write must tolerate this without crashing on
+# normalize_gamelist_path(None) and must never false-match the path-less entry.
+SAMPLE_GAMELIST_PATHLESS_GAME = """\
+<?xml version="1.0"?>
+<gameList>
+  <game>
+    <name>Pathless Game</name>
+  </game>
+  <game>
+    <path>./Pokemon.gba</path>
+    <name>Pokemon</name>
+  </game>
+</gameList>
+"""
+
 
 def _write_temp_xml(content):
     """Write content to a temp file and return its path."""
@@ -509,6 +525,126 @@ class TestSetGameOverride:
             assert "gpSP" in content
             assert "mGBA" in content
 
+    def test_creates_folder_backed_game_entry(self, editor):
+        """Folder-backed ROM writes its dedicated-dir-relative <path> verbatim."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            editor.set_game_override(tmpdir, "ps", "./FF7/FF7.m3u", "Beetle PSX")
+
+            gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "ps", "gamelist.xml")
+            with open(gamelist_path) as f:
+                content = f.read()
+            assert "<path>./FF7/FF7.m3u</path>" in content
+            assert "Beetle PSX" in content
+
+    def test_updates_folder_backed_entry_without_duplicate(self, editor):
+        """Updating an existing folder-backed entry must not append a second <game>.
+
+        The on-disk path drifts from "./FF7/FF7.m3u" to "FF7/FF7.m3u" (no leading
+        "./"); a normalized comparison still matches the existing entry, so the
+        update rebuilds it in place rather than appending a duplicate.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            editor.set_game_override(tmpdir, "ps", "./FF7/FF7.m3u", "Beetle PSX")
+            # Re-write with the drifted (no "./") form and a new core.
+            editor.set_game_override(tmpdir, "ps", "FF7/FF7.m3u", "SwanStation")
+
+            gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "ps", "gamelist.xml")
+            with open(gamelist_path) as f:
+                content = f.read()
+            assert content.count("<game>") == 1
+            assert "SwanStation" in content
+            assert "Beetle PSX" not in content
+
+    def test_folder_backed_round_trip(self, editor, resolver):
+        """Folder-backed write then read returns the same altemulator label."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            editor.set_game_override(tmpdir, "ps", "./FF7/FF7.m3u", "Beetle PSX")
+            result = resolver._read_game_override(tmpdir, "ps", "FF7/FF7.m3u")
+            assert result == "Beetle PSX"
+
+    def test_pathless_game_does_not_crash_and_creates_target_entry(self, editor):
+        """A <game> with no <path> child must not crash the write nor be matched.
+
+        The path-less entry parses to ``{"path": None}``. The write skips it
+        (an empty target never matches), creates the requested entry, and leaves
+        the path-less <game> intact.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
+            os.makedirs(gamelist_dir)
+            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
+            with open(gamelist_path, "w") as f:
+                f.write(SAMPLE_GAMELIST_PATHLESS_GAME)
+
+            # A different target than either existing entry — appends a new one.
+            assert editor.set_game_override(tmpdir, "gba", "./Zelda.gba", "gpSP") is True
+
+            with open(gamelist_path) as f:
+                content = f.read()
+            # New target entry written with its altemulator.
+            assert "<path>./Zelda.gba</path>" in content
+            assert "gpSP" in content
+            # Path-less entry left intact — not rebuilt, not given an altemulator.
+            assert "Pathless Game" in content
+            # The pre-existing Pokemon entry is untouched (no altemulator).
+            assert "<altemulator>" not in content.split("Pokemon")[0]
+
+    def test_pathless_game_matches_existing_target_not_the_pathless_one(self, editor):
+        """Writing the Pokemon target updates that entry, never the path-less one."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
+            os.makedirs(gamelist_dir)
+            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
+            with open(gamelist_path, "w") as f:
+                f.write(SAMPLE_GAMELIST_PATHLESS_GAME)
+
+            assert editor.set_game_override(tmpdir, "gba", "Pokemon.gba", "mGBA") is True
+
+            with open(gamelist_path) as f:
+                content = f.read()
+            # No duplicate <game> appended — the existing Pokemon entry matched.
+            assert content.count("<path>./Pokemon.gba</path>") == 1
+            assert "mGBA" in content
+            # The path-less entry survives without an altemulator.
+            assert "Pathless Game" in content
+
+    def test_empty_rom_path_does_not_false_match_or_create_with_truthy_core(self, editor):
+        """An empty ``rom_path`` must be a clean no-op even with a truthy ``core_label``.
+
+        The gamelist holds a PATH-LESS ``<game>`` (no ``<path>`` child →
+        ``path=None`` → normalizes to ``""``) next to a normal entry. Calling
+        with ``rom_path=""`` + a real label exercises BOTH guards:
+
+        - The loop write-guard (``if target and …``): without it the empty
+          target ``""`` would equal the path-less entry's normalized ``""`` and
+          rebuild it with an ``<altemulator>``. Asserted: the path-less entry
+          gains none.
+        - The create-branch ``rom_path`` guard: without it a junk
+          ``<game><path></path><altemulator>…</altemulator></game>`` is
+          appended. Asserted: the ``<game>`` count is unchanged.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "snes")
+            os.makedirs(gamelist_dir)
+            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
+            with open(gamelist_path, "w") as f:
+                f.write(SAMPLE_GAMELIST_PATHLESS_GAME)
+            before = SAMPLE_GAMELIST_PATHLESS_GAME
+
+            # Empty target + a real core_label: still a clean no-op.
+            assert editor.set_game_override(tmpdir, "snes", "", "Snes9x") is True
+
+            with open(gamelist_path) as f:
+                content = f.read()
+            # (1) The path-less entry is NOT matched/rebuilt — no altemulator
+            #     anywhere, so neither <game> gained one.
+            assert "<altemulator>" not in content
+            assert "Snes9x" not in content
+            # (2) No new <game> created; both original entries survive.
+            assert content.count("<game>") == before.count("<game>") == 2
+            assert "Pathless Game" in content
+            assert "<path>./Pokemon.gba</path>" in content
+
 
 class TestReadGameOverride:
     """Tests for ``CoreResolver._read_game_override`` (reads per-game altemulator label)."""
@@ -540,6 +676,43 @@ class TestReadGameOverride:
             # Should match even without "./" prefix
             result = resolver._read_game_override(tmpdir, "gba", "Pokemon.gba")
             assert result == "gpSP"
+
+    def test_matches_folder_backed_relative_path(self, editor, resolver):
+        """A folder-backed gamelist entry matches its dedicated-dir-relative identity."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            editor.set_game_override(tmpdir, "ps", "./FF7/FF7.m3u", "Beetle PSX")
+            result = resolver._read_game_override(tmpdir, "ps", "FF7/FF7.m3u")
+            assert result == "Beetle PSX"
+
+    def test_pathless_game_does_not_crash_read_and_returns_none(self, resolver):
+        """A <game> with no <path> child parses to ``path=None``; the read must
+        tolerate it (no ``normalize_gamelist_path(None)`` crash) and not match."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
+            os.makedirs(gamelist_dir)
+            with open(os.path.join(gamelist_dir, "gamelist.xml"), "w") as f:
+                f.write(SAMPLE_GAMELIST_PATHLESS_GAME)
+
+            # The path-less entry must never match a real target.
+            assert resolver._read_game_override(tmpdir, "gba", "Pokemon.gba") is None
+            # An empty rom_filename must also never match the path-less entry.
+            assert resolver._read_game_override(tmpdir, "gba", "") is None
+
+    def test_hidden_segment_path_survives_normalization_round_trip(self, editor, resolver):
+        """A "./.config/..."-style entry keeps the hidden-file dot through the
+        adapter's normalize step — the read matches the same identity it wrote."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            editor.set_game_override(tmpdir, "ps", "./.config/game.m3u", "Beetle PSX")
+
+            gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "ps", "gamelist.xml")
+            with open(gamelist_path) as f:
+                content = f.read()
+            # The leading dot of the hidden segment is preserved on disk.
+            assert "<path>./.config/game.m3u</path>" in content
+
+            # Read back via the drifted (no "./") form — the dot still matches.
+            result = resolver._read_game_override(tmpdir, "ps", ".config/game.m3u")
+            assert result == "Beetle PSX"
 
 
 class TestGetActiveCoreWithGameOverride:

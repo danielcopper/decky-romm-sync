@@ -1,5 +1,7 @@
 """Tests for RomInfoService — per-ROM save path resolution and local save discovery."""
 
+import os
+
 from tests.services.saves._helpers import (
     _create_save,
     _install_rom,
@@ -123,6 +125,27 @@ class TestGetRomSaveInfo:
         assert result["system"] == "gba"
         assert result["rom_name"] == "pokemon"
         assert result["saves_dir"].endswith("saves/gba")
+        # Single-file install → rom_dir is None in the info dict.
+        assert result["rom_dir"] is None
+
+    def test_info_includes_rom_dir_for_folder_backed_rom(self, tmp_path):
+        """The info dict carries ``rom_dir`` so downstream per-game core resolution works."""
+        svc, _ = make_service(tmp_path)
+        rom_dir = str(tmp_path / "retrodeck" / "roms" / "psx" / "FF7")
+        _seed_install(
+            svc,
+            42,
+            file_path=os.path.join(rom_dir, "FF7.m3u"),
+            system="psx",
+            platform_slug="psx",
+            rom_dir=rom_dir,
+        )
+
+        result = svc._rom_info.get_rom_save_info(42)
+
+        assert result is not None
+        assert result["rom_dir"] == rom_dir
+        assert result["file_path"] == os.path.join(rom_dir, "FF7.m3u")
 
     def test_returns_none_for_missing_rom(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -251,6 +274,43 @@ class TestGetRomSaveInfo:
 
         assert result is not None
         assert result["saves_dir"].endswith("saves/gba/mGBA")
+
+    def test_sort_by_core_passes_entry_path_for_folder_backed_rom(self, tmp_path):
+        """Folder-backed ROM under sort_by_core resolves core via the dir-relative entry path.
+
+        ``get_active_core`` must receive the ES-DE gamelist identity
+        (``FF7/FF7.m3u``), not the bare basename, so a per-game core override on
+        a multi-disc ROM picks the right per-core save subdirectory.
+        """
+        captured = {}
+
+        def _resolver(system_name, rom_filename=None):
+            captured["rom_filename"] = rom_filename
+            return ("swanstation_libretro", "SwanStation")
+
+        svc, _ = make_service(
+            tmp_path,
+            get_active_core=_resolver,
+            get_core_name=lambda core_so: "SwanStation",
+        )
+        rom_dir = str(tmp_path / "retrodeck" / "roms" / "psx" / "FF7")
+        _seed_install(
+            svc,
+            42,
+            file_path=os.path.join(rom_dir, "FF7.m3u"),
+            system="psx",
+            platform_slug="psx",
+            rom_dir=rom_dir,
+        )
+        _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": True})
+
+        result = svc._rom_info.get_rom_save_info(42)
+
+        assert captured["rom_filename"] == os.path.join("FF7", "FF7.m3u")
+        assert result is not None
+        # sort_by_content uses the ROM's dedicated-dir name (FF7) as the content
+        # segment; sort_by_core appends the resolved RetroArch corename subdir.
+        assert result["saves_dir"].endswith(os.path.join("saves", "FF7", "SwanStation"))
 
     def test_sort_by_core_uses_corename_not_es_de_label(self, tmp_path):
         """The RetroArch .info corename (``Snes9x``) must be used, not the ES-DE label (``Snes9x - Current``)."""

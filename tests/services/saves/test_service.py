@@ -19,6 +19,7 @@ from tests.services.saves._helpers import (
     _get_device_id,
     _get_save_state,
     _install_rom,
+    _seed_install,
     _seed_save_state,
     _set_device_id,
     make_service,
@@ -770,6 +771,44 @@ class TestCheckCoreChange:
         assert result["new_core"] == "supafaust_libretro"
         assert result["old_label"] == "snes9x"
         assert result["new_label"] == "Supafaust"
+
+    def test_folder_backed_rom_passes_entry_path_to_resolver(self, tmp_path):
+        """check_core_change resolves per-game core via the dir-relative entry path.
+
+        A folder-backed install (``rom_dir`` set, launch file inside it) must
+        reach ``get_active_core`` with the ES-DE gamelist identity
+        (``FF7/FF7.m3u``), not the bare basename — otherwise the per-game
+        altemulator override never matches and the core check silently uses the
+        system default.
+        """
+        captured = {}
+
+        def _resolver(system_name, rom_filename=None):
+            captured["rom_filename"] = rom_filename
+            return ("supafaust_libretro", "Supafaust")
+
+        svc, _ = make_service(tmp_path, get_active_core=_resolver)
+        svc._config.settings["save_sync_enabled"] = True
+        rom_dir = str(tmp_path / "retrodeck" / "roms" / "ps" / "FF7")
+        _seed_install(
+            svc,
+            42,
+            file_path=os.path.join(rom_dir, "FF7.m3u"),
+            system="ps",
+            platform_slug="ps",
+            rom_dir=rom_dir,
+        )
+        _seed_save_state(
+            svc,
+            42,
+            self._make_save_entry(system="ps", last_synced_core="swanstation_libretro"),
+        )
+
+        result = svc.check_core_change(42)
+
+        assert captured["rom_filename"] == os.path.join("FF7", "FF7.m3u")
+        assert result["changed"] is True
+        assert result["new_core"] == "supafaust_libretro"
 
     def test_core_same(self, tmp_path):
         """Returns changed=False when active core matches stored core."""

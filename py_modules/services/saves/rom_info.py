@@ -17,6 +17,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.es_de_paths import gamelist_entry_path
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
 
@@ -75,8 +76,11 @@ class RomInfoService:
     def get_rom_save_info(self, rom_id: int) -> dict[str, Any] | None:
         """Get save-related info for an installed ROM.
 
-        Returns dict with keys: system, rom_name, saves_dir, platform_slug, file_path
-        or None if not installed.
+        Returns dict with keys: system, rom_name, saves_dir, platform_slug,
+        file_path, rom_dir or None if not installed. ``rom_dir`` is the
+        dedicated per-ROM directory for a folder-backed ROM, ``None`` for a
+        single-file ROM — consumers pair it with ``file_path`` to derive the
+        ES-DE gamelist identity for per-game core resolution.
         """
         with self._uow_factory() as uow:
             installed = uow.rom_installs.get(int(rom_id))
@@ -84,6 +88,7 @@ class RomInfoService:
             return None
         system = installed.system
         file_path = installed.file_path
+        rom_dir = installed.rom_dir
         platform_slug = installed.platform_slug
         if not system or not file_path:
             return None
@@ -115,7 +120,7 @@ class RomInfoService:
         # SaveService cannot (continuous). See issue #232 for history.
         core_name: str | None = None
         if sort_by_core:
-            rom_filename = os.path.basename(file_path)
+            rom_filename = gamelist_entry_path(file_path, rom_dir)
             core_name, core_so = self.resolve_retroarch_corename(system, rom_filename)
             if core_name is None:
                 self._logger.warning(
@@ -146,6 +151,7 @@ class RomInfoService:
             "saves_dir": saves_dir,
             "platform_slug": platform_slug,
             "file_path": file_path,
+            "rom_dir": rom_dir,
         }
 
     def resolve_retroarch_corename(self, system: str, rom_filename: str) -> tuple[str | None, str | None]:
