@@ -566,6 +566,60 @@ describe("DangerZone", () => {
       expect(container.textContent).toContain("Deleted 2 BIOS files");
     });
 
+    it("dispatches a romm_data_changed {type:'bios', platform_slug} event on success", async () => {
+      setupOnePlatform();
+      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+        success: true,
+        deleted_count: 2,
+        message: "Deleted 2 BIOS files",
+      });
+      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Super Nintendo (1)"));
+      const platformModal = lastShownModalProps<{ onDeleteBios?: () => void }>();
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        await act(async () => {
+          platformModal?.onDeleteBios?.();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(listener).toHaveBeenCalledTimes(1);
+        const ev = listener.mock.calls[0]?.[0] as CustomEvent;
+        expect(ev.detail).toEqual({ type: "bios", platform_slug: "snes" });
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
+    });
+
+    it("does NOT dispatch romm_data_changed when deletePlatformBios reports success=false", async () => {
+      setupOnePlatform();
+      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+        success: false,
+        deleted_count: 0,
+        message: "Nothing to delete",
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Super Nintendo (1)"));
+      const platformModal = lastShownModalProps<{ onDeleteBios?: () => void }>();
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_data_changed", listener);
+      try {
+        await act(async () => {
+          platformModal?.onDeleteBios?.();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        // Failure branch surfaces the message but emits no refresh event.
+        expect(container.textContent).toContain("Nothing to delete");
+        expect(listener).not.toHaveBeenCalled();
+      } finally {
+        globalThis.removeEventListener("romm_data_changed", listener);
+      }
+    });
+
     it("surfaces 'Failed to delete BIOS files' on rejection", async () => {
       setupOnePlatform();
       vi.mocked(backend.deletePlatformBios).mockRejectedValue(new Error("io"));

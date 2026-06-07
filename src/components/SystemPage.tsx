@@ -143,6 +143,11 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
       setBiosStatus(result.message);
       if (result.success) {
         await refreshSystem();
+        // Notify an open game-detail page so it re-checks BIOS status (#939).
+        // Mirrors the download-path emit in RomMPlaySection.
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: platformSlug } }),
+        );
       }
     } catch (e) {
       setBiosStatus(`Failed to delete BIOS files: ${e}`);
@@ -224,28 +229,21 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         {/* Emulator core selection is the primary per-system concern (#923),
             shown above the BIOS file management. */}
         {hasMultipleCores && (
-          <>
-            <PanelSectionRow>
-              <DropdownItem
-                label="Emulator Core"
-                rgOptions={[
-                  ...platform.available_cores!.map((c) => ({
-                    data: c.label,
-                    label: c.is_default ? `${c.label} (default)` : c.label,
-                  })),
-                ]}
-                selectedOption={
-                  platform.active_core_label || platform.available_cores!.find((c) => c.is_default)?.label || ""
-                }
-                onChange={(option: { data: string }) => detach(handleSystemCoreChange(platform, option.data))}
-              />
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <div style={{ fontSize: "11px", color: "#ffb74d", padding: "0 16px 4px" }}>
-                Switching cores may affect save compatibility
-              </div>
-            </PanelSectionRow>
-          </>
+          <PanelSectionRow>
+            <DropdownItem
+              label="Emulator Core"
+              rgOptions={[
+                ...platform.available_cores!.map((c) => ({
+                  data: c.label,
+                  label: c.is_default ? `${c.label} (default)` : c.label,
+                })),
+              ]}
+              selectedOption={
+                platform.active_core_label || platform.available_cores!.find((c) => c.is_default)?.label || ""
+              }
+              onChange={(option: { data: string }) => detach(handleSystemCoreChange(platform, option.data))}
+            />
+          </PanelSectionRow>
         )}
         {platform.active_core_label && !hasMultipleCores && (
           <PanelSectionRow>
@@ -380,6 +378,13 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         <PanelSectionRow>
           <div style={{ fontSize: "11px", color: "#8f98a0", padding: "0 16px 4px" }}>
             Per-system emulator core and BIOS files. The active core determines which BIOS files a system needs.
+          </div>
+        </PanelSectionRow>
+        {/* General note about core switching — shown once at the top, not per
+            platform, since the caveat is the same for every system (#938). */}
+        <PanelSectionRow>
+          <div style={{ fontSize: "11px", color: "#ffb74d", padding: "0 16px 4px" }}>
+            Switching cores may affect save compatibility
           </div>
         </PanelSectionRow>
         {biosLoading && (

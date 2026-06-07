@@ -1167,6 +1167,116 @@ describe("SystemPage", () => {
       // CATCH-REJECTION assert: status string rendered.
       expect(container.textContent).toContain("Failed to delete BIOS files: Error: io");
     });
+
+    it("dispatches a romm_data_changed {type:'bios', platform_slug} event on confirm + success", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+        success: true,
+        deleted_count: 1,
+        message: "Deleted 1 BIOS file",
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      await act(async () => {
+        lastConfirmModalProps()?.onOK?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const biosEvents = dispatchSpy.mock.calls
+        .map((c) => c[0])
+        .filter((e): e is CustomEvent => e instanceof CustomEvent && e.type === "romm_data_changed");
+      expect(biosEvents).toHaveLength(1);
+      expect(biosEvents[0]!.detail).toEqual({ type: "bios", platform_slug: "ps1" });
+      dispatchSpy.mockRestore();
+    });
+
+    it("does NOT dispatch romm_data_changed when deletePlatformBios reports success=false", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+        success: false,
+        deleted_count: 0,
+        message: "Nothing to delete",
+      });
+      const dispatchSpy = vi.spyOn(globalThis, "dispatchEvent");
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      await act(async () => {
+        lastConfirmModalProps()?.onOK?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const biosEvents = dispatchSpy.mock.calls
+        .map((c) => c[0])
+        .filter((e): e is CustomEvent => e instanceof CustomEvent && e.type === "romm_data_changed");
+      expect(biosEvents).toHaveLength(0);
+      dispatchSpy.mockRestore();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // N3. Save-compatibility banner (#938) — shown once at the top, not per core
+  // ------------------------------------------------------------------
+  describe("save-compatibility banner", () => {
+    function platformWithMultipleCores(slug: string): FirmwarePlatformExt {
+      return makeBiosPlatform({
+        platform_slug: slug,
+        files: [],
+        available_cores: [
+          { core_so: "a.so", label: "core-a", is_default: true },
+          { core_so: "b.so", label: "core-b", is_default: false },
+        ],
+        active_core_label: "core-a",
+      });
+    }
+
+    const BANNER = "Switching cores may affect save compatibility";
+
+    function countOccurrences(haystack: string, needle: string): number {
+      let count = 0;
+      let idx = haystack.indexOf(needle);
+      while (idx !== -1) {
+        count++;
+        idx = haystack.indexOf(needle, idx + needle.length);
+      }
+      return count;
+    }
+
+    it("renders the banner exactly once even with multiple multi-core platforms", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          platformWithMultipleCores("snes"),
+          platformWithMultipleCores("ps1"),
+          platformWithMultipleCores("n64"),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      // Three multi-core dropdowns render, but the banner is page-level (#938).
+      expect(capturedDropdowns.length).toBe(3);
+      expect(countOccurrences(container.textContent, BANNER)).toBe(1);
+    });
+
+    it("renders the banner once even when there are no platforms at all", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(countOccurrences(container.textContent, BANNER)).toBe(1);
+    });
   });
 
   // ------------------------------------------------------------------

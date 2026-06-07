@@ -192,6 +192,12 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     try {
       const result = await deletePlatformBios(p.slug);
       setActionStatus(result.message);
+      if (result.success) {
+        // Notify an open game-detail page so it re-checks BIOS status (#939).
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", { detail: { type: "bios", platform_slug: p.slug } }),
+        );
+      }
     } catch {
       setActionStatus("Failed to delete BIOS files");
     }
