@@ -72,9 +72,6 @@ interface PanelState {
   romName: string;
   platformName: string;
   platformSlug: string;
-  // ROM filename (bare basename), threaded into the dedicated core-info path so
-  // a per-game <altemulator> override reads back as the active core (#936).
-  romFile: string;
   installed: boolean;
   installedRom: InstalledRom | null;
   metadata: RomMetadata | null;
@@ -230,24 +227,23 @@ function startBackgroundRefreshes(
   }
 
   // Core info from its own path (#923), decoupled from BIOS status.
-  if (cached.platform_slug) {
-    bgPromises.push(refreshCoreInfoInBackground(cached.platform_slug, cached.rom_file || "", cancelled, setter));
+  if (romId) {
+    bgPromises.push(refreshCoreInfoInBackground(romId, cancelled, setter));
   }
 
   return Promise.all(bgPromises);
 }
 
-/** Fetch active-core + available-cores for a platform from the dedicated
- *  `get_platform_core_info` path (#923) and merge into panel state. The ROM
- *  filename reads a per-game `<altemulator>` override back as the active core
- *  (#936). */
+/** Fetch active-core + available-cores for a ROM from the dedicated
+ *  `get_platform_core_info` path (#923) and merge into panel state. Keyed on
+ *  rom_id so the active core reflects a per-game DB override (epic #945) when
+ *  one is pinned. */
 function refreshCoreInfoInBackground(
-  platformSlug: string,
-  romFile: string,
+  romId: number,
   cancelled: () => boolean,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
-  return getPlatformCoreInfo(platformSlug, romFile)
+  return getPlatformCoreInfo(romId)
     .then((coreInfo) => {
       if (!cancelled()) {
         setter((prev) => ({ ...prev, coreInfo }));
@@ -264,7 +260,6 @@ async function loadData(
   appId: number,
   cancelled: () => boolean,
   romIdRef: React.MutableRefObject<number | null>,
-  romFileRef: React.MutableRefObject<string>,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
   try {
@@ -280,10 +275,8 @@ async function loadData(
     const romName = cached.rom_name || "";
     const platformName = cached.platform_name || "";
     const platformSlug = cached.platform_slug || "";
-    const romFile = cached.rom_file || "";
 
     romIdRef.current = romId;
-    romFileRef.current = romFile;
 
     const biosStatus = biosStatusFromCache(cached.bios_status);
     const saveStatus = saveStatusFromCache(romId, cached.save_status);
@@ -297,7 +290,6 @@ async function loadData(
       romName,
       platformName,
       platformSlug,
-      romFile,
       installed: cached.installed ?? false,
       installedRom: null, // Will be filled by background fetch if installed
       metadata: cached.metadata as RomMetadata | null,
@@ -344,7 +336,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     romName: "",
     platformName: "",
     platformSlug: "",
-    romFile: "",
     installed: false,
     installedRom: null,
     metadata: null,
@@ -366,10 +357,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     slotsLoading: false,
   });
   const romIdRef = useRef<number | null>(null);
-  // Mirror of the ROM filename, kept in a ref so the core_changed handler can
-  // read it without a stale `state` closure (it sources platform_slug from the
-  // event for the same reason). Drives the per-game core read-back (#936).
-  const romFileRef = useRef<string>("");
   const [migration, setMigration] = useState(getMigrationState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
 
@@ -394,7 +381,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   useEffect(() => {
     let cancelled = false;
 
-    detach(loadData(appId, () => cancelled, romIdRef, romFileRef, setState));
+    detach(loadData(appId, () => cancelled, romIdRef, setState));
 
     // Listen for uninstall events to update state (uses ref to avoid stale closure)
     const onUninstall = (e: Event) => {
@@ -449,16 +436,17 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null }));
     };
 
-    const handleCoreChange = async (detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
+    const handleCoreChange = async (_detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
       // Re-fetch cached game detail to pick up the new core-aware BIOS status.
       invalidateCachedGameDetail(appId);
-      // Core info comes from its own path (#923), keyed on the event's
-      // platform_slug and the ROM filename from a ref — both avoid a stale
-      // `state` closure. Passing the filename reads the per-game <altemulator>
-      // override back as the active core (#936). BIOS status is re-read from the
-      // (now core-free) cache.
+      const rid = romIdRef.current;
+      if (!rid) return;
+      // Core info comes from its own path (#923), keyed on the rom_id from a ref
+      // to avoid a stale `state` closure. The active core reflects the per-game
+      // DB override (epic #945). BIOS status is re-read from the (now core-free)
+      // cache.
       const [coreInfo, cached] = await Promise.all([
-        getPlatformCoreInfo(detail.platform_slug, romFileRef.current).catch((): CoreInfo | null => null),
+        getPlatformCoreInfo(rid).catch((): CoreInfo | null => null),
         getCachedGameDetail(appId),
       ]);
       if (cancelled || !cached.found) return;

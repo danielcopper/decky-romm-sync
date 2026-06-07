@@ -53,16 +53,14 @@ export function refreshBiosInBackground<S extends BiosInfoFields>(
 }
 
 /** Refresh core-selection state from the dedicated `get_platform_core_info`
- *  path (#923), fully decoupled from BIOS status. Keyed on the platform slug
- *  and the ROM filename so a per-game `<altemulator>` override reads back as
- *  the active core (#936). */
+ *  path (#923), fully decoupled from BIOS status. Keyed on the rom_id so the
+ *  active core reflects a per-game DB override (epic #945) when one is pinned. */
 export function refreshCoreInfoInBackground<S extends CoreInfoFields>(
-  platformSlug: string,
-  romFile: string,
+  romId: number,
   cancelled: () => boolean,
   setter: Dispatch<SetStateAction<S>>,
 ): void {
-  getPlatformCoreInfo(platformSlug, romFile)
+  getPlatformCoreInfo(romId)
     .then((coreInfo) => {
       if (!cancelled()) {
         setter((prev) => ({

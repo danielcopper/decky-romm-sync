@@ -45,9 +45,11 @@ import {
   syncRomSaves,
   deleteLocalSaves,
   setGameCore,
+  clearGameCore,
   reconcilePlaytime,
   debugLog,
 } from "../api/backend";
+import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import type { BiosStatus, SaveStatus } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
@@ -79,7 +81,6 @@ interface InfoState {
   romId: number | null;
   romName: string;
   platformSlug: string;
-  romFile: string;
   lastPlayed: string;
   playtime: string;
   saveSyncEnabled: boolean;
@@ -110,7 +111,6 @@ async function loadCached(
   appId: number,
   cancelled: () => boolean,
   romIdRef: React.MutableRefObject<number | null>,
-  romFileRef: React.MutableRefObject<string>,
   setter: React.Dispatch<React.SetStateAction<InfoState>>,
 ) {
   try {
@@ -119,7 +119,6 @@ async function loadCached(
 
     const romId = cached.rom_id!;
     romIdRef.current = romId;
-    romFileRef.current = cached.rom_file || "";
 
     // Process save sync from backend-computed display fields
     let saveSyncStatus: "synced" | "conflict" | "none" | null = null;
@@ -135,7 +134,6 @@ async function loadCached(
       romId,
       romName: cached.rom_name || "",
       platformSlug: cached.platform_slug || "",
-      romFile: cached.rom_file || "",
       saveSyncEnabled: cached.save_sync_enabled ?? false,
       saveSyncStatus,
       saveSyncLabel,
@@ -186,9 +184,10 @@ async function loadCached(
 
     // Core info: sourced from its OWN path (#923), independent of BIOS status.
     // Fetched non-blocking so the core button / badge can render once cores are
-    // known, regardless of whether the platform needs BIOS.
-    if (cached.platform_slug) {
-      refreshCoreInfoInBackground(cached.platform_slug, cached.rom_file || "", cancelled, setter);
+    // known, regardless of whether the platform needs BIOS. Keyed on rom_id so
+    // the active core reflects a per-game DB override (epic #945).
+    if (romId) {
+      refreshCoreInfoInBackground(romId, cancelled, setter);
     }
   } catch (e) {
     detach(debugLog(`RomMPlaySection: loadCached error: ${e}`));
@@ -213,7 +212,6 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     romId: null,
     romName: "",
     platformSlug: "",
-    romFile: "",
     lastPlayed: initialLastPlayed,
     playtime: initialPlaytime,
     saveSyncEnabled: false,
@@ -233,16 +231,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
   const [actionPending, setActionPending] = useState<string | null>(null);
   const romIdRef = useRef<number | null>(null);
-  // Mirror of the ROM filename, kept in a ref so the core_changed handler can
-  // read it without a stale `info` closure (it deliberately sources platform_slug
-  // from the event for the same reason). Drives the per-game core read-back (#936).
-  const romFileRef = useRef<string>("");
 
   // Cache-first load: render instantly from cached data, then check connection in background
   useEffect(() => {
     let cancelled = false;
 
-    detach(loadCached(appId, () => cancelled, romIdRef, romFileRef, setInfo));
+    detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
 
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/romIdRef/setInfo closure.
@@ -264,19 +258,15 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       }
     };
 
-    const handleCoreChange = async (detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
+    const handleCoreChange = async (_detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
       const rid = romIdRef.current;
       if (!rid) return;
       // Core data comes from the dedicated core-info path (#923), keyed on the
-      // event's platform_slug and the ROM filename from a ref — both avoid a
-      // stale-closure read of InfoState. Passing the filename reads the per-game
-      // <altemulator> override back as the active core (#936). BIOS level/label
+      // rom_id from a ref to avoid a stale-closure read of InfoState. The active
+      // core reflects the per-game DB override (epic #945). BIOS level/label
       // still come from the (now core-free) BIOS status — the active core just
       // switched, so the BIOS requirements may have changed.
-      const [coreInfo, biosResult] = await Promise.all([
-        getPlatformCoreInfo(detail.platform_slug, romFileRef.current),
-        getBiosStatus(rid),
-      ]);
+      const [coreInfo, biosResult] = await Promise.all([getPlatformCoreInfo(rid), getBiosStatus(rid)]);
       if (cancelled) return;
       setInfo((prev) => ({
         ...prev,
@@ -684,49 +674,94 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     );
   };
 
-  const handleChangeGameCore = async (coreLabel: string) => {
-    if (!info.platformSlug || !info.romFile) return;
-    const platformSlug = info.platformSlug;
-    const romPath = `./${info.romFile}`;
-    detach(debugLog(`handleChangeGameCore: slug=${platformSlug} romPath=${romPath} coreLabel=${coreLabel}`));
-    try {
-      const result = await setGameCore(platformSlug, romPath, coreLabel);
-      detach(debugLog(`handleChangeGameCore: result success=${result.success}`));
-      if (result.success) {
-        toaster.toast({ title: "RomM Sync", body: `Core set to ${coreLabel}` });
-        if (info.romId) {
-          // Core data comes from the dedicated core-info path (#923), no longer
-          // from the BIOS payload. The ROM filename reads the per-game
-          // <altemulator> override back as the active core (#936). BIOS
-          // level/label still come from getBiosStatus.
-          const [coreInfo, refreshed] = await Promise.all([
-            getPlatformCoreInfo(platformSlug, info.romFile),
-            getBiosStatus(info.romId).catch(() => ({
-              bios_status: null as BiosStatus | null,
-              bios_level: null as "ok" | "partial" | "missing" | null,
-              bios_label: null as string | null,
-            })),
-          ]);
-          setInfo((prev) => ({
-            ...prev,
-            ...extractCoreInfo(coreInfo),
-            // Re-derive biosNeeded from the refreshed status so the missing-BIOS
-            // badge keys off the now-active core (#923).
-            biosNeeded: !!refreshed.bios_status,
-            biosStatus: refreshed.bios_level,
-            biosLabel: refreshed.bios_label ?? "",
-          }));
-        }
-        // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)
-        invalidateCachedGameDetail(appId);
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platformSlug } }),
-        );
-      } else {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
+  /** Refresh the core badge + BIOS state from their dedicated paths and notify
+   *  sibling components after a successful override pin/clear. */
+  const refreshCoreDisplay = async (romId: number, platformSlug: string) => {
+    // Core data comes from the dedicated core-info path (#923), keyed on rom_id
+    // so the per-game DB override (epic #945) reads back as the active core.
+    // BIOS level/label still come from getBiosStatus — the active core just
+    // switched, so the BIOS requirements may have changed.
+    const [coreInfo, refreshed] = await Promise.all([
+      getPlatformCoreInfo(romId),
+      getBiosStatus(romId).catch(() => ({
+        bios_status: null as BiosStatus | null,
+        bios_level: null as "ok" | "partial" | "missing" | null,
+        bios_label: null as string | null,
+      })),
+    ]);
+    setInfo((prev) => ({
+      ...prev,
+      ...extractCoreInfo(coreInfo),
+      // Re-derive biosNeeded from the refreshed status so the missing-BIOS
+      // badge keys off the now-active core (#923).
+      biosNeeded: !!refreshed.bios_status,
+      biosStatus: refreshed.bios_level,
+      biosLabel: refreshed.bios_label ?? "",
+    }));
+    // Invalidate the frontend cache and notify other components (e.g. GameInfoPanel)
+    invalidateCachedGameDetail(appId);
+    globalThis.dispatchEvent(
+      new CustomEvent("romm_data_changed", { detail: { type: "core_changed", platform_slug: platformSlug } }),
+    );
+  };
+
+  /** Apply the result of a set/clear override call. The backend re-bakes the
+   *  launch_options + returns the bound app_id for an installed ROM; we
+   *  confirm-set them on the Steam shortcut BEFORE toasting success (R1). An
+   *  unconfirmed bake gets a DISTINCT "restart Steam" toast and the DB row is
+   *  KEPT — migration/re-sync re-bake from the pin. Uninstalled/unbound ROMs
+   *  carry no launch_options/app_id: persist-only, no SetAppLaunchOptions. */
+  const applyCoreResult = async (
+    result: Awaited<ReturnType<typeof setGameCore>>,
+    romId: number,
+    platformSlug: string,
+    successBody: string,
+  ) => {
+    if (!result.success) {
+      toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
+      return;
+    }
+    // Installed + bound: confirm the re-baked launch_options landed before
+    // claiming success. app_id can be null/undefined for an unbound ROM.
+    if (result.launch_options !== undefined && result.app_id != null) {
+      const confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
+      if (!confirmed) {
+        // Never toast success on an unconfirmed bake. Keep the DB row — a Steam
+        // restart (or the next migration/re-sync) re-bakes from the override.
+        toaster.toast({ title: "RomM Sync", body: "Core saved — restart Steam to apply" });
+        return;
       }
+    }
+    // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
+    toaster.toast({ title: "RomM Sync", body: successBody });
+    await refreshCoreDisplay(romId, platformSlug);
+  };
+
+  const handleChangeGameCore = async (coreLabel: string) => {
+    const romId = info.romId;
+    if (!romId || !info.platformSlug) return;
+    const platformSlug = info.platformSlug;
+    detach(debugLog(`handleChangeGameCore: romId=${romId} coreLabel=${coreLabel}`));
+    try {
+      const result = await setGameCore(romId, coreLabel);
+      detach(debugLog(`handleChangeGameCore: result success=${result.success}`));
+      await applyCoreResult(result, romId, platformSlug, `Core set to ${coreLabel}`);
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Failed to set core" });
+    }
+  };
+
+  const handleResetGameCore = async () => {
+    const romId = info.romId;
+    if (!romId || !info.platformSlug) return;
+    const platformSlug = info.platformSlug;
+    detach(debugLog(`handleResetGameCore: romId=${romId}`));
+    try {
+      const result = await clearGameCore(romId);
+      detach(debugLog(`handleResetGameCore: result success=${result.success}`));
+      await applyCoreResult(result, romId, platformSlug, "Reverted to default");
+    } catch {
+      toaster.toast({ title: "RomM Sync", body: "Failed to reset core" });
     }
   };
 
@@ -740,17 +775,22 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           { key: "core-compat", disabled: true },
           "Switching cores may affect save compatibility",
         ),
+        createElement(MenuSeparator, { key: "core-sep" }),
+        // Explicit "Follow default / Reset" affordance (#945). This is the ONLY
+        // way to clear the per-game override — picking the default core entry
+        // PINS that core, it does not clear the override.
         createElement(
           MenuItem,
-          { key: "core-retrodeck-bug", disabled: true },
-          "\u26a0 Per-game switch not applied (RetroDECK bug) — use QAM for system-wide",
+          {
+            key: "core-reset",
+            onClick: () => {
+              detach(handleResetGameCore());
+            },
+          },
+          `Follow default / Reset${info.activeCoreIsDefault ? " ✓" : ""}`,
         ),
-        createElement(MenuSeparator, { key: "core-sep" }),
-        ...info.availableCores.map((c) => {
-          // Always send the core label — even for the default core.
-          // Clearing the override (empty string) would fall back to the platform
-          // override, not the ES-DE default, which is confusing.
-          return createElement(
+        ...info.availableCores.map((c) =>
+          createElement(
             MenuItem,
             {
               key: `core-${c.core_so}`,
@@ -758,9 +798,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
                 detach(handleChangeGameCore(c.label));
               },
             },
-            `${c.label}${c.is_default ? " (default)" : ""}${info.activeCoreLabel === c.label ? " \u2713" : ""}`,
-          );
-        }),
+            `${c.label}${c.is_default ? " (default)" : ""}${!info.activeCoreIsDefault && info.activeCoreLabel === c.label ? " \u2713" : ""}`,
+          ),
+        ),
       ),
       getEventTarget(e),
     );

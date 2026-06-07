@@ -373,7 +373,7 @@ describe("RomMGameInfoPanel", () => {
       expect(backend.getRomMetadata).toHaveBeenCalledWith(99);
     });
 
-    it("forwards platform_slug + rom_file to the dedicated core-info path on mount (#936)", async () => {
+    it("keys the dedicated core-info path on rom_id on mount (#945)", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 99,
@@ -384,9 +384,8 @@ describe("RomMGameInfoPanel", () => {
       });
       render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
-      // The background core-info fetch reads the per-game override by passing the
-      // bare basename alongside the platform slug.
-      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "mario.sfc");
+      // The background core-info fetch reads the per-game DB override by rom_id.
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith(99);
     });
 
     it("skips metadata refresh when metadata exists AND not in stale_fields", async () => {
@@ -975,8 +974,7 @@ describe("RomMGameInfoPanel", () => {
       // Mount without bios_status so the initial state.biosStatus is null
       // and the BIOS tab is NOT visible. Then dispatch core_changed with a
       // cache response that DOES carry bios_status — the handler's setState
-      // call is the only path that surfaces the BIOS tab. Mount carries a
-      // rom_file so romFileRef is populated for the per-game read-back (#936).
+      // call is the only path that surfaces the BIOS tab.
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 60,
@@ -1003,8 +1001,8 @@ describe("RomMGameInfoPanel", () => {
         metadata: makeMetadata(),
         stale_fields: [],
       });
-      // Core data comes from the dedicated path (#923), keyed on the event slug
-      // AND the ROM filename from romFileRef (per-game override read-back, #936).
+      // Core data comes from the dedicated path (#923), keyed on rom_id so the
+      // active core reflects the per-game DB override (epic #945).
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "from_core_changed.so",
         active_core_label: "FROM_CORE_CHANGED",
@@ -1021,8 +1019,8 @@ describe("RomMGameInfoPanel", () => {
       });
       expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
       expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalled();
-      // The bare basename (from romFileRef, not the event) is forwarded.
-      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith("snes", "mario.sfc");
+      // Keyed on rom_id (#945) — the active core reflects the per-game DB override.
+      expect(vi.mocked(backend.getPlatformCoreInfo)).toHaveBeenCalledWith(60);
       // biosStatus now non-null → BIOS tab visible. Removing the
       // handler's `setState((prev) => ({ ..., biosStatus }))` line
       // makes this assertion fail.

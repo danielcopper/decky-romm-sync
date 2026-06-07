@@ -230,15 +230,34 @@ export const setSystemCore = callable<
   [string, string],
   { success: boolean; message?: string; bios_status?: BiosStatus }
 >("set_system_core");
-export const setGameCore = callable<
-  [string, string, string],
-  { success: boolean; message?: string; bios_status?: BiosStatus }
->("set_game_core");
-// Dedicated core-info path (#923) — active core + available cores for a
-// platform, decoupled from the BIOS firmware status. The per-game detail page
-// passes the ROM filename so a per-game <altemulator> override is read back as
-// the active core (#936); the per-system System page omits it (system-level).
-export const getPlatformCoreInfo = callable<[string, string?], CoreInfo>("get_platform_core_info");
+
+/**
+ * Result of pinning / clearing a per-game emulator override. On success for an
+ * installed + bound ROM, the backend re-bakes and returns the fresh
+ * `launch_options` (the `-e`-wrapped command for a pin, the plain command for a
+ * clear) plus the shortcut's `app_id` — the frontend confirm-sets them via
+ * `setLaunchOptionsConfirmed`. Both are absent/None when the ROM is uninstalled
+ * or unbound (no shortcut to update). An unresolvable label hard-fails with
+ * `{success: false, reason: "core_unavailable", message}`.
+ */
+export interface GameCoreApplyResult {
+  success: boolean;
+  launch_options?: string;
+  app_id?: number | null;
+  reason?: string;
+  message?: string;
+}
+
+// Per-game override (epic #945). Keyed by rom_id — the DB pin survives
+// uninstall/reinstall (roms.emulator_override). set_game_core pins a label;
+// clear_game_core drops the pin (Follow default / Reset).
+export const setGameCore = callable<[number, string], GameCoreApplyResult>("set_game_core");
+export const clearGameCore = callable<[number], GameCoreApplyResult>("clear_game_core");
+// Dedicated core-info path (#923) — active core + available cores for a ROM,
+// decoupled from the BIOS firmware status. Keyed by rom_id (#945): the active
+// core reflects the per-game DB override when one is pinned, else the platform
+// default.
+export const getPlatformCoreInfo = callable<[number], CoreInfo>("get_platform_core_info");
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 export const debugLog = callable<[string], void>("debug_log");
 const frontendLog = callable<[string, string], void>("frontend_log");
