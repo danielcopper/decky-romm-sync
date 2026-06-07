@@ -10,10 +10,13 @@
 //   - refreshSystem failure branch → setBiosError(result.message || fallback)
 //   - handleDownloadAll catch → setBiosStatus(`Download failed: ${e}`)
 //   - handleDownloadRequired catch → setBiosStatus(`Download failed: ${e}`)
+//   - handleDeleteBios catch → setBiosStatus(`Failed to delete BIOS files: ${e}`)
 //   - setSystemCore onChange catch → debugLog(`setSystemCore: error: ${e}`)
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
+import { showModal } from "@decky/ui";
+import type { ReactElement } from "react";
 import { SystemPage } from "./SystemPage";
 import * as backend from "../api/backend";
 import type { FirmwarePlatformExt } from "../types";
@@ -67,8 +70,28 @@ vi.mock("@decky/ui", async () => {
       );
     },
     Spinner: () => ce("div", { "data-testid": "spinner" }),
+    // ConfirmModal is passed to showModal as a created element; the test reads
+    // its props (strTitle / onOK) off the captured showModal call rather than
+    // rendering it, mirroring DangerZone.test.tsx.
+    ConfirmModal: passthrough("div"),
+    showModal: vi.fn(),
   };
 });
+
+// Props of the ConfirmModal element handed to the most recent showModal() call.
+interface ConfirmModalProps {
+  strTitle?: string;
+  strDescription?: string;
+  strOKButtonText?: string;
+  strCancelButtonText?: string;
+  onOK?: () => void;
+}
+function lastConfirmModalProps(): ConfirmModalProps | null {
+  const calls = vi.mocked(showModal).mock.calls;
+  if (calls.length === 0) return null;
+  const el = calls[calls.length - 1]?.[0] as ReactElement<ConfirmModalProps> | undefined;
+  return el?.props ?? null;
+}
 
 // Flush mount-time + chained promise resolutions.
 const flushAsync = () =>
@@ -99,6 +122,11 @@ describe("SystemPage", () => {
     vi.mocked(backend.downloadAllFirmware).mockResolvedValue({ success: true });
     vi.mocked(backend.downloadRequiredFirmware).mockResolvedValue({
       success: true,
+    });
+    vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+      success: true,
+      deleted_count: 0,
+      message: "",
     });
     vi.mocked(backend.setSystemCore).mockResolvedValue({ success: true });
   });
@@ -990,6 +1018,154 @@ describe("SystemPage", () => {
       // No dropdown rendered, but the "Emulator Core" Field is.
       expect(capturedDropdowns.length).toBe(0);
       expect(container.textContent).toContain("snes9x");
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // N2. Delete BIOS (#933) — per-platform destructive action
+  // ------------------------------------------------------------------
+  describe("handleDeleteBios", () => {
+    function biosPlatformWithDownloaded(): FirmwarePlatformExt {
+      return makeBiosPlatform({
+        platform_slug: "ps1",
+        files: [
+          {
+            id: 1,
+            file_name: "scph5501.bin",
+            size: 100,
+            md5: "x",
+            downloaded: true,
+            required: true,
+            description: "PS1 BIOS",
+            hash_valid: true,
+            classification: "required",
+          },
+        ],
+      });
+    }
+
+    function biosPlatformNothingDownloaded(): FirmwarePlatformExt {
+      return makeBiosPlatform({
+        platform_slug: "ps1",
+        files: [
+          {
+            id: 1,
+            file_name: "scph5501.bin",
+            size: 100,
+            md5: "x",
+            downloaded: false,
+            required: true,
+            description: "PS1 BIOS",
+            hash_valid: null,
+            classification: "required",
+          },
+        ],
+      });
+    }
+
+    it("hides the Delete BIOS button when no files are downloaded", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformNothingDownloaded()],
+      });
+      const { queryByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(queryByText(/Delete BIOS/)).toBeNull();
+    });
+
+    it("shows the Delete BIOS button with the downloaded count when at least one file is downloaded", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(getByText("Delete BIOS (1)")).toBeTruthy();
+    });
+
+    it("opens a ConfirmModal (does NOT call deletePlatformBios) when the Delete BIOS button is clicked", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      const { getByText } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      // Confirmation gates the destructive call — nothing deleted yet.
+      expect(vi.mocked(backend.deletePlatformBios)).not.toHaveBeenCalled();
+      const props = lastConfirmModalProps();
+      expect(props?.strTitle).toBe("Delete BIOS files for ps1?");
+      expect(props?.strOKButtonText).toBe("Delete BIOS Files");
+      expect(props?.strCancelButtonText).toBe("Cancel");
+    });
+
+    it("calls deletePlatformBios(slug), surfaces the message, and refreshes on confirm + success", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+        success: true,
+        deleted_count: 1,
+        message: "Deleted 1 BIOS file",
+      });
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      await act(async () => {
+        lastConfirmModalProps()?.onOK?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.deletePlatformBios)).toHaveBeenCalledWith("ps1");
+      // refreshSystem: once on mount + once after a successful delete.
+      expect(vi.mocked(backend.getFirmwareStatus)).toHaveBeenCalledTimes(2);
+      expect(container.textContent).toContain("Deleted 1 BIOS file");
+    });
+
+    it("surfaces the failure message and does NOT refresh when deletePlatformBios reports success=false", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      vi.mocked(backend.deletePlatformBios).mockResolvedValue({
+        success: false,
+        deleted_count: 0,
+        message: "Nothing to delete",
+      });
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      await act(async () => {
+        lastConfirmModalProps()?.onOK?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.deletePlatformBios)).toHaveBeenCalledWith("ps1");
+      // Only the mount-time refresh — no second refresh on failure.
+      expect(vi.mocked(backend.getFirmwareStatus)).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Nothing to delete");
+    });
+
+    it("sets biosStatus='Failed to delete BIOS files: <e>' when deletePlatformBios throws", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [biosPlatformWithDownloaded()],
+      });
+      vi.mocked(backend.deletePlatformBios).mockRejectedValue(new Error("io"));
+      const { getByText, container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Delete BIOS (1)"));
+      await act(async () => {
+        lastConfirmModalProps()?.onOK?.();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // CATCH-REJECTION assert: status string rendered.
+      expect(container.textContent).toContain("Failed to delete BIOS files: Error: io");
     });
   });
 

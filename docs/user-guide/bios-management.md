@@ -49,12 +49,30 @@ first, then the BIOS files that core needs.
 4. Below the core, each platform shows how many BIOS files are downloaded vs. available (e.g. "3 / 5 files")
 5. Tap **Show Files** to see the individual file list for a platform
 6. Tap **Download All** to download all missing BIOS files for a platform
+7. Tap **Delete BIOS** to remove that platform's downloaded BIOS files (see below)
 
 <!-- Screenshot: System page showing per-platform Emulator Core dropdown above BIOS download counts -->
 
 BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use subdirectories
 — for example, Dreamcast BIOS goes into `bios/dc/` and PS2 BIOS goes into `bios/pcsx2/bios/`. The plugin handles the
 correct placement automatically.
+
+### Deleting BIOS Files
+
+You can remove a platform's downloaded BIOS files directly from the **System** page. The **Delete BIOS** button appears
+only when the platform has at least one downloaded file — its label shows the count (e.g. "Delete BIOS (3)"). Because
+deletion is local, the button works even when your RomM server is offline.
+
+1. On the **System** page, find the platform whose BIOS files you want to remove
+2. Tap **Delete BIOS**
+3. Confirm the action in the dialog that appears
+
+This is a destructive action, so a confirmation dialog asks you to confirm before anything is deleted. Once confirmed,
+the plugin removes every downloaded BIOS file for that system from your RetroDECK bios directory and reports the result.
+Games that need those files won't launch until you download them again with **Download All** or **Download Required**.
+
+The same per-platform delete is also available from the **Data Management** page (under per-platform actions) for
+bulk-cleanup workflows.
 
 ## Which Systems Need BIOS?
 

@@ -1,9 +1,19 @@
-import { useState, useEffect, FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, Field, Focusable, DropdownItem } from "@decky/ui";
+import { useState, useEffect, FC, createElement } from "react";
+import {
+  PanelSection,
+  PanelSectionRow,
+  ButtonItem,
+  Field,
+  Focusable,
+  DropdownItem,
+  ConfirmModal,
+  showModal,
+} from "@decky/ui";
 import {
   getFirmwareStatus,
   downloadAllFirmware,
   downloadRequiredFirmware,
+  deletePlatformBios,
   setSystemCore,
   debugLog,
 } from "../api/backend";
@@ -120,6 +130,38 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
       setBiosStatus(`Download failed: ${e}`);
     }
     setDownloading(null);
+  };
+
+  // Destructive action — deletes the platform's downloaded BIOS files. Mirrors
+  // the DangerZone confirm UX (ConfirmModal via showModal). Kept flat at the
+  // component-body level (like handleDownloadAll) so the modal's onOK is a
+  // single named-handler call rather than a deeply-nested async closure (S2004).
+  const handleDeleteBios = async (platformSlug: string) => {
+    setBiosStatus("");
+    try {
+      const result = await deletePlatformBios(platformSlug);
+      setBiosStatus(result.message);
+      if (result.success) {
+        await refreshSystem();
+      }
+    } catch (e) {
+      setBiosStatus(`Failed to delete BIOS files: ${e}`);
+    }
+  };
+
+  const confirmDeleteBios = (platformSlug: string) => {
+    showModal(
+      createElement(ConfirmModal, {
+        strTitle: `Delete BIOS files for ${platformSlug}?`,
+        strDescription:
+          "This deletes every downloaded BIOS file for this system from your RetroDECK bios directory. Games that need these files won't launch until you download them again.",
+        strOKButtonText: "Delete BIOS Files",
+        strCancelButtonText: "Cancel",
+        onOK: () => {
+          detach(handleDeleteBios(platformSlug));
+        },
+      }),
+    );
   };
 
   const handleSystemCoreChange = async (platform: FirmwarePlatformExt, optionData: string) => {
@@ -299,6 +341,19 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               disabled={isDownloading}
             >
               {isDownloading ? "Downloading..." : "Download All"}
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
+        {/* Delete is local-only (no server needed) and shown only when there is
+            at least one downloaded file to delete. Destructive → ConfirmModal. */}
+        {done > 0 && (
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={() => confirmDeleteBios(platform.platform_slug)}
+              disabled={isDownloading}
+            >
+              {`Delete BIOS (${done})`}
             </ButtonItem>
           </PanelSectionRow>
         )}
