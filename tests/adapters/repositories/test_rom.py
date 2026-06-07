@@ -142,6 +142,74 @@ class TestUpsert:
         assert uow.roms.count() == 1
 
 
+class TestEmulatorOverride:
+    def test_round_trips_via_get(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        uow.roms.set_emulator_override(1, "PCSX ReARMed")
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.emulator_override == "PCSX ReARMed"
+
+    def test_defaults_to_none_when_never_pinned(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.emulator_override is None
+
+    def test_setting_none_writes_sql_null(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        uow.roms.set_emulator_override(1, "PCSX ReARMed")
+        uow.roms.set_emulator_override(1, None)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.emulator_override is None
+        # The column is SQL NULL, not an empty string.
+        assert uow._conn is not None
+        stored = uow._conn.execute("SELECT emulator_override FROM roms WHERE rom_id = 1").fetchone()[0]
+        assert stored is None
+
+    def test_get_all_overrides_omits_null_rows(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        uow.roms.save(_rom(2))
+        uow.roms.save(_rom(3))
+        uow.roms.set_emulator_override(1, "PCSX ReARMed")
+        uow.roms.set_emulator_override(3, "Beetle PSX HW")
+
+        overrides = uow.roms.get_all_emulator_overrides()
+        assert overrides == {1: "PCSX ReARMed", 3: "Beetle PSX HW"}
+
+    def test_get_all_overrides_empty_when_none_pinned(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        uow.roms.save(_rom(2))
+        assert uow.roms.get_all_emulator_overrides() == {}
+
+
+class TestResyncPreservesOverride:
+    """A re-sync builds a fresh ``Rom`` with ``emulator_override=None``; the sync
+    UPSERT must NOT wipe a pin the user set via ``set_emulator_override`` (Q1)."""
+
+    def test_pin_survives_resync_and_identity_still_updates(self, uow: SqliteUnitOfWork):
+        rom_id = 1
+        uow.roms.save(_rom(rom_id, app_id=100))
+        uow.roms.set_emulator_override(rom_id, "PCSX ReARMed")
+
+        # A normal library re-sync: fresh Rom, no override, changed identity.
+        resynced = _rom(rom_id, app_id=200)
+        resynced.name = "Renamed Game"
+        assert resynced.emulator_override is None
+        uow.roms.save(resynced)
+
+        loaded = uow.roms.get(rom_id)
+        assert loaded is not None
+        # (a) The pin survives the re-sync.
+        assert loaded.emulator_override == "PCSX ReARMed"
+        # (b) Identity columns still update on that save.
+        assert loaded.shortcut_app_id == 200
+        assert loaded.name == "Renamed Game"
+
+
 def _seed_children(uow: SqliteUnitOfWork, rom_id: int) -> None:
     """Seed a row in all five ``ON DELETE CASCADE`` children of ``roms``.
 

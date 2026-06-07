@@ -12,15 +12,43 @@ from typing import Any
 # path with. RetroDECK's flatpak command is the only value today.
 RETRODECK_INVOCATION = "flatpak run net.retrodeck.retrodeck"
 
+# RetroArch cores dir as seen INSIDE the RetroDECK flatpak sandbox. Baked
+# literally into the -e override; %EMULATOR_RETROARCH% and %ROM% stay as ES-DE
+# placeholders (run_game.sh resolves and quotes them at launch).
+_RETROARCH_CORES_DIR = "/var/config/retroarch/cores"
 
-def resolve_emulator_invocation(rom: dict[str, Any]) -> str:
+
+def resolve_emulator_invocation(rom: dict[str, Any], active_core_so: str | None = None) -> str:
     """Return the emulator invocation prefix for *rom*.
 
-    The seam where multi-emulator support (#129) will branch per ROM; today
-    every ROM resolves to the RetroDECK flatpak command and *rom* is ignored.
+    With ``active_core_so`` unset (``None``) the ROM follows the RetroDECK/ES-DE
+    default and resolves to the plain RetroDECK flatpak command. With an explicit
+    ``.so`` filename it returns the RetroDECK ``-e`` override that forces that
+    RetroArch core: ``flatpak run … -e "%EMULATOR_RETROARCH% -L <cores>/<so>
+    %ROM%"``. The cores dir is baked literally; ``%EMULATOR_RETROARCH%`` and
+    ``%ROM%`` remain ES-DE placeholders. *rom* is the per-emulator-branch seam
+    (#129) and is ignored today.
     """
     del rom  # reserved for the future per-emulator branch
-    return RETRODECK_INVOCATION
+    # B4: branch on None explicitly so None never reaches the f-string (no
+    # "None.so"); an unresolvable override degrades to the plain launch upstream.
+    if active_core_so is None:
+        return RETRODECK_INVOCATION
+    return f'{RETRODECK_INVOCATION} -e "%EMULATOR_RETROARCH% -L {_RETROARCH_CORES_DIR}/{active_core_so} %ROM%"'
+
+
+def label_to_core_so(available_cores: list[dict[str, Any]], label: str) -> str | None:
+    """Resolve a core *label* to its ``.so`` filename from *available_cores*.
+
+    *available_cores* is the already-parsed list the core-info reader returns:
+    ``[{"core_so": str, "label": str, "is_default": bool}, ...]``. Returns the
+    matching ``core_so`` or ``None`` when no entry carries *label* (a blank or
+    stale label resolves to ``None``, never to a bogus filename).
+    """
+    for core in available_cores:
+        if core.get("label") == label:
+            return core.get("core_so")
+    return None
 
 
 def build_launch_options(invocation: str, path: str) -> str:

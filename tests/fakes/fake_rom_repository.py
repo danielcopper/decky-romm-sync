@@ -47,6 +47,16 @@ class FakeRomRepository:
     def count(self) -> int:
         return len(self._roms)
 
+    def set_emulator_override(self, rom_id: int, label: str | None) -> None:
+        rom = self._roms.get(rom_id)
+        if rom is not None:
+            rom.emulator_override = label
+
+    def get_all_emulator_overrides(self) -> dict[int, str]:
+        return {
+            rom_id: rom.emulator_override for rom_id, rom in self._roms.items() if rom.emulator_override is not None
+        }
+
     def _snapshot(self) -> dict[int, Rom]:
         return copy.deepcopy(self._roms)
 

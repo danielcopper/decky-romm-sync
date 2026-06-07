@@ -1,0 +1,14 @@
+-- =============================================================================
+-- 002_add_emulator_override.sql — per-game emulator/core override on the Rom aggregate
+-- Epic #945 (per-game emulator override via -e-baked launch_options)
+-- =============================================================================
+--
+-- Adds a nullable LABEL column to roms (the Rom aggregate's anchor table, so the
+-- override survives uninstall/reinstall per ADR-0007). NULL = no override ->
+-- follow the RetroDECK/ES-DE default. Only pin/clear ever write it; the sync
+-- UPSERT deliberately excludes it so a re-sync never wipes a user's pin.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 2.
+-- -----------------------------------------------------------------------------
+ALTER TABLE roms ADD COLUMN emulator_override TEXT;  -- core LABEL; NULL = follow default (pin/clear only)

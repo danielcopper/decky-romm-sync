@@ -41,6 +41,15 @@ def _tables(db_path: str) -> set[str]:
         conn.close()
 
 
+def _columns(db_path: str, table: str) -> set[str]:
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {row[1] for row in rows}
+    finally:
+        conn.close()
+
+
 def _set_user_version(db_path: str, version: int) -> None:
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
@@ -49,17 +58,21 @@ def _set_user_version(db_path: str, version: int) -> None:
         conn.close()
 
 
+# Highest NNN in the shipped migrations dir (001_initial + 002_add_emulator_override).
+_SHIPPED_VERSION = 2
+
+
 class TestEmptyDatabase:
     """Empty DB (user_version 0) -> the full shipped schema is applied."""
 
-    def test_applies_real_v1_schema(self, tmp_path: Path):
+    def test_applies_real_schema(self, tmp_path: Path):
         db_path = str(tmp_path / "romm_sync.db")
 
         final_version = apply_migrations(db_path)
 
-        # Highest NNN in the shipped migrations dir is 001 -> version 1.
-        assert final_version == 1
-        assert _user_version(db_path) == 1
+        assert final_version == _SHIPPED_VERSION
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        # 002 only ALTERs roms; the table set is unchanged from v1.
         assert _tables(db_path) == _V1_TABLES
 
     def test_creates_missing_parent_directory(self, tmp_path: Path):
@@ -69,18 +82,28 @@ class TestEmptyDatabase:
         apply_migrations(db_path)
 
         assert Path(db_path).exists()
-        assert _user_version(db_path) == 1
+        assert _user_version(db_path) == _SHIPPED_VERSION
 
     def test_idempotent_second_run_is_noop(self, tmp_path: Path):
         db_path = str(tmp_path / "romm_sync.db")
         apply_migrations(db_path)
 
-        # A re-run finds nothing pending and must not re-execute 001 (which
-        # would fail on duplicate-table creation if it were re-applied).
+        # A re-run finds nothing pending and must not re-execute prior migrations
+        # (which would fail on duplicate-table / duplicate-column if re-applied).
         final_version = apply_migrations(db_path)
 
-        assert final_version == 1
+        assert final_version == _SHIPPED_VERSION
         assert _tables(db_path) == _V1_TABLES
+
+    def test_adds_emulator_override_to_roms_only(self, tmp_path: Path):
+        # 002 ALTERs only roms; rom_installs (and every other table) is untouched.
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == 2
+        assert "emulator_override" in _columns(db_path, "roms")
+        assert "emulator_override" not in _columns(db_path, "rom_installs")
 
 
 class TestPartiallyMigratedDatabase:

@@ -26,6 +26,7 @@ class Rom:
     igdb_id: int | None = None
     sgdb_id: int | None = None
     ra_id: int | None = None
+    emulator_override: str | None = None
 
     @classmethod
     def synced(
@@ -74,3 +75,21 @@ class Rom:
     def assign_ra_id(self, ra_id: int) -> None:
         """Stamp the resolved RetroAchievements id."""
         self.ra_id = ra_id
+
+    def pin_emulator_override(self, label: str) -> None:
+        """Pin a per-game emulator/core override to the core *label*.
+
+        Stores the LABEL the user chose (e.g. ``"PCSX ReARMed"``), not a
+        resolved ``.so`` — the ``.so`` is resolved live at launch-bake time, so
+        the override survives RetroDECK/ES-DE default changes. A blank or
+        whitespace-only *label* is meaningless and raises ``ValueError``; clear
+        the override with :meth:`clear_emulator_override` instead.
+        """
+        stripped = label.strip()
+        if not stripped:
+            raise ValueError("emulator_override label must not be empty")
+        self.emulator_override = stripped
+
+    def clear_emulator_override(self) -> None:
+        """Drop the per-game override so the ROM follows the system default."""
+        self.emulator_override = None

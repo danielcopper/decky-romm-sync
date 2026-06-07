@@ -6,6 +6,7 @@ from domain.shortcut_data import (
     RETRODECK_INVOCATION,
     build_launch_options,
     build_shortcuts_data,
+    label_to_core_so,
     resolve_emulator_invocation,
 )
 
@@ -22,6 +23,61 @@ class TestResolveEmulatorInvocation:
         assert resolve_emulator_invocation({}) == resolve_emulator_invocation(
             {"id": 5, "platform_slug": "n64", "name": "X"}
         )
+
+    def test_explicit_none_core_is_plain_invocation(self):
+        # active_core_so=None must behave exactly like the 1-arg call: no -e override.
+        result = resolve_emulator_invocation({"id": 1}, None)
+        assert result == RETRODECK_INVOCATION
+        assert "-e" not in result
+
+    def test_one_arg_default_has_no_override(self):
+        assert "-e" not in resolve_emulator_invocation({"id": 1})
+
+    def test_core_so_bakes_golden_e_override(self):
+        # Byte-exact golden -e string: literal cores dir, preserved %…% placeholders.
+        result = resolve_emulator_invocation({"id": 1}, "pcsx_rearmed_libretro.so")
+        assert result == (
+            "flatpak run net.retrodeck.retrodeck "
+            '-e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/pcsx_rearmed_libretro.so %ROM%"'
+        )
+
+    def test_core_so_uses_literal_cores_dir_and_keeps_placeholders(self):
+        result = resolve_emulator_invocation({"id": 1}, "pcsx_rearmed_libretro.so")
+        assert "/var/config/retroarch/cores" in result
+        assert "%EMULATOR_RETROARCH%" in result
+        assert "%ROM%" in result
+        # The cores dir is baked literally; %CORE_RETROARCH% is NOT used.
+        assert "%CORE_RETROARCH%" not in result
+
+    def test_none_never_yields_none_so(self):
+        # B4 guard: a None core must never reach the f-string as the literal "None.so".
+        assert "None.so" not in resolve_emulator_invocation({"id": 1}, None)
+        assert "None" not in resolve_emulator_invocation({"id": 1}, None)
+
+
+# Shape mirrors CoreInfoProvider.get_available_cores():
+# [{"core_so": str, "label": str, "is_default": bool}, ...].
+_AVAILABLE_CORES = [
+    {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+    {"core_so": "mednafen_psx_hw_libretro.so", "label": "Beetle PSX HW", "is_default": False},
+]
+
+
+class TestLabelToCoreSo:
+    """Tests for label_to_core_so()."""
+
+    def test_match_returns_core_so(self):
+        assert label_to_core_so(_AVAILABLE_CORES, "PCSX ReARMed") == "pcsx_rearmed_libretro.so"
+        assert label_to_core_so(_AVAILABLE_CORES, "Beetle PSX HW") == "mednafen_psx_hw_libretro.so"
+
+    def test_miss_returns_none(self):
+        assert label_to_core_so(_AVAILABLE_CORES, "No Such Core") is None
+
+    def test_empty_cores_list_returns_none(self):
+        assert label_to_core_so([], "PCSX ReARMed") is None
+
+    def test_empty_label_returns_none(self):
+        assert label_to_core_so(_AVAILABLE_CORES, "") is None
 
 
 class TestBuildLaunchOptions:
