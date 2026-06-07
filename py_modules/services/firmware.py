@@ -594,7 +594,9 @@ class FirmwareService:
             files = collect_firmware_status(items, registry_platform, active_core_so)
         except Exception:
             if not registry_platform:
-                return {"needs_bios": False}
+                return {
+                    "needs_bios": False,
+                }
             bios_base = self._retrodeck_paths.bios_path()
             registry_items = [
                 {
@@ -609,7 +611,9 @@ class FirmwareService:
             files = collect_firmware_status(registry_items, registry_platform, active_core_so)
 
         if not files:
-            return {"needs_bios": False}
+            return {
+                "needs_bios": False,
+            }
 
         server_count = len(files)
         local_count = sum(1 for f in files if f.downloaded)
@@ -640,16 +644,16 @@ class FirmwareService:
         errors = []
         removed_names: list[str] = []
         for f in files:
-            if not f.downloaded:
+            if not f["downloaded"]:
                 continue
             try:
-                self._firmware_file_store.remove_file(f.local_path)
+                self._firmware_file_store.remove_file(f["local_path"])
             except OSError as e:
-                self._logger.warning(f"Failed to remove BIOS file {f.file_name}: {e}")
-                errors.append(f"{f.file_name}: {e}")
+                self._logger.warning(f"Failed to remove BIOS file {f['file_name']}: {e}")
+                errors.append(f"{f['file_name']}: {e}")
                 continue
             deleted += 1
-            removed_names.append(f.file_name)
+            removed_names.append(f["file_name"])
 
         if removed_names:
             self._prune_bios_records(platform_slug, removed_names)

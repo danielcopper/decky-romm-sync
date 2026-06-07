@@ -1,6 +1,8 @@
 import asyncio
 import os
+from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -484,7 +486,13 @@ class TestDownloadAllFirmware:
 class TestDeletePlatformBios:
     @pytest.mark.asyncio
     async def test_delete_platform_bios_happy_path(self, plugin, fw, tmp_path):
-        """Deleting platform BIOS removes downloaded files and state entries."""
+        """Deleting platform BIOS removes downloaded files and state entries.
+
+        ``check_platform_bios`` returns its ``files`` as ``asdict`` dicts
+        (``[asdict(f) for f in files]``), so the mock mirrors that shape — not
+        bare ``BiosFileEntry`` objects. Driving the real output shape is what
+        guards the delete path against the #750 dict/attribute mismatch.
+        """
         bios_dir = tmp_path / "retrodeck" / "bios"
         bios_dir.mkdir(parents=True)
         bios_file = bios_dir / "scph5501.bin"
@@ -501,25 +509,27 @@ class TestDeletePlatformBios:
             )
         )
 
-        # Mock check_platform_bios to return our test file
+        # Mock check_platform_bios with the REAL output shape: asdict dicts.
         async def mock_check(slug, rom_filename=None):
             return {
                 "needs_bios": True,
                 "server_count": 1,
                 "local_count": 1,
                 "all_downloaded": True,
-                "files": (
-                    BiosFileEntry(
-                        file_name="scph5501.bin",
-                        downloaded=True,
-                        local_path=str(bios_file),
-                        required=True,
-                        description="PS1 BIOS",
-                        classification="required",
-                        cores={},
-                        used_by_active=True,
+                "files": [
+                    asdict(
+                        BiosFileEntry(
+                            file_name="scph5501.bin",
+                            downloaded=True,
+                            local_path=str(bios_file),
+                            required=True,
+                            description="PS1 BIOS",
+                            classification="required",
+                            cores={},
+                            used_by_active=True,
+                        )
                     ),
-                ),
+                ],
             }
 
         fw.check_platform_bios = mock_check
@@ -530,6 +540,81 @@ class TestDeletePlatformBios:
         assert not bios_file.exists()
         # Verify BIOS record removed from the registry
         assert plugin._uow.bios_files.get("psx", "scph5501.bin") is None
+
+    @pytest.mark.asyncio
+    async def test_delete_platform_bios_real_check_output_shape(self, plugin, tmp_path):
+        """Regression for #750: delete works against the real asdict dict shape.
+
+        Drives ``delete_platform_bios`` end-to-end through the *real*
+        ``check_platform_bios`` (server-offline registry fallback), so the
+        ``files`` list is the genuine ``[asdict(f) for f in files]`` payload
+        the callable hands to ``_delete_platform_bios_io``. Before the fix that
+        worker read ``f.downloaded`` / ``f.local_path`` / ``f.file_name`` as
+        attributes on those dicts, raising ``AttributeError`` in the executor
+        and deleting nothing — the "Failed to delete BIOS files" the modal showed.
+        """
+        bios_dir = tmp_path / "bios"
+        bios_dir.mkdir(parents=True)
+        # One downloaded file (store sees it) + one never-downloaded.
+        store = FakeFirmwareFileStore({str(bios_dir / "scph5501.bin"): b"\x00" * 512})
+
+        fw = _make_firmware_service(
+            romm_api=plugin._romm_api,
+            uow_factory=FakeUnitOfWorkFactory(plugin._uow),
+            firmware_file_store=store,
+            retrodeck_paths=FakeRetroDeckPaths(bios=str(bios_dir)),
+        )
+        fw._loop = asyncio.get_event_loop()
+        fw._bios_registry = {
+            "platforms": {
+                "psx": {
+                    "scph5501.bin": {
+                        "description": "PS1 US BIOS",
+                        "required": True,
+                        "firmware_path": "scph5501.bin",
+                    },
+                    "scph5502.bin": {
+                        "description": "PS1 EU BIOS",
+                        "required": True,
+                        "firmware_path": "scph5502.bin",
+                    },
+                }
+            }
+        }
+        fw._bios_files_index = {}
+        for plat, files in fw._bios_registry["platforms"].items():
+            for fname, entry in files.items():
+                fw._bios_files_index[fname] = {**entry, "platform": plat}
+
+        # The downloaded file has a BiosFile record to prune (firmware slug "ps").
+        plugin._uow.bios_files.save(
+            BiosFile.mark_downloaded(
+                platform_slug="ps",
+                file_name="scph5501.bin",
+                file_path=str(bios_dir / "scph5501.bin"),
+                downloaded_at="2026-01-01T00:00:00+00:00",
+                firmware_id=42,
+            )
+        )
+
+        # list_firmware fails -> check_platform_bios takes the registry fallback,
+        # which still emits the genuine asdict files payload.
+        with patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")):
+            # Precondition: files really are dicts, not BiosFileEntry objects —
+            # subscripting a string key would raise on a BiosFileEntry instance.
+            status: dict[str, Any] = await fw.check_platform_bios("psx")
+            assert status["files"][0]["file_name"] == "scph5501.bin"
+            assert status["files"][0]["downloaded"] is True
+
+            result = await fw.delete_platform_bios("psx")
+
+        # (b) success/deleted_count response is correct: only the one downloaded.
+        assert result["success"] is True
+        assert result["deleted_count"] == 1
+        # (a) the downloaded file is removed via the firmware file store...
+        assert str(bios_dir / "scph5501.bin") not in store.files
+        # ...and its BiosFile record is pruned (matched under firmware slug "ps").
+        assert plugin._uow.bios_files.get("ps", "scph5501.bin") is None
 
     @pytest.mark.asyncio
     async def test_delete_platform_bios_no_files(self, fw):
@@ -546,7 +631,7 @@ class TestDeletePlatformBios:
 
     @pytest.mark.asyncio
     async def test_delete_platform_bios_skips_not_downloaded(self, fw, tmp_path):
-        """Only files with downloaded=True are deleted."""
+        """Only files with downloaded=True are deleted (real asdict dict shape)."""
 
         async def mock_check(slug, rom_filename=None):
             return {
@@ -554,28 +639,32 @@ class TestDeletePlatformBios:
                 "server_count": 2,
                 "local_count": 0,
                 "all_downloaded": False,
-                "files": (
-                    BiosFileEntry(
-                        file_name="bios1.bin",
-                        downloaded=False,
-                        local_path="/fake/path1",
-                        required=False,
-                        description="bios1.bin",
-                        classification="unknown",
-                        cores={},
-                        used_by_active=True,
+                "files": [
+                    asdict(
+                        BiosFileEntry(
+                            file_name="bios1.bin",
+                            downloaded=False,
+                            local_path="/fake/path1",
+                            required=False,
+                            description="bios1.bin",
+                            classification="unknown",
+                            cores={},
+                            used_by_active=True,
+                        )
                     ),
-                    BiosFileEntry(
-                        file_name="bios2.bin",
-                        downloaded=False,
-                        local_path="/fake/path2",
-                        required=False,
-                        description="bios2.bin",
-                        classification="unknown",
-                        cores={},
-                        used_by_active=True,
+                    asdict(
+                        BiosFileEntry(
+                            file_name="bios2.bin",
+                            downloaded=False,
+                            local_path="/fake/path2",
+                            required=False,
+                            description="bios2.bin",
+                            classification="unknown",
+                            cores={},
+                            used_by_active=True,
+                        )
                     ),
-                ),
+                ],
             }
 
         fw.check_platform_bios = mock_check
@@ -2429,28 +2518,32 @@ class TestDeletePlatformBiosIOLogsWarnings:
         async def mock_check(slug, rom_filename=None):
             return {
                 "needs_bios": True,
-                "files": (
-                    BiosFileEntry(
-                        file_name="scph5501.bin",
-                        downloaded=True,
-                        local_path="/fake/bios/scph5501.bin",
-                        required=True,
-                        description="PS1 BIOS",
-                        classification="required",
-                        cores={},
-                        used_by_active=True,
+                "files": [
+                    asdict(
+                        BiosFileEntry(
+                            file_name="scph5501.bin",
+                            downloaded=True,
+                            local_path="/fake/bios/scph5501.bin",
+                            required=True,
+                            description="PS1 BIOS",
+                            classification="required",
+                            cores={},
+                            used_by_active=True,
+                        )
                     ),
-                    BiosFileEntry(
-                        file_name="scph5502.bin",
-                        downloaded=True,
-                        local_path="/fake/bios/scph5502.bin",
-                        required=True,
-                        description="PS1 BIOS (EU)",
-                        classification="required",
-                        cores={},
-                        used_by_active=True,
+                    asdict(
+                        BiosFileEntry(
+                            file_name="scph5502.bin",
+                            downloaded=True,
+                            local_path="/fake/bios/scph5502.bin",
+                            required=True,
+                            description="PS1 BIOS (EU)",
+                            classification="required",
+                            cores={},
+                            used_by_active=True,
+                        )
                     ),
-                ),
+                ],
             }
 
         fw.check_platform_bios = mock_check
