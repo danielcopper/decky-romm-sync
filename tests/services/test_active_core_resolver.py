@@ -129,8 +129,8 @@ def test_null_override_delegates_to_system_default() -> None:
     resolver, _ = _make_resolver(uow=uow, core_info=core_info)
 
     assert resolver.active_core_for_rom(1) == ("snes9x_libretro", "Snes9x")
-    # Delegation path: the system-layer get_active_core was consulted with no rom_filename.
-    assert core_info.active_core_calls == [("snes", None)]
+    # Delegation path: the system-layer get_active_core was consulted with the system only.
+    assert core_info.active_core_calls == ["snes"]
 
 
 def test_null_override_passes_through_system_none() -> None:
@@ -190,7 +190,7 @@ def test_stale_override_degrades_to_system_default() -> None:
     # Degrades to the system default — never a bogus "None.so", never raises.
     assert result == ("mgba_libretro", "mGBA")
     # The system layer was consulted (the degrade delegated past the unresolvable pin).
-    assert core_info.active_core_calls == [("gba", None)]
+    assert core_info.active_core_calls == ["gba"]
 
 
 def test_stale_override_logs_warning(caplog: pytest.LogCaptureFixture) -> None:

@@ -486,21 +486,17 @@ class TestSetGameOverride:
             assert "gpSP" in content
             assert "VBA-M" in content
 
-    def test_round_trip_write_then_read(self, editor, resolver):
-        """Write system + game overrides, then read them back."""
+    def test_system_and_multiple_game_overrides_coexist(self, editor, resolver):
+        """Write a system override plus two per-game overrides into one gamelist."""
         with tempfile.TemporaryDirectory() as tmpdir:
             editor.set_system_override(tmpdir, "gba", "VBA-M")
             editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
             editor.set_game_override(tmpdir, "gba", "./Zelda.gba", "mGBA")
 
-            # Read system override
+            # System override is preserved alongside the per-game entries.
             assert resolver._read_system_override(tmpdir, "gba") == "VBA-M"
 
-            # Read per-game overrides
-            assert resolver._read_game_override(tmpdir, "gba", "Pokemon.gba") == "gpSP"
-            assert resolver._read_game_override(tmpdir, "gba", "Zelda.gba") == "mGBA"
-
-            # Read gamelist — should have both games
+            # The gamelist carries both game entries and both per-game labels.
             gamelist_path = os.path.join(tmpdir, "ES-DE", "gamelists", "gba", "gamelist.xml")
             with open(gamelist_path) as f:
                 content = f.read()
@@ -508,88 +504,6 @@ class TestSetGameOverride:
             assert "Zelda.gba" in content
             assert "gpSP" in content
             assert "mGBA" in content
-
-
-class TestReadGameOverride:
-    """Tests for ``CoreResolver._read_game_override`` (reads per-game altemulator label)."""
-
-    def test_returns_none_when_no_gamelist(self, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = resolver._read_game_override(tmpdir, "gba", "Pokemon.gba")
-            assert result is None
-
-    def test_returns_none_when_no_override(self, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
-            os.makedirs(gamelist_dir)
-            with open(os.path.join(gamelist_dir, "gamelist.xml"), "w") as f:
-                f.write(SAMPLE_GAMELIST_NO_OVERRIDE)
-            result = resolver._read_game_override(tmpdir, "gba", "some_game.gba")
-            assert result is None
-
-    def test_reads_per_game_override(self, editor, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
-            result = resolver._read_game_override(tmpdir, "gba", "Pokemon.gba")
-            assert result == "gpSP"
-
-    def test_matches_with_dot_slash_prefix(self, editor, resolver):
-        """ROM filename without ./ prefix should match path with ./ prefix."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
-            # Should match even without "./" prefix
-            result = resolver._read_game_override(tmpdir, "gba", "Pokemon.gba")
-            assert result == "gpSP"
-
-
-class TestGetActiveCoreWithGameOverride:
-    """``get_active_core`` reads per-game overrides when ``rom_filename`` is provided."""
-
-    GBA_SYSTEM_INFO: ClassVar[dict[str, Any]] = {
-        "gba": {
-            "default_core": "mgba_libretro",
-            "default_label": "mGBA",
-            "cores": {
-                "mgba_libretro": "mGBA",
-                "gpsp_libretro": "gpSP",
-                "vbam_libretro": "VBA-M",
-            },
-            "label_to_core": {
-                "mGBA": "mgba_libretro",
-                "gpSP": "gpsp_libretro",
-                "VBA-M": "vbam_libretro",
-            },
-        }
-    }
-
-    def test_per_game_override_takes_precedence(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            resolver = _make_resolver(get_retrodeck_home=lambda: tmpdir)
-            editor = _make_editor()
-            with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
-                # Set system override to VBA-M
-                editor.set_system_override(tmpdir, "gba", "VBA-M")
-                # Set per-game override to gpSP
-                editor.set_game_override(tmpdir, "gba", "./Pokemon.gba", "gpSP")
-
-                # Without rom_filename: system override wins
-                result = resolver.get_active_core("gba")
-                assert result == ("vbam_libretro", "VBA-M")
-
-                # With rom_filename: per-game override wins
-                result = resolver.get_active_core("gba", rom_filename="Pokemon.gba")
-                assert result == ("gpsp_libretro", "gpSP")
-
-    def test_falls_through_to_system_when_no_game_override(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            resolver = _make_resolver(get_retrodeck_home=lambda: tmpdir)
-            editor = _make_editor()
-            with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
-                editor.set_system_override(tmpdir, "gba", "VBA-M")
-
-                # rom_filename provided but no per-game override: system override wins
-                result = resolver.get_active_core("gba", rom_filename="Pokemon.gba")
-                assert result == ("vbam_libretro", "VBA-M")
 
 
 class TestMtimeInvalidation:

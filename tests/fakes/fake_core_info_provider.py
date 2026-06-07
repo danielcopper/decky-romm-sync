@@ -27,15 +27,11 @@ class FakeCoreInfoProvider:
         self.active_core = active_core
         self.available_cores: list[dict[str, Any]] = available_cores if available_cores is not None else []
         self.reset_cache_count = 0
-        self.active_core_calls: list[tuple[str, str | None]] = []
+        self.active_core_calls: list[str] = []
         self.available_cores_calls: list[str] = []
 
-    def get_active_core(
-        self,
-        system_name: str,
-        rom_filename: str | None = None,
-    ) -> tuple[str | None, str | None]:
-        self.active_core_calls.append((system_name, rom_filename))
+    def get_active_core(self, system_name: str) -> tuple[str | None, str | None]:
+        self.active_core_calls.append(system_name)
         return self.active_core
 
     def get_available_cores(self, system_name: str) -> list[dict[str, Any]]:

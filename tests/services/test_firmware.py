@@ -305,7 +305,7 @@ class TestGetFirmwareStatus:
         assert dc_plat["active_core"] == "flycast_libretro.so"
         assert dc_plat["available_cores"] == [{"label": "Flycast", "so": "flycast_libretro.so"}]
         # Both core read seams received the NORMALIZED system, not the raw slug.
-        assert core_info.active_core_calls == [("dreamcast", None)]
+        assert core_info.active_core_calls == ["dreamcast"]
         assert core_info.available_cores_calls == ["dreamcast"]
         assert resolver.calls == [("dc", None)]
 
@@ -1118,7 +1118,7 @@ class TestCheckPlatformBiosSlugNormalization:
         assert result["needs_bios"] is True
         assert result["server_count"] == 1
         # The active-core read seam received the NORMALIZED system.
-        assert core_info.active_core_calls == [(system, None)]
+        assert core_info.active_core_calls == [system]
         # The BIOS path no longer reads available cores at all.
         assert core_info.available_cores_calls == []
         assert resolver.calls == [(slug, None)]
@@ -1346,7 +1346,7 @@ class TestDownloadRequiredFirmware:
         assert result["downloaded"] == 1
         assert download_called_ids == [1]
         # get_active_core received the NORMALIZED system, not the raw slug.
-        assert core_info.active_core_calls == [("dreamcast", None)]
+        assert core_info.active_core_calls == ["dreamcast"]
         assert resolver.calls == [("dc", None)]
 
     @pytest.mark.asyncio
@@ -1941,7 +1941,7 @@ class TestCheckPlatformBiosPreResolvedCore:
         assert result["needs_bios"] is True
         assert result["required_count"] == 0  # mGBA treats gba_bios.bin as optional
         # None → the system default was read once for the system "gba".
-        assert fw._core_info.active_core_calls == [("gba", None)]
+        assert fw._core_info.active_core_calls == ["gba"]
 
 
 class TestLoadBiosRegistryErrors:
@@ -2450,7 +2450,7 @@ class TestCheckPlatformBiosCached:
         assert result["needs_bios"] is True
         assert result["server_count"] == 1
         # The active-core read seam received the NORMALIZED system.
-        assert core_info.active_core_calls == [(system, None)]
+        assert core_info.active_core_calls == [system]
         # The BIOS path no longer reads available cores at all.
         assert core_info.available_cores_calls == []
         assert resolver.calls == [(slug, None)]

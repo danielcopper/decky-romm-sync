@@ -3,6 +3,9 @@
 Owns the I/O for resolving active RetroArch cores from ES-DE's
 ``gamelist.xml`` / ``es_systems.xml`` / ``core_defaults.json``, and for
 writing per-system / per-game core overrides back to ``gamelist.xml``.
+The read side resolves at the system layer only (per-system
+``<alternativeEmulator>`` → es_systems default → ``core_defaults``);
+per-game core selection is read from the ``roms`` store, not gamelist.
 """
 
 from __future__ import annotations
@@ -41,10 +44,10 @@ class CoreResolver:
     """Resolves active RetroArch cores for ES-DE systems.
 
     Reads ``es_systems.xml`` from the RetroDECK flatpak install, falls back
-    to a bundled ``core_defaults.json``, and honours per-system /
-    per-game overrides written into ``gamelist.xml``. Caches its file
-    reads as instance attributes; call :meth:`reset_cache` after editing
-    the underlying files.
+    to a bundled ``core_defaults.json``, and honours the per-system
+    ``<alternativeEmulator>`` override written into ``gamelist.xml``.
+    Caches its file reads as instance attributes; call :meth:`reset_cache`
+    after editing the underlying files.
 
     Implements the ``CoreInfoProvider`` Protocol structurally.
     """
@@ -94,8 +97,8 @@ class CoreResolver:
                 return (core_so, override_label)
         return None
 
-    def _try_gamelist_overrides(self, system_name, system_info, rom_filename):
-        """Try per-game and per-system overrides from gamelist.xml.
+    def _try_gamelist_overrides(self, system_name, system_info):
+        """Try the per-system override from gamelist.xml.
 
         Returns (core_so, label) or None.
         """
@@ -110,43 +113,27 @@ class CoreResolver:
         if not retrodeck_home:
             return None
 
-        # Per-game override (if rom_filename provided)
-        if rom_filename:
-            game_label = self._read_game_override(retrodeck_home, system_name, rom_filename)
-            if game_label:
-                resolved = self._resolve_label(system_name, system_info, game_label)
-                if resolved:
-                    self._logger.debug(
-                        "es_de_config: per-game override for %s/%s -> %s",
-                        system_name,
-                        rom_filename,
-                        game_label,
-                    )
-                    return resolved
-
-        # Per-system override
         override_label = self._read_system_override(retrodeck_home, system_name)
         if not override_label:
             return None
         return self._resolve_label(system_name, system_info, override_label)
 
-    def get_active_core(self, system_name, rom_filename=None):
-        """Resolve the active core for a system (or specific game).
+    def get_active_core(self, system_name):
+        """Resolve the active core for a system.
 
         Resolution chain:
-        1. Per-game override (gamelist.xml altemulator) — if rom_filename provided
-        2. Per-system override (gamelist.xml alternativeEmulator)
-        3. Live es_systems.xml default
-        4. Static core_defaults.json fallback
-        5. (None, None) if all fail
+        1. Per-system override (gamelist.xml alternativeEmulator)
+        2. Live es_systems.xml default
+        3. Static core_defaults.json fallback
+        4. (None, None) if all fail
 
         Returns: (core_so_name, label) or (None, None).
         """
         es_systems = self._load_es_systems()
         system_info = es_systems.get(system_name)
 
-        # Try gamelist.xml overrides first
-        override = self._try_gamelist_overrides(system_name, system_info, rom_filename)
+        # Try the system-level gamelist.xml override first
+        override = self._try_gamelist_overrides(system_name, system_info)
         if override:
             return override
 
@@ -260,38 +247,6 @@ class CoreResolver:
             return None
 
         return result["label"]
-
-    def _read_game_override(self, retrodeck_home, system_name, rom_filename):
-        """Check for per-game alternative emulator override in gamelist.xml.
-
-        Reads ``{retrodeck_home}/ES-DE/gamelists/{system}/gamelist.xml``
-        looking for ``<game>`` entries with matching ``<path>`` and ``<altemulator>``.
-
-        Returns the altemulator label string or None.
-        """
-        gamelist_path = os.path.join(retrodeck_home, "ES-DE", "gamelists", system_name, _GAMELIST_FILENAME)
-        if not os.path.exists(gamelist_path):
-            return None
-
-        raw = GamelistXmlEditorAdapter.read_gamelist_raw(gamelist_path)
-        if not raw:
-            return None
-
-        parsed = GamelistXmlEditorAdapter.parse_gamelist_preserving(raw)
-        if not parsed:
-            return None
-
-        # Match rom_filename against game paths
-        # rom_filename could be "Pokemon.gba" and path could be "./Pokemon.gba"
-        for game in parsed["games"]:
-            game_path = game.get("path", "")
-            # Normalize: strip leading "./" for comparison
-            normalized = game_path.lstrip("./") if game_path else ""
-            path_matches = normalized == rom_filename or game_path == rom_filename or game_path == f"./{rom_filename}"
-            if path_matches and game.get("altemulator"):
-                return game["altemulator"]
-
-        return None
 
     # -- static helpers (no instance state needed) ---------------------------
 
