@@ -1,4 +1,4 @@
-"""Tests for CoreService."""
+"""Tests for CoreService — system core write + per-game pin/clear + core menu."""
 
 from __future__ import annotations
 
@@ -7,9 +7,13 @@ import logging
 from typing import Any
 
 import pytest
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
+from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
+from domain.rom import Rom
+from domain.rom_install import RomInstall
 from services.cores import CoreService, CoreServiceConfig
 
 
@@ -73,6 +77,40 @@ class FakeBiosChecker:
         return self.payload
 
 
+def _seed_rom(
+    uow: FakeUnitOfWork,
+    *,
+    rom_id: int,
+    platform_slug: str = "snes",
+    shortcut_app_id: int | None = None,
+    emulator_override: str | None = None,
+) -> None:
+    uow.roms.save(
+        Rom(
+            rom_id=rom_id,
+            platform_slug=platform_slug,
+            name=f"rom-{rom_id}",
+            fs_name=f"rom-{rom_id}.sfc",
+            shortcut_app_id=shortcut_app_id,
+            last_synced_at="2026-01-01T00:00:00+00:00",
+            emulator_override=emulator_override,
+        )
+    )
+
+
+def _seed_install(uow: FakeUnitOfWork, *, rom_id: int, file_path: str, platform_slug: str = "snes") -> None:
+    uow.rom_installs.save(
+        RomInstall(
+            rom_id=rom_id,
+            file_path=file_path,
+            rom_dir=None,
+            platform_slug=platform_slug,
+            system=platform_slug,
+            installed_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+
+
 @pytest.fixture
 def event_loop():
     loop = asyncio.new_event_loop()
@@ -89,7 +127,10 @@ def logger() -> logging.Logger:
 def core_info() -> FakeCoreInfoProvider:
     return FakeCoreInfoProvider(
         active_core=("snes9x_libretro", "Snes9x"),
-        available_cores=[{"core_so": "snes9x_libretro", "label": "Snes9x"}],
+        available_cores=[
+            {"core_so": "snes9x_libretro", "label": "Snes9x", "is_default": True},
+            {"core_so": "bsnes_libretro", "label": "bsnes", "is_default": False},
+        ],
     )
 
 
@@ -120,6 +161,21 @@ def retrodeck_paths() -> FakeRetroDeckPaths:
 
 
 @pytest.fixture
+def uow() -> FakeUnitOfWork:
+    return FakeUnitOfWork()
+
+
+@pytest.fixture
+def uow_factory(uow) -> FakeUnitOfWorkFactory:
+    return FakeUnitOfWorkFactory(uow=uow)
+
+
+@pytest.fixture
+def active_core() -> FakeActiveCoreResolver:
+    return FakeActiveCoreResolver(default=("snes9x_libretro", "Snes9x"))
+
+
+@pytest.fixture
 def service(
     event_loop,
     logger,
@@ -128,6 +184,8 @@ def service(
     resolve_system,
     bios_checker,
     retrodeck_paths,
+    uow_factory,
+    active_core,
 ) -> CoreService:
     return CoreService(
         config=CoreServiceConfig(
@@ -138,105 +196,187 @@ def service(
             resolve_system=resolve_system,
             retrodeck_paths=retrodeck_paths,
             bios_checker=bios_checker,
+            uow_factory=uow_factory,
+            active_core=active_core,
         ),
     )
 
 
-# ── get_available_cores ────────────────────────────────────────────────
+# ── get_available_cores (rom_id-keyed core menu) ───────────────────────
 
 
 class TestGetAvailableCores:
-    def test_happy_path(self, event_loop, service, core_info):
-        result = event_loop.run_until_complete(service.get_available_cores("snes"))
+    def test_happy_path(self, event_loop, service, core_info, uow):
+        _seed_rom(uow, rom_id=42, platform_slug="snes")
+        result = event_loop.run_until_complete(service.get_available_cores(42))
         assert result == {
             "cores": core_info.available_cores,
             "active_core": "snes9x_libretro",
             "active_core_label": "Snes9x",
         }
 
-    def test_no_active_core(self, event_loop, service, core_info):
-        core_info.active_core = (None, None)
-        result = event_loop.run_until_complete(service.get_available_cores("snes"))
-        assert result["active_core"] is None
-        assert result["active_core_label"] is None
+    def test_unknown_rom_returns_empty(self, event_loop, service, core_info):
+        # No ROM seeded for rom_id=7 → empty cores + no active core, and the
+        # platform-wide core enumeration is never reached.
+        result = event_loop.run_until_complete(service.get_available_cores(7))
+        assert result == {"cores": [], "active_core": None, "active_core_label": None}
+        assert core_info.available_cores_calls == []
 
-    def test_empty_cores_list(self, event_loop, service, core_info):
-        core_info.available_cores = []
-        result = event_loop.run_until_complete(service.get_available_cores("snes"))
-        assert result["cores"] == []
-
-    def test_system_level_read_passes_none_rom_filename(self, event_loop, service, core_info):
-        # No rom_filename → the active-core read is SYSTEM-LEVEL.
-        event_loop.run_until_complete(service.get_available_cores("snes"))
-        assert core_info.active_core_calls == [("snes", None)]
-
-    def test_per_game_read_forwards_rom_filename(self, event_loop, service, core_info):
-        # A rom_filename narrows the active-core read to the per-game
-        # <altemulator> override (#936). The available-cores list stays
-        # platform-wide (system-level), so it is read with the bare system only.
-        core_info.active_core = ("bsnes_libretro", "bsnes")
-        result = event_loop.run_until_complete(
-            service.get_available_cores("snes", rom_filename="mario.sfc"),
-        )
-        # Active read is per-game (filename forwarded to get_active_core).
-        assert core_info.active_core_calls == [("snes", "mario.sfc")]
-        # Available-cores enumeration never receives the filename — it is the
-        # platform-wide options list.
-        assert core_info.available_cores_calls == ["snes"]
+    def test_active_marker_reflects_pin(self, event_loop, service, uow, active_core):
+        # A pinned ROM surfaces the OVERRIDE core as active (via the resolver),
+        # not the system default — the menu highlights the pin.
+        _seed_rom(uow, rom_id=42, platform_slug="snes", emulator_override="bsnes")
+        active_core.per_rom[42] = ("bsnes_libretro", "bsnes")
+        result = event_loop.run_until_complete(service.get_available_cores(42))
         assert result["active_core"] == "bsnes_libretro"
         assert result["active_core_label"] == "bsnes"
+        assert active_core.calls == [42]
 
-    def test_per_game_override_overrides_system_core(self, event_loop, service, core_info):
-        # The whole point of #936: with a filename, the per-game core surfaces
-        # instead of the system default. The fake returns whatever active_core
-        # is set; assert the filename reached the seam that resolves it.
-        core_info.active_core = ("parallel_n64_libretro", "ParaLLEl N64")
-        result = event_loop.run_until_complete(
-            service.get_available_cores("n64", rom_filename="zelda.z64"),
+    def test_active_marker_falls_back_to_system_default(self, event_loop, service, uow, active_core):
+        # An unpinned ROM (NULL override) surfaces the system default via the
+        # resolver — the same seam, no divergence from the launched core.
+        _seed_rom(uow, rom_id=42, platform_slug="snes")
+        active_core.default = ("snes9x_libretro", "Snes9x")
+        result = event_loop.run_until_complete(service.get_available_cores(42))
+        assert result["active_core"] == "snes9x_libretro"
+        assert result["active_core_label"] == "Snes9x"
+
+    def test_empty_cores_list(self, event_loop, service, core_info, uow):
+        _seed_rom(uow, rom_id=42, platform_slug="snes")
+        core_info.available_cores = []
+        result = event_loop.run_until_complete(service.get_available_cores(42))
+        assert result["cores"] == []
+
+    @pytest.mark.parametrize(
+        ("slug", "system"),
+        [
+            ("dc", "dreamcast"),
+            ("sms", "mastersystem"),
+            ("neo-geo-pocket", "ngp"),
+            ("snes", "snes"),  # identity: slug already equals system
+        ],
+    )
+    def test_resolves_system_for_available_cores(
+        self, event_loop, service, core_info, resolve_system, uow, slug, system
+    ):
+        _seed_rom(uow, rom_id=42, platform_slug=slug)
+        event_loop.run_until_complete(service.get_available_cores(42))
+        # The platform-wide enumeration receives the NORMALIZED system.
+        assert core_info.available_cores_calls == [system]
+        assert resolve_system.calls == [(slug, None)]
+
+
+# ── set_game_core (per-game pin; B4 hard-fail-before-write) ─────────────
+
+
+class TestSetGameCore:
+    def test_installed_and_bound_pins_and_returns_override_launch(self, event_loop, service, uow):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+        assert result["success"] is True
+        assert result["app_id"] == 99
+        # The -e override form bakes the resolved .so for the pinned label.
+        assert result["launch_options"] == (
+            "flatpak run net.retrodeck.retrodeck -e "
+            '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/bsnes_libretro %ROM%" '
+            '"/roms/snes/mario.sfc"'
         )
-        assert ("n64", "zelda.z64") in core_info.active_core_calls
-        assert result["active_core_label"] == "ParaLLEl N64"
+        # The pin landed on the Rom aggregate.
+        assert uow.roms.get(42).emulator_override == "bsnes"
+
+    def test_uninstalled_pins_without_live_launch(self, event_loop, service, uow):
+        # Bound but NOT installed → pin stored, but no shortcut to update live.
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+        assert result["success"] is True
+        assert result["launch_options"] is None
+        assert result["app_id"] is None
+        assert uow.roms.get(42).emulator_override == "bsnes"
+
+    def test_unbound_pins_without_live_launch(self, event_loop, service, uow):
+        # Installed but UNBOUND (no shortcut_app_id) → pin stored, no app_id.
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=None)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+        assert result["success"] is True
+        assert result["launch_options"] is None
+        assert result["app_id"] is None
+        assert uow.roms.get(42).emulator_override == "bsnes"
+
+    def test_unresolvable_label_fails_and_writes_nothing(self, event_loop, service, uow):
+        # B4 + #10: an unavailable core hard-fails BEFORE any write — the DB
+        # must never hold a label no consumer can resolve.
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        result = event_loop.run_until_complete(service.set_game_core(42, "Genesis Plus GX"))
+        assert result["success"] is False
+        assert result["reason"] == "core_unavailable"
+        assert result["message"] == "Core 'Genesis Plus GX' is not available for snes"
+        # No pin written.
+        assert uow.roms.get(42).emulator_override is None
+
+    def test_unknown_rom_fails(self, event_loop, service):
+        result = event_loop.run_until_complete(service.set_game_core(7, "bsnes"))
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert "7" in result["message"]
+
+    def test_resolves_system_before_label_lookup(self, event_loop, service, uow, core_info, resolve_system):
+        # The slug→system normalization runs before the available-cores read so
+        # label resolution keys off the RetroDECK system, not the raw slug.
+        _seed_rom(uow, rom_id=42, platform_slug="dc", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/dc/sonic.gdi", platform_slug="dc")
+        core_info.available_cores = [{"core_so": "flycast_libretro", "label": "Flycast", "is_default": True}]
+        result = event_loop.run_until_complete(service.set_game_core(42, "Flycast"))
+        assert result["success"] is True
+        assert ("dc", None) in resolve_system.calls
+        assert core_info.available_cores_calls == ["dreamcast"]
 
 
-# ── get_platform_core_info (the dedicated core-info path, #923) ─────────
+# ── clear_game_core (Reset / Follow default) ───────────────────────────
 
 
-class TestGetPlatformCoreInfoPath:
-    """The ``get_platform_core_info`` callable is backed by ``get_available_cores``.
+class TestClearGameCore:
+    def test_clears_and_returns_plain_launch(self, event_loop, service, uow):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99, emulator_override="bsnes")
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        result = event_loop.run_until_complete(service.clear_game_core(42))
+        assert result["success"] is True
+        assert result["app_id"] == 99
+        # PLAIN launch — no -e override segment.
+        assert result["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/snes/mario.sfc"'
+        assert "-e" not in result["launch_options"]
+        # The pin is gone (SQL NULL).
+        assert uow.roms.get(42).emulator_override is None
 
-    Core info (active core + available cores) is served via its OWN path, fully
-    decoupled from the BIOS firmware status (#923). ``main.get_platform_core_info``
-    delegates straight to ``CoreService.get_available_cores`` — exercised here via
-    the service method that backs the callable.
-    """
+    def test_clear_uninstalled_drops_pin_without_live_launch(self, event_loop, service, uow):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99, emulator_override="bsnes")
+        result = event_loop.run_until_complete(service.clear_game_core(42))
+        assert result["success"] is True
+        assert result["launch_options"] is None
+        assert result["app_id"] is None
+        assert uow.roms.get(42).emulator_override is None
 
-    def test_serves_active_core_and_available_cores(self, event_loop, service, core_info):
-        core_info.available_cores = [
-            {"core_so": "snes9x_libretro", "label": "Snes9x", "is_default": True},
-            {"core_so": "bsnes_libretro", "label": "bsnes", "is_default": False},
-        ]
-        core_info.active_core = ("bsnes_libretro", "bsnes")
-        result = event_loop.run_until_complete(service.get_available_cores("snes"))
-        assert result == {
-            "cores": core_info.available_cores,
-            "active_core": "bsnes_libretro",
-            "active_core_label": "bsnes",
-        }
+    def test_clear_already_unpinned_is_idempotent(self, event_loop, service, uow):
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        result = event_loop.run_until_complete(service.clear_game_core(42))
+        assert result["success"] is True
+        assert result["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/snes/mario.sfc"'
+        assert uow.roms.get(42).emulator_override is None
 
-    def test_independent_of_bios_checker(self, event_loop, service, bios_checker):
-        # The core-info path never consults the BIOS checker.
-        event_loop.run_until_complete(service.get_available_cores("snes"))
-        assert bios_checker.calls == []
+    def test_clear_unknown_rom_fails(self, event_loop, service):
+        result = event_loop.run_until_complete(service.clear_game_core(7))
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
 
 
-# ── set_system_core ────────────────────────────────────────────────────
+# ── set_system_core (unchanged platform-wide ES-DE override) ────────────
 
 
 class TestSetSystemCore:
     def test_bios_status_carries_no_core_fields(self, event_loop, service, bios_checker):
-        # After #923 the BIOS checker returns BIOS status only; set_system_core
-        # threads that payload through verbatim, so the response's bios_status
-        # carries no core fields.
         bios_checker.payload = {
             "needs_bios": True,
             "server_count": 1,
@@ -265,7 +405,6 @@ class TestSetSystemCore:
     def test_empty_core_label_clears_override(self, event_loop, service, gamelist_editor):
         result = event_loop.run_until_complete(service.set_system_core("snes", ""))
         assert result["success"] is True
-        # Editor sees None when core_label is the empty string.
         assert gamelist_editor.system_calls == [("/home/deck/retrodeck", "snes", None)]
 
     def test_no_retrodeck_home(
@@ -289,7 +428,6 @@ class TestSetSystemCore:
         result = event_loop.run_until_complete(service.set_system_core("snes", "Snes9x"))
         assert result["success"] is False
         assert "xml write failed" in result["message"]
-        # BIOS checker must not be invoked after a failed write.
         assert bios_checker.calls == []
 
     def test_bios_checker_raises_returns_error(self, event_loop, service, gamelist_editor, bios_checker):
@@ -297,108 +435,7 @@ class TestSetSystemCore:
         result = event_loop.run_until_complete(service.set_system_core("snes", "Snes9x"))
         assert result["success"] is False
         assert "bios probe failed" in result["message"]
-        # The write itself still happened.
         assert gamelist_editor.system_calls == [("/home/deck/retrodeck", "snes", "Snes9x")]
-
-
-# ── set_game_core ──────────────────────────────────────────────────────
-
-
-class TestSetGameCore:
-    def test_happy_path(self, event_loop, service, core_info, gamelist_editor, bios_checker):
-        result = event_loop.run_until_complete(service.set_game_core("n64", "n64/zelda.z64", "Mupen64Plus"))
-        assert result == {"success": True, "bios_status": {"needs_bios": False}}
-        assert gamelist_editor.game_calls == [
-            ("/home/deck/retrodeck", "n64", "n64/zelda.z64", "Mupen64Plus"),
-        ]
-        assert core_info.reset_cache_count == 1
-        assert bios_checker.calls == [("n64", "n64/zelda.z64")]
-
-    def test_rom_path_with_leading_dotslash(self, event_loop, service, bios_checker):
-        result = event_loop.run_until_complete(
-            service.set_game_core("n64", "./n64/zelda.z64", "Mupen64Plus"),
-        )
-        assert result["success"] is True
-        assert bios_checker.calls == [("n64", "n64/zelda.z64")]
-
-    def test_empty_rom_path_yields_none_filename(self, event_loop, service, gamelist_editor, bios_checker):
-        result = event_loop.run_until_complete(service.set_game_core("n64", "", "Mupen64Plus"))
-        assert result["success"] is True
-        assert bios_checker.calls == [("n64", None)]
-        # The editor still receives the empty rom_path verbatim — the
-        # write-side fallback is "set None core_label", not "skip write".
-        assert gamelist_editor.game_calls == [("/home/deck/retrodeck", "n64", "", "Mupen64Plus")]
-
-    def test_empty_core_label_clears_override(self, event_loop, service, gamelist_editor):
-        result = event_loop.run_until_complete(service.set_game_core("n64", "n64/zelda.z64", ""))
-        assert result["success"] is True
-        assert gamelist_editor.game_calls == [
-            ("/home/deck/retrodeck", "n64", "n64/zelda.z64", None),
-        ]
-
-    def test_no_retrodeck_home(
-        self,
-        event_loop,
-        service,
-        retrodeck_paths,
-        gamelist_editor,
-        bios_checker,
-        core_info,
-    ):
-        retrodeck_paths.home = ""
-        result = event_loop.run_until_complete(
-            service.set_game_core("n64", "n64/zelda.z64", "Mupen64Plus"),
-        )
-        assert result == {"success": False, "message": "RetroDECK home not found"}
-        assert gamelist_editor.game_calls == []
-        assert bios_checker.calls == []
-        assert core_info.reset_cache_count == 0
-
-    def test_editor_raises_returns_error(self, event_loop, service, gamelist_editor, bios_checker):
-        gamelist_editor.game_side_effect = RuntimeError("xml write failed")
-        result = event_loop.run_until_complete(
-            service.set_game_core("n64", "n64/zelda.z64", "Mupen64Plus"),
-        )
-        assert result["success"] is False
-        assert "xml write failed" in result["message"]
-        assert bios_checker.calls == []
-
-    def test_bios_checker_raises_returns_error(self, event_loop, service, gamelist_editor, bios_checker):
-        bios_checker.side_effect = RuntimeError("bios probe failed")
-        result = event_loop.run_until_complete(
-            service.set_game_core("n64", "n64/zelda.z64", "Mupen64Plus"),
-        )
-        assert result["success"] is False
-        assert "bios probe failed" in result["message"]
-        assert gamelist_editor.game_calls == [
-            ("/home/deck/retrodeck", "n64", "n64/zelda.z64", "Mupen64Plus"),
-        ]
-
-
-# ── slug → system normalization ────────────────────────────────────────
-#
-# The raw RomM platform_slug (dc, sms, neo-geo-pocket) must be resolved to
-# the RetroDECK system (dreamcast, mastersystem, ngp) BEFORE it reaches the
-# ES-DE core read/write seams. The BIOS recheck, by contrast, stays on the
-# RAW slug — that is BIOS space, owned by FirmwareService.
-
-
-class TestSlugNormalization:
-    @pytest.mark.parametrize(
-        ("slug", "system"),
-        [
-            ("dc", "dreamcast"),
-            ("sms", "mastersystem"),
-            ("neo-geo-pocket", "ngp"),
-            ("snes", "snes"),  # identity: slug already equals system
-        ],
-    )
-    def test_get_available_cores_resolves_system(self, event_loop, service, core_info, resolve_system, slug, system):
-        event_loop.run_until_complete(service.get_available_cores(slug))
-        # Both read seams receive the NORMALIZED system, not the raw slug.
-        assert core_info.available_cores_calls == [system]
-        assert core_info.active_core_calls == [(system, None)]
-        assert resolve_system.calls == [(slug, None)]
 
     @pytest.mark.parametrize(
         ("slug", "system"),
@@ -413,25 +450,5 @@ class TestSlugNormalization:
         self, event_loop, service, gamelist_editor, bios_checker, slug, system
     ):
         event_loop.run_until_complete(service.set_system_core(slug, "Core"))
-        # ES-DE write seam receives the NORMALIZED system.
         assert gamelist_editor.system_calls == [("/home/deck/retrodeck", system, "Core")]
-        # BIOS recheck receives the RAW slug.
         assert bios_checker.calls == [(slug, None)]
-
-    @pytest.mark.parametrize(
-        ("slug", "system"),
-        [
-            ("dc", "dreamcast"),
-            ("sms", "mastersystem"),
-            ("neo-geo-pocket", "ngp"),
-            ("snes", "snes"),
-        ],
-    )
-    def test_set_game_core_resolves_system_keeps_raw_bios(
-        self, event_loop, service, gamelist_editor, bios_checker, slug, system
-    ):
-        event_loop.run_until_complete(service.set_game_core(slug, f"{slug}/game.rom", "Core"))
-        # ES-DE write seam receives the NORMALIZED system; rom_path is verbatim.
-        assert gamelist_editor.game_calls == [("/home/deck/retrodeck", system, f"{slug}/game.rom", "Core")]
-        # BIOS recheck receives the RAW slug (filename derived from rom_path).
-        assert bios_checker.calls == [(slug, f"{slug}/game.rom")]

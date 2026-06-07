@@ -47,6 +47,7 @@ from adapters.system_uuid_gen import SystemUuidGen
 from domain.state_migrations import fold_legacy_save_sync_settings, migrate_settings
 from lib.late_binding import LateBinding
 from services.achievements import AchievementsService, AchievementsServiceConfig
+from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.connection import ConnectionService, ConnectionServiceConfig
 from services.cores import CoreService, CoreServiceConfig
@@ -596,6 +597,15 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    active_core_resolver = ActiveCoreResolver(
+        config=ActiveCoreResolverConfig(
+            uow_factory=cfg.callbacks.uow_factory,
+            core_info=cfg.adapters.core_info_provider,
+            resolve_system=cfg.adapters.http_adapter.resolve_system,
+            logger=cfg.runtime.logger,
+        ),
+    )
+
     core_service = CoreService(
         config=CoreServiceConfig(
             loop=cfg.runtime.loop,
@@ -605,6 +615,8 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             resolve_system=cfg.adapters.http_adapter.resolve_system,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             bios_checker=firmware_service,
+            uow_factory=cfg.callbacks.uow_factory,
+            active_core=active_core_resolver,
         ),
     )
 

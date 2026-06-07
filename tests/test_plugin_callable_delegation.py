@@ -206,33 +206,37 @@ class TestCoreCallableDelegation:
 
     @pytest.mark.asyncio
     async def test_set_game_core_delegates(self, plugin):
-        plugin._core_service.set_game_core = AsyncMock(return_value={"success": True})
-        result = await plugin.set_game_core("snes", "/path", "core_a")
-        plugin._core_service.set_game_core.assert_awaited_once_with("snes", "/path", "core_a")
-        assert result == {"success": True}
+        # The per-game pin is keyed by rom_id (the DB anchor), not by
+        # platform_slug + rom_path: the override lives on the Rom aggregate.
+        plugin._core_service.set_game_core = AsyncMock(
+            return_value={"success": True, "launch_options": "flatpak run …", "app_id": 99}
+        )
+        result = await plugin.set_game_core(42, "Snes9x")
+        plugin._core_service.set_game_core.assert_awaited_once_with(42, "Snes9x")
+        assert result == {"success": True, "launch_options": "flatpak run …", "app_id": 99}
+
+    @pytest.mark.asyncio
+    async def test_clear_game_core_delegates(self, plugin):
+        # Reset / Follow default drops the pin; delegates by rom_id and returns
+        # the PLAIN launch options for the live shortcut.
+        plugin._core_service.clear_game_core = AsyncMock(
+            return_value={"success": True, "launch_options": "flatpak run …", "app_id": 99}
+        )
+        result = await plugin.clear_game_core(42)
+        plugin._core_service.clear_game_core.assert_awaited_once_with(42)
+        assert result == {"success": True, "launch_options": "flatpak run …", "app_id": 99}
 
     @pytest.mark.asyncio
     async def test_get_platform_core_info_delegates(self, plugin):
         # Core info is served via its OWN path (CoreService.get_available_cores),
-        # independent of the BIOS firmware status (#923). Without a rom_filename
-        # the active read is SYSTEM-LEVEL (rom_filename=None).
+        # keyed by rom_id so the per-game active core (override or system default)
+        # surfaces, independent of the BIOS firmware status (#923).
         plugin._core_service.get_available_cores = AsyncMock(
             return_value={"cores": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
         )
-        result = await plugin.get_platform_core_info("snes")
-        plugin._core_service.get_available_cores.assert_awaited_once_with("snes", rom_filename=None)
+        result = await plugin.get_platform_core_info(42)
+        plugin._core_service.get_available_cores.assert_awaited_once_with(42)
         assert result == {"cores": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
-
-    @pytest.mark.asyncio
-    async def test_get_platform_core_info_forwards_rom_filename(self, plugin):
-        # The per-game detail page passes the ROM filename so a per-game
-        # <altemulator> override reads back as the active core (#936).
-        plugin._core_service.get_available_cores = AsyncMock(
-            return_value={"cores": [], "active_core": "bsnes_libretro", "active_core_label": "bsnes"}
-        )
-        result = await plugin.get_platform_core_info("snes", "mario.sfc")
-        plugin._core_service.get_available_cores.assert_awaited_once_with("snes", rom_filename="mario.sfc")
-        assert result == {"cores": [], "active_core": "bsnes_libretro", "active_core_label": "bsnes"}
 
 
 class TestFirmwareCallableDelegation:
