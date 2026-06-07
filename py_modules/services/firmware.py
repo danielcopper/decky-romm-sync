@@ -632,16 +632,16 @@ class FirmwareService:
         errors = []
         removed_names: list[str] = []
         for f in files:
-            if not f.downloaded:
+            if not f["downloaded"]:
                 continue
             try:
-                self._firmware_file_store.remove_file(f.local_path)
+                self._firmware_file_store.remove_file(f["local_path"])
             except OSError as e:
-                self._logger.warning(f"Failed to remove BIOS file {f.file_name}: {e}")
-                errors.append(f"{f.file_name}: {e}")
+                self._logger.warning(f"Failed to remove BIOS file {f['file_name']}: {e}")
+                errors.append(f"{f['file_name']}: {e}")
                 continue
             deleted += 1
-            removed_names.append(f.file_name)
+            removed_names.append(f["file_name"])
 
         if removed_names:
             self._prune_bios_records(platform_slug, removed_names)
