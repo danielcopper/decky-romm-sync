@@ -114,10 +114,24 @@ class RommHttpAdapter:
             ctx.verify_mode = ssl.CERT_NONE
         return ctx
 
-    def auth_header(self) -> str:
-        """Bearer auth header value built from the stored Client API Token."""
+    def auth_header(self) -> str | None:
+        """Bearer auth header value, or ``None`` when no Client API Token is stored.
+
+        Returning ``None`` lets callers omit the ``Authorization`` header on
+        unauthenticated probes (fresh setup, before a token is minted). An empty
+        ``Bearer `` value is malformed and some RomM versions 500 on it, which
+        would deadlock first-time connection setup.
+        """
         token = self._settings.get("romm_api_token") or ""
-        return f"Bearer {token}"
+        return f"Bearer {token}" if token else None
+
+    def _apply_default_headers(self, req: urllib.request.Request) -> None:
+        """Attach the standard outgoing headers: ``User-Agent`` always, and
+        ``Authorization`` only when a Client API Token is stored."""
+        header = self.auth_header()
+        if header is not None:
+            req.add_header("Authorization", header)
+        req.add_header("User-Agent", self._user_agent)
 
     @staticmethod
     def _basic_auth_header(username: str, password: str) -> str:
@@ -218,8 +232,7 @@ class RommHttpAdapter:
 
         def _do_request():
             req = urllib.request.Request(url, method="GET")
-            req.add_header("Authorization", self.auth_header())
-            req.add_header("User-Agent", self._user_agent)
+            self._apply_default_headers(req)
             try:
                 with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
                     return json.loads(resp.read().decode())
@@ -273,8 +286,7 @@ class RommHttpAdapter:
 
         def _do_download():
             req = urllib.request.Request(url, method="GET")
-            req.add_header("Authorization", self.auth_header())
-            req.add_header("User-Agent", self._user_agent)
+            self._apply_default_headers(req)
             ctx = self.ssl_context()
             try:
                 with urllib.request.urlopen(req, context=ctx, timeout=self._CONNECT_TIMEOUT) as resp:
@@ -300,8 +312,7 @@ class RommHttpAdapter:
             body = json.dumps(data).encode("utf-8")
             req = urllib.request.Request(url, data=body, method=method)
             req.add_header("Content-Type", "application/json")
-            req.add_header("Authorization", self.auth_header())
-            req.add_header("User-Agent", self._user_agent)
+            self._apply_default_headers(req)
             try:
                 with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
                     return json.loads(resp.read().decode())
@@ -341,8 +352,7 @@ class RommHttpAdapter:
         url = self._settings["romm_url"].rstrip("/") + path
         req = urllib.request.Request(url, data=body, method=method)
         req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-        req.add_header("Authorization", self.auth_header())
-        req.add_header("User-Agent", self._user_agent)
+        self._apply_default_headers(req)
         try:
             with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
                 return json.loads(resp.read().decode())

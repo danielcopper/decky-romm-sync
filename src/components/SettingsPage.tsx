@@ -291,7 +291,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         setHasToken(true);
       }
     } catch {
-      setStatus("Connection failed");
+      setStatus("Sign-in failed");
     }
   };
 

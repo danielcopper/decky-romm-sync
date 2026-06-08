@@ -64,7 +64,7 @@ def _make_service(
 
 class TestTestConnectionHappyPath:
     def test_returns_success_with_version(self, event_loop, romm_api, logger):
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["success"] is True
@@ -74,7 +74,7 @@ class TestTestConnectionHappyPath:
 
     def test_version_exact_minimum_succeeds(self, event_loop, romm_api, logger):
         """Version equal to minimum tuple is accepted (>= comparison)."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -101,8 +101,22 @@ class TestTestConnectionBadPath:
         result = event_loop.run_until_complete(service.test_connection())
         assert result["error_code"] == "config_error"
 
-    def test_heartbeat_connection_error_clears_version(self, event_loop, romm_api, logger):
+    def test_no_token_returns_config_error_without_probing(self, event_loop, romm_api, logger):
+        """A configured URL but no minted token short-circuits before any network
+        call — an unauthenticated scoped probe is never fired (#928)."""
         settings = {"romm_url": "http://romm.local"}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.test_connection())
+        assert result == {
+            "success": False,
+            "message": "Not signed in — sign in to RomM first",
+            "error_code": "config_error",
+        }
+        romm_api.heartbeat.assert_not_called()
+        romm_api.list_platforms.assert_not_called()
+
+    def test_heartbeat_connection_error_clears_version(self, event_loop, romm_api, logger):
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.side_effect = RommConnectionError("connection refused")
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -113,7 +127,7 @@ class TestTestConnectionBadPath:
 
     def test_list_platforms_server_error_prefixed(self, event_loop, romm_api, logger):
         """Non-auth/forbidden errors from list_platforms get prefixed."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.list_platforms.side_effect = RommServerError("boom", status_code=503)
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -123,7 +137,7 @@ class TestTestConnectionBadPath:
 
     def test_list_platforms_auth_error_not_prefixed(self, event_loop, romm_api, logger):
         """auth_error / forbidden_error keep their original message — no prefix."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.list_platforms.side_effect = RommAuthError("bad credentials")
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -134,7 +148,7 @@ class TestTestConnectionBadPath:
 
 class TestTestConnectionVersionGate:
     def test_version_below_minimum_rejected(self, event_loop, romm_api, logger):
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.5.0"}}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -146,7 +160,7 @@ class TestTestConnectionVersionGate:
 
     def test_version_one_patch_below_minimum_rejected(self, event_loop, romm_api, logger):
         """4.8.0 is below 4.8.1 — must be rejected."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.0"}}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -154,7 +168,7 @@ class TestTestConnectionVersionGate:
 
     def test_development_version_bypasses_gate(self, event_loop, romm_api, logger):
         """``development`` version string skips the minimum-version check."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "development"}}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -166,7 +180,7 @@ class TestTestConnectionVersionGate:
 class TestTestConnectionEdgeCases:
     def test_heartbeat_without_system_field(self, event_loop, romm_api, logger):
         """Heartbeat dict without SYSTEM.VERSION → list_platforms still probed, success without romm_version."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = {}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -177,7 +191,7 @@ class TestTestConnectionEdgeCases:
 
     def test_heartbeat_returns_none_safely_handled(self, event_loop, romm_api, logger):
         """A ``None`` heartbeat payload is tolerated via ``contextlib.suppress``."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = None
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -187,7 +201,7 @@ class TestTestConnectionEdgeCases:
 
     def test_heartbeat_with_malformed_system_field(self, event_loop, romm_api, logger):
         """SYSTEM field that is not a dict raises AttributeError, suppressed → version=None."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = {"SYSTEM": "not-a-dict"}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
@@ -196,7 +210,7 @@ class TestTestConnectionEdgeCases:
 
     def test_min_required_version_injected(self, event_loop, romm_api, logger):
         """Service uses the injected minimum, not a hard-coded tuple."""
-        settings = {"romm_url": "http://romm.local"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
         romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "5.0.0"}}
         # Inject a higher minimum so 5.0.0 is rejected.
         service = _make_service(
@@ -228,6 +242,18 @@ class TestEstablishTokenHappyPath:
         assert settings["romm_api_token_id"] == 42
         # URL persisted + token persisted → at least two saves.
         assert settings_persister.save_settings.call_count >= 2
+
+    def test_mints_with_no_preexisting_token(self, event_loop, romm_api, logger):
+        """``establish_token`` is the path that mints the first token — it must
+        proceed even though no token is stored yet (#928 guard applies only to
+        ``test_connection``, never here)."""
+        settings: dict[str, Any] = {}
+        assert "romm_api_token" not in settings
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+        assert result["success"] is True
+        romm_api.mint_client_token.assert_called_once()
+        assert settings["romm_api_token"] == "rmm_minted"
 
     def test_does_not_persist_credentials(self, event_loop, romm_api, logger):
         settings: dict[str, Any] = {}

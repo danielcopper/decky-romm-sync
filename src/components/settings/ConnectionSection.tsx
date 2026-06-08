@@ -1,8 +1,8 @@
 /**
- * RomM server connection settings — URL, account/token connection, SSL
- * toggle, and the "Test Connection" affordance. Pure renderer: the parent
- * owns the field values, the has-token flag, the status string, and the
- * save/connect/test logic.
+ * RomM server connection settings — URL, account sign-in/token, SSL toggle,
+ * and the "Test Connection" affordance. Pure renderer: the parent owns the
+ * field values, the has-token flag, the status string, and the
+ * save/sign-in/test logic.
  */
 
 import { FC } from "react";
@@ -48,12 +48,12 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
         </Field>
       </PanelSectionRow>
       <PanelSectionRow>
-        <Field label="RomM Account" description={hasToken ? "Connected" : "Not connected"}>
+        <Field label="RomM Account" description={hasToken ? "Signed in" : "Not signed in"}>
           <DialogButton
             style={{ minWidth: "auto", width: "auto" }}
             onClick={() => showModal(<ConnectModal onConnect={onConnect} />)}
           >
-            Connect
+            Sign in
           </DialogButton>
         </Field>
       </PanelSectionRow>
@@ -68,7 +68,12 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
         </PanelSectionRow>
       )}
       <PanelSectionRow>
-        <ButtonItem layout="below" onClick={onTestConnection} disabled={loading}>
+        <ButtonItem
+          layout="below"
+          onClick={onTestConnection}
+          disabled={loading || !hasToken}
+          description={hasToken ? undefined : "Sign in to RomM first to test the connection."}
+        >
           Test Connection
         </ButtonItem>
       </PanelSectionRow>

@@ -187,6 +187,7 @@ class TestConnection:
 
         plugin.loop = asyncio.get_event_loop()
         plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_token"
         plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
         plugin._romm_api.list_platforms.return_value = [{"id": 1, "slug": "n64"}]
         # Rebuild connection service with the live event loop so executor

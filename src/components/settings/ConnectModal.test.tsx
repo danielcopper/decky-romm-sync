@@ -54,7 +54,7 @@ describe("ConnectModal", () => {
     expect(pass.getAttribute("data-is-password")).toBe("true");
   });
 
-  it("calls onConnect with the entered username + password on Connect", () => {
+  it("calls onConnect with the entered username + password on Sign in", () => {
     const onConnect = vi.fn();
     const { getByTestId } = render(<ConnectModal onConnect={onConnect} />);
 
@@ -73,8 +73,8 @@ describe("ConnectModal", () => {
     expect(onConnect).toHaveBeenCalledWith("", "");
   });
 
-  it("uses 'Connect' as the OK button label", () => {
+  it("uses 'Sign in' as the OK button label", () => {
     const { getByTestId } = render(<ConnectModal onConnect={vi.fn()} />);
-    expect(getByTestId("ok-button").textContent).toBe("Connect");
+    expect(getByTestId("ok-button").textContent).toBe("Sign in");
   });
 });

@@ -68,13 +68,21 @@ class ConnectionService:
         """Probe the configured server and return a frontend-shaped result dict.
 
         The result dict always carries ``success`` and ``message``. On
-        failure, ``error_code`` classifies the cause (``config_error``,
+        failure, ``error_code`` classifies the cause (``config_error`` when
+        the server URL is unset or no token has been minted yet,
         ``version_error``, or an :func:`lib.errors.error_response` code).
         On success or version failure, ``romm_version`` carries the
         detected server version when the heartbeat exposed one.
         """
         if not self._settings.get("romm_url"):
             return {"success": False, "message": "No server URL configured", "error_code": "config_error"}
+
+        if not self._settings.get("romm_api_token"):
+            return {
+                "success": False,
+                "message": "Not signed in — sign in to RomM first",
+                "error_code": "config_error",
+            }
 
         try:
             version = await self._loop.run_in_executor(None, self._probe_version)

@@ -152,15 +152,15 @@ class TestRommAuthHeader:
         header = plugin._http_adapter.auth_header()
         assert header == "Bearer rmm_abc123"
 
-    def test_bearer_empty_when_no_token(self, plugin):
+    def test_returns_none_when_no_token(self, plugin):
         plugin.settings.pop("romm_api_token", None)
         header = plugin._http_adapter.auth_header()
-        assert header == "Bearer "
+        assert header is None
 
-    def test_bearer_empty_when_token_none(self, plugin):
+    def test_returns_none_when_token_none(self, plugin):
         plugin.settings["romm_api_token"] = None
         header = plugin._http_adapter.auth_header()
-        assert header == "Bearer "
+        assert header is None
 
 
 class TestRommBasicAuthRequest:
@@ -326,6 +326,49 @@ class TestRommRequest:
         req = mock_open.call_args[0][0]
         assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
+    def test_omits_authorization_when_no_token(self, plugin):
+        """A pre-mint probe (no stored token) must not send an empty ``Bearer ``
+        header — some RomM versions 500 on it. The User-Agent is still sent."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings.pop("romm_api_token", None)
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = _json.dumps({"ok": True}).encode()
+        fake_resp.__enter__ = MagicMock(return_value=fake_resp)
+        fake_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=fake_resp) as mock_open:
+            plugin._http_adapter.request("/api/test")
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Authorization") is None
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
+
+    def test_sends_authorization_when_token_present(self, plugin):
+        """With a stored token, the Bearer header is sent alongside the UA."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = _json.dumps({"ok": True}).encode()
+        fake_resp.__enter__ = MagicMock(return_value=fake_resp)
+        fake_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=fake_resp) as mock_open:
+            plugin._http_adapter.request("/api/test")
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Authorization") == "Bearer rmm_runtime"
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
+
 
 class TestRommJsonRequest:
     def test_post_json(self, plugin):
@@ -369,6 +412,27 @@ class TestRommJsonRequest:
 
         req = mock_open.call_args[0][0]
         assert req.get_method() == "PUT"
+
+    def test_omits_authorization_when_no_token(self, plugin):
+        """A token-less JSON request omits the Authorization header (no empty Bearer)."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings.pop("romm_api_token", None)
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = _json.dumps({"id": 1}).encode()
+        fake_resp.__enter__ = MagicMock(return_value=fake_resp)
+        fake_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=fake_resp) as mock_open:
+            plugin._http_adapter.post_json("/api/saves", {"filename": "test.srm"})
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Authorization") is None
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
 
 class TestRommUploadMultipart:
@@ -486,6 +550,7 @@ def _setup_plugin(plugin):
     plugin.settings["romm_url"] = "http://romm.local"
     plugin.settings["romm_user"] = "user"
     plugin.settings["romm_pass"] = "pass"
+    plugin.settings["romm_api_token"] = "rmm_token"
     plugin.settings["romm_allow_insecure_ssl"] = False
     plugin.loop = asyncio.get_event_loop()
     plugin._connection_service = ConnectionService(
@@ -1360,6 +1425,29 @@ class TestDownloadTimeout:
             adapter.download("/roms/game.zip", dest)
 
         req = mock_open.call_args[0][0]
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
+
+    def test_download_omits_authorization_when_no_token(self, tmp_path):
+        """A token-less download omits the Authorization header (no empty Bearer)."""
+        from io import BytesIO
+
+        adapter = self._make_adapter()
+        adapter._settings.pop("romm_api_token", None)
+        dest = str(tmp_path / "rom.zip")
+        data = b"hello"
+
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Length": str(len(data))}
+        stream = BytesIO(data)
+        mock_resp.read = stream.read
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            adapter.download("/roms/game.zip", dest)
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Authorization") is None
         assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
     def test_connection_timeout_still_works(self, tmp_path):

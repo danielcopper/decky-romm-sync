@@ -596,7 +596,7 @@ describe("SettingsPage", () => {
       expect(conn?.hasToken).toBe(false);
     });
 
-    it("sets status='Connection failed' when connectWithCredentials throws", async () => {
+    it("sets status='Sign-in failed' when connectWithCredentials throws", async () => {
       vi.mocked(backend.connectWithCredentials).mockRejectedValue(new Error("net"));
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
@@ -606,7 +606,7 @@ describe("SettingsPage", () => {
         await Promise.resolve();
       });
 
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Connection failed");
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Sign-in failed");
     });
   });
 

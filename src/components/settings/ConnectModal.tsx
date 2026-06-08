@@ -27,8 +27,8 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect }) =
       onOK={() => {
         onConnect(username, password);
       }}
-      strTitle="Connect to RomM"
-      strOKButtonText="Connect"
+      strTitle="Sign in to RomM"
+      strOKButtonText="Sign in"
       bDisableBackgroundDismiss={true}
     >
       <div style={{ fontSize: "12px", marginBottom: "12px", color: "rgba(255,255,255,0.6)" }}>
