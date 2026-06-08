@@ -38,6 +38,7 @@ export interface CoreInfo {
   cores: AvailableCore[];
   active_core: string | null;
   active_core_label: string | null;
+  platform_core_label: string | null;
 }
 
 /**

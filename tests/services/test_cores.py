@@ -185,14 +185,37 @@ class TestGetAvailableCores:
             "cores": core_info.available_cores,
             "active_core": "snes9x_libretro",
             "active_core_label": "Snes9x",
+            "platform_core_label": None,
         }
 
     def test_unknown_rom_returns_empty(self, event_loop, service, core_info):
         # No ROM seeded for rom_id=7 → empty cores + no active core, and the
         # platform-wide core enumeration is never reached.
         result = event_loop.run_until_complete(service.get_available_cores(7))
-        assert result == {"cores": [], "active_core": None, "active_core_label": None}
+        assert result == {
+            "cores": [],
+            "active_core": None,
+            "active_core_label": None,
+            "platform_core_label": None,
+        }
         assert core_info.available_cores_calls == []
+
+    def test_platform_core_label_surfaces_per_platform_override(self, event_loop, service, uow, settings):
+        # A per-platform override set on the System page (settings.json
+        # platform_cores) surfaces as platform_core_label so the menu can mark
+        # the system-level selection distinctly from the active core (#954).
+        _seed_rom(uow, rom_id=42, platform_slug="snes")
+        settings["platform_cores"]["snes"] = "bsnes"
+        result = event_loop.run_until_complete(service.get_available_cores(42))
+        assert result["platform_core_label"] == "bsnes"
+
+    def test_platform_core_label_none_when_platform_absent(self, event_loop, service, uow, settings):
+        # A platform with no per-platform override → platform_core_label is None
+        # even when OTHER platforms carry one.
+        _seed_rom(uow, rom_id=42, platform_slug="snes")
+        settings["platform_cores"]["gba"] = "mGBA"
+        result = event_loop.run_until_complete(service.get_available_cores(42))
+        assert result["platform_core_label"] is None
 
     def test_active_marker_reflects_pin(self, event_loop, service, uow, active_core):
         # A pinned ROM surfaces the OVERRIDE core as active (via the resolver),

@@ -234,6 +234,7 @@ describe("RomMGameInfoPanel", () => {
       cores: [],
       active_core: null,
       active_core_label: null,
+      platform_core_label: null,
     });
     vi.mocked(backend.getSaveStatus).mockResolvedValue({
       rom_id: 0,
@@ -1006,6 +1007,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "from_core_changed.so",
         active_core_label: "FROM_CORE_CHANGED",
+        platform_core_label: null,
         cores: [{ core_so: "from_core_changed.so", label: "FROM_CORE_CHANGED", is_default: true }],
       });
       await act(async () => {
@@ -1056,6 +1058,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "initial_core.so",
         active_core_label: "INITIAL_CORE",
+        platform_core_label: null,
         cores: [{ core_so: "initial_core.so", label: "INITIAL_CORE", is_default: true }],
       });
       const view = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1797,6 +1800,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "snes9x_libretro",
         active_core_label: "Snes9x",
+        platform_core_label: null,
         cores: [{ core_so: "snes9x_libretro", label: "Snes9x", is_default: true }],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -1952,6 +1956,7 @@ describe("RomMGameInfoPanel", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "mycore.so",
         active_core_label: "MyCore",
+        platform_core_label: null,
         cores: [{ core_so: "mycore.so", label: "MyCore", is_default: true }],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);

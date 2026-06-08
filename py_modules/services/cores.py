@@ -89,15 +89,23 @@ class CoreService:
         selection is the per-ROM resolution from :class:`ActiveCoreResolver`, so
         a pinned ``emulator_override`` (or per-platform core) surfaces over the
         system default and the menu can highlight the active core (or offer
-        Reset). When ``rom_id`` is unknown the cores list is empty and the active
-        core is ``(None, None)``.
+        Reset). ``platform_core_label`` carries the per-platform override label
+        (``settings.json`` ``platform_cores``) so the menu can mark the
+        system-level selection distinctly from the active core. When ``rom_id``
+        is unknown the cores list is empty and the active core is
+        ``(None, None)``.
         """
         return await self._loop.run_in_executor(None, self._available_cores_io, rom_id)
 
     def _available_cores_io(self, rom_id: int) -> dict[str, Any]:
         rom = self._read_rom(rom_id)
         if rom is None:
-            return {"cores": [], "active_core": None, "active_core_label": None}
+            return {
+                "cores": [],
+                "active_core": None,
+                "active_core_label": None,
+                "platform_core_label": None,
+            }
         system = self._resolve_system(rom.platform_slug)
         cores = self._core_info.get_available_cores(system)
         active_so, active_label = self._active_core.active_core_for_rom(rom_id)
@@ -105,6 +113,7 @@ class CoreService:
             "cores": cores,
             "active_core": active_so,
             "active_core_label": active_label,
+            "platform_core_label": self._settings.get("platform_cores", {}).get(rom.platform_slug),
         }
 
     def _set_system_core_io(self, platform_slug: str, core_label: str) -> list[dict[str, Any]]:

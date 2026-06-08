@@ -77,11 +77,14 @@ vi.mock("../utils/playSection", () => ({
     biosStatus: "ok",
     biosLabel: "OK",
   })),
-  extractCoreInfo: vi.fn((c: { active_core_label?: string | null; cores?: unknown[] }) => ({
-    activeCoreLabel: c.active_core_label ?? null,
-    activeCoreIsDefault: true,
-    availableCores: c.cores ?? [],
-  })),
+  extractCoreInfo: vi.fn(
+    (c: { active_core_label?: string | null; platform_core_label?: string | null; cores?: unknown[] }) => ({
+      activeCoreLabel: c.active_core_label ?? null,
+      activeCoreIsDefault: true,
+      availableCores: c.cores ?? [],
+      platformCoreLabel: c.platform_core_label ?? null,
+    }),
+  ),
   resolveSaveSyncLabel: vi.fn(() => "synced label"),
   // timeoutMs returns a Promise that never resolves — Promise.race with
   // testConnection always wins. Tests can override per-case to drive the
@@ -261,6 +264,7 @@ describe("RomMPlaySection", () => {
       activeCoreLabel: null,
       activeCoreIsDefault: true,
       availableCores: [],
+      platformCoreLabel: null,
     });
     // refreshCoreInfoInBackground (mocked) merges the current extractCoreInfo
     // mock result into state so the core button / menu render as in production,
@@ -268,7 +272,12 @@ describe("RomMPlaySection", () => {
     // extractCoreInfo mock ignores its argument, so the dummy CoreInfo is fine.
     vi.mocked(sectionRefresh.refreshCoreInfoInBackground).mockImplementation((_romId, cancelled, setter) => {
       if (cancelled()) return;
-      const coreFields = playSectionUtils.extractCoreInfo({ cores: [], active_core: null, active_core_label: null });
+      const coreFields = playSectionUtils.extractCoreInfo({
+        cores: [],
+        active_core: null,
+        active_core_label: null,
+        platform_core_label: null,
+      });
       act(() => {
         setter((prev) => ({ ...prev, ...coreFields }));
       });
@@ -283,6 +292,7 @@ describe("RomMPlaySection", () => {
       cores: [],
       active_core: null,
       active_core_label: null,
+      platform_core_label: null,
     });
 
     // Steam globals — appStore for the synchronous overview read.
@@ -1067,6 +1077,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "blastem.so",
         active_core_label: "BlastEm",
+        platform_core_label: null,
         cores: [
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
@@ -1117,6 +1128,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "blastem.so",
         active_core_label: "BlastEm",
+        platform_core_label: null,
         cores: [
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
@@ -2025,6 +2037,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "snes9x.so",
         active_core_label: "Snes9x",
+        platform_core_label: null,
         cores: [
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
@@ -2037,6 +2050,7 @@ describe("RomMPlaySection", () => {
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
         ],
+        platformCoreLabel: null,
       });
     }
 
@@ -2252,6 +2266,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
         active_core: "blastem.so",
         active_core_label: "BlastEm",
+        platform_core_label: null,
         cores: [
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
@@ -2265,6 +2280,7 @@ describe("RomMPlaySection", () => {
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
         ],
+        platformCoreLabel: null,
       });
     }
 
@@ -2436,6 +2452,7 @@ describe("RomMPlaySection", () => {
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
         ],
+        platformCoreLabel: null,
       });
       // 1 disabled compat note + 2 core items (separator filtered out, no Reset).
       expect(items).toHaveLength(3);
@@ -2455,12 +2472,33 @@ describe("RomMPlaySection", () => {
           { core_so: "snes9x.so", label: "Snes9x", is_default: true },
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
         ],
+        platformCoreLabel: null,
       });
       expect(items).toHaveLength(3);
       // The default entry has no ✓ when an override is pinned …
       expect(items[1]!.props.children).toBe("Snes9x (default)");
       // … and the pinned core carries it instead.
       expect(items[2]!.props.children).toBe("BlastEm ✓");
+    });
+
+    it("showCoreMenu marks the per-platform override core with (system), and only that core (#954)", async () => {
+      // BlastEm is the per-platform override set on the System page; the active
+      // core is the default Snes9x. The (system) marker sits on BlastEm only —
+      // Snes9x carries (default) ✓ but NOT (system).
+      const items = await setupCoreMenuStructure({
+        activeCoreLabel: "Snes9x",
+        activeCoreIsDefault: true,
+        availableCores: [
+          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
+          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        ],
+        platformCoreLabel: "BlastEm",
+      });
+      expect(items).toHaveLength(3);
+      // The per-platform override core carries (system); a different core does not.
+      expect(items[2]!.props.children).toBe("BlastEm (system)");
+      expect(items[1]!.props.children).toBe("Snes9x (default) ✓");
+      expect(items[1]!.props.children).not.toContain("(system)");
     });
 
     it("showSteamMenu Properties → SteamClient.Apps.OpenAppSettingsDialog(appId, 'general')", async () => {
@@ -2646,6 +2684,7 @@ describe("RomMPlaySection", () => {
         activeCoreLabel: "OnlyOne",
         activeCoreIsDefault: true,
         availableCores: [{ core_so: "x.so", label: "OnlyOne", is_default: true }],
+        platformCoreLabel: null,
       });
       const { queryByTitle } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();

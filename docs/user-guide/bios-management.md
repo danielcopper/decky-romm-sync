@@ -160,8 +160,19 @@ cores are available for the game's platform.
 
 1. Open a game's detail page
 2. Tap the **CPU button** (microchip icon)
-3. Pick a core from the menu — the active core is marked with a checkmark
+3. Pick a core from the menu — each entry can carry up to three markers (see below)
 4. The BIOS status, core badge, and game info panel update immediately
+
+Each core in the menu can show up to three markers, one per role:
+
+- **(default)** — the RetroDECK/es_systems default core for this platform.
+- **(system)** — the per-platform core you picked on the [System page](#per-platform-system-page) (stored in the
+  plugin's settings). Absent when the platform has no per-platform override.
+- **✓** (checkmark) — the core this game actually launches with right now.
+
+The three roles are independent, so a single core can carry more than one marker: "(default) (system)" when your
+per-platform pick happens to equal the default, or "(system) ✓" when the per-platform core is also the one the game
+launches with.
 
 A per-game core takes priority over the platform default. Picking a non-default core from the list **pins** that core
 for the game. To drop the per-game core and follow the platform default again, pick the **default-marked core** (the

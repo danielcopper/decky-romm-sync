@@ -99,6 +99,7 @@ describe("extractCoreInfo", () => {
   const baseCoreInfo: CoreInfo = {
     active_core: "mupen64plus_next_libretro.so",
     active_core_label: "Mupen64Plus-Next",
+    platform_core_label: null,
     cores: [
       { core_so: "mupen64plus_next_libretro.so", label: "Mupen64Plus-Next", is_default: true },
       { core_so: "parallel_n64_libretro.so", label: "ParaLLEl N64", is_default: false },
@@ -110,6 +111,7 @@ describe("extractCoreInfo", () => {
     expect(result.activeCoreLabel).toBe("Mupen64Plus-Next");
     expect(result.activeCoreIsDefault).toBe(true);
     expect(result.availableCores).toHaveLength(2);
+    expect(result.platformCoreLabel).toBeNull();
   });
 
   it("marks activeCoreIsDefault=false when active core differs from default", () => {
@@ -123,8 +125,23 @@ describe("extractCoreInfo", () => {
     expect(result.activeCoreLabel).toBeNull();
   });
 
+  it("maps a non-null platform_core_label through to platformCoreLabel (#954)", () => {
+    const result = extractCoreInfo({ ...baseCoreInfo, platform_core_label: "ParaLLEl N64" });
+    expect(result.platformCoreLabel).toBe("ParaLLEl N64");
+  });
+
+  it("maps a null platform_core_label through to null platformCoreLabel (#954)", () => {
+    const result = extractCoreInfo({ ...baseCoreInfo, platform_core_label: null });
+    expect(result.platformCoreLabel).toBeNull();
+  });
+
   it("defaults availableCores to [] when cores missing", () => {
-    const result = extractCoreInfo({ active_core: null, active_core_label: null, cores: [] });
+    const result = extractCoreInfo({
+      active_core: null,
+      active_core_label: null,
+      platform_core_label: null,
+      cores: [],
+    });
     expect(result.availableCores).toEqual([]);
   });
 });

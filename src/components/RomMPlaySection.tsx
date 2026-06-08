@@ -92,6 +92,7 @@ interface InfoState {
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
   availableCores: Array<{ core_so: string; label: string; is_default: boolean }>;
+  platformCoreLabel: string | null;
   activeSlot: string | null;
   raId: number | null;
   achievementEarned: number;
@@ -223,6 +224,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     activeCoreLabel: null,
     activeCoreIsDefault: true,
     availableCores: [],
+    platformCoreLabel: null,
     activeSlot: "default",
     raId: null,
     achievementEarned: 0,
@@ -780,6 +782,11 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           // The active marker sits on the ACTIVE core: the default-marked entry
           // when no override is pinned, otherwise the pinned core (#945).
           const isActive = info.activeCoreIsDefault ? c.is_default : info.activeCoreLabel === c.label;
+          // The (system) marker sits on the per-platform override set on the
+          // System page (settings.json platform_cores). A core can carry both
+          // "(default) (system)" and "(system) ✓" — all three roles are
+          // independent (#954).
+          const isPlatformCore = info.platformCoreLabel !== null && c.label === info.platformCoreLabel;
           return createElement(
             MenuItem,
             {
@@ -791,7 +798,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
                 detach(c.is_default ? handleResetGameCore() : handleChangeGameCore(c.label));
               },
             },
-            `${c.label}${c.is_default ? " (default)" : ""}${isActive ? " \u2713" : ""}`,
+            `${c.label}${c.is_default ? " (default)" : ""}${isPlatformCore ? " (system)" : ""}${isActive ? " \u2713" : ""}`,
           );
         }),
       ),

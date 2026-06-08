@@ -26,6 +26,7 @@ export interface CoreInfoFields {
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
   availableCores: AvailableCore[];
+  platformCoreLabel: string | null;
 }
 
 export interface SaveSyncResolution {
@@ -86,6 +87,7 @@ export function extractCoreInfo(coreInfo: CoreInfo): CoreInfoFields {
     activeCoreLabel,
     activeCoreIsDefault,
     availableCores,
+    platformCoreLabel: coreInfo.platform_core_label ?? null,
   };
 }
 
