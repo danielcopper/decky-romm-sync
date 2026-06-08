@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.21.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.20.0...decky-romm-sync-v0.21.0) (2026-06-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **downloads:** multi-file ROM downloads now extract into "<launch-file>/" (e.g. "Game.m3u/") instead of "<name>/". Multi-disc and single-disc bin/cue games installed before this version keep their old folder layout in ES-DE until re-downloaded; the plugin's own launch is unaffected. Lazy on-access healing for existing installs is tracked in #951.
+
+### Features
+
+* **cores:** per-game emulator/core override via RetroDECK -e + plugin DB ([#949](https://github.com/danielcopper/decky-romm-sync/issues/949)) ([968df1d](https://github.com/danielcopper/decky-romm-sync/commit/968df1df44e36d7c9a4ce0fda42e84a8ca805671))
+* **cores:** plugin owns emulator selection — per-platform core in settings.json, always -e, drop gamelist ([#953](https://github.com/danielcopper/decky-romm-sync/issues/953)) ([384ec5e](https://github.com/danielcopper/decky-romm-sync/commit/384ec5eaf4241c2d19cad4d224a131b88c0fb6eb))
+* **downloads:** name multi-file ROM folders after a game playlist so ES-DE collapses them ([#952](https://github.com/danielcopper/decky-romm-sync/issues/952)) ([d55ed09](https://github.com/danielcopper/decky-romm-sync/commit/d55ed0945d1c63f37e37d762a2db115265469068))
+* **ui:** add per-platform BIOS delete to the System page ([#934](https://github.com/danielcopper/decky-romm-sync/issues/934)) ([73f2983](https://github.com/danielcopper/decky-romm-sync/commit/73f29835e41c3e51955dfbfedd7adb4eefb7e641))
+* **ui:** highlight the active core in the game-page BIOS list ([#955](https://github.com/danielcopper/decky-romm-sync/issues/955)) ([#959](https://github.com/danielcopper/decky-romm-sync/issues/959)) ([fad88b1](https://github.com/danielcopper/decky-romm-sync/commit/fad88b17a4e083fc935794e824cfd0f41b541aa6))
+* **ui:** per-game core menu — (system) marker + 'Use System Override' reset item ([#958](https://github.com/danielcopper/decky-romm-sync/issues/958)) ([973672e](https://github.com/danielcopper/decky-romm-sync/commit/973672e6ac74a3de5d49f9ac9f522aea3cbfbd3f))
+
+
+### Bug Fixes
+
+* **auth:** drop empty Bearer header that deadlocks fresh setup ([#950](https://github.com/danielcopper/decky-romm-sync/issues/950)) ([27f6bae](https://github.com/danielcopper/decky-romm-sync/commit/27f6bae99e82a9de0ec9d952b6cd13590eaa81db)), closes [#928](https://github.com/danielcopper/decky-romm-sync/issues/928)
+* **cores:** normalize RomM slug → RetroDECK system before core/gamelist seams ([#919](https://github.com/danielcopper/decky-romm-sync/issues/919)) ([0e27f34](https://github.com/danielcopper/decky-romm-sync/commit/0e27f34fe377cf70d738bceeaaa9bd89eaf2e4d6)), closes [#906](https://github.com/danielcopper/decky-romm-sync/issues/906)
+* **cores:** surface active-core fields on no-BIOS platforms so the per-game core menu renders ([#927](https://github.com/danielcopper/decky-romm-sync/issues/927)) ([9da0926](https://github.com/danielcopper/decky-romm-sync/commit/9da0926f31c1f3055231f8e8908dc472cdbc58ab))
+* **firmware:** read asdict bios files by key so per-platform BIOS delete works ([#931](https://github.com/danielcopper/decky-romm-sync/issues/931)) ([691c0e7](https://github.com/danielcopper/decky-romm-sync/commit/691c0e76ee3400f29c7b195d2f106e03fefbae15))
+* **library:** heartbeat the shortcut scan and scan once per run ([#946](https://github.com/danielcopper/decky-romm-sync/issues/946)) ([8010224](https://github.com/danielcopper/decky-romm-sync/commit/801022486a033bdc41dd3dab94674052f3574daa)), closes [#930](https://github.com/danielcopper/decky-romm-sync/issues/930)
+* **paths:** surface RetroDECK config health instead of silent stale-root fallback ([#957](https://github.com/danielcopper/decky-romm-sync/issues/957)) ([51c07a1](https://github.com/danielcopper/decky-romm-sync/commit/51c07a1aeb9e82ee989a97b71373146372dee645))
+* **ui:** show the per-game core-switch warning only when the filename triggers it ([#932](https://github.com/danielcopper/decky-romm-sync/issues/932)) ([ba16d46](https://github.com/danielcopper/decky-romm-sync/commit/ba16d463d8ba958a0548ad680e4e687e40eb424d))
+* **ui:** single save-compatibility banner + emit bios event on BIOS delete ([#940](https://github.com/danielcopper/decky-romm-sync/issues/940)) ([69e2b1d](https://github.com/danielcopper/decky-romm-sync/commit/69e2b1d2ecacab01ac83c47205deaecad70b9096))
+* **ui:** System page lists only currently-synced systems ([#956](https://github.com/danielcopper/decky-romm-sync/issues/956)) ([#960](https://github.com/danielcopper/decky-romm-sync/issues/960)) ([8f3ec42](https://github.com/danielcopper/decky-romm-sync/commit/8f3ec42f0f72835bf56a6cd165bba7b9a0e538ad))
+* **ui:** thread rom_filename so the game-detail reads the per-game active core ([#937](https://github.com/danielcopper/decky-romm-sync/issues/937)) ([09de015](https://github.com/danielcopper/decky-romm-sync/commit/09de01586dbda5f443c835bd15cd23b79aa1ccfe))
+
 ## [0.20.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.19.0...decky-romm-sync-v0.20.0) (2026-06-05)
 
 
