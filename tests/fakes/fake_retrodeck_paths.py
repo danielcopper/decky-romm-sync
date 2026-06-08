@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from lib.retrodeck_health import RetroDeckConfigHealth
+
 
 class FakeRetroDeckPaths:
     """In-memory ``RetroDeckPaths`` for tests.
@@ -19,11 +21,15 @@ class FakeRetroDeckPaths:
         roms: str = "",
         bios: str = "",
         home: str = "",
+        config_path: str = "/fake/retrodeck.json",
+        health: RetroDeckConfigHealth = RetroDeckConfigHealth.OK,
     ) -> None:
         self.saves = saves
         self.roms = roms
         self.bios = bios
         self.home = home
+        self.config = config_path
+        self.health = health
 
     def saves_path(self) -> str:
         return self.saves
@@ -36,3 +42,9 @@ class FakeRetroDeckPaths:
 
     def retrodeck_home(self) -> str:
         return self.home
+
+    def config_path(self) -> str:
+        return self.config
+
+    def config_health(self) -> RetroDeckConfigHealth:
+        return self.health

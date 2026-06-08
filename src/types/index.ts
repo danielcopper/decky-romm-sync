@@ -14,3 +14,4 @@ export * from "./saves";
 export * from "./achievements";
 export * from "./migration";
 export * from "./devices";
+export * from "./retrodeck";

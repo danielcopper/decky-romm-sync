@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import patch
 
 from adapters.retrodeck_paths import RetroDeckPathsAdapter
+from lib.retrodeck_health import RetroDeckConfigHealth
 
 
 def _make_adapter(tmp_path, config: dict[str, Any] | None = None) -> RetroDeckPathsAdapter:
@@ -158,3 +159,103 @@ class TestLoadConfigLogging:
 
         assert result == os.path.join(str(tmp_path), "retrodeck", "bios")
         assert not any("Failed to load RetroDECK config" in rec.message for rec in caplog.records)
+
+
+class TestConfigPath:
+    def test_config_path_points_at_retrodeck_json(self, tmp_path):
+        adapter = _make_adapter(tmp_path)
+        assert adapter.config_path() == os.path.join(
+            str(tmp_path),
+            ".var",
+            "app",
+            "net.retrodeck.retrodeck",
+            "config",
+            "retrodeck",
+            "retrodeck.json",
+        )
+
+
+class TestConfigHealth:
+    def test_ok_when_config_present_and_home_exists(self, tmp_path):
+        """OK: ``retrodeck.json`` read AND the resolved home exists on disk."""
+        home = tmp_path / "rd-home"
+        home.mkdir()
+        adapter = _make_adapter(tmp_path, {"paths": {"rd_home_path": str(home)}})
+        assert adapter.config_health() is RetroDeckConfigHealth.OK
+
+    def test_absent_when_no_config_file(self, tmp_path):
+        """ABSENT: no ``retrodeck.json`` — the legitimate fresh-install case."""
+        adapter = _make_adapter(tmp_path)  # no config file
+        assert adapter.config_health() is RetroDeckConfigHealth.ABSENT
+
+    def test_absent_does_not_log(self, tmp_path, caplog):
+        """ABSENT stays quiet — no WARNING for the expected fresh-install path."""
+        adapter = _make_adapter(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            assert adapter.config_health() is RetroDeckConfigHealth.ABSENT
+        assert not any("Failed to load RetroDECK config" in rec.message for rec in caplog.records)
+
+    def test_unreadable_on_malformed_json(self, tmp_path):
+        """UNREADABLE: the file exists but is not valid JSON."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "retrodeck.json").write_text("not valid json")
+        adapter = RetroDeckPathsAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        assert adapter.config_health() is RetroDeckConfigHealth.UNREADABLE
+
+    def test_unreadable_on_permission_error(self, tmp_path):
+        """UNREADABLE: the file exists but cannot be opened."""
+        config_dir = tmp_path / ".var" / "app" / "net.retrodeck.retrodeck" / "config" / "retrodeck"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "retrodeck.json"
+        config_file.write_text(json.dumps({"paths": {"rd_home_path": "/whatever"}}))
+
+        real_open = open
+
+        def fake_open(path, *args, **kwargs):
+            if str(path) == str(config_file):
+                raise PermissionError(f"denied: {path}")
+            return real_open(path, *args, **kwargs)
+
+        adapter = RetroDeckPathsAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+        with patch("builtins.open", side_effect=fake_open):
+            assert adapter.config_health() is RetroDeckConfigHealth.UNREADABLE
+
+    def test_root_missing_when_resolved_home_absent(self, tmp_path):
+        """ROOT_MISSING: config read OK but the resolved home is not on disk."""
+        missing_home = tmp_path / "ejected-sd-card" / "retrodeck"
+        adapter = _make_adapter(tmp_path, {"paths": {"rd_home_path": str(missing_home)}})
+        assert adapter.config_health() is RetroDeckConfigHealth.ROOT_MISSING
+
+    def test_absent_wins_over_root_missing(self, tmp_path):
+        """ABSENT must win even though the ``~/retrodeck`` fallback is absent.
+
+        With no ``retrodeck.json``, ``retrodeck_home()`` falls back to
+        ``<user_home>/retrodeck`` — which does not exist in this tmp dir.
+        The disk probe must NOT run for ABSENT, so the result stays
+        ABSENT (quiet) rather than ROOT_MISSING (loud).
+        """
+        adapter = _make_adapter(tmp_path)  # no config file
+        # Sanity: the fallback home does not exist on disk.
+        assert not os.path.isdir(adapter.retrodeck_home())
+        assert adapter.config_health() is RetroDeckConfigHealth.ABSENT
+
+    def test_health_reuses_ttl_cache_no_second_read(self, tmp_path):
+        """Within the TTL, ``config_health`` must not trigger a second file read."""
+        home = tmp_path / "rd-home"
+        home.mkdir()
+        adapter = _make_adapter(tmp_path, {"paths": {"rd_home_path": str(home)}})
+        # Prime the cache with one read.
+        assert adapter.config_health() is RetroDeckConfigHealth.OK
+
+        real_open = open
+        opened: list[str] = []
+
+        def tracking_open(path, *args, **kwargs):
+            opened.append(str(path))
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=tracking_open):
+            assert adapter.config_health() is RetroDeckConfigHealth.OK
+
+        assert opened == [], "config_health re-read retrodeck.json within the TTL"

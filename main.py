@@ -75,6 +75,10 @@ class Plugin:
         )
         self.settings = result.stores.settings
         self._debug_logger = result.handles.debug_logger
+        # RetroDECK path resolver — held directly so the get_retrodeck_status
+        # callable can read the resolution health without routing through a
+        # service (it's a pure adapter read, no orchestration).
+        self._retrodeck_paths = result.callbacks.retrodeck_paths
 
         # ── 4. Wire services ────────────────────────────────────────────────
         services = wire_services(
@@ -180,6 +184,20 @@ class Plugin:
 
     async def get_settings(self):
         return self._settings_service.get_settings()
+
+    async def get_retrodeck_status(self):
+        """Report RetroDECK path-resolution health for the frontend banner.
+
+        Discriminated-status union (Callable response shapes carve-out):
+        ``status`` carries one of ``ok`` / ``absent`` / ``unreadable`` /
+        ``root_missing``. The frontend owns the human-readable copy; the
+        backend returns the discriminant plus the probed paths.
+        """
+        return {
+            "status": self._retrodeck_paths.config_health().value,
+            "config_path": self._retrodeck_paths.config_path(),
+            "resolved_home": self._retrodeck_paths.retrodeck_home(),
+        }
 
     async def get_whitelist_settings(self):
         return self._settings_service.get_whitelist_settings()

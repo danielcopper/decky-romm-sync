@@ -11,7 +11,10 @@ resolver layers over the es_systems default.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from lib.retrodeck_health import RetroDeckConfigHealth
 
 
 class SystemResolver(Protocol):
@@ -21,12 +24,17 @@ class SystemResolver(Protocol):
 
 
 class RetroDeckPaths(Protocol):
-    """Bundled accessor for the four RetroDECK runtime directory paths.
+    """Bundled accessor for the RetroDECK runtime directory paths plus a
+    health signal for how trustworthy those paths are.
 
     Distinct method names per path are deliberate: a single
     ``def __call__(self) -> str`` shape would make a saves-for-bios
     mix-up silently type-check at the call site. Separate names give
-    the type checker enough information to flag it.
+    the type checker enough information to flag it. The path getters are
+    best-effort and never raise; ``config_health`` is the loud signal
+    ``main.py`` surfaces to the frontend when the resolved roots are
+    likely wrong (``retrodeck.json`` unreadable, or its resolved home
+    missing on disk).
     """
 
     def saves_path(self) -> str: ...
@@ -36,6 +44,10 @@ class RetroDeckPaths(Protocol):
     def bios_path(self) -> str: ...
 
     def retrodeck_home(self) -> str: ...
+
+    def config_path(self) -> str: ...
+
+    def config_health(self) -> RetroDeckConfigHealth: ...
 
 
 class RetroArchSaveSortingProvider(Protocol):

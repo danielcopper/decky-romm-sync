@@ -26,6 +26,7 @@ import {
   clearSyncCache,
   refreshMigrationState,
   getSyncStatus,
+  getRetroDeckStatus,
   logError,
 } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
@@ -40,7 +41,9 @@ import {
 } from "../utils/saveSortMigrationStore";
 import { requestSyncCancel } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
+import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
+import { WarningCard } from "./WarningCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import type {
   SyncProgress,
@@ -177,6 +180,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [skipPreview, setSkipPreview] = useState(false);
   const [loading, setLoading] = useState(false);
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
+  const [retrodeckBanner, setRetrodeckBanner] = useState<RetroDeckBanner | null>(null);
   const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
   const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
@@ -212,6 +216,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         }
       })
       .catch((e) => logError(`Failed to load settings: ${e}`));
+
+    // RetroDECK path-resolution health — warn the user when the resolved roots
+    // are likely wrong (retrodeck.json unreadable, or its home missing on
+    // disk). "ok"/"absent" stay quiet (banner cleared to null).
+    getRetroDeckStatus()
+      .then((s) => setRetrodeckBanner(retroDeckBanner(s.status, s)))
+      .catch((e) => logError(`Failed to query RetroDECK status: ${e}`));
 
     // Backend is authoritative for in-flight sync state. Seed the module
     // store from get_sync_status() so a QAM close/reopen recovers the live
@@ -544,6 +555,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   return (
     <>
       <PanelSection title="Status">
+        {retrodeckBanner && (
+          <PanelSectionRow>
+            <WarningCard title={retrodeckBanner.title} message={retrodeckBanner.message} compact />
+          </PanelSectionRow>
+        )}
         <PanelSectionRow>
           <Field label="Connection">
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>

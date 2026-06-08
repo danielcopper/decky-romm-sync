@@ -34,6 +34,7 @@ import type {
   DeleteSlotResult,
   MigrationStatus,
   MigrationResult,
+  RetroDeckStatus,
   SaveSortMigrationStatus,
   RollbackStatus,
   ListFileVersionsResult,
@@ -354,6 +355,11 @@ export const reconcilePlaytime = callable<
   [number],
   { total_seconds: number; session_count: number; server_query_failed: boolean }
 >("reconcile_playtime");
+
+// RetroDECK path-resolution health for the QAM banner — discriminated status
+// ("ok" | "absent" | "unreadable" | "root_missing") plus the probed paths. The
+// frontend owns the human-readable copy; the backend returns the discriminant.
+export const getRetroDeckStatus = callable<[], RetroDeckStatus>("get_retrodeck_status");
 
 // RetroDECK path migration
 export const getMigrationStatus = callable<[], MigrationStatus>("get_migration_status");

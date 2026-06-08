@@ -249,6 +249,39 @@ The ES-DE `es_systems.xml` parser (`CoreResolver`) keeps its XML parsing inline 
 module; that is acceptable because the adapter owns its I/O. New `.info`-style sources that warrant a pure-parse split
 should follow the [parser layout template](#parser-layout-template) above (pure parse in `domain/`, I/O in `adapters/`).
 
+### Best-effort fallback and config health (`retrodeck.json`)
+
+`RetroDeckPathsAdapter` resolves all RetroDECK roots (ROMs, saves, BIOS, home) from the `paths` block of
+`retrodeck.json`. The path getters (`roms_path`, `saves_path`, `bios_path`, `retrodeck_home`) are **best-effort and
+never raise**: when the file is missing, unreadable, or malformed, each getter falls back to
+`<user_home>/retrodeck/<subdir>`. That fallback is RetroDECK's own default root, so it is correct for a default install
+but **wrong** for an SD-card install where the user pointed RetroDECK at external storage.
+
+Silently operating on the wrong root is the failure mode
+[#948](https://github.com/danielcopper/decky-romm-sync/issues/948) addresses. The fix keeps the getters
+silent-and-best-effort but pairs them with a loud health signal that the frontend surfaces as a QAM banner.
+`RetroDeckPathsAdapter.config_health()` returns a `RetroDeckConfigHealth` enum (`py_modules/lib/retrodeck_health.py` —
+placed in `lib/` because the adapter, the `RetroDeckPaths` Protocol, and `main.py` all import it, and import-linter
+forbids the adapter↔service directions). The four states:
+
+| State          | When                                                                                         | Loud? | Rationale                                                                                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`           | `retrodeck.json` read successfully **and** the resolved home exists on disk                  | no    | Healthy — roots are trustworthy.                                                                                                                                              |
+| `absent`       | `retrodeck.json` not found (`FileNotFoundError`)                                             | no    | The legitimate fresh-install case — `~/retrodeck` is RetroDECK's own default root. `absent` wins over `root_missing` even when the `~/retrodeck` fallback does not exist yet. |
+| `unreadable`   | file exists but cannot be read or parsed (`OSError` / `PermissionError` / `JSONDecodeError`) | yes   | We know RetroDECK is configured but cannot read where its roots point — derived paths are likely wrong.                                                                       |
+| `root_missing` | `retrodeck.json` read OK, but the resolved home directory does not exist on disk             | yes   | The library volume is gone (e.g. SD card ejected) — syncs and downloads would target a missing/wrong location.                                                                |
+
+`config_health()` reuses the same 30-second TTL cache as the path getters (`_load_config()`) — no second independent
+file read — and tracks the last load outcome so it can distinguish `absent` from `unreadable` (a bare `None` would
+conflate them). The `root_missing` disk probe (`os.path.isdir`) only runs when the config read OK; it never runs for
+`absent`, so a fresh install stays quiet.
+
+`main.py` exposes this via the `get_retrodeck_status()` callable, a discriminated-status union
+(`{status, config_path, resolved_home}`) — the [Callable response shapes](backend-architecture.md) carve-out for >2
+outcomes. The backend returns only the discriminant plus the probed paths; the frontend owns the human-readable copy
+(`src/utils/retrodeckHealth.ts`) and renders the shared `WarningCard` in the QAM Status panel for the two loud states.
+`ok` and `absent` render no banner.
+
 ## Known consumer gaps
 
 One-parser-per-source compliance has two sides, and this page historically only covered one of them:

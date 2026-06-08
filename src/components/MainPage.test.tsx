@@ -341,6 +341,11 @@ describe("MainPage", () => {
       total: 0,
       message: "",
     });
+    vi.mocked(backend.getRetroDeckStatus).mockResolvedValue({
+      status: "ok",
+      config_path: "/cfg/retrodeck.json",
+      resolved_home: "/home/deck/retrodeck",
+    });
     vi.mocked(backend.cancelSync).mockResolvedValue({
       success: true,
       message: "Cancelled",
@@ -1827,6 +1832,74 @@ describe("MainPage", () => {
       // Re-query — the toggle is re-rendered.
       const updated = container.querySelector('[data-testid="toggle-input"]') as HTMLInputElement | null;
       expect(updated!.checked).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // P. RetroDECK config-health banner
+  // ===========================================================================
+  describe("RetroDECK config-health banner", () => {
+    it("shows the unreadable banner when status is 'unreadable'", async () => {
+      vi.mocked(backend.getRetroDeckStatus).mockResolvedValue({
+        status: "unreadable",
+        config_path: "/cfg/retrodeck.json",
+        resolved_home: "/home/deck/retrodeck",
+      });
+      const { findByText } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(await findByText("RetroDECK configuration unreadable")).toBeInTheDocument();
+      expect(await findByText(/syncs and downloads may target the wrong location/)).toBeInTheDocument();
+      // Probed config path is surfaced.
+      expect(await findByText(/\/cfg\/retrodeck\.json/)).toBeInTheDocument();
+    });
+
+    it("shows the root-missing banner when status is 'root_missing'", async () => {
+      vi.mocked(backend.getRetroDeckStatus).mockResolvedValue({
+        status: "root_missing",
+        config_path: "/cfg/retrodeck.json",
+        resolved_home: "/run/media/sdcard/retrodeck",
+      });
+      const { findByText } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(await findByText("RetroDECK library not found")).toBeInTheDocument();
+      expect(await findByText(/make sure the card is inserted/)).toBeInTheDocument();
+      // Resolved home is surfaced.
+      expect(await findByText(/\/run\/media\/sdcard\/retrodeck/)).toBeInTheDocument();
+    });
+
+    it("renders no banner when status is 'ok'", async () => {
+      vi.mocked(backend.getRetroDeckStatus).mockResolvedValue({
+        status: "ok",
+        config_path: "/cfg/retrodeck.json",
+        resolved_home: "/home/deck/retrodeck",
+      });
+      const { queryByText } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(queryByText("RetroDECK configuration unreadable")).toBeNull();
+      expect(queryByText("RetroDECK library not found")).toBeNull();
+    });
+
+    it("renders no banner when status is 'absent' (fresh-install case)", async () => {
+      vi.mocked(backend.getRetroDeckStatus).mockResolvedValue({
+        status: "absent",
+        config_path: "/cfg/retrodeck.json",
+        resolved_home: "/home/deck/retrodeck",
+      });
+      const { queryByText } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(queryByText("RetroDECK configuration unreadable")).toBeNull();
+      expect(queryByText("RetroDECK library not found")).toBeNull();
+    });
+
+    it("leaves the banner cleared when getRetroDeckStatus rejects", async () => {
+      vi.mocked(backend.getRetroDeckStatus).mockRejectedValue(new Error("boom"));
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      const { queryByText } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // No banner, and the rejection is logged (non-vacuous .catch assertion).
+      expect(queryByText("RetroDECK configuration unreadable")).toBeNull();
+      expect(queryByText("RetroDECK library not found")).toBeNull();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to query RetroDECK status"));
     });
   });
 });

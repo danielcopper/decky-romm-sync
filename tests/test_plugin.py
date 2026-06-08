@@ -16,6 +16,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.persistence import PersistenceAdapter, SettingsPersisterAdapter
 from adapters.steam_config import SteamConfigAdapter
+from lib.retrodeck_health import RetroDeckConfigHealth
 
 # conftest.py patches decky before this import
 from main import Plugin
@@ -642,6 +643,8 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_whitelist_settings",
     "update_whitelist_settings",
     "save_collection_platform_groups",
+    # Read-only RetroDECK path-resolution health probe (for the frontend banner).
+    "get_retrodeck_status",
     # Cancel operations — must remain callable mid-operation when migration
     # marker fires so the user can stop in-flight work.
     "cancel_sync",
@@ -940,3 +943,43 @@ class TestCancelCallablesNotBlockedByMigration:
         result = await plugin.cancel_download(42)
         assert result.get("blocked_by_migration") is not True
         plugin._download_service.cancel_download.assert_called_once_with(42)
+
+
+class TestRetroDeckStatus:
+    @pytest.mark.asyncio
+    async def test_ok_status_carries_paths(self, plugin):
+        plugin._retrodeck_paths = FakeRetroDeckPaths(
+            home="/retrodeck",
+            config_path="/cfg/retrodeck.json",
+            health=RetroDeckConfigHealth.OK,
+        )
+        result = await plugin.get_retrodeck_status()
+        assert result == {
+            "status": "ok",
+            "config_path": "/cfg/retrodeck.json",
+            "resolved_home": "/retrodeck",
+        }
+
+    @pytest.mark.asyncio
+    async def test_status_is_plain_string_not_enum(self, plugin):
+        """The discriminant must serialize as a plain str for the WebSocket bridge."""
+        plugin._retrodeck_paths = FakeRetroDeckPaths(health=RetroDeckConfigHealth.UNREADABLE)
+        result = await plugin.get_retrodeck_status()
+        assert result["status"] == "unreadable"
+        assert type(result["status"]) is str
+
+    @pytest.mark.asyncio
+    async def test_root_missing_status(self, plugin):
+        plugin._retrodeck_paths = FakeRetroDeckPaths(
+            home="/missing",
+            health=RetroDeckConfigHealth.ROOT_MISSING,
+        )
+        result = await plugin.get_retrodeck_status()
+        assert result["status"] == "root_missing"
+        assert result["resolved_home"] == "/missing"
+
+    @pytest.mark.asyncio
+    async def test_absent_status(self, plugin):
+        plugin._retrodeck_paths = FakeRetroDeckPaths(health=RetroDeckConfigHealth.ABSENT)
+        result = await plugin.get_retrodeck_status()
+        assert result["status"] == "absent"
