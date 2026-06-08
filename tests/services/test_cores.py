@@ -56,10 +56,10 @@ class FakeBiosChecker:
         self.payload: dict[str, Any] = {"needs_bios": False}
         self.side_effect: BaseException | None = None
 
-    async def check_platform_bios(self, platform_slug: str, rom_filename: str | None = None) -> dict[str, Any]:
+    async def check_platform_bios(self, platform_slug: str, active_core_so: str | None = None) -> dict[str, Any]:
         if self.side_effect is not None:
             raise self.side_effect
-        self.calls.append((platform_slug, rom_filename))
+        self.calls.append((platform_slug, active_core_so))
         return self.payload
 
 
