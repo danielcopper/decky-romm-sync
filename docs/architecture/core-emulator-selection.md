@@ -100,7 +100,7 @@ The pure seam `domain.shortcut_data.resolve_emulator_invocation(rom, active_core
 them at launch, so a ROM path with spaces or parens is handled. Only the in-sandbox cores directory
 (`/var/config/retroarch/cores`) is baked literally; ES-DE's `%CORE_RETROARCH%` variable is **not** expanded through
 `-e`, so the plugin bakes the resolved path itself. The `-e` flag makes RetroDECK skip its gamelist lookup entirely,
-which is why the override applies for any filename (see [Why `-e`, not the gamelist](#why-e-not-the-gamelist)).
+which is why the override applies for any filename (see [Why `-e`, not the gamelist](#why--e-not-the-gamelist)).
 
 `-e` is added **only** for ROMs that have an override. A ROM with no override keeps the plain command, so RetroDECK's
 default-emulator behaviour stays live for the common case and the blast radius is minimal.
