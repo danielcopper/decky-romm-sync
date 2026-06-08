@@ -214,8 +214,9 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     }
   };
 
-  const withGames = biosPlatforms.filter((p) => p.has_games);
-  const withoutGames = biosPlatforms.filter((p) => !p.has_games);
+  // Only currently-synced systems are shown (#956): a platform counts as synced
+  // when it has at least one ROM bound to a Steam shortcut (has_games).
+  const syncedPlatforms = biosPlatforms.filter((p) => p.has_games);
 
   const renderBiosPlatform = (platform: FirmwarePlatformExt) => {
     const total = platform.files.length;
@@ -433,9 +434,9 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
           </PanelSectionRow>
         )}
 
-        {!biosLoading && !biosError && biosPlatforms.length === 0 && (
+        {!biosLoading && !biosError && syncedPlatforms.length === 0 && (
           <PanelSectionRow>
-            <Field label="No firmware files found" />
+            <Field label="No synced systems" description="Sync some games to manage their cores and BIOS files here." />
           </PanelSectionRow>
         )}
 
@@ -446,8 +447,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         )}
       </PanelSection>
 
-      {withGames.map(renderBiosPlatform)}
-      {withoutGames.map(renderBiosPlatform)}
+      {syncedPlatforms.map(renderBiosPlatform)}
     </>
   );
 };

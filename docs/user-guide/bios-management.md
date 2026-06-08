@@ -42,10 +42,12 @@ is highlighted in amber so you can spot at a glance which core's requirements th
 ## System Page
 
 The **System** page is the per-system emulator settings page: for each platform it shows the **active emulator core**
-first, then the BIOS files that core needs.
+first, then the BIOS files that core needs. It lists only your **currently-synced systems** — platforms with at least
+one synced game (whether synced by platform or by collection). Systems you have no synced games for don't appear, even
+if your RomM server has BIOS files for them.
 
 1. From the main QAM page, tap **System**
-2. Platforms with synced games that still need required BIOS files appear first, marked with "BIOS needed"
+2. Platforms with synced games that still need required BIOS files are marked with "BIOS needed"
 3. For platforms with more than one available core, an **Emulator Core** dropdown is shown at the top of the platform's
    section — this is the primary per-system control
 4. Below the core, each platform shows how many BIOS files are downloaded vs. available (e.g. "3 / 5 files")

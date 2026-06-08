@@ -230,14 +230,45 @@ describe("SystemPage", () => {
       expect(container.textContent).toContain("Failed to fetch firmware status: Error: network");
     });
 
-    it("renders the no-firmware empty state when platforms list is empty", async () => {
+    it("renders the no-synced-systems empty state when platforms list is empty", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [],
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.textContent).toContain("No firmware files found");
+      expect(container.textContent).toContain("No synced systems");
+    });
+
+    it("renders only currently-synced systems (has_games), hiding unsynced ones", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({ platform_slug: "snes", has_games: true }),
+          makeBiosPlatform({ platform_slug: "ps2", has_games: false }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      // The synced platform renders; the unsynced one is filtered out entirely.
+      expect(container.textContent).toContain("snes");
+      expect(container.textContent).not.toContain("ps2");
+    });
+
+    it("renders the no-synced-systems empty state when BIOS platforms exist but none are synced", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({ platform_slug: "snes", has_games: false }),
+          makeBiosPlatform({ platform_slug: "ps2", has_games: false }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain("No synced systems");
+      // Neither unsynced platform is rendered as a section.
+      expect(container.textContent).not.toContain("snes");
+      expect(container.textContent).not.toContain("ps2");
     });
   });
 

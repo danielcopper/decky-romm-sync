@@ -370,12 +370,21 @@ class FirmwareService:
                 )
         return platforms_map
 
-    def _read_installed_slugs(self) -> set[str]:
-        """Return the set of platform slugs that have at least one synced ROM."""
-        with self._uow_factory() as uow:
-            return {rom.platform_slug for rom in uow.roms.iter_all() if rom.platform_slug}
+    def _read_synced_slugs(self) -> set[str]:
+        """Return platform slugs with at least one ROM bound to a Steam shortcut.
 
-    def _enrich_platform_map(self, platforms_map, installed_slugs):
+        A bound ROM (``shortcut_app_id`` set) is one that is currently in the
+        synced library, covering both platform- and collection-sync. Deselected
+        platforms get unbound on the next sync (ADR-0007) and drop out.
+        """
+        with self._uow_factory() as uow:
+            return {
+                rom.platform_slug
+                for rom in uow.roms.iter_all()
+                if rom.platform_slug and rom.shortcut_app_id is not None
+            }
+
+    def _enrich_platform_map(self, platforms_map, synced_slugs):
         """Add core info and game-installed flags to each platform entry.
 
         The core read seams key by the resolved RetroDECK ``system`` (ADR-0010
@@ -391,7 +400,7 @@ class FirmwareService:
             plat["active_core_label"] = core_label
             plat["available_cores"] = self._core_info.get_available_cores(system)
             plat["files"] = [self._enrich_firmware_file(f, core_so=core_so) for f in plat["files"]]
-            plat["has_games"] = slug in installed_slugs
+            plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
 
     async def get_firmware_status(self):
@@ -409,8 +418,8 @@ class FirmwareService:
             server_offline = True
             platforms_map = self._group_registry_firmware()
 
-        installed_slugs = await self._loop.run_in_executor(None, self._read_installed_slugs)
-        self._enrich_platform_map(platforms_map, installed_slugs)
+        synced_slugs = await self._loop.run_in_executor(None, self._read_synced_slugs)
+        self._enrich_platform_map(platforms_map, synced_slugs)
         platforms = sorted(platforms_map.values(), key=lambda p: p["platform_slug"])
         return {"success": True, "server_offline": server_offline, "platforms": platforms}
 

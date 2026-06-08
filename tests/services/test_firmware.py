@@ -50,8 +50,12 @@ def _make_clock() -> FakeClock:
     return FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
 
 
-def _seed_rom(uow: FakeUnitOfWork, *, rom_id: int, platform_slug: str, app_id: int = 1) -> None:
-    """Seed one ``Rom`` so firmware's installed-platform read sees the platform."""
+def _seed_rom(uow: FakeUnitOfWork, *, rom_id: int, platform_slug: str, app_id: int | None = 1) -> None:
+    """Seed one ``Rom`` so firmware's synced-platform read sees the platform.
+
+    ``app_id=None`` seeds an *unbound* ROM (no Steam shortcut) — its platform
+    does not count as synced.
+    """
     uow.roms.save(
         Rom(
             rom_id=rom_id,
@@ -312,24 +316,33 @@ class TestGetFirmwareStatus:
         assert resolver.calls == [("dc", None)]
 
     @pytest.mark.asyncio
-    async def test_has_games_reflects_synced_roms(self, plugin, fw):
-        """``has_games`` is True only for platforms with a synced ROM in the registry."""
+    async def test_has_games_reflects_bound_roms(self, plugin, fw):
+        """``has_games`` is True only for platforms with a ROM bound to a shortcut.
+
+        - ``dc``: one bound ROM (``shortcut_app_id`` set) -> True.
+        - ``ps2``: only an *unbound* ROM (``shortcut_app_id is None``) -> False.
+        - ``gba``: no ROM rows at all -> False.
+        """
         firmware_list = [
             {"id": 1, "file_name": "bios_dc.bin", "file_path": "bios/dc/bios_dc.bin", "file_size_bytes": 100},
             {"id": 2, "file_name": "scph.bin", "file_path": "bios/ps2/scph.bin", "file_size_bytes": 200},
+            {"id": 3, "file_name": "gba_bios.bin", "file_path": "bios/gba/gba_bios.bin", "file_size_bytes": 300},
         ]
         # A real loop so the executor-run reads hit the shared fake UoW.
         fw._loop = asyncio.get_event_loop()
-        # Seed one ROM on "dc" only.
-        _seed_rom(plugin._uow, rom_id=42, platform_slug="dc")
+        # "dc": a bound ROM. "ps2": only an unbound ROM. "gba": no ROM rows.
+        _seed_rom(plugin._uow, rom_id=42, platform_slug="dc", app_id=1)
+        _seed_rom(plugin._uow, rom_id=43, platform_slug="ps2", app_id=None)
 
         with patch.object(plugin._romm_api, "list_firmware", return_value=firmware_list):
             result = await fw.get_firmware_status()
 
         dc_plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
         ps2_plat = next(p for p in result["platforms"] if p["platform_slug"] == "ps2")
+        gba_plat = next(p for p in result["platforms"] if p["platform_slug"] == "gba")
         assert dc_plat["has_games"] is True
         assert ps2_plat["has_games"] is False
+        assert gba_plat["has_games"] is False
 
     @pytest.mark.asyncio
     async def test_detects_downloaded_files(self, fw, tmp_path):
