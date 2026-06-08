@@ -135,7 +135,7 @@ them at launch, so a ROM path with spaces or parens is handled. Only the in-sand
 (`/var/config/retroarch/cores`) is baked literally; ES-DE's `%CORE_RETROARCH%` variable is **not** expanded through
 `-e`, so the plugin bakes the resolved path itself. The `-e` flag makes RetroDECK skip its gamelist lookup entirely,
 which is why a baked core applies for any filename (see
-[Why always `-e`, never the gamelist](#why-always-e-never-the-gamelist)).
+[Why the plugin always bakes the core, never the gamelist](#why-the-plugin-always-bakes-the-core-never-the-gamelist)).
 
 **Always `-e`.** Per
 [ADR-0012](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0012-plugin-owns-core-selection-always-e-no-gamelist.md),
@@ -208,7 +208,7 @@ per-platform core change applies **immediately** to every installed game on the 
 `PlatformCoreReaderAdapter` holds the live settings dict, the fan-out resolves the value just written rather than a
 stale snapshot.
 
-## Why always `-e`, never the gamelist
+## Why the plugin always bakes the core, never the gamelist
 
 ES-DE stores core choices in `gamelist.xml` — a per-game `<altemulator>` element and a system-level
 `<alternativeEmulator>`. The plugin does **not** use that file for its own launches at all (it neither reads nor writes
