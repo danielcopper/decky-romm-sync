@@ -907,6 +907,47 @@ class TestDoSyncPerUnit:
         assert unit_events[1]["unit_index"] == 1
 
     @pytest.mark.asyncio
+    async def test_emitted_unit_carries_run_id(self, plugin, fake_romm_api):
+        """Each ``sync_apply_unit`` payload carries the run's ``current_sync_id``.
+
+        The frontend keys its once-per-run existing-shortcut scan cache off
+        ``run_id``, so every unit emitted within a run must carry the same id.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}],
+        )
+        _seed_platform(
+            fake_romm_api,
+            platform_id=2,
+            name="GBA",
+            slug="gba",
+            roms=[{"id": 20, "name": "B"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-abc"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 2
+        assert all(e["run_id"] == "run-abc" for e in unit_events)
+
+    @pytest.mark.asyncio
     async def test_emitted_shortcuts_carry_install_launch_options(self, plugin, fake_romm_api):
         """Installed ROMs get the full launch command; uninstalled ROMs get ``""``.
 

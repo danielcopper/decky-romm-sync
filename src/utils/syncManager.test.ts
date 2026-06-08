@@ -25,8 +25,9 @@ vi.mock("./steamShortcuts", () => ({
 
 import { initUnitSyncManager } from "./syncManager";
 
-function unit(launchOptions: string): SyncApplyUnitData {
+function unit(launchOptions: string, runId = "run-1"): SyncApplyUnitData {
   return {
+    run_id: runId,
     unit_type: "platform",
     unit_id: 1,
     unit_name: "PSX",
@@ -65,7 +66,7 @@ describe("syncManager — existing-shortcut update uses confirm-poll", () => {
 
     initUnitSyncManager();
     await act(async () => {
-      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd));
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-confirm"));
       // One shortcut + the 50ms inter-item delay; give the async loop room.
       await flush(120);
     });
@@ -74,5 +75,49 @@ describe("syncManager — existing-shortcut update uses confirm-poll", () => {
     expect(addShortcut).not.toHaveBeenCalled();
     // The rom_id→appId binding is reported back to the backend.
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 });
+  });
+});
+
+describe("syncManager — once-per-run existing-shortcut scan cache", () => {
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+  });
+
+  it("scans once for two units sharing the same run_id", async () => {
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+    initUnitSyncManager();
+
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-same"));
+      await flush(120);
+    });
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-same"));
+      await flush(120);
+    });
+
+    // Second unit reuses the cached scan from the first.
+    expect(getExistingRomMShortcuts).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-scans when a second unit carries a different run_id", async () => {
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+    initUnitSyncManager();
+
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-diff-a"));
+      await flush(120);
+    });
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-diff-b"));
+      await flush(120);
+    });
+
+    // A new run_id is a cache miss → fresh scan.
+    expect(getExistingRomMShortcuts).toHaveBeenCalledTimes(2);
   });
 });

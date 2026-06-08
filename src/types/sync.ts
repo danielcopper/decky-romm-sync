@@ -110,6 +110,8 @@ export interface SyncPlanData {
 }
 
 export interface SyncApplyUnitData {
+  /** Identifies the sync run; keys the frontend's once-per-run shortcut-scan cache. */
+  run_id: string;
   unit_type: "platform" | "collection";
   unit_id: number | string;
   unit_name: string;

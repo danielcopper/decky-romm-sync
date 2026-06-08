@@ -672,6 +672,7 @@ class SyncOrchestrator:
         await self._emit(
             "sync_apply_unit",
             {
+                "run_id": str(box.current_sync_id or ""),
                 "unit_type": unit.type,
                 "unit_id": unit.id,
                 "unit_name": unit.name,

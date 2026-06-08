@@ -1,5 +1,5 @@
 import type { SyncAddItem } from "../types";
-import { getAppIdRomIdMap, logError } from "../api/backend";
+import { getAppIdRomIdMap, syncHeartbeat, logError } from "../api/backend";
 
 /**
  * Ownership marker: RomM-managed shortcuts launch through the plugin's
@@ -8,6 +8,8 @@ import { getAppIdRomIdMap, logError } from "../api/backend";
  * full RetroDECK command, not a `romm:<id>` marker).
  */
 const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
+
+const HEARTBEAT_INTERVAL_MS = 10_000;
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -99,9 +101,13 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
   const appIds = Array.from(deckApps.keys());
 
   // Detect our shortcuts by exe, in parallel batches to avoid 2s-per-shortcut
-  // serial overhead from RegisterForAppDetails.
+  // serial overhead from RegisterForAppDetails. A large library makes this scan
+  // take tens of seconds, so emit a heartbeat every 10s between batches —
+  // otherwise the backend's per-unit heartbeat timeout cancels the run before
+  // the scan finishes.
   const ourAppIds: number[] = [];
   const CONCURRENCY = 10;
+  let lastHeartbeat = Date.now();
   for (let i = 0; i < appIds.length; i += CONCURRENCY) {
     const batch = appIds.slice(i, i + CONCURRENCY);
     const entries = await Promise.all(
@@ -109,6 +115,10 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
     );
     for (const { appId, exe } of entries) {
       if (exe.endsWith(ROM_LAUNCHER_SUFFIX)) ourAppIds.push(appId);
+    }
+    if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
+      syncHeartbeat().catch(() => {});
+      lastHeartbeat = Date.now();
     }
   }
 

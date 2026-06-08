@@ -17,6 +17,16 @@ interface ArtworkTarget {
 let _cancelRequested = false;
 let _isUnitRunning = false;
 
+/**
+ * Once-per-run cache of the existing-shortcut scan. The backend emits one
+ * ``sync_apply_unit`` event per unit but the scan only needs to run once per
+ * run: every pre-existing RomM shortcut is captured at the first unit, and the
+ * backend deduplicates rom_ids so no rom_id is emitted by more than one unit in
+ * a run. Keyed by ``run_id`` — a new run mints a new id, so the cache
+ * self-resets on a fresh run (miss → fresh scan).
+ */
+let _scanCache: { runId: string; map: Map<number, number> } | null = null;
+
 /** Request cancellation of the frontend shortcut processing loop. */
 export function requestSyncCancel(): void {
   _cancelRequested = true;
@@ -116,6 +126,22 @@ async function processUnitArtwork(artworkTargets: ArtworkTarget[]): Promise<void
 }
 
 /**
+ * Return the existing RomM-shortcut map for this run, scanning Steam at most
+ * once per run. On a cache hit (``run_id`` matches the cached run) the stored
+ * map is reused; on a miss the scan runs, the result is cached, and one
+ * ``logInfo`` records how long the scan took so operators can confirm it ran
+ * exactly once per run.
+ */
+async function resolveExistingShortcuts(runId: string): Promise<Map<number, number>> {
+  if (_scanCache?.runId === runId) return _scanCache.map;
+  const start = Date.now();
+  const map = await getExistingRomMShortcuts();
+  _scanCache = { runId, map };
+  logInfo(`getExistingRomMShortcuts: scanned ${map.size} RomM shortcuts in ${Date.now() - start}ms (run ${runId})`);
+  return map;
+}
+
+/**
  * Initialize the per-unit pipeline handler. Listens for ``sync_apply_unit``
  * events, processes each unit's shortcuts at the CEF-safe 50ms cadence, and
  * reports back via ``reportUnitResults`` so the backend can advance the
@@ -154,7 +180,7 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
         totalSteps: data.total_units,
       });
 
-      const existing = await getExistingRomMShortcuts();
+      const existing = await resolveExistingShortcuts(data.run_id);
       await processUnitShortcuts(data, existing, romIdToAppId, artworkTargets, total);
 
       // Artwork — keep existing base64 path; per-unit-sized batch keeps the

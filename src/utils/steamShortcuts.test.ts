@@ -154,4 +154,32 @@ describe("getExistingRomMShortcuts", () => {
     const result = await getExistingRomMShortcuts();
     expect(result.size).toBe(0);
   });
+
+  it("emits a heartbeat when the scan crosses the 10s window across batches", async () => {
+    // Two full batches (CONCURRENCY=10 → 20 appIds across two iterations).
+    const apps = new Map<number, object>();
+    for (let appId = 1; appId <= 20; appId++) apps.set(appId, {});
+    const exe = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
+    const { fn } = makeRegisterForAppDetails(() => ({ strShortcutExe: exe }));
+    vi.stubGlobal("SteamClient", { Apps: { RegisterForAppDetails: fn } });
+    vi.stubGlobal("collectionStore", { deckDesktopApps: { apps } });
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({});
+
+    // Drive Date.now() so the elapsed-since-last-heartbeat check trips once the
+    // first batch completes. The loop seeds lastHeartbeat at the first call;
+    // every later call returns a value > 10s past it.
+    const base = 1_000_000;
+    let calls = 0;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      calls += 1;
+      // First read seeds lastHeartbeat; subsequent reads are 11s later.
+      return calls <= 1 ? base : base + 11_000;
+    });
+
+    await getExistingRomMShortcuts();
+
+    // Non-vacuous: crossing the window fires the fire-and-forget heartbeat.
+    expect(vi.mocked(backend.syncHeartbeat)).toHaveBeenCalled();
+    nowSpy.mockRestore();
+  });
 });
