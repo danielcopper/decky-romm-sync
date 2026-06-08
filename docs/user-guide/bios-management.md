@@ -31,7 +31,9 @@ The "BIOS missing" indicator is computed against the **active core** for that ga
 no BIOS (or that treats a file as optional) clears the warning, while switching to a core that requires a missing file
 surfaces it.
 
-Tap the BIOS status indicator to see a detailed list of individual files and which ones are present or missing.
+Tap the BIOS status indicator to see a detailed list of individual files and which ones are present or missing. Each
+file lists the cores that use it (e.g. _Beetle PSX HW (required)_, _SwanStation (optional)_); the **active core**'s line
+is highlighted in amber so you can spot at a glance which core's requirements the file applies to.
 
 <!-- Screenshot: Game detail page showing orange BIOS status with "3/5 downloaded" -->
 

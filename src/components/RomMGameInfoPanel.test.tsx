@@ -1819,6 +1819,169 @@ describe("RomMGameInfoPanel", () => {
       // note appears instead.
       expect(container.textContent).toContain("other file");
     });
+
+    it("highlights the active core's per-BIOS line and leaves non-active cores grey (#955)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 56,
+        platform_slug: "psx",
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "psx",
+          server_count: 1,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+          files: [
+            {
+              file_name: "scph5501.bin",
+              description: "PSX BIOS",
+              downloaded: false,
+              classification: "required",
+              cores: {
+                beetle_psx_hw_libretro: { required: true },
+                swanstation_libretro: { required: false },
+              },
+              used_by_active: true,
+            },
+          ],
+        } as never,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      // Active core is Beetle PSX HW; SwanStation is an alternative core.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "beetle_psx_hw_libretro",
+        active_core_label: "Beetle PSX HW",
+        platform_core_label: null,
+        has_game_override: false,
+        cores: [
+          { core_so: "beetle_psx_hw_libretro", label: "Beetle PSX HW", is_default: true },
+          { core_so: "swanstation_libretro", label: "SwanStation", is_default: false },
+        ],
+      });
+      const { getByText } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+      // Active core line: amber + bold.
+      const activeLine = getByText("Beetle PSX HW (required)");
+      expect(activeLine.style.color).toBe("#d4a72c");
+      expect(activeLine.style.fontWeight).toBe("bold");
+      // Non-active core line: grey + normal weight.
+      const inactiveLine = getByText("SwanStation (optional)");
+      expect(inactiveLine.style.color).toBe("rgba(255, 255, 255, 0.5)");
+      expect(inactiveLine.style.fontWeight).toBe("normal");
+    });
+
+    it("highlights no core line when active_core is null (#955)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 57,
+        platform_slug: "psx",
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "psx",
+          server_count: 1,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+          files: [
+            {
+              file_name: "scph5501.bin",
+              description: "PSX BIOS",
+              downloaded: false,
+              classification: "required",
+              cores: {
+                beetle_psx_hw_libretro: { required: true },
+                swanstation_libretro: { required: false },
+              },
+              used_by_active: false,
+            },
+          ],
+        } as never,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      // No active core resolved → no line is highlighted.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: null,
+        active_core_label: null,
+        platform_core_label: null,
+        has_game_override: false,
+        cores: [
+          { core_so: "beetle_psx_hw_libretro", label: "Beetle PSX HW", is_default: false },
+          { core_so: "swanstation_libretro", label: "SwanStation", is_default: false },
+        ],
+      });
+      const { getByText } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+      const beetleLine = getByText("Beetle PSX HW (required)");
+      expect(beetleLine.style.color).toBe("rgba(255, 255, 255, 0.5)");
+      expect(beetleLine.style.fontWeight).toBe("normal");
+      const swanLine = getByText("SwanStation (optional)");
+      expect(swanLine.style.color).toBe("rgba(255, 255, 255, 0.5)");
+      expect(swanLine.style.fontWeight).toBe("normal");
+    });
+
+    it("falls back to the de-suffixed .so when a core is absent from coreInfo (#955)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 58,
+        platform_slug: "psx",
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "psx",
+          server_count: 1,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 1,
+          required_downloaded: 0,
+          files: [
+            {
+              file_name: "scph5501.bin",
+              description: "PSX BIOS",
+              downloaded: false,
+              classification: "required",
+              cores: {
+                some_obscure_libretro: { required: true },
+              },
+              used_by_active: true,
+            },
+          ],
+        } as never,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      // coreInfo does NOT enumerate `some_obscure_libretro`, so coreLabelMap[coreSo]
+      // is undefined and the `.replace(/_libretro$/, "")` fallback renders the label.
+      vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
+        active_core: "beetle_psx_hw_libretro",
+        active_core_label: "Beetle PSX HW",
+        platform_core_label: null,
+        has_game_override: false,
+        cores: [{ core_so: "beetle_psx_hw_libretro", label: "Beetle PSX HW", is_default: true }],
+      });
+      const { getByText } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+      // Fallback label = `.so` key with `_libretro` stripped; not the active core,
+      // so it stays grey + normal weight.
+      const fallbackLine = getByText("some_obscure (required)");
+      expect(fallbackLine.style.color).toBe("rgba(255, 255, 255, 0.5)");
+      expect(fallbackLine.style.fontWeight).toBe("normal");
+    });
   });
 
   // ------------------------------------------------------------------

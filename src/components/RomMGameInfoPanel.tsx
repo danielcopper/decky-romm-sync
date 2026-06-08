@@ -177,6 +177,34 @@ function biosStatusFromCache(cachedBios: Record<string, unknown> | null | undefi
   };
 }
 
+/** Render the per-core lines under a BIOS file — one row per core that uses it. */
+function buildBiosCoreLines(
+  cores: Record<string, { required: boolean }>,
+  coreLabelMap: Record<string, string>,
+  activeCore: string | null | undefined,
+): ReturnType<typeof createElement>[] {
+  return Object.entries(cores).map(([coreSo, coreData]) => {
+    const label = coreLabelMap[coreSo] || coreSo.replace(/_libretro$/, "");
+    const suffix = coreData.required ? " (required)" : " (optional)";
+    // Highlight the resolved active core's line (#955). active_core is the
+    // core's `.so`, same identifier space as the cores keys; a null/undefined
+    // active core matches nothing.
+    const isActiveCore = coreSo === activeCore;
+    return createElement(
+      "div",
+      {
+        key: `core-${coreSo}`,
+        style: {
+          color: isActiveCore ? "#d4a72c" : "rgba(255, 255, 255, 0.5)",
+          fontSize: "12px",
+          fontWeight: isActiveCore ? "bold" : "normal",
+        },
+      },
+      `${label}${suffix}`,
+    );
+  });
+}
+
 /** Build a `SaveStatus` from a cached game detail's `save_status` field. */
 function saveStatusFromCache(
   romId: number,
@@ -837,23 +865,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         }
 
         // Build per-core lines
-        const coreLines: ReturnType<typeof createElement>[] = [];
-        if (f.cores) {
-          for (const [coreSo, coreData] of Object.entries(f.cores)) {
-            const label = coreLabelMap[coreSo] || coreSo.replace(/_libretro$/, "");
-            const suffix = coreData.required ? " (required)" : " (optional)";
-            coreLines.push(
-              createElement(
-                "div",
-                {
-                  key: `core-${coreSo}`,
-                  style: { color: "rgba(255, 255, 255, 0.5)", fontSize: "12px" },
-                },
-                `${label}${suffix}`,
-              ),
-            );
-          }
-        }
+        const coreLines = f.cores ? buildBiosCoreLines(f.cores, coreLabelMap, state.coreInfo?.active_core) : [];
 
         return createElement(
           "div",
