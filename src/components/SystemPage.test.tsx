@@ -108,10 +108,26 @@ const flushAsync = () =>
   });
 
 function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): FirmwarePlatformExt {
+  const files = overrides.files ?? [];
+  // Mirror the backend per-platform BIOS aggregates (_set_platform_bios_aggregates):
+  // the real get_firmware_status payload always ships these, so the helper derives
+  // them from the files unless a test overrides them explicitly.
+  const serverCount = files.length;
+  const localCount = files.filter((f) => f.downloaded).length;
+  const requiredFiles = files.filter((f) => f.classification === "required");
+  const requiredCount = requiredFiles.length;
+  const requiredDownloaded = requiredFiles.filter((f) => f.downloaded).length;
+  const biosLevel: "ok" | "partial" | "missing" =
+    requiredDownloaded >= requiredCount ? "ok" : requiredDownloaded > 0 ? "partial" : "missing";
   return {
     platform_slug: "snes",
     files: [],
     has_games: true,
+    server_count: serverCount,
+    local_count: localCount,
+    required_count: requiredCount,
+    required_downloaded: requiredDownloaded,
+    bios_level: biosLevel,
     ...overrides,
   };
 }

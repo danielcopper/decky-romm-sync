@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain import firmware_paths
-from domain.bios import collect_firmware_status
+from domain.bios import collect_firmware_status, compute_bios_level, format_bios_status
 from domain.bios_file import BiosFile
 from domain.firmware_cache import FirmwareCacheEntry
 from lib.errors import error_response
@@ -402,6 +402,42 @@ class FirmwareService:
             plat["files"] = [self._enrich_firmware_file(f, core_so=core_so) for f in plat["files"]]
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
+            self._set_platform_bios_aggregates(plat, slug)
+
+    def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str) -> None:
+        """Stamp the per-platform BIOS aggregates onto a ``get_firmware_status`` entry.
+
+        Adds ``server_count`` / ``local_count`` / ``required_count`` /
+        ``required_downloaded`` and the ``bios_level`` trichotomy
+        (``"ok"`` / ``"partial"`` / ``"missing"``) so the System page reads the
+        ok/partial/missing decision and the display counts straight off this
+        payload instead of re-deriving the threshold logic in the frontend. The
+        classification comes from the already-core-aware enriched files, so the
+        level matches the per-game game-detail path. Required-file counts key off
+        ``classification == "required"`` (the enriched per-core required flag).
+        """
+        files = plat["files"]
+        server_count = len(files)
+        local_count = sum(1 for f in files if f["downloaded"])
+        required_files = [f for f in files if f["classification"] == "required"]
+        required_count = len(required_files)
+        required_downloaded = sum(1 for f in required_files if f["downloaded"])
+
+        bios_obj = format_bios_status(
+            {
+                "server_count": server_count,
+                "local_count": local_count,
+                "all_downloaded": local_count >= server_count,
+                "required_count": required_count,
+                "required_downloaded": required_downloaded,
+            },
+            slug,
+        )
+        plat["server_count"] = server_count
+        plat["local_count"] = local_count
+        plat["required_count"] = required_count
+        plat["required_downloaded"] = required_downloaded
+        plat["bios_level"] = compute_bios_level(bios_obj)
 
     async def get_firmware_status(self):
         """Return BIOS/firmware status for all platforms on the RomM server.
@@ -650,7 +686,7 @@ class FirmwareService:
         active_files = [f for f in files if f.used_by_active]
         required_files = [f for f in active_files if f.classification == "required"]
 
-        return {
+        result = {
             "needs_bios": True,
             "server_count": server_count,
             "local_count": local_count,
@@ -660,6 +696,11 @@ class FirmwareService:
             "unknown_count": sum(1 for f in files if f.classification == "unknown"),
             "files": [asdict(f) for f in files],
         }
+        # bios_level trichotomy ("ok" / "partial" / "missing") so the frontend reads
+        # the classification straight off this payload instead of re-deriving the
+        # threshold logic. Matches the System page and per-game game-detail paths.
+        result["bios_level"] = compute_bios_level(format_bios_status(result, platform_slug))
+        return result
 
     def _delete_platform_bios_io(self, platform_slug, files):
         """Sync worker for delete_platform_bios — file deletions then DB prune.

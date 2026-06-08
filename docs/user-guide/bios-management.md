@@ -22,20 +22,22 @@ Not all systems need BIOS files. Cartridge-based systems like Game Boy, SNES, an
 ## BIOS Status on the Game Detail Page
 
 When you open a game that belongs to a platform with BIOS files on your RomM server, the game detail panel shows a BIOS
-status indicator:
+status indicator. Open the panel's **BIOS** tab to see the readiness line. Its dot color reflects the same
+ok/partial/missing classification used everywhere in the plugin:
 
-- **Green** — "BIOS ready (X files)" — all BIOS files are downloaded
-- **Orange** — "BIOS required — X/Y downloaded" — some files are missing
+- **Green** — all required files present: "All required ready (3/5)" (or "All ready (3/5)" when the system has no
+  required-vs-optional split)
+- **Orange** — some required files present: "2/5 required files ready" (or "3/5 files ready" without a required split)
+- **Red** — no required files present yet
 
-The "BIOS missing" indicator is computed against the **active core** for that game — so switching to a core that needs
-no BIOS (or that treats a file as optional) clears the warning, while switching to a core that requires a missing file
-surfaces it.
+The classification is computed against the **active core** for that game — so switching to a core that needs no BIOS (or
+that treats a file as optional) clears the warning, while switching to a core that requires a missing file surfaces it.
 
 Tap the BIOS status indicator to see a detailed list of individual files and which ones are present or missing. Each
 file lists the cores that use it (e.g. _Beetle PSX HW (required)_, _SwanStation (optional)_); the **active core**'s line
 is highlighted in amber so you can spot at a glance which core's requirements the file applies to.
 
-<!-- Screenshot: Game detail page showing orange BIOS status with "3/5 downloaded" -->
+<!-- Screenshot: Game detail page showing orange BIOS status with "2/5 required files ready" -->
 
 ![BIOS file list overlay showing individual required files with checkmarks and "Missing" labels](../assets/screenshot-bios.jpg)
 

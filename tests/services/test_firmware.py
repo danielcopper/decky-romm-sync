@@ -385,6 +385,134 @@ class TestGetFirmwareStatus:
         assert "platforms" in result
 
 
+_BIOS_AGG_REGISTRY = {
+    "platforms": {
+        "dc": {
+            "req1.bin": {"description": "Required BIOS 1", "required": True, "md5": ""},
+            "req2.bin": {"description": "Required BIOS 2", "required": True, "md5": ""},
+            "opt1.bin": {"description": "Optional firmware", "required": False, "md5": ""},
+        },
+    },
+}
+_BIOS_AGG_INDEX = {
+    "req1.bin": {"description": "Required BIOS 1", "required": True, "md5": "", "platform": "dc"},
+    "req2.bin": {"description": "Required BIOS 2", "required": True, "md5": "", "platform": "dc"},
+    "opt1.bin": {"description": "Optional firmware", "required": False, "md5": "", "platform": "dc"},
+}
+
+
+class TestGetFirmwareStatusBiosAggregates:
+    """``get_firmware_status`` ships per-platform BIOS aggregates + ``bios_level``.
+
+    The System page reads the ok/partial/missing decision and display counts off
+    this payload instead of re-deriving the threshold logic in the frontend
+    (#461). The level is computed by the same ``domain.bios.compute_bios_level``
+    the game-detail path uses, from the already-core-aware enriched files.
+    """
+
+    @staticmethod
+    def _firmware(*names: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": i + 1,
+                "file_name": name,
+                "file_path": f"bios/dc/{name}",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            }
+            for i, name in enumerate(names)
+        ]
+
+    async def _run(self, fw, tmp_path, firmware_list, downloaded: set[str]):
+        """Run get_firmware_status with the dc registry and the given downloads."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True, exist_ok=True)
+        for name in downloaded:
+            (bios_dir / name).write_bytes(b"\x00" * 100)
+
+        fw._bios_registry = _BIOS_AGG_REGISTRY
+        fw._bios_files_index = dict(_BIOS_AGG_INDEX)
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(side_effect=[firmware_list, set()])
+
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+            result = await fw.get_firmware_status()
+        return next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+
+    @pytest.mark.asyncio
+    async def test_all_required_ready_is_ok(self, fw, tmp_path):
+        """All required files downloaded → bios_level 'ok' + matching counts."""
+        plat = await self._run(
+            fw, tmp_path, self._firmware("req1.bin", "req2.bin", "opt1.bin"), downloaded={"req1.bin", "req2.bin"}
+        )
+        assert plat["bios_level"] == "ok"
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 2
+        assert plat["server_count"] == 3
+        assert plat["local_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_some_required_downloaded_is_partial(self, fw, tmp_path):
+        """One of two required files present → bios_level 'partial'."""
+        plat = await self._run(
+            fw, tmp_path, self._firmware("req1.bin", "req2.bin", "opt1.bin"), downloaded={"req1.bin"}
+        )
+        assert plat["bios_level"] == "partial"
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 1
+
+    @pytest.mark.asyncio
+    async def test_no_required_downloaded_is_missing(self, fw, tmp_path):
+        """No required file present → bios_level 'missing'."""
+        plat = await self._run(fw, tmp_path, self._firmware("req1.bin", "req2.bin", "opt1.bin"), downloaded=set())
+        assert plat["bios_level"] == "missing"
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 0
+        assert plat["local_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_required_files_falls_back_to_all_downloaded(self, fw, tmp_path):
+        """No required files at all → level keys off the all-downloaded fallback.
+
+        With zero required files compute_bios_level returns 'ok' (0 >= 0), which
+        the System page treats as the no-required branch (it selects phrasing by
+        required_count, not the level) — required_count is 0 here.
+        """
+        plat = await self._run(fw, tmp_path, self._firmware("opt1.bin"), downloaded={"opt1.bin"})
+        assert plat["required_count"] == 0
+        assert plat["required_downloaded"] == 0
+        assert plat["server_count"] == 1
+        assert plat["local_count"] == 1
+        assert plat["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_server_offline_fallback_ships_aggregates(self, plugin, fw, tmp_path):
+        """Offline registry fallback still stamps bios_level + counts per platform."""
+        fw._bios_registry = _BIOS_AGG_REGISTRY
+        fw._bios_files_index = dict(_BIOS_AGG_INDEX)
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True, exist_ok=True)
+        (bios_dir / "req1.bin").write_bytes(b"\x00" * 100)
+        fw._loop = asyncio.get_event_loop()
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.get_firmware_status()
+
+        assert result["server_offline"] is True
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        # Registry fallback enumerates all three dc files; one required downloaded.
+        assert plat["required_count"] == 2
+        assert plat["required_downloaded"] == 1
+        assert plat["bios_level"] == "partial"
+        assert plat["server_count"] == 3
+        assert plat["local_count"] == 1
+
+
 class TestDownloadFirmware:
     @pytest.mark.asyncio
     async def test_downloads_and_verifies_md5(self, plugin, fw, tmp_path):
@@ -937,6 +1065,9 @@ class TestCheckPlatformBiosRequired:
         assert result["required_count"] == 2
         assert result["required_downloaded"] == 0
         assert result["server_count"] == 3
+        # No required file downloaded → bios_level 'missing' (single source of
+        # truth: domain.bios.compute_bios_level, threaded off this payload, #461).
+        assert result["bios_level"] == "missing"
 
     @pytest.mark.asyncio
     async def test_all_required_downloaded(self, fw, tmp_path):
@@ -1000,6 +1131,60 @@ class TestCheckPlatformBiosRequired:
         assert result["local_count"] == 2
         # all_downloaded is False because optional1.bin is not downloaded
         assert result["all_downloaded"] is False
+        # All required files present → bios_level 'ok' (the required-file branch
+        # of compute_bios_level wins over all_downloaded, #461).
+        assert result["bios_level"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_some_required_downloaded_bios_level_partial(self, fw, tmp_path):
+        """One of two required files downloaded → bios_level 'partial' (#461)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        (bios_dir / "required1.bin").write_bytes(b"\x00" * 100)
+        # Leave required2.bin not downloaded
+
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "required1.bin",
+                "file_path": "bios/dc/required1.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+            {
+                "id": 2,
+                "file_name": "required2.bin",
+                "file_path": "bios/dc/required2.bin",
+                "file_size_bytes": 200,
+                "md5_hash": "",
+            },
+        ]
+
+        fw._bios_registry = {
+            "platforms": {
+                "dc": {
+                    "required1.bin": {"description": "Required BIOS 1", "required": True, "md5": ""},
+                    "required2.bin": {"description": "Required BIOS 2", "required": True, "md5": ""},
+                },
+            },
+        }
+        fw._bios_files_index = {
+            "required1.bin": {"description": "Required BIOS 1", "required": True, "md5": "", "platform": "dc"},
+            "required2.bin": {"description": "Required BIOS 2", "required": True, "md5": "", "platform": "dc"},
+        }
+
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+        with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
+            result = await fw.check_platform_bios("dc")
+        assert result["needs_bios"] is True
+        assert result["required_count"] == 2
+        assert result["required_downloaded"] == 1
+        # One required file present, the other missing → bios_level 'partial'.
+        assert result["bios_level"] == "partial"
 
     @pytest.mark.asyncio
     async def test_per_file_required_and_description(self, fw, tmp_path):

@@ -23,16 +23,24 @@ import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 
+/**
+ * Build the per-platform summary label/description from the backend BIOS
+ * aggregates. The ok/partial/missing DECISION is the backend's `bios_level`
+ * (`compute_bios_level`) — `requiredReady` is `bios_level === "ok"`, so the
+ * required-files threshold is no longer re-compared here. `requiredCount` still
+ * selects the phrasing axis (required vs. plain file counts), and the
+ * optional-missing breakdown stays a local computation passed in by the caller.
+ */
 function getBiosSummary(
   requiredCount: number,
   requiredDone: number,
-  allRequiredDone: boolean,
+  requiredReady: boolean,
   optionalMissing: number,
   done: number,
   total: number,
   allDone: boolean,
 ) {
-  if (requiredCount > 0 && allRequiredDone) {
+  if (requiredCount > 0 && requiredReady) {
     return {
       summaryLabel: `${requiredDone} / ${requiredCount} required`,
       summaryDescription:
@@ -219,30 +227,38 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
   const syncedPlatforms = biosPlatforms.filter((p) => p.has_games);
 
   const renderBiosPlatform = (platform: FirmwarePlatformExt) => {
-    const total = platform.files.length;
-    const done = platform.files.filter((f) => f.downloaded).length;
+    const unknownFiles = platform.files.filter((f) => f.classification === "unknown");
+    // Display counts come from the backend aggregates (computed from the same
+    // core-aware files); fall back to local derivation only if a payload omits
+    // them. The optional-missing breakdown stays a local file-level axis — the
+    // 3-state bios_level doesn't model it.
+    const total = platform.server_count ?? platform.files.length;
+    const done = platform.local_count ?? platform.files.filter((f) => f.downloaded).length;
     const allDone = done === total;
     const isDownloading = downloading === platform.platform_slug;
     const isExpanded = expanded[platform.platform_slug] ?? false;
 
     const requiredFiles = platform.files.filter((f) => f.classification === "required");
-    const unknownFiles = platform.files.filter((f) => f.classification === "unknown");
-    const requiredCount = requiredFiles.length;
-    const requiredDone = requiredFiles.filter((f) => f.downloaded).length;
-    const allRequiredDone = requiredDone === requiredCount;
+    const requiredCount = platform.required_count ?? requiredFiles.length;
+    const requiredDone = platform.required_downloaded ?? requiredFiles.filter((f) => f.downloaded).length;
     const optionalMissing = platform.files.filter((f) => f.classification === "optional" && !f.downloaded).length;
 
-    const needsAttention = platform.has_games && !allRequiredDone;
+    // The ok/partial/missing DECISION is the backend's bios_level — "ready"
+    // means all required files present (bios_level === "ok"). Fall back to the
+    // local count comparison only when the level is absent from the payload.
+    const requiredReady = platform.bios_level != null ? platform.bios_level === "ok" : requiredDone === requiredCount;
+
+    const needsAttention = platform.has_games && requiredCount > 0 && !requiredReady;
     const { summaryLabel, summaryDescription } = getBiosSummary(
       requiredCount,
       requiredDone,
-      allRequiredDone,
+      requiredReady,
       optionalMissing,
       done,
       total,
       allDone,
     );
-    const hasRequiredMissing = requiredCount > 0 && !allRequiredDone;
+    const hasRequiredMissing = requiredCount > 0 && !requiredReady;
     const hasOptionalMissing = optionalMissing > 0;
 
     const hasMultipleCores = !!platform.available_cores && platform.available_cores.length > 1;

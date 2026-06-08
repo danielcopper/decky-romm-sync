@@ -55,6 +55,16 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   active_core?: string;
   active_core_label?: string;
   available_cores?: AvailableCore[];
+  // Per-platform BIOS aggregates computed by the backend from the same
+  // core-aware enriched files (`compute_bios_level`), so the System page reads
+  // the ok/partial/missing decision and display counts off the payload instead
+  // of re-deriving the threshold logic. The optional-missing breakdown stays a
+  // local file-level computation (a richer axis the 3-state level doesn't model).
+  bios_level?: "ok" | "partial" | "missing" | null;
+  required_count?: number;
+  required_downloaded?: number;
+  server_count?: number;
+  local_count?: number;
 }
 
 export interface FirmwareStatus {
@@ -84,6 +94,10 @@ export interface BiosStatus {
   required_downloaded?: number;
   unknown_count?: number;
   files?: BiosFileStatus[];
+  // ok/partial/missing trichotomy computed by the backend (compute_bios_level)
+  // so the frontend reads the classification off the payload instead of
+  // re-deriving the threshold logic. Present only when needs_bios is true.
+  bios_level?: "ok" | "partial" | "missing" | null;
 }
 
 export interface FirmwareDownloadResult {

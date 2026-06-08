@@ -934,6 +934,39 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("BIOS");
     });
 
+    it("bios: threads bios_level from the callable result into the rendered status-dot color (#461)", async () => {
+      // The check_platform_bios refresh path now ships bios_level straight from
+      // the backend (compute_bios_level) — the handler threads it through, never
+      // re-deriving from counts. amber (#d4a72c) is the observable side effect.
+      await mountWithRomId(60);
+      vi.mocked(backend.checkPlatformBios).mockResolvedValue({
+        needs_bios: true,
+        server_count: 5,
+        local_count: 2,
+        all_downloaded: false,
+        required_count: 5,
+        required_downloaded: 2,
+        bios_level: "partial",
+      });
+      const view = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "bios", platform_slug: "snes" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Open the BIOS tab so the status dot renders.
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+      expect(view.container.innerHTML).toContain("#d4a72c");
+    });
+
     it("bios: detail.platform_slug absent → no fetch (early return)", async () => {
       await mountWithRomId(60);
       vi.mocked(backend.checkPlatformBios).mockClear();
@@ -2032,7 +2065,26 @@ describe("RomMGameInfoPanel", () => {
     });
   });
 
-  describe("pickBiosColor (rendered via BIOS section)", () => {
+  describe("BIOS status-dot color (sourced from backend bios_level)", () => {
+    // Mirror the backend compute_bios_level trichotomy so the cached payload
+    // ships the same bios_level the real backend would — the panel sources the
+    // dot color from bios_level now, never re-deriving it from the counts.
+    function deriveBiosLevel(
+      required_downloaded: number | null,
+      required_count: number | null,
+      local_count: number,
+      all_downloaded: boolean,
+    ): "ok" | "partial" | "missing" {
+      if (required_count !== null && required_downloaded !== null) {
+        if (required_downloaded >= required_count) return "ok";
+        if (required_downloaded > 0) return "partial";
+        return "missing";
+      }
+      if (all_downloaded) return "ok";
+      if (local_count > 0) return "partial";
+      return "missing";
+    }
+
     async function renderWithBios(
       required_downloaded: number | null,
       required_count: number | null,
@@ -2052,6 +2104,7 @@ describe("RomMGameInfoPanel", () => {
         found: true,
         rom_id: 1,
         bios_status: bios as never,
+        bios_level: deriveBiosLevel(required_downloaded, required_count, local_count, all_downloaded),
         metadata: makeMetadata(),
         stale_fields: [],
       });

@@ -1,4 +1,17 @@
-"""Pure BIOS-status formatting and computation for the game detail page."""
+"""Pure BIOS-status formatting and the BIOS classification boundary.
+
+Domain owns the ok/partial/missing CLASSIFICATION (``compute_bios_level``) and
+the compact status token (``compute_bios_label``) — the single source of truth
+for the BIOS readiness decision that every surface (game-detail panel,
+play-section row, System page) renders. Verbose, per-surface phrasing and the
+status-dot color are UI-layer concerns and deliberately do NOT live here. The
+System page's richer two-axis summary (the optional-missing / launch-risk
+breakdown the 3-state level doesn't model) is likewise a frontend concern.
+
+Anything that takes raw firmware-check inputs and returns a readiness level,
+label, or the structured ``BiosStatus`` shape belongs here; anything that decides
+how a level reads or which color it shows belongs in the frontend.
+"""
 
 from __future__ import annotations
 

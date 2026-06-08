@@ -54,6 +54,7 @@ import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import type { BiosStatus, SaveStatus } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
+import { biosColorForLevel } from "../utils/biosColor";
 import {
   applySaveSyncDisplay,
   extractBiosInfo,
@@ -1060,7 +1061,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   // BIOS warning (only when files are missing — OK status moved to tab)
   if (info.biosNeeded && info.biosStatus && info.biosStatus !== "ok") {
-    const biosColor = info.biosStatus === "partial" ? "#d4a72c" : "#d94126";
+    const biosColor = biosColorForLevel(info.biosStatus);
     infoItems.push(
       createElement(
         "div",

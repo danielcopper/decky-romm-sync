@@ -50,6 +50,7 @@ import type {
   SaveSlotSummary,
 } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
+import { biosColorForLevel } from "../utils/biosColor";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import {
   getSaveSortMigrationState,
@@ -77,6 +78,12 @@ interface PanelState {
   metadata: RomMetadata | null;
   coverBase64: string | null;
   biosStatus: BiosStatus | null;
+  // ok/partial/missing classification — single source of truth is the backend
+  // (`compute_bios_level`); both the cache path and the bios-change refresh path
+  // thread `bios_level` straight off their respective payloads, never re-deriving
+  // it. Drives the BIOS status-dot color via `biosColorForLevel`. null when no
+  // BIOS need.
+  biosLevel: "ok" | "partial" | "missing" | null;
   // Core info comes from the dedicated get_platform_core_info path (#923), not
   // from biosStatus — the two concerns are decoupled.
   coreInfo: CoreInfo | null;
@@ -101,16 +108,6 @@ function formatReleaseDate(timestamp: number | null): string | null {
   const date = new Date(timestamp * 1000);
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}`;
-}
-
-/**
- * BIOS readiness indicator color: green when complete, amber on partial progress,
- * red when nothing is downloaded yet.
- */
-function pickBiosColor(done: number, total: number): string {
-  if (done >= total) return "#5ba32b";
-  if (done > 0) return "#d4a72c";
-  return "#d94126";
 }
 
 /** Refresh slot configuration and available slots — extracted to reduce nesting depth. */
@@ -307,6 +304,9 @@ async function loadData(
     romIdRef.current = romId;
 
     const biosStatus = biosStatusFromCache(cached.bios_status);
+    // bios_level is computed by the backend (`compute_bios_level`) and shipped on
+    // the cached payload — thread it straight through, never re-derive here.
+    const biosLevel = biosStatus ? (cached.bios_level ?? null) : null;
     const saveStatus = saveStatusFromCache(romId, cached.save_status);
     const conflicts: SyncConflict[] = cached.save_status?.conflicts ?? [];
     const raId = cached.ra_id ?? null;
@@ -323,6 +323,7 @@ async function loadData(
       metadata: cached.metadata as RomMetadata | null,
       coverBase64: null, // Will be filled by background fetch
       biosStatus,
+      biosLevel,
       coreInfo: null, // Will be filled by background fetch (get_platform_core_info)
       saveSyncEnabled: cached.save_sync_enabled ?? false,
       saveStatus,
@@ -369,6 +370,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     metadata: null,
     coverBase64: null,
     biosStatus: null,
+    biosLevel: null,
     coreInfo: null,
     saveSyncEnabled: false,
     saveStatus: null,
@@ -461,7 +463,8 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     const handleBiosChange = async (detail: Extract<RommDataChangedDetail, { type: "bios" }>) => {
       if (!detail.platform_slug) return;
       const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus => ({ needs_bios: false }));
-      setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null }));
+      const biosLevel = updated.needs_bios ? (updated.bios_level ?? null) : null;
+      setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null, biosLevel }));
     };
 
     const handleCoreChange = async (_detail: Extract<RommDataChangedDetail, { type: "core_changed" }>) => {
@@ -485,7 +488,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
           ...cached.bios_status,
         };
       }
-      setState((prev) => ({ ...prev, biosStatus, coreInfo: coreInfo ?? prev.coreInfo }));
+      // bios_level comes from the backend cache (compute_bios_level) — thread it
+      // through, never re-derive. null when there's no BIOS need.
+      const biosLevel = biosStatus ? (cached.bios_level ?? null) : null;
+      setState((prev) => ({ ...prev, biosStatus, biosLevel, coreInfo: coreInfo ?? prev.coreInfo }));
     };
 
     const handleMetadataChange = async (detail: Extract<RommDataChangedDetail, { type: "metadata" }>) => {
@@ -791,22 +797,17 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     const reqCount = bios.required_count;
     const reqDone = bios.required_downloaded;
 
-    let biosColor: string;
+    // Color is sourced from the backend ok/partial/missing classification via the
+    // shared helper — the panel no longer re-derives it. The verbose phrasing
+    // below stays the panel's own concern (per-surface wording).
+    const biosColor = biosColorForLevel(state.biosLevel);
     let biosLabel: string;
     if (reqCount != null && reqDone != null) {
-      biosColor = pickBiosColor(reqDone, reqCount);
       biosLabel =
         reqDone >= reqCount
           ? `All required ready (${localCount}/${serverCount})`
           : `${reqDone}/${reqCount} required files ready`;
     } else {
-      if (bios.all_downloaded) {
-        biosColor = "#5ba32b";
-      } else if (localCount > 0) {
-        biosColor = "#d4a72c";
-      } else {
-        biosColor = "#d94126";
-      }
       biosLabel = bios.all_downloaded
         ? `All ready (${localCount}/${serverCount})`
         : `${localCount}/${serverCount} files ready`;
