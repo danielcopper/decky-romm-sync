@@ -280,8 +280,8 @@ class TestGetFirmwareStatus:
         from unittest.mock import AsyncMock, MagicMock
 
         core_info = FakeCoreInfoProvider(
-            active_core=("flycast_libretro.so", "Flycast"),
-            available_cores=[{"label": "Flycast", "so": "flycast_libretro.so"}],
+            active_core=("flycast_libretro", "Flycast"),
+            available_cores=[{"label": "Flycast", "so": "flycast_libretro"}],
         )
         resolver = FakeSystemResolver(mapping={"dc": "dreamcast"})
         fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
@@ -304,8 +304,8 @@ class TestGetFirmwareStatus:
         # Entry identity stays on the RAW slug.
         assert dc_plat["platform_slug"] == "dc"
         # Active-core data resolved under the NORMALIZED system surfaces on the entry.
-        assert dc_plat["active_core"] == "flycast_libretro.so"
-        assert dc_plat["available_cores"] == [{"label": "Flycast", "so": "flycast_libretro.so"}]
+        assert dc_plat["active_core"] == "flycast_libretro"
+        assert dc_plat["available_cores"] == [{"label": "Flycast", "so": "flycast_libretro"}]
         # Both core read seams received the NORMALIZED system, not the raw slug.
         assert core_info.active_core_calls == ["dreamcast"]
         assert core_info.available_cores_calls == ["dreamcast"]
@@ -1093,8 +1093,8 @@ class TestCheckPlatformBiosSlugNormalization:
         from unittest.mock import AsyncMock, MagicMock
 
         core_info = FakeCoreInfoProvider(
-            active_core=("flycast_libretro.so", "Flycast"),
-            available_cores=[{"label": "Flycast", "so": "flycast_libretro.so"}],
+            active_core=("flycast_libretro", "Flycast"),
+            available_cores=[{"label": "Flycast", "so": "flycast_libretro"}],
         )
         resolver = FakeSystemResolver(mapping={"dc": "dreamcast", "sms": "mastersystem", "neo-geo-pocket": "ngp"})
         fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
@@ -1141,10 +1141,10 @@ class TestCheckPlatformBiosNoCoreFields:
         from unittest.mock import AsyncMock, MagicMock
 
         core_info = FakeCoreInfoProvider(
-            active_core=("genesisplusgx_libretro.so", "Genesis Plus GX"),
+            active_core=("genesisplusgx_libretro", "Genesis Plus GX"),
             available_cores=[
-                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
-                {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro"},
+                {"label": "PicoDrive", "so": "picodrive_libretro"},
             ],
         )
         fw = _make_firmware_service(core_info=core_info)
@@ -1169,10 +1169,10 @@ class TestCheckPlatformBiosNoCoreFields:
     async def test_offline_no_registry_omits_core_fields(self, plugin, fw):
         """Server unreachable + no registry entries → no core fields."""
         core_info = FakeCoreInfoProvider(
-            active_core=("genesisplusgx_libretro.so", "Genesis Plus GX"),
+            active_core=("genesisplusgx_libretro", "Genesis Plus GX"),
             available_cores=[
-                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
-                {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+                {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro"},
+                {"label": "PicoDrive", "so": "picodrive_libretro"},
             ],
         )
         fw = _make_firmware_service(romm_api=plugin._romm_api, core_info=core_info)
@@ -1306,7 +1306,7 @@ class TestDownloadRequiredFirmware:
         """
         from unittest.mock import AsyncMock, MagicMock
 
-        core_info = FakeCoreInfoProvider(active_core=("flycast_libretro.so", "Flycast"))
+        core_info = FakeCoreInfoProvider(active_core=("flycast_libretro", "Flycast"))
         resolver = FakeSystemResolver(mapping={"dc": "dreamcast"})
         fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
 
@@ -1319,12 +1319,13 @@ class TestDownloadRequiredFirmware:
                 "md5_hash": "",
             },
         ]
-        # Per-core required flag keyed on the active-core .so resolved via the system.
+        # Per-core required flag keyed on the active core (BARE, no ".so") resolved
+        # via the system — the bios registry keys its cores dict on bare names too.
         fw._bios_files_index = {
             "boot.bin": {
                 "description": "Boot",
                 "required": False,
-                "cores": {"flycast_libretro.so": {"required": True}},
+                "cores": {"flycast_libretro": {"required": True}},
                 "platform": "dc",
             },
         }
@@ -2341,10 +2342,10 @@ class TestCheckPlatformBiosCached:
             firmware_cache_epoch=1000.0,
         )
 
-        core_info.active_core = ("genesisplusgx_libretro.so", "Genesis Plus GX")
+        core_info.active_core = ("genesisplusgx_libretro", "Genesis Plus GX")
         core_info.available_cores = [
-            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro.so"},
-            {"label": "PicoDrive", "so": "picodrive_libretro.so"},
+            {"label": "Genesis Plus GX", "so": "genesisplusgx_libretro"},
+            {"label": "PicoDrive", "so": "picodrive_libretro"},
         ]
         result = fw.check_platform_bios_cached("sms")
 
@@ -2370,8 +2371,8 @@ class TestCheckPlatformBiosCached:
             firmware_cache_epoch=42.0,
         )
 
-        core_info.active_core = ("mgba_libretro.so", "mGBA")
-        core_info.available_cores = [{"label": "mGBA", "so": "mgba_libretro.so"}]
+        core_info.active_core = ("mgba_libretro", "mGBA")
+        core_info.available_cores = [{"label": "mGBA", "so": "mgba_libretro"}]
         with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = fw.check_platform_bios_cached("gba")
 
@@ -2441,8 +2442,8 @@ class TestCheckPlatformBiosCached:
             bios_registry={"platforms": {slug: {"boot.bin": {"required": True, "md5": "abc"}}}},
             resolve_system=resolver,
         )
-        core_info.active_core = ("flycast_libretro.so", "Flycast")
-        core_info.available_cores = [{"label": "Flycast", "so": "flycast_libretro.so"}]
+        core_info.active_core = ("flycast_libretro", "Flycast")
+        core_info.available_cores = [{"label": "Flycast", "so": "flycast_libretro"}]
 
         with patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = fw.check_platform_bios_cached(slug)

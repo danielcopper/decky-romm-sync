@@ -996,7 +996,7 @@ class TestDoDownloadOverrideRebake:
     async def test_reinstall_with_override_rebakes_e_form(self, plugin, tmp_path):
         """An override-set ROM's reinstall emits ``-e`` baked launch_options (B2)."""
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
         payload, target_path = await self._run_single_download(plugin, tmp_path, rom_id=42, override="PCSX ReARMed")
         assert payload["app_id"] == 1042
@@ -1010,7 +1010,7 @@ class TestDoDownloadOverrideRebake:
     async def test_reinstall_without_override_is_plain(self, plugin, tmp_path):
         """A NULL-override ROM's reinstall emits the plain launch — no ``-e`` (B2)."""
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
         payload, target_path = await self._run_single_download(plugin, tmp_path, rom_id=43, override=None)
         assert payload["launch_options"] == f'flatpak run net.retrodeck.retrodeck "{target_path}"'
@@ -1023,7 +1023,7 @@ class TestDoDownloadOverrideRebake:
 
         # available_cores does not carry the pinned label → resolution returns None.
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
         with caplog.at_level(logging.WARNING):
             payload, target_path = await self._run_single_download(plugin, tmp_path, rom_id=44, override="Removed Core")

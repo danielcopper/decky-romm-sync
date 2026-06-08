@@ -1062,7 +1062,7 @@ class TestMigrationRelaunchOptions:
         decky.DECKY_USER_HOME = str(tmp_path)
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
 
         old_home = str(tmp_path / "old")
@@ -1107,7 +1107,7 @@ class TestMigrationRelaunchOptions:
         plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
         # available_cores does not carry the pinned label → resolution returns None.
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
 
         old_home = str(tmp_path / "old")

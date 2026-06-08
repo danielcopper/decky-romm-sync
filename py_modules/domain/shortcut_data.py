@@ -22,19 +22,23 @@ def resolve_emulator_invocation(rom: dict[str, Any], active_core_so: str | None 
     """Return the emulator invocation prefix for *rom*.
 
     With ``active_core_so`` unset (``None``) the ROM follows the RetroDECK/ES-DE
-    default and resolves to the plain RetroDECK flatpak command. With an explicit
-    ``.so`` filename it returns the RetroDECK ``-e`` override that forces that
-    RetroArch core: ``flatpak run … -e "%EMULATOR_RETROARCH% -L <cores>/<so>
-    %ROM%"``. The cores dir is baked literally; ``%EMULATOR_RETROARCH%`` and
-    ``%ROM%`` remain ES-DE placeholders. *rom* is the per-emulator-branch seam
-    (#129) and is ignored today.
+    default and resolves to the plain RetroDECK flatpak command. With a bare core
+    name it returns the RetroDECK ``-e`` override that forces that RetroArch core:
+    ``flatpak run … -e "%EMULATOR_RETROARCH% -L <cores>/<so>.so %ROM%"``. The
+    cores dir is baked literally; ``%EMULATOR_RETROARCH%`` and ``%ROM%`` remain
+    ES-DE placeholders. *rom* is the per-emulator-branch seam (#129) and is
+    ignored today.
     """
     del rom  # reserved for the future per-emulator branch
     # B4: branch on None explicitly so None never reaches the f-string (no
     # "None.so"); an unresolvable override degrades to the plain launch upstream.
     if active_core_so is None:
         return RETRODECK_INVOCATION
-    return f'{RETRODECK_INVOCATION} -e "%EMULATOR_RETROARCH% -L {_RETROARCH_CORES_DIR}/{active_core_so} %ROM%"'
+    # active_core_so is the BARE core name (no extension) — the es_systems parser
+    # captures the name without ".so" (regex group excludes the suffix), and both
+    # core_defaults.json and the bios registry key on bare names too. Append the
+    # ".so" here for the on-disk RetroArch core path that retroarch's -L expects.
+    return f'{RETRODECK_INVOCATION} -e "%EMULATOR_RETROARCH% -L {_RETROARCH_CORES_DIR}/{active_core_so}.so %ROM%"'
 
 
 def label_to_core_so(available_cores: list[dict[str, Any]], label: str) -> str | None:

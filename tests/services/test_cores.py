@@ -262,10 +262,12 @@ class TestSetGameCore:
         result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
         assert result["success"] is True
         assert result["app_id"] == 99
-        # The -e override form bakes the resolved .so for the pinned label.
+        # The -e override form bakes the resolved core for the pinned label. The
+        # available-cores map keys on the BARE core name (bsnes_libretro); the
+        # bake appends exactly one ".so" for the on-disk RetroArch core path.
         assert result["launch_options"] == (
             "flatpak run net.retrodeck.retrodeck -e "
-            '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/bsnes_libretro %ROM%" '
+            '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/bsnes_libretro.so %ROM%" '
             '"/roms/snes/mario.sfc"'
         )
         # The pin landed on the Rom aggregate.

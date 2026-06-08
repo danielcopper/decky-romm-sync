@@ -520,7 +520,7 @@ class TestGetCachedGameDetailBiosFromCache:
         ]
         plugin._firmware_service._firmware_cache_epoch = 99.0
 
-        plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
+        plugin._firmware_service._core_info.active_core = ("mgba_libretro", "mGBA")
         plugin._firmware_service._core_info.available_cores = []
         with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path))):
             result = game_detail_service.get_cached_game_detail(50000)
@@ -792,7 +792,7 @@ class TestComputedFields:
         ]
         plugin._firmware_service._firmware_cache_epoch = 100.0
 
-        plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
+        plugin._firmware_service._core_info.active_core = ("mgba_libretro", "mGBA")
         plugin._firmware_service._core_info.available_cores = []
         with patch.object(
             plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(tmp_path / "nonexistent"))
@@ -836,7 +836,7 @@ class TestComputedFields:
         ]
         plugin._firmware_service._firmware_cache_epoch = 100.0
 
-        plugin._firmware_service._core_info.active_core = ("mgba_libretro.so", "mGBA")
+        plugin._firmware_service._core_info.active_core = ("mgba_libretro", "mGBA")
         plugin._firmware_service._core_info.available_cores = []
         with patch.object(plugin._firmware_service, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))):
             result = game_detail_service.get_cached_game_detail(99999)

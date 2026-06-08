@@ -221,9 +221,9 @@ class TestBuildCoreOverrides:
     """
 
     def test_resolved_override_included_null_omitted(self, plugin):
-        """A resolvable pin maps to its ``.so``; a ROM with no pin is absent."""
+        """A resolvable pin maps to its BARE core name; a ROM with no pin is absent."""
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
         _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
         _seed_install(plugin, 11, file_path="/roms/psx/b.chd", platform_slug="psx")
@@ -233,7 +233,7 @@ class TestBuildCoreOverrides:
         roms = [{"id": 10, "platform_slug": "psx"}, {"id": 11, "platform_slug": "psx"}]
         result = plugin._sync_service._orchestrator._build_core_overrides(roms)
 
-        assert result == {10: "pcsx_rearmed_libretro.so"}
+        assert result == {10: "pcsx_rearmed_libretro"}
         assert 11 not in result
 
     def test_stale_override_omitted_with_warning(self, plugin, caplog):
@@ -241,7 +241,7 @@ class TestBuildCoreOverrides:
         import logging
 
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
         _seed_install(plugin, 10, file_path="/roms/psx/a.chd", platform_slug="psx")
         with plugin._uow:
@@ -1008,7 +1008,7 @@ class TestDoSyncPerUnit:
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
 
         _seed_platform(
@@ -1051,7 +1051,7 @@ class TestDoSyncPerUnit:
         _use_fake_romm(plugin, fake_romm_api)
         # available_cores no longer carries the pinned label → label_to_core_so → None.
         plugin._core_info.available_cores = [
-            {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
+            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]
 
         _seed_platform(

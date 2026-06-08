@@ -35,14 +35,25 @@ class TestResolveEmulatorInvocation:
 
     def test_core_so_bakes_golden_e_override(self):
         # Byte-exact golden -e string: literal cores dir, preserved %…% placeholders.
-        result = resolve_emulator_invocation({"id": 1}, "pcsx_rearmed_libretro.so")
+        # The core name is BARE (no extension) as the es_systems parser yields it;
+        # the bake appends exactly one ".so" for the on-disk RetroArch core path.
+        result = resolve_emulator_invocation({"id": 1}, "pcsx_rearmed_libretro")
         assert result == (
             "flatpak run net.retrodeck.retrodeck "
             '-e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/pcsx_rearmed_libretro.so %ROM%"'
         )
 
+    def test_bare_core_name_yields_exactly_one_so_suffix(self):
+        # Regression for the on-device crash: the bake appended no ".so" and the
+        # fakes hid it by passing ".so"-suffixed names. With the real bare name
+        # the baked -L path must carry exactly one ".so" — not zero, not two.
+        result = resolve_emulator_invocation({"id": 1}, "pcsx_rearmed")
+        assert "/var/config/retroarch/cores/pcsx_rearmed.so" in result
+        assert "pcsx_rearmed.so.so" not in result
+        assert "/cores/pcsx_rearmed %ROM%" not in result
+
     def test_core_so_uses_literal_cores_dir_and_keeps_placeholders(self):
-        result = resolve_emulator_invocation({"id": 1}, "pcsx_rearmed_libretro.so")
+        result = resolve_emulator_invocation({"id": 1}, "pcsx_rearmed_libretro")
         assert "/var/config/retroarch/cores" in result
         assert "%EMULATOR_RETROARCH%" in result
         assert "%ROM%" in result
@@ -56,10 +67,11 @@ class TestResolveEmulatorInvocation:
 
 
 # Shape mirrors CoreInfoProvider.get_available_cores():
-# [{"core_so": str, "label": str, "is_default": bool}, ...].
+# [{"core_so": str, "label": str, "is_default": bool}, ...]. core_so is the BARE
+# core name (no ".so") as the es_systems parser and core_defaults.json yield it.
 _AVAILABLE_CORES = [
-    {"core_so": "pcsx_rearmed_libretro.so", "label": "PCSX ReARMed", "is_default": True},
-    {"core_so": "mednafen_psx_hw_libretro.so", "label": "Beetle PSX HW", "is_default": False},
+    {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
+    {"core_so": "mednafen_psx_hw_libretro", "label": "Beetle PSX HW", "is_default": False},
 ]
 
 
@@ -67,8 +79,8 @@ class TestLabelToCoreSo:
     """Tests for label_to_core_so()."""
 
     def test_match_returns_core_so(self):
-        assert label_to_core_so(_AVAILABLE_CORES, "PCSX ReARMed") == "pcsx_rearmed_libretro.so"
-        assert label_to_core_so(_AVAILABLE_CORES, "Beetle PSX HW") == "mednafen_psx_hw_libretro.so"
+        assert label_to_core_so(_AVAILABLE_CORES, "PCSX ReARMed") == "pcsx_rearmed_libretro"
+        assert label_to_core_so(_AVAILABLE_CORES, "Beetle PSX HW") == "mednafen_psx_hw_libretro"
 
     def test_miss_returns_none(self):
         assert label_to_core_so(_AVAILABLE_CORES, "No Such Core") is None
@@ -156,7 +168,7 @@ class TestBuildShortcutsData:
     def test_installed_rom_with_core_override_bakes_e_form(self):
         # A rom_id present in core_overrides bakes the -e override into its launch.
         roms = [{"id": 1, "name": "PSX Game"}]
-        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/psx/game.chd"}, {1: "pcsx_rearmed_libretro.so"})
+        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/psx/game.chd"}, {1: "pcsx_rearmed_libretro"})
         assert result[0]["launch_options"] == (
             "flatpak run net.retrodeck.retrodeck "
             '-e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/pcsx_rearmed_libretro.so %ROM%" '
@@ -166,14 +178,14 @@ class TestBuildShortcutsData:
     def test_installed_rom_absent_from_overrides_is_plain(self):
         # A rom_id NOT in core_overrides follows the default — plain launch, no -e.
         roms = [{"id": 1, "name": "Plain"}]
-        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/n64/g.z64"}, {2: "other_libretro.so"})
+        result = build_shortcuts_data(roms, "/plugin", {1: "/roms/n64/g.z64"}, {2: "other_libretro"})
         assert result[0]["launch_options"] == 'flatpak run net.retrodeck.retrodeck "/roms/n64/g.z64"'
         assert "-e" not in result[0]["launch_options"]
 
     def test_uninstalled_rom_with_override_still_empty(self):
         # An override on an UNINSTALLED rom can't bake — no path, empty placeholder.
         roms = [{"id": 1, "name": "NotDownloaded"}]
-        result = build_shortcuts_data(roms, "/plugin", {}, {1: "pcsx_rearmed_libretro.so"})
+        result = build_shortcuts_data(roms, "/plugin", {}, {1: "pcsx_rearmed_libretro"})
         assert result[0]["launch_options"] == ""
 
     def test_empty_roms(self):
