@@ -152,12 +152,12 @@ cores are available for the game's platform.
 
 1. Open a game's detail page
 2. Tap the **CPU button** (microchip icon)
-3. Pick a core from the menu — the current core is marked with a checkmark
+3. Pick a core from the menu — the active core is marked with a checkmark
 4. The BIOS status, core badge, and game info panel update immediately
 
-A per-game core takes priority over the platform default. The menu also has a **Follow default / Reset** entry: tap it
-to drop the per-game core so the game follows its platform default again. Picking the default core from the list
-**pins** that core for the game; only **Follow default / Reset** clears the per-game choice.
+A per-game core takes priority over the platform default. Picking a non-default core from the list **pins** that core
+for the game. To drop the per-game core and follow the platform default again, pick the **default-marked core** (the
+entry labelled "(default)") — that clears the per-game override.
 
 When you set or reset a per-game core for an installed game, the plugin updates the game's Steam shortcut immediately
 and confirms the change landed before reporting success. If Steam can't accept the change in the current session, you'll

@@ -1,16 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { cloneElement, createElement, type ReactElement } from "react";
-import { showModal, Navigation } from "@decky/ui";
+import { showModal } from "@decky/ui";
 import { showCoreChangeModal } from "./CoreChangeModal";
 import { detach } from "../utils/detach";
-
-// A filename whose parentheses trip RetroDECK's awk-regex match, so the
-// per-game core-switch warning box must render. Mirrors the #210 break case.
-const RISKY_FILE = "Mario Golf - Advance Tour (USA).zip";
-// A clean filename — no regex metacharacters, so the override works and the
-// red box must stay hidden.
-const CLEAN_FILE = "Tetris.gb";
 
 // Per-file mock for @decky/ui. The global stub renders ModalRoot as a
 // pass-through <div> but discards its `closeModal` prop. Here we capture
@@ -29,7 +22,6 @@ vi.mock("@decky/ui", () => {
     DialogButton: ({ children, onClick, disabled }: AnyProps & { disabled?: boolean }) =>
       createElement("button", { onClick, disabled }, children as never),
     showModal: vi.fn(),
-    Navigation: { NavigateToExternalWeb: vi.fn() },
   };
 });
 
@@ -46,7 +38,6 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
 interface CoreChangeContentProps {
   oldLabel: string;
   newLabel: string;
-  launchFileName?: string;
   closeModal?: () => void;
   onDone: (proceed: boolean) => void;
 }
@@ -112,53 +103,12 @@ describe("CoreChangeModal", () => {
   describe("CoreChangeModalContent — rendering", () => {
     it("always renders title, label arrow, and the Save Compatibility Warning", () => {
       // Drive via showCoreChangeModal so we don't depend on the non-exported FC.
-      detach(showCoreChangeModal("CoreA", "CoreB", CLEAN_FILE));
+      detach(showCoreChangeModal("CoreA", "CoreB"));
       const { container } = render(lastShownElement());
 
       expect(container.textContent).toContain("Emulator Core Changed");
       expect(container.textContent).toContain("CoreA → CoreB");
       expect(container.textContent).toContain("Save Compatibility Warning");
-    });
-
-    it("hides the per-game core-switch box for a clean filename", () => {
-      detach(showCoreChangeModal("CoreA", "CoreB", CLEAN_FILE));
-      const { container, queryByText } = render(lastShownElement());
-
-      // The always-on Save Compatibility Warning is unaffected by the filename.
-      expect(container.textContent).toContain("Save Compatibility Warning");
-      // The conditional red box and its Learn more button are absent.
-      expect(container.textContent).not.toContain("Per-Game Core Switch May Be Ignored");
-      expect(queryByText("Learn more")).toBeNull();
-    });
-
-    it("hides the per-game core-switch box when no filename is provided", () => {
-      detach(showCoreChangeModal("CoreA", "CoreB"));
-      const { container, queryByText } = render(lastShownElement());
-
-      expect(container.textContent).toContain("Save Compatibility Warning");
-      expect(container.textContent).not.toContain("Per-Game Core Switch May Be Ignored");
-      expect(queryByText("Learn more")).toBeNull();
-    });
-
-    it("shows the per-game core-switch box for a filename with special characters", () => {
-      detach(showCoreChangeModal("CoreA", "CoreB", RISKY_FILE));
-      const { container, queryByText } = render(lastShownElement());
-
-      expect(container.textContent).toContain("Save Compatibility Warning");
-      expect(container.textContent).toContain("Per-Game Core Switch May Be Ignored");
-      expect(container.textContent).toContain("special characters");
-      expect(container.textContent).toContain("System page");
-      expect(queryByText("Learn more")).not.toBeNull();
-    });
-
-    it("opens the published docs anchor when Learn more is clicked", () => {
-      detach(showCoreChangeModal("CoreA", "CoreB", RISKY_FILE));
-      const { container } = render(lastShownElement());
-
-      fireEvent.click(buttonByText(container, "Learn more"));
-      expect(Navigation.NavigateToExternalWeb).toHaveBeenCalledWith(
-        "https://danielcopper.github.io/decky-romm-sync/user-guide/bios-management/#per-game-core-switching-limitation",
-      );
     });
   });
 

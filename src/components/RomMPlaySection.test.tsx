@@ -2040,10 +2040,10 @@ describe("RomMPlaySection", () => {
       });
     }
 
-    // Core menu (after the #945 rewrite): [compat(disabled), Reset, Snes9x, BlastEm]
-    // (the separator is filtered out by isMenuItem). Reset is index 1; the cores
-    // follow at 2..N.
-    const BLASTEM_IDX = 3;
+    // Core menu (after the #945 reset-item removal): [compat(disabled), Snes9x
+    // (default), BlastEm] — the separator is filtered out by isMenuItem, and the
+    // explicit Reset item is gone (picking the default core clears the override).
+    const BLASTEM_IDX = 2;
 
     it("happy path: setGameCore(rom_id, label) → confirms re-baked launch_options, toasts, invalidates + dispatches core_changed", async () => {
       await setupCoreAction();
@@ -2224,10 +2224,11 @@ describe("RomMPlaySection", () => {
   });
 
   // ------------------------------------------------------------------
-  // M2. handleResetGameCore (Follow default / Reset — Q3/R2)
+  // M2. handleResetGameCore — triggered by picking the default-marked core
+  // (the explicit "Reset" item is gone; the default entry is the clear path)
   // ------------------------------------------------------------------
 
-  describe("handleResetGameCore", () => {
+  describe("handleResetGameCore (picking the default-marked core)", () => {
     async function setupCoreAction() {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
@@ -2256,7 +2257,7 @@ describe("RomMPlaySection", () => {
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
         ],
       });
-      // A non-default core is active so the Reset item is meaningful.
+      // A non-default core is active, so picking the default-marked core clears it.
       vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
         activeCoreLabel: "BlastEm",
         activeCoreIsDefault: false,
@@ -2267,9 +2268,11 @@ describe("RomMPlaySection", () => {
       });
     }
 
-    const RESET_IDX = 1;
+    // Picking the default-marked core (Snes9x) is the clear path. Menu after the
+    // #945 reset-item removal: [compat(disabled), Snes9x (default), BlastEm].
+    const DEFAULT_CORE_IDX = 1;
 
-    it("Reset item calls clearGameCore(rom_id) + confirms the PLAIN launch_options + toasts 'Reverted to default'", async () => {
+    it("picking the default-marked core calls clearGameCore(rom_id) + confirms the PLAIN launch_options + toasts 'Reverted to default'", async () => {
       await setupCoreAction();
       vi.mocked(backend.clearGameCore).mockResolvedValue({
         success: true,
@@ -2284,15 +2287,17 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       const coreItems = await openCoreMenuAndGetItems(testAppId);
-      // Reset is a distinct affordance, separate from the core entries.
-      expect(coreItems[RESET_IDX]!.props.children).toContain("Follow default / Reset");
+      // The default-marked core entry is the clear path (no separate Reset item).
+      // In this setup a non-default core (BlastEm) is active, so the ✓ sits on
+      // BlastEm — the default entry has no ✓ but still clears the override.
+      expect(coreItems[DEFAULT_CORE_IDX]!.props.children).toBe("Snes9x (default)");
       vi.mocked(toaster.toast).mockClear();
       vi.mocked(backend.getPlatformCoreInfo).mockClear();
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {
         await act(async () => {
-          await coreItems[RESET_IDX]!.props.onClick?.();
+          await coreItems[DEFAULT_CORE_IDX]!.props.onClick?.();
         });
         expect(vi.mocked(backend.clearGameCore)).toHaveBeenCalledWith(42);
         // Picking a core entry must NOT have been used to clear.
@@ -2312,7 +2317,7 @@ describe("RomMPlaySection", () => {
       }
     });
 
-    it("Reset false-confirm → DISTINCT restart toast, NOT success", async () => {
+    it("default-pick false-confirm → DISTINCT restart toast, NOT success", async () => {
       await setupCoreAction();
       vi.mocked(backend.clearGameCore).mockResolvedValue({
         success: true,
@@ -2325,7 +2330,7 @@ describe("RomMPlaySection", () => {
       const coreItems = await openCoreMenuAndGetItems(testAppId);
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
-        await coreItems[RESET_IDX]!.props.onClick?.();
+        await coreItems[DEFAULT_CORE_IDX]!.props.onClick?.();
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({ body: "Core saved — restart Steam to apply" }),
@@ -2335,7 +2340,7 @@ describe("RomMPlaySection", () => {
       );
     });
 
-    it("Reset uninstalled/unbound: success without launch_options/app_id → success toast, no confirm-set", async () => {
+    it("default-pick uninstalled/unbound: success without launch_options/app_id → success toast, no confirm-set", async () => {
       await setupCoreAction();
       vi.mocked(backend.clearGameCore).mockResolvedValue({ success: true });
       render(<RomMPlaySection appId={testAppId} />);
@@ -2343,13 +2348,13 @@ describe("RomMPlaySection", () => {
       const coreItems = await openCoreMenuAndGetItems(testAppId);
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
-        await coreItems[RESET_IDX]!.props.onClick?.();
+        await coreItems[DEFAULT_CORE_IDX]!.props.onClick?.();
       });
       expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Reverted to default" }));
     });
 
-    it("Reset {success:false} → toasts result.message", async () => {
+    it("default-pick {success:false} → toasts result.message", async () => {
       await setupCoreAction();
       vi.mocked(backend.clearGameCore).mockResolvedValue({ success: false, message: "clear failed" });
       render(<RomMPlaySection appId={testAppId} />);
@@ -2357,12 +2362,12 @@ describe("RomMPlaySection", () => {
       const coreItems = await openCoreMenuAndGetItems(testAppId);
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
-        await coreItems[RESET_IDX]!.props.onClick?.();
+        await coreItems[DEFAULT_CORE_IDX]!.props.onClick?.();
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "clear failed" }));
     });
 
-    it("Reset throw → 'Failed to reset core'", async () => {
+    it("default-pick throw → 'Failed to reset core'", async () => {
       await setupCoreAction();
       vi.mocked(backend.clearGameCore).mockRejectedValue(new Error("boom"));
       render(<RomMPlaySection appId={testAppId} />);
@@ -2370,7 +2375,7 @@ describe("RomMPlaySection", () => {
       const coreItems = await openCoreMenuAndGetItems(testAppId);
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
-        await coreItems[RESET_IDX]!.props.onClick?.();
+        await coreItems[DEFAULT_CORE_IDX]!.props.onClick?.();
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Failed to reset core" }));
     });
@@ -2421,9 +2426,9 @@ describe("RomMPlaySection", () => {
       return openCoreMenuAndGetItems(testAppId);
     }
 
-    it("showCoreMenu yields the compat note + a Reset item + 1 MenuItem per core; ✓ on Reset when default is active (#945)", async () => {
+    it("showCoreMenu yields the compat note + 1 MenuItem per core (no separate Reset item); ✓ on the default core when it is active (#945)", async () => {
       // Default core active → the override is NOT pinned, so the ✓ sits on the
-      // Reset affordance, not on any core entry.
+      // default-marked core entry (which is also the clear path).
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "Snes9x",
         activeCoreIsDefault: true,
@@ -2432,19 +2437,17 @@ describe("RomMPlaySection", () => {
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
         ],
       });
-      // 1 disabled compat note + Reset + 2 core items (separator filtered out).
-      expect(items).toHaveLength(4);
+      // 1 disabled compat note + 2 core items (separator filtered out, no Reset).
+      expect(items).toHaveLength(3);
       // The obsolete RetroDECK-bug warning MenuItem is gone — only ONE disabled item.
       expect(items.filter((i) => i.props.disabled === true)).toHaveLength(1);
       expect(items[0]!.props.disabled).toBe(true);
-      // Reset carries the ✓ because the default is active.
-      expect(items[1]!.props.children).toBe("Follow default / Reset ✓");
-      // No core entry carries the ✓ when the default is active.
-      expect(items[2]!.props.children).toBe("Snes9x (default)");
-      expect(items[3]!.props.children).toBe("BlastEm");
+      // The default-marked core carries the ✓ because it is active.
+      expect(items[1]!.props.children).toBe("Snes9x (default) ✓");
+      expect(items[2]!.props.children).toBe("BlastEm");
     });
 
-    it("showCoreMenu marks the pinned non-default core with ✓ (not Reset) (#945)", async () => {
+    it("showCoreMenu marks the pinned non-default core with ✓ (not the default entry) (#945)", async () => {
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "BlastEm",
         activeCoreIsDefault: false,
@@ -2453,12 +2456,11 @@ describe("RomMPlaySection", () => {
           { core_so: "blastem.so", label: "BlastEm", is_default: false },
         ],
       });
-      expect(items).toHaveLength(4);
-      // Reset has no ✓ when an override is pinned …
-      expect(items[1]!.props.children).toBe("Follow default / Reset");
+      expect(items).toHaveLength(3);
+      // The default entry has no ✓ when an override is pinned …
+      expect(items[1]!.props.children).toBe("Snes9x (default)");
       // … and the pinned core carries it instead.
-      expect(items[2]!.props.children).toBe("Snes9x (default)");
-      expect(items[3]!.props.children).toBe("BlastEm ✓");
+      expect(items[2]!.props.children).toBe("BlastEm ✓");
     });
 
     it("showSteamMenu Properties → SteamClient.Apps.OpenAppSettingsDialog(appId, 'general')", async () => {

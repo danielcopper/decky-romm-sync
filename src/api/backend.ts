@@ -250,7 +250,8 @@ export interface GameCoreApplyResult {
 
 // Per-game override (epic #945). Keyed by rom_id — the DB pin survives
 // uninstall/reinstall (roms.emulator_override). set_game_core pins a label;
-// clear_game_core drops the pin (Follow default / Reset).
+// clear_game_core drops the pin (follow default — triggered by picking the
+// default-marked core in the menu).
 export const setGameCore = callable<[number, string], GameCoreApplyResult>("set_game_core");
 export const clearGameCore = callable<[number], GameCoreApplyResult>("clear_game_core");
 // Dedicated core-info path (#923) — active core + available cores for a ROM,

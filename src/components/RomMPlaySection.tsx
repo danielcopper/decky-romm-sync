@@ -776,31 +776,24 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           "Switching cores may affect save compatibility",
         ),
         createElement(MenuSeparator, { key: "core-sep" }),
-        // Explicit "Follow default / Reset" affordance (#945). This is the ONLY
-        // way to clear the per-game override — picking the default core entry
-        // PINS that core, it does not clear the override.
-        createElement(
-          MenuItem,
-          {
-            key: "core-reset",
-            onClick: () => {
-              detach(handleResetGameCore());
-            },
-          },
-          `Follow default / Reset${info.activeCoreIsDefault ? " ✓" : ""}`,
-        ),
-        ...info.availableCores.map((c) =>
-          createElement(
+        ...info.availableCores.map((c) => {
+          // The active marker sits on the ACTIVE core: the default-marked entry
+          // when no override is pinned, otherwise the pinned core (#945).
+          const isActive = info.activeCoreIsDefault ? c.is_default : info.activeCoreLabel === c.label;
+          return createElement(
             MenuItem,
             {
               key: `core-${c.core_so}`,
+              // Picking the default-marked core CLEARS the per-game override
+              // (follow default); any other core PINS it. The default entry is
+              // the reset path \u2014 there is no separate "Reset" item.
               onClick: () => {
-                detach(handleChangeGameCore(c.label));
+                detach(c.is_default ? handleResetGameCore() : handleChangeGameCore(c.label));
               },
             },
-            `${c.label}${c.is_default ? " (default)" : ""}${!info.activeCoreIsDefault && info.activeCoreLabel === c.label ? " \u2713" : ""}`,
-          ),
-        ),
+            `${c.label}${c.is_default ? " (default)" : ""}${isActive ? " \u2713" : ""}`,
+          );
+        }),
       ),
       getEventTarget(e),
     );

@@ -127,9 +127,9 @@ The frontend CPU-button menu on the game detail page drives two backend callable
   a **hard failure** — the canonical `{success: False, reason, message}` shape is returned and **nothing is written**,
   so the DB never holds a label no consumer can resolve. On success it `pin`s the override, then re-bakes and returns
   the new `launch_options` + the bound `app_id` for an installed ROM.
-- **`clear_game_core(rom_id)`** (the explicit **"Follow default / Reset"** menu item) `clear`s the override to `NULL`
-  and returns the recomputed **plain** `launch_options` (no `-e`). Picking the default core entry does **not** clear —
-  it pins that core; Reset is the only clear path.
+- **`clear_game_core(rom_id)`** (triggered by picking the **default-marked core** in the menu) `clear`s the override to
+  `NULL` and returns the recomputed **plain** `launch_options` (no `-e`). There is no separate "Reset" item — selecting
+  the default-marked entry is the clear path; any other entry pins that core.
 
 For an installed + bound ROM the response carries `launch_options` + `app_id`; the frontend then **awaits
 `setLaunchOptionsConfirmed`** (the fire-then-poll `AppDetails` confirm from
