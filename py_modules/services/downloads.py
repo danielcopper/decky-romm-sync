@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
+    es_de_collapse_rename,
     is_multi_file_download,
     needs_m3u,
     resolve_local_file_name,
@@ -283,6 +284,12 @@ class DownloadService:
         self._maybe_generate_m3u_io(extract_dir, rom_detail)
         # Detect launch file: prefer M3U > CUE > largest file
         launch_file = self._collect_and_detect_launch_file(extract_dir)
+        # ES-DE collapses a multi-file dir into one game entry only when the
+        # dir is named after the launch file *including* the extension. The
+        # launch file is only known after extraction (the M3U may be
+        # auto-generated above), so the rename happens here, last of all the
+        # filesystem work, so a later failure cleans up the renamed dir.
+        extract_dir, launch_file = self._maybe_es_de_collapse_io(extract_dir, launch_file)
 
         return self._record_install_io(
             rom_id=rom_id,
@@ -292,6 +299,30 @@ class DownloadService:
             system=system,
             cleanup=lambda: self._download_file_store.remove_tree(extract_dir),
         )
+
+    def _maybe_es_de_collapse_io(self, extract_dir: str, launch_file: str) -> tuple[str, str]:
+        """Rename *extract_dir* after the launch file so ES-DE collapses it to one entry.
+
+        Returns ``(rom_dir, launch_file)`` — the renamed pair when the move
+        applied, or the originals unchanged. Moves the *whole* directory
+        (never just the launch file — ADR-0008). Skips the move when
+        ``es_de_collapse_rename`` reports no rename is needed, and on
+        collision: if the target already exists the staging dir is kept and a
+        warning is logged rather than clobbering or merging an existing dir.
+        """
+        rename = es_de_collapse_rename(extract_dir, launch_file)
+        if rename is None:
+            return (extract_dir, launch_file)
+        new_rom_dir, new_launch_file = rename
+        if self._download_file_store.exists(new_rom_dir):
+            self._logger.warning(
+                "ES-DE collapse rename skipped: target '%s' already exists; keeping staging dir '%s'",
+                new_rom_dir,
+                extract_dir,
+            )
+            return (extract_dir, launch_file)
+        self._download_file_store.move_dir(extract_dir, new_rom_dir)
+        return (new_rom_dir, new_launch_file)
 
     def _post_download_single_io(self, rom_id, rom_detail, target_path, system):
         """Sync helper for _do_download single-file — rename + DB persist in executor.
@@ -401,6 +432,10 @@ class DownloadService:
         platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
         has_multiple = is_multi_file_download(rom_detail)
         progress_callback = self._make_progress_callback(rom_id, rom_name, platform_name, file_name)
+        # Tracks the resolved launch path once extraction returns it, so a
+        # failure AFTER the ES-DE collapse rename cleans up the *renamed* dir
+        # (``os.path.dirname(final_path)``) — not just the staging name.
+        final_path: str | None = None
 
         try:
             self._logger.info(f"Download starting: {rom_name} (rom_id={rom_id}, multi={has_multiple}) -> {target_path}")
@@ -456,14 +491,14 @@ class DownloadService:
 
         except asyncio.CancelledError:
             self._download_queue[rom_id]["status"] = "cancelled"
-            self._cleanup_partial_download(target_path, has_multiple, file_name)
+            self._cleanup_partial_download(target_path, has_multiple, file_name, final_path)
             self._logger.info(f"Download cancelled: {rom_name}")
             raise
 
         except Exception as e:
             self._download_queue[rom_id]["status"] = "failed"
             self._download_queue[rom_id]["error"] = str(e)
-            self._cleanup_partial_download(target_path, has_multiple, file_name)
+            self._cleanup_partial_download(target_path, has_multiple, file_name, final_path)
             self._logger.error(f"Download failed for {rom_name}: {e}")
             await self._emit(
                 "download_failed",
@@ -481,7 +516,13 @@ class DownloadService:
             self._prune_download_queue()
 
     def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict[str, Any]) -> None:
-        """Auto-generate an M3U playlist if none exists and multiple disc files are found."""
+        """Auto-generate a game-named M3U playlist when one is warranted (see ``needs_m3u``).
+
+        Writes ``<fs_name_no_ext>.m3u`` when no M3U already exists and the disc
+        files warrant one: multi-disc ROMs (any of cue/chd/iso) for disc
+        switching, or a single-disc bin/cue ROM so the extract dir collapses to
+        a game-named entry in ES-DE.
+        """
         all_files = self._download_file_store.scan_files_with_sizes(extract_dir)
         # Check if an M3U already exists (search recursively)
         if any(path.lower().endswith(".m3u") for path, _size in all_files):
@@ -508,8 +549,15 @@ class DownloadService:
         result = detect_launch_file(all_files)
         return result if result is not None else extract_dir
 
-    def _cleanup_partial_download(self, target_path, has_multiple, file_name):
-        """Clean up partial download files. Each step is independent so one failure doesn't block others."""
+    def _cleanup_partial_download(self, target_path, has_multiple, file_name, final_path=None):
+        """Clean up partial download files. Each step is independent so one failure doesn't block others.
+
+        For a multi-file ROM the extract dir may have been renamed for ES-DE
+        collapse after extraction. *final_path* (the resolved launch file,
+        ``None`` until extraction returns it) lets cleanup tear down whichever
+        of the two dir names exists — the staging name *and* the renamed dir
+        (``os.path.dirname(final_path)``) — so no failure path orphans a dir.
+        """
         paths_to_remove = [
             target_path + _ZIP_TMP_EXT,
             target_path + _TMP_EXT,
@@ -521,12 +569,15 @@ class DownloadService:
             except Exception as e:
                 self._logger.warning(f"Cleanup failed for {path}: {e}")
         if has_multiple:
-            rom_dir_name = os.path.splitext(file_name)[0]
-            extract_dir = os.path.join(os.path.dirname(target_path), rom_dir_name)
-            try:
-                self._download_file_store.remove_tree(extract_dir)
-            except Exception as e:
-                self._logger.warning(f"Cleanup failed for directory {extract_dir}: {e}")
+            staging_dir = os.path.join(os.path.dirname(target_path), os.path.splitext(file_name)[0])
+            dirs_to_remove = {staging_dir}
+            if final_path:
+                dirs_to_remove.add(os.path.dirname(final_path))
+            for extract_dir in dirs_to_remove:
+                try:
+                    self._download_file_store.remove_tree(extract_dir)
+                except Exception as e:
+                    self._logger.warning(f"Cleanup failed for directory {extract_dir}: {e}")
 
     def cancel_download(self, rom_id):
         rom_id = int(rom_id)

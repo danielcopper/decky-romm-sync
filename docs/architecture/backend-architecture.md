@@ -163,11 +163,11 @@ The full schema and aggregate model are in [Database Design](database-design.md)
 RomM exposes three mutually exclusive file-layout flags on every ROM detail. They control how the server stores files
 and how the API serves them. The plugin maps each layout to a local on-disk path:
 
-| RomM flag                | RomM server layout                                                | What `fs_name` is   | Plugin local layout                                                       |
-| ------------------------ | ----------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------- |
-| `has_simple_single_file` | `roms/<platform>/<file>` — one file, flat                         | the filename        | flat in platform folder: `roms/<platform>/<file>`                         |
-| `has_nested_single_file` | `roms/<platform>/<folder>/<file>` — one file in a per-game folder | the **folder** name | flat in platform folder: `roms/<platform>/<file>`                         |
-| `has_multiple_files`     | per-game folder with multiple files (multi-disc, BIN+CUE, etc.)   | the ZIP/folder name | extracted into per-game subfolder: `roms/<platform>/<fs_name_no_ext>/...` |
+| RomM flag                | RomM server layout                                                | What `fs_name` is   | Plugin local layout                                                                                     |
+| ------------------------ | ----------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `has_simple_single_file` | `roms/<platform>/<file>` — one file, flat                         | the filename        | flat in platform folder: `roms/<platform>/<file>`                                                       |
+| `has_nested_single_file` | `roms/<platform>/<folder>/<file>` — one file in a per-game folder | the **folder** name | flat in platform folder: `roms/<platform>/<file>`                                                       |
+| `has_multiple_files`     | per-game folder with multiple files (multi-disc, BIN+CUE, etc.)   | the ZIP/folder name | extracted into per-game subfolder named after the launch file: `roms/<platform>/<launch-file-name>/...` |
 
 **`has_nested_single_file` quirk**: `fs_name` is the parent folder name, not the filename. The actual filename with
 extension lives in `files[0].file_name`. The plugin reads from `files[0].file_name` so the downloaded ROM lands with the
@@ -188,6 +188,24 @@ top-level file (`has_multiple_files=False`, `has_nested_single_file=True`) yet m
 a ZIP. Keying on `has_multiple_files` alone would take the single-file path and write the ZIP bytes verbatim into one
 unreadable `.nsp`. The boolean is kept as a defensive fallback for payloads that omit `files`; a genuine nested-single
 ROM has `len(files) == 1` and correctly stays on the flat single-file path.
+
+**ES-DE directory-collapse rename**: a multi-file ROM is extracted into a staging folder named after the ZIP
+(`fs_name_no_ext`), but the per-game folder is then renamed after the **detected launch file including its extension**
+(e.g. `Final Fantasy VII (USA).m3u/` containing `Final Fantasy VII (USA).m3u`). ES-DE only collapses a directory into a
+single game entry when the folder name matches the launch file's full name with extension; without the rename a
+multi-disc game shows in ES-DE as a folder plus loose disc files. The launch file is only known after extraction (an
+`.m3u` may be auto-generated — see below), so the rename happens last, after launch-file detection, via
+`es_de_collapse_rename` (`domain/rom_files.py`) + the `DownloadFileStore.move_dir` whole-directory move. On a name
+collision (target already exists) the rename is skipped and the staging folder is kept — never clobbered or merged.
+Existing installs from before this feature keep their old folder layout until re-downloaded.
+
+**M3U generation rule** (`needs_m3u` in `domain/rom_files.py`): a game-named `<fs_name_no_ext>.m3u` is auto-generated
+(when no `.m3u` already exists) for **multi-disc** ROMs — two or more disc files of any kind (`.cue`/`.chd`/`.iso`) — so
+the emulator can switch discs, **and** for **single-disc bin/cue** ROMs — exactly one `.cue` — so the extract dir is
+renamed after a game-named playlist rather than a generically-named cue (`disc1.cue/`). The single-disc branch is scoped
+strictly to `.cue`: bin/cue systems (PS1/PS2/Saturn/Sega CD/PC Engine CD, etc.) are M3U-friendly, whereas iso-based
+GameCube/Wii (Dolphin) are never bin/cue and do not reliably launch from a single-entry M3U. Single-disc `.chd`/`.iso`
+arrive as single-file downloads that never reach the extraction path, so they get no playlist.
 
 Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
 

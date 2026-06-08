@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
+    es_de_collapse_rename,
     is_multi_file_download,
     needs_m3u,
     resolve_local_file_name,
@@ -96,17 +97,31 @@ class TestNeedsM3u:
     def test_three_disc_files_returns_true(self):
         assert needs_m3u(["disc1.chd", "disc2.chd", "disc3.chd"]) is True
 
-    def test_single_disc_file_returns_false(self):
-        assert needs_m3u(["game.cue"]) is False
-
     def test_empty_list_returns_false(self):
         assert needs_m3u([]) is False
+
+    def test_single_cue_returns_true(self):
+        # Single-disc bin/cue: M3U so the extract dir gets a game-named playlist.
+        assert needs_m3u(["disc1.cue"]) is True
+
+    def test_single_cue_case_insensitive_returns_true(self):
+        assert needs_m3u(["Game.CUE"]) is True
+
+    def test_single_chd_returns_false(self):
+        # Single-disc chd is a single-file download; iso/chd are out of scope.
+        assert needs_m3u(["game.chd"]) is False
+
+    def test_single_iso_returns_false(self):
+        assert needs_m3u(["game.iso"]) is False
 
     def test_boundary_exactly_two(self):
         assert needs_m3u(["a.iso", "b.iso"]) is True
 
-    def test_boundary_exactly_one(self):
-        assert needs_m3u(["a.iso"]) is False
+    def test_two_chd_returns_true(self):
+        assert needs_m3u(["disc1.chd", "disc2.chd"]) is True
+
+    def test_mixed_two_or_more_returns_true(self):
+        assert needs_m3u(["disc1.cue", "disc2.chd"]) is True
 
 
 class TestBuildM3uContent:
@@ -263,6 +278,43 @@ class TestDetectLaunchFile:
         open(m3u, "w").close()
         result = detect_launch_file(_with_sizes([m3u]))
         assert result == m3u
+
+
+class TestEsDeCollapseRename:
+    """Tests for es_de_collapse_rename — pure path algebra for the ES-DE dir collapse."""
+
+    def test_happy_m3u_renames_dir_to_launch_file_basename(self):
+        rom_dir = "/roms/psx/Game"
+        launch_file = "/roms/psx/Game/Game.m3u"
+        assert es_de_collapse_rename(rom_dir, launch_file) == (
+            "/roms/psx/Game.m3u",
+            "/roms/psx/Game.m3u/Game.m3u",
+        )
+
+    def test_cue_variant_renames_dir(self):
+        rom_dir = "/roms/psx/Final Fantasy VII (USA)"
+        launch_file = "/roms/psx/Final Fantasy VII (USA)/Final Fantasy VII (USA).cue"
+        assert es_de_collapse_rename(rom_dir, launch_file) == (
+            "/roms/psx/Final Fantasy VII (USA).cue",
+            "/roms/psx/Final Fantasy VII (USA).cue/Final Fantasy VII (USA).cue",
+        )
+
+    def test_idempotent_already_named_after_launch_file(self):
+        rom_dir = "/roms/psx/Game.m3u"
+        launch_file = "/roms/psx/Game.m3u/Game.m3u"
+        assert es_de_collapse_rename(rom_dir, launch_file) is None
+
+    def test_fallback_launch_file_equals_rom_dir(self):
+        rom_dir = "/roms/psx/Game"
+        assert es_de_collapse_rename(rom_dir, rom_dir) is None
+
+    def test_empty_launch_file_returns_none(self):
+        assert es_de_collapse_rename("/roms/psx/Game", "") is None
+
+    def test_nested_launch_file_in_subdir_returns_none(self):
+        rom_dir = "/roms/wiiu/Game"
+        launch_file = "/roms/wiiu/Game/code/Game.rpx"
+        assert es_de_collapse_rename(rom_dir, launch_file) is None
 
 
 class TestResolveLocalFileName:

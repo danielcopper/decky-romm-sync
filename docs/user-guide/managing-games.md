@@ -31,10 +31,25 @@ You can also tap **Cancel** to abort a download in progress. Partial files are c
 
 Downloaded ROMs are stored in your RetroDECK roms directory (e.g. `~/retrodeck/roms/gba/`).
 
-### Multi-Disc Games
+### Multi-Disc and Multi-File Games
 
 Multi-disc games (e.g. multi-disc PS1 titles) are downloaded as a single ZIP from RomM, extracted automatically, and an
 M3U playlist file is used for disc switching. This is handled transparently — just download and play.
+
+The game's folder is named after a game-named M3U playlist (e.g. `Final Fantasy VII (USA).m3u/`) so that ES-DE collapses
+it into a single game entry instead of showing a folder plus loose disc files. This applies to:
+
+- **Multi-disc** ROMs (two or more disc files — any of `.cue`, `.chd`, `.iso`): the M3U is generated for disc switching.
+- **Single-disc bin/cue** ROMs (one `.cue`): a game-named M3U is generated too, because the `.cue` itself is often
+  generically named (`disc1.cue`, `track01.cue`) and would otherwise produce a `disc1.cue/` folder. bin/cue systems
+  (PS1/PS2/Saturn/Sega CD/PC Engine CD, etc.) play cleanly from the playlist.
+
+Single-disc `.chd`/`.iso` titles download as a single file (no folder), so they need no playlist.
+
+!!! note "Known limitation"
+
+    Games installed **before** this version keep their old folder layout (named without the extension), so ES-DE still
+    shows them as a folder plus loose disc files. Re-download the game to get the single clean ES-DE entry.
 
 ## Uninstalling ROMs
 

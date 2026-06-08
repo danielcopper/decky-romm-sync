@@ -100,6 +100,23 @@ class TestRename:
             adapter.rename(str(tmp_path / "missing"), str(tmp_path / "dst"))
 
 
+class TestMoveDir:
+    def test_moves_whole_subtree(self, adapter, tmp_path):
+        src = tmp_path / "Game"
+        (src / "sub").mkdir(parents=True)
+        (src / "Game.m3u").write_text("disc1.cue\n")
+        (src / "sub" / "disc1.cue").write_text("data")
+        dst = tmp_path / "Game.m3u"
+        adapter.move_dir(str(src), str(dst))
+        assert not src.exists()
+        assert (dst / "Game.m3u").read_text() == "disc1.cue\n"
+        assert (dst / "sub" / "disc1.cue").read_text() == "data"
+
+    def test_missing_source_raises(self, adapter, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            adapter.move_dir(str(tmp_path / "missing"), str(tmp_path / "dst"))
+
+
 class TestDiskFree:
     def test_returns_positive_int(self, adapter, tmp_path):
         # Real filesystem returns some non-negative integer.
@@ -296,6 +313,7 @@ class TestProtocolMethodCount:
             "remove_file",
             "remove_tree",
             "make_dirs",
+            "move_dir",
             "rename",
             "disk_free",
             "walk_files_matching_suffixes",

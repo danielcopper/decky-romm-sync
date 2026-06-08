@@ -75,6 +75,28 @@ class FakeDownloadFileStore:
             raise FileNotFoundError(src)
         self.files[dst] = self.files.pop(src)
 
+    def move_dir(self, src: str, dst: str) -> None:
+        """Re-key every entry under *src* to *dst*, modelling ``os.replace`` on a dir.
+
+        Raises ``FileNotFoundError`` when *src* is not a known directory.
+        """
+        if not self.is_dir(src):
+            raise FileNotFoundError(src)
+        src_prefix = src.rstrip("/") + "/"
+        dst_prefix = dst.rstrip("/") + "/"
+        for stored in list(self.files):
+            if stored == src:
+                self.files[dst] = self.files.pop(src)
+            elif stored.startswith(src_prefix):
+                self.files[dst_prefix + stored[len(src_prefix) :]] = self.files.pop(stored)
+        for d in list(self.dirs):
+            if d == src:
+                self.dirs.discard(d)
+                self.dirs.add(dst)
+            elif d.startswith(src_prefix):
+                self.dirs.discard(d)
+                self.dirs.add(dst_prefix + d[len(src_prefix) :])
+
     def disk_free(self, path: str) -> int:
         return self.disk_free_bytes
 

@@ -7,6 +7,7 @@ as parameters.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 _DISC_EXTENSIONS = (".cue", ".chd", ".iso")
@@ -43,8 +44,13 @@ def is_multi_file_download(rom_detail: dict[str, Any]) -> bool:
 def needs_m3u(disc_files: list[str]) -> bool:
     """Return True if an M3U playlist should be generated.
 
-    Decides based on the number of disc files found. An M3U is needed
-    when there are 2 or more disc files (multi-disc ROM).
+    An M3U is generated for **multi-disc** ROMs (2 or more disc files of any
+    kind — cue/chd/iso — so the emulator can switch discs) and for
+    **single-disc bin/cue** ROMs (exactly one ``.cue`` — so the extract dir can
+    be named after a game-named playlist for ES-DE collapse; bin/cue systems
+    are M3U-friendly, unlike iso-based GameCube/Wii). Single-disc chd/iso get no
+    M3U: they arrive as single-file downloads that never reach this path, and
+    iso-based titles do not reliably launch from a single-entry M3U.
 
     Parameters
     ----------
@@ -52,7 +58,7 @@ def needs_m3u(disc_files: list[str]) -> bool:
         Relative paths of disc files (.cue, .chd, .iso) found in the
         extraction directory. Must already exclude any existing .m3u files.
     """
-    return len(disc_files) >= 2
+    return len(disc_files) >= 2 or (len(disc_files) == 1 and disc_files[0].lower().endswith(".cue"))
 
 
 def build_m3u_content(disc_files: list[str]) -> str:
@@ -131,6 +137,48 @@ def detect_launch_file(files: list[tuple[str, int]]) -> str | None:
 
     # Largest file by pre-computed size
     return max(files, key=lambda t: t[1])[0]
+
+
+def es_de_collapse_rename(rom_dir: str, launch_file: str) -> tuple[str, str] | None:
+    """Return ``(new_rom_dir, new_launch_file)`` renaming *rom_dir* after the launch file.
+
+    ES-DE collapses a multi-file ROM directory into a single game entry only
+    when the directory is named with the launch file's full name *including*
+    the extension (e.g. ``Final Fantasy VII (USA).m3u/`` containing
+    ``Final Fantasy VII (USA).m3u``). The download path extracts into a dir
+    named without the extension, so this computes the rename target.
+
+    Pure path algebra only — the caller performs the filesystem move.
+
+    Parameters
+    ----------
+    rom_dir:
+        Absolute path of the extracted ROM directory.
+    launch_file:
+        Absolute path of the detected launch file (``detect_launch_file``).
+
+    Returns
+    -------
+    tuple[str, str] | None
+        ``(new_rom_dir, new_launch_file)`` when a rename applies, or ``None``
+        when no rename is needed or possible:
+
+        - *launch_file* is falsy or equals *rom_dir* (the detect-fallback
+          case: no real launch file inside the directory).
+        - *launch_file* is nested in a subdirectory of *rom_dir* — ES-DE would
+          not collapse it anyway.
+        - *rom_dir* is already named after the launch file (idempotent).
+    """
+    if not launch_file or launch_file == rom_dir:
+        return None
+    if os.path.dirname(launch_file) != rom_dir:
+        return None
+    launch_basename = os.path.basename(launch_file)
+    if os.path.basename(rom_dir) == launch_basename:
+        return None
+    new_rom_dir = os.path.join(os.path.dirname(rom_dir), launch_basename)
+    new_launch_file = os.path.join(new_rom_dir, launch_basename)
+    return (new_rom_dir, new_launch_file)
 
 
 def resolve_local_file_name(rom_detail: dict[str, Any]) -> tuple[str, bool]:

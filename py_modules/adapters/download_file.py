@@ -46,6 +46,15 @@ class DownloadFileAdapter:
         """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
         os.replace(src, dst)
 
+    def move_dir(self, src: str, dst: str) -> None:
+        """Atomically move the whole directory *src* to *dst* via ``os.replace``.
+
+        Same-filesystem only — *src* and *dst* are siblings under the
+        platform roms folder. Moves the entire subtree in one syscall so
+        a multi-file ROM is never split.
+        """
+        os.replace(src, dst)
+
     def disk_free(self, path: str) -> int:
         """Return the free space in bytes for the filesystem hosting *path*."""
         return shutil.disk_usage(path).free

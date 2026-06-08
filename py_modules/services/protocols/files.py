@@ -87,6 +87,18 @@ class DownloadFileStore(Protocol):
         """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
         ...
 
+    def move_dir(self, src: str, dst: str) -> None:
+        """Atomically move the whole directory *src* to *dst*.
+
+        Moves the entire subtree (never a single file inside it), so the
+        ES-DE directory-collapse rename can never split a multi-file ROM
+        (ADR-0008). *dst* must not already exist — callers probe with
+        ``exists`` first and skip the move on collision. Same-filesystem
+        only (``os.replace`` semantics); the extract dir and its rename
+        target are siblings under the platform folder.
+        """
+        ...
+
     def disk_free(self, path: str) -> int:
         """Return the free space in bytes for the filesystem hosting *path*."""
         ...
