@@ -29,9 +29,9 @@ class TestFormatBiosStatusFullDict:
             "required_count": 2,
             "required_downloaded": 1,
             "files": [{"file_name": "gba_bios.bin", "downloaded": True}],
-            "active_core": "mgba_libretro.so",
+            "active_core": "mgba_libretro",
             "active_core_label": "mGBA",
-            "available_cores": [{"core": "mgba_libretro.so", "label": "mGBA"}],
+            "available_cores": [{"core": "mgba_libretro", "label": "mGBA"}],
         }
         result = format_bios_status(bios, "gba")
 
@@ -44,7 +44,7 @@ class TestFormatBiosStatusFullDict:
         assert result.required_downloaded == 1
         assert len(result.files) == 1
         assert result.files[0].file_name == "gba_bios.bin"
-        assert result.active_core == "mgba_libretro.so"
+        assert result.active_core == "mgba_libretro"
         assert result.active_core_label == "mGBA"
         assert len(result.available_cores) == 1
 
@@ -129,9 +129,9 @@ class TestClassifyFirmwareFile:
         reg_entry = {
             "description": "GBA BIOS",
             "required": True,
-            "cores": {"gpsp_libretro.so": {"required": True}, "mgba_libretro.so": {"required": False}},
+            "cores": {"gpsp_libretro": {"required": True}, "mgba_libretro": {"required": False}},
         }
-        is_required, classification, description = classify_firmware_file(reg_entry, "gba_bios.bin", "gpsp_libretro.so")
+        is_required, classification, description = classify_firmware_file(reg_entry, "gba_bios.bin", "gpsp_libretro")
         assert is_required is True
         assert classification == "required"
         assert description == "GBA BIOS"
@@ -141,9 +141,9 @@ class TestClassifyFirmwareFile:
         reg_entry = {
             "description": "GBA BIOS",
             "required": True,
-            "cores": {"gpsp_libretro.so": {"required": True}, "mgba_libretro.so": {"required": False}},
+            "cores": {"gpsp_libretro": {"required": True}, "mgba_libretro": {"required": False}},
         }
-        is_required, classification, description = classify_firmware_file(reg_entry, "gba_bios.bin", "mgba_libretro.so")
+        is_required, classification, description = classify_firmware_file(reg_entry, "gba_bios.bin", "mgba_libretro")
         assert is_required is False
         assert classification == "optional"
         assert description == "GBA BIOS"
@@ -153,9 +153,9 @@ class TestClassifyFirmwareFile:
         reg_entry = {
             "description": "Some BIOS",
             "required": True,
-            "cores": {"known_core.so": {"required": True}},
+            "cores": {"known_core": {"required": True}},
         }
-        is_required, classification, _ = classify_firmware_file(reg_entry, "some.bin", "unknown_core.so")
+        is_required, classification, _ = classify_firmware_file(reg_entry, "some.bin", "unknown_core")
         assert is_required is False
         assert classification == "optional"
 
@@ -183,7 +183,7 @@ class TestClassifyFirmwareFile:
 
     def test_no_reg_entry_with_active_core_yields_unknown(self):
         """File not in registry with active core still yields unknown."""
-        is_required, classification, description = classify_firmware_file(None, "alien.bin", "some_core.so")
+        is_required, classification, description = classify_firmware_file(None, "alien.bin", "some_core")
         assert is_required is False
         assert classification == "unknown"
         assert description == "alien.bin"
@@ -202,14 +202,14 @@ class TestBuildCoresInfo:
         """reg_entry with cores key produces per-core required dict."""
         reg_entry = {
             "cores": {
-                "mgba_libretro.so": {"required": False},
-                "gpsp_libretro.so": {"required": True},
+                "mgba_libretro": {"required": False},
+                "gpsp_libretro": {"required": True},
             }
         }
         result = build_cores_info(reg_entry)
         assert result == {
-            "mgba_libretro.so": {"required": False},
-            "gpsp_libretro.so": {"required": True},
+            "mgba_libretro": {"required": False},
+            "gpsp_libretro": {"required": True},
         }
 
     def test_no_reg_entry_returns_empty_dict(self):
@@ -223,9 +223,9 @@ class TestBuildCoresInfo:
 
     def test_core_missing_required_defaults_to_true(self):
         """Core entry without required key defaults to True."""
-        reg_entry = {"cores": {"some_core.so": {}}}
+        reg_entry = {"cores": {"some_core": {}}}
         result = build_cores_info(reg_entry)
-        assert result["some_core.so"]["required"] is True
+        assert result["some_core"]["required"] is True
 
 
 class TestIsUsedByActiveCore:
@@ -233,27 +233,27 @@ class TestIsUsedByActiveCore:
 
     def test_no_active_core_returns_true(self):
         """No active core — file is considered used by all."""
-        reg_entry = {"cores": {"mgba_libretro.so": {"required": False}}}
+        reg_entry = {"cores": {"mgba_libretro": {"required": False}}}
         assert is_used_by_active_core(reg_entry, None) is True
 
     def test_no_reg_entry_returns_true(self):
         """No registry entry — unknown file, considered used."""
-        assert is_used_by_active_core(None, "mgba_libretro.so") is True
+        assert is_used_by_active_core(None, "mgba_libretro") is True
 
     def test_reg_entry_without_cores_returns_true(self):
         """Registry entry without cores key — file used by all cores."""
         reg_entry = {"description": "DC BIOS", "required": True}
-        assert is_used_by_active_core(reg_entry, "some_core.so") is True
+        assert is_used_by_active_core(reg_entry, "some_core") is True
 
     def test_active_core_in_cores_returns_true(self):
         """Active core present in cores dict — file is used by it."""
-        reg_entry = {"cores": {"mgba_libretro.so": {"required": False}}}
-        assert is_used_by_active_core(reg_entry, "mgba_libretro.so") is True
+        reg_entry = {"cores": {"mgba_libretro": {"required": False}}}
+        assert is_used_by_active_core(reg_entry, "mgba_libretro") is True
 
     def test_active_core_not_in_cores_returns_false(self):
         """Active core not in cores dict — file not used by it."""
-        reg_entry = {"cores": {"gpsp_libretro.so": {"required": True}}}
-        assert is_used_by_active_core(reg_entry, "mgba_libretro.so") is False
+        reg_entry = {"cores": {"gpsp_libretro": {"required": True}}}
+        assert is_used_by_active_core(reg_entry, "mgba_libretro") is False
 
 
 class TestBuildFileEntry:
@@ -264,7 +264,7 @@ class TestBuildFileEntry:
         reg_entry = {
             "description": "Dreamcast BIOS",
             "required": True,
-            "cores": {"dc_libretro.so": {"required": True}},
+            "cores": {"dc_libretro": {"required": True}},
         }
         result = build_file_entry("dc_boot.bin", True, "/bios/dc/dc_boot.bin", reg_entry, None)
         assert isinstance(result, BiosFileEntry)
@@ -274,7 +274,7 @@ class TestBuildFileEntry:
         assert result.required is True
         assert result.description == "Dreamcast BIOS"
         assert result.classification == "required"
-        assert result.cores == {"dc_libretro.so": {"required": True}}
+        assert result.cores == {"dc_libretro": {"required": True}}
         assert result.used_by_active is True
 
     def test_no_reg_entry_yields_unknown(self):
@@ -306,9 +306,9 @@ class TestBuildFileEntry:
         reg_entry = {
             "description": "GBA BIOS",
             "required": True,
-            "cores": {"gpsp_libretro.so": {"required": True}},
+            "cores": {"gpsp_libretro": {"required": True}},
         }
-        result = build_file_entry("gba_bios.bin", False, "/bios/gba_bios.bin", reg_entry, "mgba_libretro.so")
+        result = build_file_entry("gba_bios.bin", False, "/bios/gba_bios.bin", reg_entry, "mgba_libretro")
         assert result.used_by_active is False
         assert result.required is False
         assert result.classification == "optional"
@@ -360,11 +360,11 @@ class TestCollectFirmwareStatus:
             "gba_bios.bin": {
                 "description": "GBA BIOS",
                 "required": True,
-                "cores": {"mgba_libretro.so": {"required": False}},
+                "cores": {"mgba_libretro": {"required": False}},
             }
         }
         items = [{"file_name": "gba_bios.bin", "downloaded": False, "dest": "/bios/gba_bios.bin"}]
-        result = collect_firmware_status(items, registry_platform, "mgba_libretro.so")
+        result = collect_firmware_status(items, registry_platform, "mgba_libretro")
         assert result[0].required is False
         assert result[0].classification == "optional"
 
@@ -428,13 +428,13 @@ class TestComputeBiosLabel:
 
 class TestAvailableCore:
     def test_construction(self):
-        core = AvailableCore(core_so="mgba_libretro.so", label="mGBA", is_default=True)
-        assert core.core_so == "mgba_libretro.so"
+        core = AvailableCore(core_so="mgba_libretro", label="mGBA", is_default=True)
+        assert core.core_so == "mgba_libretro"
         assert core.label == "mGBA"
         assert core.is_default is True
 
     def test_frozen(self):
-        core = AvailableCore(core_so="mgba_libretro.so", label="mGBA", is_default=True)
+        core = AvailableCore(core_so="mgba_libretro", label="mGBA", is_default=True)
         try:
             core.label = "other"  # type: ignore[misc]
             raise AssertionError("Should have raised AttributeError")
@@ -442,9 +442,9 @@ class TestAvailableCore:
             pass
 
     def test_asdict(self):
-        core = AvailableCore(core_so="mgba_libretro.so", label="mGBA", is_default=True)
+        core = AvailableCore(core_so="mgba_libretro", label="mGBA", is_default=True)
         d = asdict(core)
-        assert d == {"core_so": "mgba_libretro.so", "label": "mGBA", "is_default": True}
+        assert d == {"core_so": "mgba_libretro", "label": "mGBA", "is_default": True}
 
 
 class TestBiosFileEntry:
@@ -456,7 +456,7 @@ class TestBiosFileEntry:
             required=True,
             description="GBA BIOS",
             classification="required",
-            cores={"mgba_libretro.so": {"required": True}},
+            cores={"mgba_libretro": {"required": True}},
             used_by_active=True,
         )
         assert entry.file_name == "gba_bios.bin"
@@ -490,7 +490,7 @@ class TestBiosStatus:
             "required_count": 2,
             "required_downloaded": 1,
             "files": (),
-            "active_core": "mgba_libretro.so",
+            "active_core": "mgba_libretro",
             "active_core_label": "mGBA",
             "available_cores": (),
         }
@@ -513,7 +513,7 @@ class TestBiosStatus:
         assert status.active_core is None
 
     def test_asdict_roundtrip(self):
-        core = AvailableCore(core_so="mgba_libretro.so", label="mGBA", is_default=True)
+        core = AvailableCore(core_so="mgba_libretro", label="mGBA", is_default=True)
         file_entry = BiosFileEntry(
             file_name="gba_bios.bin",
             downloaded=True,
@@ -521,7 +521,7 @@ class TestBiosStatus:
             required=True,
             description="GBA BIOS",
             classification="required",
-            cores={"mgba_libretro.so": {"required": True}},
+            cores={"mgba_libretro": {"required": True}},
             used_by_active=True,
         )
         status = self._make_status(files=(file_entry,), available_cores=(core,))
@@ -530,4 +530,4 @@ class TestBiosStatus:
         assert len(d["files"]) == 1
         assert d["files"][0]["file_name"] == "gba_bios.bin"
         assert len(d["available_cores"]) == 1
-        assert d["available_cores"][0]["core_so"] == "mgba_libretro.so"
+        assert d["available_cores"][0]["core_so"] == "mgba_libretro"
