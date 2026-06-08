@@ -246,7 +246,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     // The ok/partial/missing DECISION is the backend's bios_level — "ready"
     // means all required files present (bios_level === "ok"). Fall back to the
     // local count comparison only when the level is absent from the payload.
-    const requiredReady = platform.bios_level != null ? platform.bios_level === "ok" : requiredDone === requiredCount;
+    const requiredReady = platform.bios_level == null ? requiredDone === requiredCount : platform.bios_level === "ok";
 
     const needsAttention = platform.has_games && requiredCount > 0 && !requiredReady;
     const { summaryLabel, summaryDescription } = getBiosSummary(
