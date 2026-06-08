@@ -19,10 +19,16 @@ import { showModal } from "@decky/ui";
 import type { ReactElement } from "react";
 import { SystemPage } from "./SystemPage";
 import * as backend from "../api/backend";
+import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import type { FirmwarePlatformExt } from "../types";
 
 // scrollToTop is a no-op in happy-dom; mock for cleanliness.
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
+
+// setLaunchOptionsConfirmed pokes SteamClient — stub it so the per-platform
+// core-change fan-out (re-bake of each bound shortcut's launch_options) is
+// driveable without a real Steam client.
+vi.mock("../utils/steamShortcuts", () => ({ setLaunchOptionsConfirmed: vi.fn() }));
 
 // DropdownItem in the global @decky/ui stub is a passthrough <select> with no
 // rgOptions / onChange capture. SystemPage uses DropdownItem for per-platform
@@ -129,6 +135,7 @@ describe("SystemPage", () => {
       message: "",
     });
     vi.mocked(backend.setSystemCore).mockResolvedValue({ success: true });
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
   });
 
   // ------------------------------------------------------------------
@@ -914,6 +921,144 @@ describe("SystemPage", () => {
         });
       });
       expect(vi.mocked(backend.setSystemCore)).toHaveBeenCalledWith("snes", "mesen-s");
+    });
+
+    // ----------------------------------------------------------------
+    // Re-bake fan-out (#947): a successful per-platform core change
+    // confirm-sets fresh launch_options for every affected bound shortcut
+    // returned in result.rebake_items. Mirrors the migration_relaunch_options
+    // fan-out in index.tsx (bounded-concurrency batches, per-item catch).
+    // ----------------------------------------------------------------
+    const renderDualCoreSnes = async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "snes",
+            files: [],
+            available_cores: [
+              { core_so: "snes9x.so", label: "snes9x", is_default: true },
+              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            ],
+            active_core_label: "snes9x",
+          }),
+        ],
+      });
+      render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+    };
+
+    const selectMesenS = () =>
+      act(async () => {
+        await capturedDropdowns[0]?.onChange?.({ data: "mesen-s", label: "mesen-s" });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+    it("confirm-sets launch options for each rebake item after a core change", async () => {
+      await renderDualCoreSnes();
+      vi.mocked(backend.setSystemCore).mockResolvedValue({
+        success: true,
+        rebake_items: [
+          { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/a.sfc"' },
+          { app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/b.sfc"' },
+        ],
+      });
+
+      await selectMesenS();
+
+      expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(
+        100,
+        'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/a.sfc"',
+      );
+      expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(
+        200,
+        'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/b.sfc"',
+      );
+      expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not call setLaunchOptionsConfirmed when rebake_items is empty/absent", async () => {
+      await renderDualCoreSnes();
+      // success but no rebake_items key at all (uninstalled / unbound platform)
+      vi.mocked(backend.setSystemCore).mockResolvedValue({ success: true });
+
+      await selectMesenS();
+
+      expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+      // Still refreshes + dispatches the event so the UI reflects the new core.
+      expect(vi.mocked(backend.getFirmwareStatus)).toHaveBeenCalledTimes(2);
+    });
+
+    it("logs an error and keeps processing remaining items when one confirm rejects", async () => {
+      // logError is a plain wrapper (not a callable mock) — spy it directly to
+      // observe the post-catch side effect.
+      const logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      try {
+        await renderDualCoreSnes();
+        vi.mocked(backend.setSystemCore).mockResolvedValue({
+          success: true,
+          rebake_items: [
+            { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/a.sfc"' },
+            { app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/b.sfc"' },
+          ],
+        });
+        vi.mocked(setLaunchOptionsConfirmed).mockImplementation(async (appId: number) => {
+          if (appId === 100) throw new Error("set failed");
+          return true;
+        });
+
+        await selectMesenS();
+
+        // CATCH-REJECTION assert: the rejecting item's error is surfaced via logError.
+        expect(logErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("setSystemCore: failed to set launch options for appId 100"),
+        );
+        // Continued processing: the second item still got its confirm-set, and
+        // the refresh/dispatch path still ran after the catch.
+        expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(
+          200,
+          'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/b.sfc"',
+        );
+        expect(vi.mocked(backend.getFirmwareStatus)).toHaveBeenCalledTimes(2);
+      } finally {
+        logErrorSpy.mockRestore();
+      }
+    });
+
+    it("logs an error when a confirm resolves false (write not confirmed)", async () => {
+      const logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      try {
+        await renderDualCoreSnes();
+        vi.mocked(backend.setSystemCore).mockResolvedValue({
+          success: true,
+          rebake_items: [
+            { app_id: 300, launch_options: 'flatpak run net.retrodeck.retrodeck -e mesen-s "/roms/snes/c.sfc"' },
+          ],
+        });
+        vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(false);
+
+        await selectMesenS();
+
+        // CATCH-REJECTION assert: the unconfirmed write surfaces a distinct logError.
+        expect(logErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("setSystemCore: failed to confirm launch options for appId 300"),
+        );
+      } finally {
+        logErrorSpy.mockRestore();
+      }
+    });
+
+    it("does NOT fan out when setSystemCore returns success=false even if rebake_items present", async () => {
+      await renderDualCoreSnes();
+      vi.mocked(backend.setSystemCore).mockResolvedValue({
+        success: false,
+        rebake_items: [{ app_id: 999, launch_options: "should-not-apply" }],
+      });
+
+      await selectMesenS();
+
+      expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
     });
 
     it("does NOT refresh or dispatch the event when setSystemCore returns success=false", async () => {

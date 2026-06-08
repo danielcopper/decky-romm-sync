@@ -4,9 +4,9 @@ Services query the host RetroDECK/RetroArch/ES-DE environment through
 these Protocols: filesystem path getters (saves, roms, BIOS,
 RetroDECK home), platform-to-system resolution, RetroArch save sorting
 toggles, and RetroArch core lookups for ES-DE configured systems.
-``GamelistXmlEditor`` is the matching write seam for the ES-DE
-per-system core override — paired with ``CoreInfoProvider``
-which owns the read side.
+``PlatformCoreReader`` exposes the plugin-owned per-platform core
+selection (stored in ``settings.json``, not the ES-DE gamelist) that the
+resolver layers over the es_systems default.
 """
 
 from __future__ import annotations
@@ -54,13 +54,13 @@ class CoreInfoProvider(Protocol):
     """Core resolution for ES-DE configured systems, consumed by services.
 
     Exposes the read seam services need to ask "which RetroArch core is
-    active for this system?" without depending on the concrete adapter.
-    Resolution is system-layer only (per-system ``<alternativeEmulator>``
-    → es_systems default → ``core_defaults``); per-game core selection is
-    a ``roms`` store concern read through ``active_core_for_rom``.
+    the system-layer default for this system?" without depending on the
+    concrete adapter. Resolution is system-layer only (es_systems default
+    → ``core_defaults``); the plugin-owned per-platform and per-game core
+    selections are layered on top by ``active_core_for_rom``, not here.
     Implementations own the underlying file reads and may cache parse
-    results; ``reset_cache`` lets writers invalidate the cache after
-    editing the underlying configuration.
+    results; ``reset_cache`` lets writers invalidate the cache after a
+    per-platform core write.
     """
 
     def get_active_core(self, system_name: str) -> tuple[str | None, str | None]: ...
@@ -70,20 +70,17 @@ class CoreInfoProvider(Protocol):
     def reset_cache(self) -> None: ...
 
 
-class GamelistXmlEditor(Protocol):
-    """Write seam for the ES-DE per-system core override.
+class PlatformCoreReader(Protocol):
+    """Read seam for the plugin-owned per-platform core selection.
 
-    Lets ``main.py`` callables mutate ``gamelist.xml`` without
-    depending on the concrete adapter. Reads remain a
-    ``CoreInfoProvider`` concern.
+    Exposes the ``settings.json`` ``platform_cores`` map (RomM platform
+    slug → core label) so the resolver can layer a user-chosen
+    platform-wide core over the es_systems default without reading the
+    retired ES-DE gamelist. Returns the stored core label for a slug, or
+    ``None`` when the platform has no plugin-owned selection.
     """
 
-    def set_system_override(
-        self,
-        retrodeck_home: str,
-        system_name: str,
-        core_label: str | None,
-    ) -> bool: ...
+    def get_platform_core(self, platform_slug: str) -> str | None: ...
 
 
 class CoreNameProviderFn(Protocol):

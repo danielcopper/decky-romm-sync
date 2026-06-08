@@ -1,19 +1,19 @@
-"""CoreService — RetroArch core selection and overrides per system/ROM.
+"""CoreService — RetroArch core selection and overrides per platform/ROM.
 
-Owns the system-wide core override (ES-DE ``<alternativeEmulator>`` via the
-gamelist editor) and the per-game emulator override (the ``roms.emulator_override``
-pin). Enumerating the cores available for a ROM's platform, toggling the
-system-wide default, and pinning/clearing a per-game core all live here; the
-cross-service BIOS recheck that follows a system-core write is also scheduled
-from this service.
+Owns the plugin's two core-selection deviations: the per-platform core (the
+``settings.json`` ``platform_cores`` map) and the per-game emulator override (the
+``roms.emulator_override`` pin). Enumerating the cores available for a ROM's
+platform, toggling the per-platform default (with the fan-out that re-bakes every
+affected shortcut), and pinning/clearing a per-game core all live here; the
+cross-service BIOS recheck that follows a per-platform core write is also
+scheduled from this service.
 
-The per-game pin is stored on the ``Rom`` aggregate via the Unit-of-Work — never
-on the ES-DE gamelist — and the launch command for an installed+bound ROM is
-recomputed from the pinned ``.so`` so the frontend can confirm-set it on the live
-Steam shortcut. System reads/writes happen via the injected ``CoreInfoProvider``
-and ``GamelistXmlEditor`` adapters; the per-ROM active core comes from the shared
-``ActiveCoreReader`` resolver so the menu's active marker never diverges from the
-launched core.
+Neither selection is written to the retired ES-DE gamelist: the per-platform core
+lands in ``settings.json`` via the injected ``SettingsPersister`` and the per-game
+pin lands on the ``Rom`` aggregate via the Unit-of-Work. The launch command for an
+installed+bound ROM is recomputed from the shared ``ActiveCoreReader`` resolver so
+the read-path core never diverges from the launched core, and the frontend can
+confirm-set the freshly-baked ``launch_options`` on the live Steam shortcut.
 """
 
 from __future__ import annotations
@@ -36,8 +36,7 @@ if TYPE_CHECKING:
         ActiveCoreReader,
         BiosChecker,
         CoreInfoProvider,
-        GamelistXmlEditor,
-        RetroDeckPaths,
+        SettingsPersister,
         SystemResolver,
         UnitOfWork,
         UnitOfWorkFactory,
@@ -49,34 +48,36 @@ class CoreServiceConfig:
     """Frozen wiring bundle handed to ``CoreService.__init__``.
 
     Carries the runtime infrastructure (event loop, logger), the ES-DE
-    read/write seams, the platform-slug-to-system resolver, the bundled
-    RetroDECK paths provider, the cross-service BIOS checker, the SQLite
-    Unit-of-Work factory (to read the ROM + its install and write the pin), and
-    the shared per-ROM active-core resolver (the menu's active marker). Bundled
-    here so the ctor stays within the S107 parameter budget.
+    core-info read seam, the platform-slug-to-system resolver, the live
+    ``settings`` dict + its persister (where the per-platform core lands), the
+    cross-service BIOS checker, the SQLite Unit-of-Work factory (to read the ROM
+    + its install and write the per-game pin), and the shared per-ROM
+    active-core resolver (the menu's active marker + the source of every
+    re-baked launch command). Bundled here so the ctor stays within the S107
+    parameter budget.
     """
 
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     core_info: CoreInfoProvider
-    gamelist_editor: GamelistXmlEditor
     resolve_system: SystemResolver
-    retrodeck_paths: RetroDeckPaths
+    settings: dict[str, Any]
+    settings_persister: SettingsPersister
     bios_checker: BiosChecker
     uow_factory: UnitOfWorkFactory
     active_core: ActiveCoreReader
 
 
 class CoreService:
-    """RetroArch core override reads and writes — system (ES-DE) + per-game (DB)."""
+    """RetroArch core override reads and writes — per-platform (settings) + per-game (DB)."""
 
     def __init__(self, *, config: CoreServiceConfig) -> None:
         self._loop = config.loop
         self._logger = config.logger
         self._core_info = config.core_info
-        self._gamelist_editor = config.gamelist_editor
         self._resolve_system = config.resolve_system
-        self._retrodeck_paths = config.retrodeck_paths
+        self._settings = config.settings
+        self._settings_persister = config.settings_persister
         self._bios_checker = config.bios_checker
         self._uow_factory = config.uow_factory
         self._active_core = config.active_core
@@ -86,9 +87,10 @@ class CoreService:
 
         The available-cores list is platform-wide (system-level); the active
         selection is the per-ROM resolution from :class:`ActiveCoreResolver`, so
-        a pinned ``emulator_override`` surfaces over the system default and the
-        menu can highlight the active core (or offer Reset). When ``rom_id`` is
-        unknown the cores list is empty and the active core is ``(None, None)``.
+        a pinned ``emulator_override`` (or per-platform core) surfaces over the
+        system default and the menu can highlight the active core (or offer
+        Reset). When ``rom_id`` is unknown the cores list is empty and the active
+        core is ``(None, None)``.
         """
         return await self._loop.run_in_executor(None, self._available_cores_io, rom_id)
 
@@ -105,39 +107,71 @@ class CoreService:
             "active_core_label": active_label,
         }
 
-    def _set_system_core_io(
-        self,
-        retrodeck_home: str,
-        system: str,
-        core_label: str,
-    ) -> None:
-        self._gamelist_editor.set_system_override(retrodeck_home, system, core_label or None)
+    def _set_system_core_io(self, platform_slug: str, core_label: str) -> list[dict[str, Any]]:
+        """Write the per-platform core selection and re-bake the affected shortcuts.
+
+        Mutates ``settings["platform_cores"]`` — stores *core_label* under
+        *platform_slug* when non-empty, pops the slug when blank (revert to the
+        es_systems default) — and persists ``settings.json`` through the
+        injected persister. The persister holds the same live dict, so the fan-out
+        that follows resolves the freshly-written value.
+
+        Returns one ``{"app_id", "launch_options"}`` entry per installed+bound ROM
+        on the platform whose active core is the new per-platform selection. ROMs
+        with a per-game ``emulator_override`` are skipped (the pin wins over the
+        platform default), as are uninstalled or unbound ROMs (no live shortcut to
+        rewrite). Each entry's ``launch_options`` is the FULL active core baked by
+        the shared resolver — the ``-e`` override form, or the plain launch when
+        the resolver yields ``(None, None)``.
+        """
+        if core_label:
+            self._settings["platform_cores"][platform_slug] = core_label
+        else:
+            self._settings["platform_cores"].pop(platform_slug, None)
+        self._settings_persister.save_settings()
         self._core_info.reset_cache()
 
-    async def set_system_core(self, platform_slug: str, core_label: str) -> dict[str, Any]:
-        """Set or clear the system-wide core override for a platform.
+        rebake_items: list[dict[str, Any]] = []
+        with self._uow_factory() as uow:
+            for rom in uow.roms.iter_by_platform(platform_slug):
+                if rom.emulator_override is not None:
+                    continue
+                if rom.shortcut_app_id is None:
+                    continue
+                install = uow.rom_installs.get(rom.rom_id)
+                if install is None:
+                    continue
+                core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
+                invocation = resolve_emulator_invocation({}, core_so)
+                rebake_items.append(
+                    {
+                        "app_id": rom.shortcut_app_id,
+                        "launch_options": build_launch_options(invocation, install.file_path),
+                    }
+                )
+        return rebake_items
 
-        Empty ``core_label`` clears the override (reverts to the ES-DE
-        default). Returns ``{"success": True, "bios_status": ...}`` on
-        success, where ``bios_status`` is the BIOS payload re-checked
-        against the newly chosen core. On any failure (missing
-        RetroDECK home, XML write error, BIOS recheck error) returns
-        ``{"success": False, "message": ...}``.
+    async def set_system_core(self, platform_slug: str, core_label: str) -> dict[str, Any]:
+        """Set or clear the per-platform core selection for a platform.
+
+        Empty ``core_label`` clears the selection (reverts to the es_systems
+        default). On success the per-platform core is written to ``settings.json``
+        and every installed+bound ROM on the platform (minus per-game-overridden
+        ROMs) is re-baked: the response carries ``rebake_items`` (a list of
+        ``{"app_id", "launch_options"}``) the frontend confirm-sets on the live
+        Steam shortcuts, plus ``bios_status`` re-checked against the newly chosen
+        core. On any failure (settings write error, fan-out error, BIOS recheck
+        error) returns ``{"success": False, "message": ...}``.
         """
-        retrodeck_home = self._retrodeck_paths.retrodeck_home()
-        if not retrodeck_home:
-            return {"success": False, "message": "RetroDECK home not found"}
-        system = self._resolve_system(platform_slug)
         try:
-            await self._loop.run_in_executor(
+            rebake_items = await self._loop.run_in_executor(
                 None,
                 self._set_system_core_io,
-                retrodeck_home,
-                system,
+                platform_slug,
                 core_label,
             )
             bios = await self._bios_checker.check_platform_bios(platform_slug)
-            return {"success": True, "bios_status": bios}
+            return {"success": True, "bios_status": bios, "rebake_items": rebake_items}
         except Exception as e:
             self._logger.error(f"Failed to set system core: {e}")
             return {"success": False, "message": str(e)}
@@ -189,13 +223,16 @@ class CoreService:
     async def clear_game_core(self, rom_id: int) -> dict[str, Any]:
         """Clear the per-game override for ``rom_id`` (Follow default / Reset).
 
-        Drops the pin (stores SQL NULL) so the ROM follows the system default,
-        then returns the recomputed PLAIN ``launch_options`` (no ``-e``) and
-        ``app_id`` for an installed+bound ROM so the frontend confirm-sets the
-        default launch on the live shortcut. Clearing is always valid — there is
-        no label to resolve. When the ROM is unknown the canonical failure shape
-        is returned; when it is uninstalled or unbound the NULL still lands and
-        ``launch_options``/``app_id`` are ``None``.
+        Drops the pin (stores SQL NULL) so the ROM follows the per-platform/system
+        default, then returns the recomputed ``launch_options`` and ``app_id`` for
+        an installed+bound ROM so the frontend confirm-sets the now-default launch
+        on the live shortcut. Because the resolved default may itself be a
+        per-platform core, the recomputed command bakes the ROM's FULL active core
+        (the ``-e`` override form, or the plain launch when the platform resolves
+        to ``(None, None)``) — never an unconditional plain launch. Clearing is
+        always valid — there is no label to resolve. When the ROM is unknown the
+        canonical failure shape is returned; when it is uninstalled or unbound the
+        NULL still lands and ``launch_options``/``app_id`` are ``None``.
         """
         return await self._loop.run_in_executor(None, self._clear_game_core_io, rom_id)
 
@@ -210,8 +247,11 @@ class CoreService:
                 }
             rom.clear_emulator_override()
             uow.roms.set_emulator_override(rom_id, rom.emulator_override)
-            # No override → plain launch (active_core_so=None → no -e).
-            launch_options, app_id = self._launch_options_for(uow, rom, None)
+            # Cleared pin → follow the per-platform/system default. Resolve the
+            # ROM's full active core AFTER the NULL lands so a per-platform core
+            # still bakes its -e override (not a plain launch).
+            core_so, _label = self._active_core.active_core_for_rom(rom_id)
+            launch_options, app_id = self._launch_options_for(uow, rom, core_so)
         return {"success": True, "launch_options": launch_options, "app_id": app_id}
 
     def _launch_options_for(

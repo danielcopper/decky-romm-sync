@@ -1,9 +1,11 @@
 """Tests for ActiveCoreResolver — the single per-ROM active-core read seam.
 
-Covers the four contract branches: a resolvable override wins; a NULL override
-delegates to the system layer; the system ``<alternativeEmulator>`` layer is
-preserved through that delegation (combined precedence); and a stale override
-degrades to the system default without raising or emitting a bogus ``.so``.
+Covers the four-layer precedence: a resolvable per-game override wins; a
+per-platform ``settings.json`` core beats the es_systems default; the per-game
+override beats the per-platform core; a NULL override with no per-platform core
+delegates to the es_systems default; a stale per-game or per-platform label
+degrades to the next layer without raising or emitting a bogus ``.so``; and the
+retired ES-DE gamelist is never consulted.
 """
 
 from __future__ import annotations
@@ -38,6 +40,23 @@ class FakeSystemResolver:
         return self.mapping.get(platform_slug, platform_slug)
 
 
+class FakePlatformCoreReader:
+    """In-memory ``PlatformCoreReader`` mapping platform slugs to core labels.
+
+    Returns the configured label for a slug, or ``None`` when absent. Records
+    each queried slug so a test can assert the per-platform layer was consulted
+    (or skipped when a per-game override already resolved).
+    """
+
+    def __init__(self, mapping: dict[str, str] | None = None) -> None:
+        self.mapping = mapping if mapping is not None else {}
+        self.calls: list[str] = []
+
+    def get_platform_core(self, platform_slug: str) -> str | None:
+        self.calls.append(platform_slug)
+        return self.mapping.get(platform_slug)
+
+
 def _seed_rom(
     uow: FakeUnitOfWork,
     *,
@@ -64,12 +83,15 @@ def _make_resolver(
     uow: FakeUnitOfWork,
     core_info: FakeCoreInfoProvider,
     resolve_system: FakeSystemResolver | None = None,
+    platform_core_reader: FakePlatformCoreReader | None = None,
 ) -> tuple[ActiveCoreResolver, FakeSystemResolver]:
     resolver_fn = resolve_system if resolve_system is not None else FakeSystemResolver()
+    platform_reader = platform_core_reader if platform_core_reader is not None else FakePlatformCoreReader()
     resolver = ActiveCoreResolver(
         config=ActiveCoreResolverConfig(
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
             core_info=core_info,
+            platform_core_reader=platform_reader,
             resolve_system=resolver_fn,
             logger=logging.getLogger("test"),
         ),
@@ -143,33 +165,50 @@ def test_null_override_passes_through_system_none() -> None:
     assert resolver.active_core_for_rom(5) == (None, None)
 
 
-# --- combined precedence: system alt-emu preserved through delegation (R7) -----
+# --- per-platform layer beats es_systems default; per-game beats per-platform ---
 
 
-def test_null_override_returns_system_alt_emulator_not_platform_default() -> None:
-    """One platform, two ROMs: pinned ROM gets its pin; the un-pinned ROM gets the
-    system ``<alternativeEmulator>`` (NOT the es_systems default), proving step-3
-    delegation preserves the whole system layer (review R7)."""
+def test_per_platform_core_beats_es_systems_default() -> None:
+    """An un-pinned ROM whose platform carries a per-platform core gets that core,
+    not the es_systems default — the layer-2 selection wins over the system layer."""
     uow = FakeUnitOfWork()
-    _seed_rom(uow, rom_id=10, platform_slug="psx", emulator_override="PCSX ReARMed")
-    _seed_rom(uow, rom_id=11, platform_slug="psx", emulator_override=None)
-    # get_active_core models the live system layer: a system alt-emulator override
-    # is set on this platform, so it returns the alt-emu core, not the es_systems
-    # default. The resolver must surface exactly that for the un-pinned ROM.
+    _seed_rom(uow, rom_id=20, platform_slug="snes", emulator_override=None)
     core_info = FakeCoreInfoProvider(
         available_cores=[
-            {"core_so": "swanstation_libretro", "label": "SwanStation", "is_default": True},
-            {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": False},
-            {"core_so": "beetle_psx_libretro", "label": "Beetle PSX", "is_default": False},
+            {"core_so": "snes9x_libretro", "label": "Snes9x", "is_default": True},
+            {"core_so": "bsnes_libretro", "label": "bsnes", "is_default": False},
         ],
-        active_core=("beetle_psx_libretro", "Beetle PSX"),  # the system alt-emu, not the default
+        # es_systems default is Snes9x — the per-platform core must override it.
+        active_core=("snes9x_libretro", "Snes9x"),
     )
-    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+    platform_reader = FakePlatformCoreReader(mapping={"snes": "bsnes"})
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info, platform_core_reader=platform_reader)
 
-    # Pinned ROM → its own override (system layer untouched).
-    assert resolver.active_core_for_rom(10) == ("pcsx_rearmed_libretro", "PCSX ReARMed")
-    # Un-pinned ROM → the system alt-emu core, not the es_systems default.
-    assert resolver.active_core_for_rom(11) == ("beetle_psx_libretro", "Beetle PSX")
+    assert resolver.active_core_for_rom(20) == ("bsnes_libretro", "bsnes")
+    # The es_systems default layer was never consulted — the per-platform core resolved.
+    assert core_info.active_core_calls == []
+    assert platform_reader.calls == ["snes"]
+
+
+def test_per_game_override_beats_per_platform_core() -> None:
+    """A pinned ROM keeps its per-game core even when its platform has a per-platform
+    selection — layer-1 (per-game) wins over layer-2 (per-platform)."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=21, platform_slug="snes", emulator_override="Snes9x")
+    core_info = FakeCoreInfoProvider(
+        available_cores=[
+            {"core_so": "snes9x_libretro", "label": "Snes9x", "is_default": True},
+            {"core_so": "bsnes_libretro", "label": "bsnes", "is_default": False},
+        ],
+        active_core=("bsnes_libretro", "bsnes"),
+    )
+    platform_reader = FakePlatformCoreReader(mapping={"snes": "bsnes"})
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info, platform_core_reader=platform_reader)
+
+    assert resolver.active_core_for_rom(21) == ("snes9x_libretro", "Snes9x")
+    # Per-game override resolved first — the per-platform layer is never consulted.
+    assert platform_reader.calls == []
+    assert core_info.active_core_calls == []
 
 
 # --- override set but STALE → degrades to system default (no raise, no bogus so) ---
@@ -208,18 +247,79 @@ def test_stale_override_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
     assert any("Removed Core" in r.message and "degrading" in r.message for r in caplog.records)
 
 
+# --- stale per-platform core → degrades to es_systems default (no raise) -------
+
+
+def test_stale_per_platform_core_degrades_to_system_default() -> None:
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=30, platform_slug="gba", emulator_override=None)
+    # available_cores no longer carries the per-platform label → degrades.
+    core_info = FakeCoreInfoProvider(
+        available_cores=[{"core_so": "mgba_libretro", "label": "mGBA", "is_default": True}],
+        active_core=("mgba_libretro", "mGBA"),
+    )
+    platform_reader = FakePlatformCoreReader(mapping={"gba": "Removed Core"})
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info, platform_core_reader=platform_reader)
+
+    result = resolver.active_core_for_rom(30)
+
+    # Degrades to the es_systems default — never a bogus "None.so", never raises.
+    assert result == ("mgba_libretro", "mGBA")
+    assert platform_reader.calls == ["gba"]
+    assert core_info.active_core_calls == ["gba"]
+
+
+def test_stale_per_platform_core_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=30, platform_slug="gba", emulator_override=None)
+    core_info = FakeCoreInfoProvider(
+        available_cores=[{"core_so": "mgba_libretro", "label": "mGBA", "is_default": True}],
+        active_core=("mgba_libretro", "mGBA"),
+    )
+    platform_reader = FakePlatformCoreReader(mapping={"gba": "Removed Core"})
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info, platform_core_reader=platform_reader)
+
+    with caplog.at_level(logging.WARNING, logger="test"):
+        resolver.active_core_for_rom(30)
+
+    assert any("Removed Core" in r.message and "per-platform" in r.message for r in caplog.records)
+
+
+# --- no per-platform core → falls through to es_systems default ----------------
+
+
+def test_no_per_platform_core_falls_through_to_system_default() -> None:
+    """A NULL override + an empty per-platform map delegates straight to the
+    es_systems default — the per-platform layer was consulted and found nothing."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=40, platform_slug="snes", emulator_override=None)
+    core_info = FakeCoreInfoProvider(
+        available_cores=[{"core_so": "snes9x_libretro", "label": "Snes9x", "is_default": True}],
+        active_core=("snes9x_libretro", "Snes9x"),
+    )
+    platform_reader = FakePlatformCoreReader()  # empty map → None for every slug
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info, platform_core_reader=platform_reader)
+
+    assert resolver.active_core_for_rom(40) == ("snes9x_libretro", "Snes9x")
+    assert platform_reader.calls == ["snes"]
+    assert core_info.active_core_calls == ["snes"]
+
+
 # --- bad path: unknown rom_id → (None, None), no raise -------------------------
 
 
 def test_missing_rom_resolves_to_none_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     uow = FakeUnitOfWork()
     core_info = FakeCoreInfoProvider(active_core=("mgba_libretro", "mGBA"))
-    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+    platform_reader = FakePlatformCoreReader(mapping={"gba": "mGBA"})
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info, platform_core_reader=platform_reader)
 
     with caplog.at_level(logging.WARNING, logger="test"):
         result = resolver.active_core_for_rom(404)
 
     assert result == (None, None)
-    # No system read happens for a ROM that does not exist.
+    # No system read happens for a ROM that does not exist — and the per-platform
+    # layer (the retired-gamelist replacement) is never consulted for a missing ROM.
     assert core_info.active_core_calls == []
+    assert platform_reader.calls == []
     assert any("404" in r.message for r in caplog.records)

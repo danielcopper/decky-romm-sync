@@ -23,6 +23,7 @@ from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_path_exists_reader import FakePathExistsReader
+from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_rom_file_store import FakeRomFileStore
@@ -89,15 +90,27 @@ class TestBootstrap:
     def test_returns_core_info_provider_on_adapters(self, tmp_path):
         """``core_info_provider`` (CoreResolver) is bundled with adapters, not callbacks.
 
-        Lock-in for #671 — stateful adapter sits next to ``gamelist_editor``
-        in :class:`AdapterBundle`. :class:`CallbackBundle` carries only
-        provider callables and persisters.
+        The stateful adapter sits in :class:`AdapterBundle`;
+        :class:`CallbackBundle` carries only provider callables and persisters.
         """
         result = _bootstrap_for(tmp_path)
         # AdapterBundle exposes the stateful CoreResolver.
         assert result.adapters.core_info_provider is not None
         # CallbackBundle no longer carries it.
         assert not hasattr(result.callbacks, "core_info_provider")
+
+    def test_platform_core_reader_binds_live_settings(self, tmp_path):
+        """``CallbackBundle.platform_core_reader`` reads the live settings dict.
+
+        A per-platform core written into ``stores.settings`` after bootstrap is
+        visible on the next ``get_platform_core`` read — the adapter holds the
+        same dict, not a snapshot (the fan-out depends on this).
+        """
+        result = _bootstrap_for(tmp_path)
+        reader = result.callbacks.platform_core_reader
+        assert reader.get_platform_core("snes") is None
+        result.stores.settings["platform_cores"]["snes"] = "bsnes"
+        assert reader.get_platform_core("snes") == "bsnes"
 
     def test_state_bundle_carries_only_settings(self, tmp_path):
         """Post-cutover (#784) ``StateBundle`` holds only the live settings dict.
@@ -192,7 +205,6 @@ class TestWireServices:
             "migration_file_store": FakeMigrationFileStore(),
             "rom_file_store": FakeRomFileStore(),
             "save_file_store": FakeSaveFileStore(),
-            "gamelist_editor": MagicMock(),
             "path_probe": FakePathExistsReader(),
             "settings": settings,
             "loop": asyncio.new_event_loop(),
@@ -214,6 +226,7 @@ class TestWireServices:
             ),
             "get_retroarch_save_sorting": MagicMock(return_value=(True, False)),
             "get_core_name": MagicMock(return_value="Snes9x"),
+            "platform_core_reader": FakePlatformCoreReader(),
             "settings_persister": MagicMock(),
             "core_info_provider": FakeCoreInfoProvider(),
             "log_debug": MagicMock(),
@@ -237,7 +250,6 @@ class TestWireServices:
                 migration_file_store=deps["migration_file_store"],
                 rom_file_store=deps["rom_file_store"],
                 save_file_store=deps["save_file_store"],
-                gamelist_editor=deps["gamelist_editor"],
                 path_probe=deps["path_probe"],
                 core_info_provider=deps["core_info_provider"],
             ),
@@ -260,6 +272,7 @@ class TestWireServices:
                 retrodeck_paths=deps["retrodeck_paths"],
                 get_retroarch_save_sorting=deps["get_retroarch_save_sorting"],
                 get_core_name=deps["get_core_name"],
+                platform_core_reader=deps["platform_core_reader"],
                 settings_persister=deps["settings_persister"],
                 log_debug=deps["log_debug"],
                 plugin_metadata=deps["plugin_metadata"],

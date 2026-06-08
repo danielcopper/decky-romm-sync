@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.preview_delta import PreviewDelta
-from domain.shortcut_data import build_shortcuts_data, label_to_core_so
+from domain.shortcut_data import build_shortcuts_data
 from domain.sync_diff import (
     classify_roms,
     compute_collection_diff,
@@ -42,12 +42,11 @@ if TYPE_CHECKING:
     from services.library.fetcher import LibraryFetcher
     from services.library.reporter import SyncReporter
     from services.protocols import (
+        ActiveCoreReader,
         ArtworkManager,
         Clock,
-        CoreInfoProvider,
         EventEmitter,
         Sleeper,
-        SystemResolver,
         UnitOfWorkFactory,
         UuidGen,
     )
@@ -84,8 +83,9 @@ class SyncOrchestratorConfig:
     field is a :class:`LateBinding` because :class:`LibraryService`
     constructs the orchestrator before the reporter exists; the façade
     plugs the reader in via ``set()`` once the reporter is built. The
-    ``core_info`` read seam and ``resolve_system`` resolver bake each
-    ROM's ``emulator_override`` into ``launch_options`` at sync time.
+    shared ``active_core`` resolver bakes each ROM's full active core (the
+    per-game/per-platform deviation folded over the es_systems default)
+    into ``launch_options`` at sync time.
     """
 
     settings: dict[str, Any]
@@ -101,8 +101,7 @@ class SyncOrchestratorConfig:
     fetcher: LibraryFetcher
     reporter: LateBinding[SyncReporter]
     artwork: ArtworkManager
-    core_info: CoreInfoProvider
-    resolve_system: SystemResolver
+    active_core: ActiveCoreReader
 
 
 class SyncOrchestrator:
@@ -122,8 +121,7 @@ class SyncOrchestrator:
         self._fetcher = config.fetcher
         self._artwork = config.artwork
         self._reporter = config.reporter
-        self._core_info = config.core_info
-        self._resolve_system = config.resolve_system
+        self._active_core = config.active_core
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -824,36 +822,23 @@ class SyncOrchestrator:
         )
 
     def _build_core_overrides(self, roms: list[dict[str, Any]]) -> dict[int, str]:
-        """Resolve each ROM's ``emulator_override`` LABEL to its ``.so`` for the bake.
+        """Resolve each ROM's FULL active core to its ``.so`` for the bake.
 
-        Reads the per-game override LABELs in one ``get_all_emulator_overrides``
-        scan, then resolves each against the cores available for that ROM's
-        platform. Only ROMs in *roms* that carry an override AND whose LABEL still
-        resolves to a real core appear in the returned ``{rom_id: core_so}`` map —
-        a stale LABEL (no longer in ``available_cores``) is omitted with a WARNING
-        so :func:`build_shortcuts_data` bakes the PLAIN launch for it (never a
-        bogus ``None.so``). ROMs with no override never enter the map.
+        Runs every ROM in *roms* through the shared per-ROM ``active_core``
+        resolver (the single read-path seam that folds the per-game
+        ``emulator_override`` and per-platform ``settings.json`` core over the
+        es_systems default). Only ROMs that resolve to a non-``None`` core appear
+        in the returned ``{rom_id: core_so}`` map, so :func:`build_shortcuts_data`
+        bakes the ``-e`` override for them; a ROM that resolves to ``(None,
+        None)`` (a genuinely unresolvable platform) is absent and falls back to
+        the plain launch. The resolver already warns + degrades on a stale label,
+        so no bogus ``None.so`` ever reaches the bake.
         """
-        with self._uow_factory() as uow:
-            overrides = uow.roms.get_all_emulator_overrides()
-        if not overrides:
-            return {}
-        slug_by_id = {rom["id"]: rom.get("platform_slug", "") for rom in roms}
         resolved: dict[int, str] = {}
-        for rom_id, label in overrides.items():
-            if rom_id not in slug_by_id:
-                continue
-            system = self._resolve_system(slug_by_id[rom_id])
-            core_so = label_to_core_so(self._core_info.get_available_cores(system), label)
-            if core_so is None:
-                self._logger.warning(
-                    "sync: emulator override '%s' for rom_id=%s no longer resolves on %s; baking the plain launch",
-                    label,
-                    rom_id,
-                    system,
-                )
-                continue
-            resolved[rom_id] = core_so
+        for rom in roms:
+            core_so, _label = self._active_core.active_core_for_rom(rom["id"])
+            if core_so is not None:
+                resolved[rom["id"]] = core_so
         return resolved
 
     def _scan_installed_paths(self) -> dict[int, str]:

@@ -13,7 +13,7 @@ import logging
 import os
 from typing import Any
 
-_SETTINGS_VERSION = 6
+_SETTINGS_VERSION = 7
 _LOCK_EXT = ".lock"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -35,6 +35,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "default_slot": "default",
     "autocleanup_limit": 10,
     "device_name": None,
+    "platform_cores": {},
 }
 
 
@@ -162,3 +163,20 @@ class SettingsPersisterAdapter:
 
     def save_settings(self) -> None:
         self._persistence.save_settings(self._settings)
+
+
+class PlatformCoreReaderAdapter:
+    """Adapter view exposing the ``PlatformCoreReader`` Protocol over settings.
+
+    Binds the live ``settings`` dict so the per-platform core selection is
+    always read from ``settings["platform_cores"]`` as it stands at call time.
+    The bound reference is the same dict every writer mutates, so a fan-out
+    that resolves a freshly-written platform core sees the new value rather
+    than a stale snapshot.
+    """
+
+    def __init__(self, settings: dict[str, Any]) -> None:
+        self._settings = settings
+
+    def get_platform_core(self, platform_slug: str) -> str | None:
+        return self._settings.get("platform_cores", {}).get(platform_slug)

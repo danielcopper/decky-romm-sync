@@ -140,6 +140,20 @@ display names resolve live from RomM; sync exclusion is the user-intent `enabled
 not per-platform local state. A `Platform` aggregate is reintroduced only when a concrete need lands (the
 standalone-emulator roadmap), not speculatively.
 
+### Emulator override vs default core vs active core
+
+Three distinct notions in core selection, kept separate because they have different owners and lifetimes:
+
+- **Default core** — the RetroArch core RetroDECK declares for a platform (in `es_systems.xml`). RetroDECK-owned; it can
+  change on a RetroDECK update. The plugin reads it live and **never stores** it — a stored copy would go stale.
+- **Emulator override** — a deliberate user choice to deviate from the default core, at **per-game** or **per-platform**
+  scope. The plugin owns the override and stores **only the deviation**; the absence of an override means "follow the
+  default." A core the user picks inside ES-DE's own UI is _not_ an emulator override in this sense — it is ES-DE's
+  state, which the plugin does not own.
+- **Active core** — the core a ROM actually launches with: the override when one exists, the default otherwise. One
+  resolver answers it for both the launch and every read consumer (BIOS requirement, save path, game-detail badge), so
+  the launched core never diverges from what those reads assume.
+
 ### Save-sync slot
 
 A named channel for a ROM's saves (e.g. `default`). The active slot for a ROM is recorded on its `RomSaveState`;

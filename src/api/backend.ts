@@ -226,9 +226,20 @@ export const getBiosStatus = callable<
     bios_label: string | null;
   }
 >("get_bios_status");
+/**
+ * A single shortcut whose baked `launch_options` must be confirm-set after a
+ * per-platform core change. The backend returns one entry per installed + bound
+ * ROM on the platform (minus per-game-overridden ROMs); the frontend fans out
+ * `setLaunchOptionsConfirmed(app_id, launch_options)` over the list.
+ */
+export interface RebakeItem {
+  app_id: number;
+  launch_options: string;
+}
+
 export const setSystemCore = callable<
   [string, string],
-  { success: boolean; message?: string; bios_status?: BiosStatus }
+  { success: boolean; message?: string; bios_status?: BiosStatus; rebake_items?: RebakeItem[] }
 >("set_system_core");
 
 /**

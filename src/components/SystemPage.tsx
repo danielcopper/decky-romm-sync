@@ -16,10 +16,12 @@ import {
   deletePlatformBios,
   setSystemCore,
   debugLog,
+  logError,
 } from "../api/backend";
 import type { FirmwarePlatformExt } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
+import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 
 function getBiosSummary(
   requiredCount: number,
@@ -177,6 +179,29 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
       const result = await setSystemCore(platform.platform_slug, label);
       detach(debugLog(`setSystemCore: result success=${result.success}`));
       if (result.success) {
+        // Re-bake launch_options for every affected installed ROM on this
+        // platform. The backend returns the fresh command per bound shortcut;
+        // confirm-set each so existing shortcuts launch with the new core.
+        // Mirrors the migration_relaunch_options fan-out in index.tsx
+        // (bounded-concurrency batches so a platform with many ROMs doesn't
+        // serialize worst-case per-shortcut confirm-poll timeouts).
+        const items = result.rebake_items ?? [];
+        const CONCURRENCY = 10;
+        for (let i = 0; i < items.length; i += CONCURRENCY) {
+          const batch = items.slice(i, i + CONCURRENCY);
+          await Promise.all(
+            batch.map(async (item) => {
+              try {
+                const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
+                if (!ok) {
+                  logError(`setSystemCore: failed to confirm launch options for appId ${item.app_id}`);
+                }
+              } catch (e) {
+                logError(`setSystemCore: failed to set launch options for appId ${item.app_id}: ${e}`);
+              }
+            }),
+          );
+        }
         await refreshSystem();
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {

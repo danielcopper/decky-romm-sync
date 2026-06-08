@@ -11,6 +11,7 @@ from adapters.persistence import (
     _SETTINGS_VERSION,
     DEFAULT_SETTINGS,
     PersistenceAdapter,
+    PlatformCoreReaderAdapter,
 )
 
 
@@ -81,12 +82,15 @@ class TestLocking:
 class TestSettingsSchema:
     """Schema-level expectations for the settings defaults + version stamp."""
 
-    def test_settings_version_is_6(self):
-        assert _SETTINGS_VERSION == 6
+    def test_settings_version_is_7(self):
+        assert _SETTINGS_VERSION == 7
 
     def test_default_settings_carry_token_slots(self):
         assert DEFAULT_SETTINGS["romm_api_token"] is None
         assert DEFAULT_SETTINGS["romm_api_token_id"] is None
+
+    def test_default_settings_carry_empty_platform_cores(self):
+        assert DEFAULT_SETTINGS["platform_cores"] == {}
 
     def test_load_settings_backfills_token_slots(self, adapter):
         result = adapter.load_settings()
@@ -101,7 +105,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 6
+        assert loaded["version"] == 7
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────
@@ -194,3 +198,35 @@ class TestLoadSaveSyncState:
     def test_load_non_dict_json_returns_none(self, adapter):
         self._write(adapter, json.dumps([1, 2, 3]))
         assert adapter.load_save_sync_state() is None
+
+
+# ── PlatformCoreReaderAdapter (per-platform core read over live settings) ────────
+
+
+class TestPlatformCoreReaderAdapter:
+    def test_returns_label_for_configured_platform(self):
+        reader = PlatformCoreReaderAdapter({"platform_cores": {"snes": "bsnes", "gba": "mGBA"}})
+        assert reader.get_platform_core("snes") == "bsnes"
+        assert reader.get_platform_core("gba") == "mGBA"
+
+    def test_returns_none_for_absent_platform(self):
+        reader = PlatformCoreReaderAdapter({"platform_cores": {"snes": "bsnes"}})
+        assert reader.get_platform_core("psx") is None
+
+    def test_returns_none_when_map_empty(self):
+        reader = PlatformCoreReaderAdapter({"platform_cores": {}})
+        assert reader.get_platform_core("snes") is None
+
+    def test_returns_none_when_key_missing(self):
+        # Defensive: a settings dict without platform_cores at all.
+        reader = PlatformCoreReaderAdapter({})
+        assert reader.get_platform_core("snes") is None
+
+    def test_reads_live_dict_not_a_snapshot(self):
+        """The adapter binds the live dict — a later write is visible on the next read."""
+        settings: dict[str, object] = {"platform_cores": {}}
+        reader = PlatformCoreReaderAdapter(settings)
+        assert reader.get_platform_core("snes") is None
+        # Mutate the same dict the adapter holds.
+        settings["platform_cores"]["snes"] = "bsnes"  # type: ignore[index]
+        assert reader.get_platform_core("snes") == "bsnes"

@@ -4,7 +4,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
@@ -65,8 +65,7 @@ def plugin():
             log_debug=p._log_debug,
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
-            core_info=FakeCoreInfoProvider(),
-            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
+            active_core=FakeActiveCoreResolver(default=(None, None)),
         ),
     )
 
@@ -876,7 +875,6 @@ class TestMainStartupOrdering:
                 migration_file_store=MagicMock(),
                 rom_file_store=MagicMock(),
                 save_file_store=MagicMock(),
-                gamelist_editor=MagicMock(),
                 path_probe=MagicMock(),
                 core_info_provider=MagicMock(),
             ),
@@ -887,6 +885,7 @@ class TestMainStartupOrdering:
                 retrodeck_paths=MagicMock(),
                 get_retroarch_save_sorting=MagicMock(),
                 get_core_name=MagicMock(),
+                platform_core_reader=MagicMock(),
                 settings_persister=MagicMock(),
                 log_debug=MagicMock(),
                 plugin_metadata=MagicMock(),

@@ -105,8 +105,8 @@ you at a glance which core the plugin is filtering for.
 
 1. If you set a **per-game core** for this game in the plugin, that wins. (Per-game cores are stored by the plugin
    itself — see [Per-Game (Game Detail Page)](#per-game-game-detail-page) below.)
-2. If no per-game core, the plugin checks for a **per-system override** in ES-DE's `gamelist.xml` (via
-   `<alternativeEmulator>`) — the System-page Emulator Core dropdown writes this.
+2. If no per-game core, the plugin checks for a **per-platform core** you set on the System page — stored by the plugin
+   in its own settings, not in ES-DE.
 3. The plugin reads RetroDECK's ES-DE configuration (`es_systems.xml`) from the flatpak installation to find the default
    emulator for each platform — the first listed RetroArch core is treated as the default
 4. If the live configuration can't be read, the plugin falls back to a shipped `core_defaults.json` with RetroDECK's
@@ -122,13 +122,13 @@ showing all files.
 
 ## Changing the Active Core
 
-You can change the active emulator core directly from the plugin, without leaving Game Mode. There are two scopes:
+You can change the active emulator core directly from the plugin, without leaving Game Mode. There are two scopes, and
+**both are stored by the plugin itself** — neither touches ES-DE's `gamelist.xml`. The plugin bakes the chosen core
+directly into each game's Steam shortcut, so your choice applies reliably for any ROM filename.
 
-- **Per-platform** changes are written to ES-DE's `gamelist.xml` (as a system-wide `<alternativeEmulator>`), so they
-  persist across sessions and are picked up by both the plugin and ES-DE.
-- **Per-game** changes are stored by the plugin itself and applied by baking the chosen core into the game's Steam
-  shortcut. They do **not** touch ES-DE's `gamelist.xml`, so they apply reliably for any ROM filename and survive
-  uninstalling and re-downloading the game.
+- **Per-platform** changes set the core for every game on a platform. Stored in the plugin's own settings.
+- **Per-game** changes set the core for a single game and take priority over the platform choice. Stored by the plugin
+  on the game, so they survive uninstalling and re-downloading.
 
 ### Per-Platform (System Page)
 
@@ -141,9 +141,17 @@ in the platform's section, above the BIOS file list. Changing it sets the defaul
 3. Use the **Emulator Core** dropdown to select a different core
 4. The BIOS file list below updates immediately to show files relevant to the new core
 
-This writes a system-wide override to ES-DE's `gamelist.xml`. ES-DE will pick up the change on next launch. The System
-page works even when your RomM server is offline — core switching and BIOS status are available, only download buttons
-are disabled.
+The plugin stores the choice in its own settings and **immediately re-applies it** to every installed game on that
+platform — the change takes effect right away, with no sync needed (games that already have a per-game core keep their
+own choice). The System page works even when your RomM server is offline — core switching and BIOS status are available,
+only download buttons are disabled.
+
+!!! note "A RetroDECK default-core change needs a Force Full Sync"
+
+    Setting a per-platform core on the System page re-bakes your installed games right away. But if a **RetroDECK
+    update** ships a _new default core_ for a platform (and you have not picked a core yourself), that new default does
+    **not** take effect on a normal sync — a normal sync skips platforms whose games haven't changed, so the
+    previously-baked core stays. Run a **Force Full Sync** to re-bake every game and pick up RetroDECK's new default.
 
 ### Per-Game (Game Detail Page)
 
@@ -168,17 +176,23 @@ Per-game cores work for **any ROM filename**. The plugin bakes the chosen core d
 so it does not rely on RetroDECK's gamelist lookup (which mishandles parentheses and other special characters in
 filenames) and is not affected by that upstream limitation.
 
-### Per-game cores do not migrate
+### Core choices are not migrated from ES-DE
 
-Two notes for anyone who set a per-game core before this version, or who edits ES-DE directly:
+The plugin now owns core selection entirely and no longer reads or writes ES-DE's `gamelist.xml`. A few notes for anyone
+upgrading from an older build or who edits ES-DE directly:
 
+- **Per-platform cores set in ES-DE are not carried over — re-apply them once.** Earlier builds stored a per-system core
+  as a `<alternativeEmulator>` in ES-DE's `gamelist.xml`; the plugin now stores per-platform cores in its own settings
+  and does **not** read or import that ES-DE entry. If you had set a per-system core, re-apply it once on the **System**
+  page (the Emulator Core dropdown) and it sticks from then on.
 - **Per-game cores set with an older plugin build are not carried over.** Earlier builds stored per-game cores in
   ES-DE's `gamelist.xml`; the plugin now stores them itself and does not import the old entries. Re-apply any per-game
   core once through the CPU-button menu and it sticks from then on (including across uninstall/re-download).
-- **A per-game core set directly in ES-DE is not seen by the plugin.** If you set a game's `<altemulator>` in ES-DE's
-  own interface, the plugin's BIOS badge, per-core save path, and core-change warning will **not** reflect it — those
-  follow the core the plugin knows about. ES-DE-native launches still honour your ES-DE setting. To keep the plugin's
-  badges and save paths in sync, set the per-game core through the plugin's CPU-button menu instead.
+- **A core set directly in ES-DE is not seen by the plugin.** If you pick a core for a game (or a system) in ES-DE's own
+  interface, the plugin's BIOS badge, per-core save path, and core-change warning will **not** reflect it — those follow
+  the core the plugin knows about, and the plugin's launches always use the core it has baked in. ES-DE-native launches
+  still honour your ES-DE setting. To keep the plugin's badges, save paths, and launches in sync, set the core through
+  the plugin (the CPU-button menu for one game, the System page for a whole platform) instead.
 
 ### Non-Default Core Indicator
 

@@ -9,6 +9,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
@@ -19,6 +20,7 @@ from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
@@ -74,6 +76,25 @@ def plugin():
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config
 
+    # Shared fake Unit of Work — install records flow through it, and tests
+    # inspect ``uow.rom_installs`` after the service has run. Exposed as
+    # ``p._uow`` for assertions.
+    p._uow = FakeUnitOfWork()
+    # Shared core-info fake so a test can seed ``available_cores`` and assert the
+    # per-game override re-bakes the ``-e`` form on download_complete. The real
+    # ActiveCoreResolver folds the DB override over this fake's es_systems default
+    # — the same seam DownloadService re-bakes through on download-complete.
+    p._core_info = FakeCoreInfoProvider()
+    p._active_core = ActiveCoreResolver(
+        config=ActiveCoreResolverConfig(
+            uow_factory=FakeUnitOfWorkFactory(p._uow),
+            core_info=p._core_info,
+            platform_core_reader=FakePlatformCoreReader(),
+            resolve_system=p._resolve_system,
+            logger=decky.logger,
+        ),
+    )
+
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
             romm_api=p._romm_api,
@@ -90,17 +111,9 @@ def plugin():
             log_debug=p._log_debug,
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
-            core_info=FakeCoreInfoProvider(),
-            resolve_system=p._resolve_system,
+            active_core=p._active_core,
         ),
     )
-    # Shared fake Unit of Work — install records flow through it, and tests
-    # inspect ``uow.rom_installs`` after the service has run. Exposed as
-    # ``p._uow`` for assertions.
-    p._uow = FakeUnitOfWork()
-    # Shared core-info fake so a test can seed ``available_cores`` and assert the
-    # per-game override re-bakes the ``-e`` form on download_complete.
-    p._core_info = FakeCoreInfoProvider()
     p._download_service = DownloadService(
         config=DownloadServiceConfig(
             romm_api=p._romm_api,
@@ -115,7 +128,7 @@ def plugin():
                 roms=os.path.join(os.path.expanduser("~"), "retrodeck", "roms"),
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
-            core_info=p._core_info,
+            active_core=p._active_core,
             uow_factory=FakeUnitOfWorkFactory(p._uow),
         ),
     )

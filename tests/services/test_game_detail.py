@@ -68,8 +68,7 @@ def plugin(tmp_path):
             log_debug=p._log_debug,
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
-            core_info=FakeCoreInfoProvider(),
-            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
+            active_core=FakeActiveCoreResolver(default=(None, None)),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)

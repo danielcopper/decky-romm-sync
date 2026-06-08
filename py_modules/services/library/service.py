@@ -30,16 +30,15 @@ if TYPE_CHECKING:
     from domain.preview_delta import PreviewDelta
     from domain.sync_state import SyncState
     from services.protocols import (
+        ActiveCoreReader,
         ArtworkManager,
         Clock,
-        CoreInfoProvider,
         DebugLogger,
         EventEmitter,
         RommLibraryApi,
         SettingsPersister,
         Sleeper,
         SteamConfigStore,
-        SystemResolver,
         UnitOfWorkFactory,
         UuidGen,
     )
@@ -55,8 +54,8 @@ class LibraryServiceConfig:
     factory (the synced-ROM registry, last-sync timestamp, sync stats and
     metadata cache now live in ``roms`` / ``sync_runs`` / ``rom_metadata``
     via the UoW), debug-logger seam, the artwork peer service, and the
-    ES-DE core-info read seam + platform-slug-to-system resolver (used to
-    bake each ROM's ``emulator_override`` into ``launch_options`` at sync).
+    shared per-ROM ``active_core`` resolver (used to bake each ROM's full
+    active core into ``launch_options`` at sync).
     """
 
     romm_api: RommLibraryApi
@@ -73,8 +72,7 @@ class LibraryServiceConfig:
     log_debug: DebugLogger
     artwork: ArtworkManager
     uow_factory: UnitOfWorkFactory
-    core_info: CoreInfoProvider
-    resolve_system: SystemResolver
+    active_core: ActiveCoreReader
 
 
 class LibraryService:
@@ -135,8 +133,7 @@ class LibraryService:
                 fetcher=self._fetcher,
                 reporter=reporter_binding,
                 artwork=config.artwork,
-                core_info=config.core_info,
-                resolve_system=config.resolve_system,
+                active_core=config.active_core,
             )
         )
 

@@ -17,6 +17,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -24,6 +25,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
+from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
@@ -84,8 +86,21 @@ def plugin(tmp_path):
     p._artwork_service = artwork_service
 
     # Shared core-info fake so a sync-apply test can seed ``available_cores`` and
-    # assert a per-game emulator_override re-bakes the ``-e`` form.
+    # assert a per-game emulator_override (or per-platform core) re-bakes the
+    # ``-e`` form. The real ActiveCoreResolver folds the DB override + the
+    # per-platform map over this fake's es_systems default — the same seam the
+    # orchestrator's bake site draws from.
     p._core_info = FakeCoreInfoProvider()
+    p._platform_core_reader = FakePlatformCoreReader()
+    p._active_core = ActiveCoreResolver(
+        config=ActiveCoreResolverConfig(
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
+            core_info=p._core_info,
+            platform_core_reader=p._platform_core_reader,
+            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
+            logger=decky.logger,
+        ),
+    )
 
     p._sync_service = LibraryService(
         config=LibraryServiceConfig(
@@ -103,8 +118,7 @@ def plugin(tmp_path):
             log_debug=p._log_debug,
             artwork=artwork_service,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
-            core_info=p._core_info,
-            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
+            active_core=p._active_core,
         ),
     )
 

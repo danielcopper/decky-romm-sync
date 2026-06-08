@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.save_extensions import get_save_extensions
 from domain.save_path import resolve_save_dir
-from domain.shortcut_data import build_launch_options, label_to_core_so, resolve_emulator_invocation
+from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 
 if TYPE_CHECKING:
     import logging
@@ -25,18 +25,15 @@ if TYPE_CHECKING:
 
     from models.state import SaveSortSettings
 
-    from domain.rom import Rom
     from domain.rom_install import RomInstall
     from services.protocols import (
         ActiveCoreReader,
-        CoreInfoProvider,
         CoreNameProviderFn,
         EventEmitter,
         MigrationFileStore,
         RetroArchSaveSortingProvider,
         RetroDeckPaths,
         SettingsPersister,
-        SystemResolver,
         UnitOfWorkFactory,
     )
 
@@ -57,10 +54,10 @@ class MigrationServiceConfig:
     Holds the Protocol-typed migration-file adapter, the live settings
     dict, runtime infrastructure, persistence callbacks, event emitter,
     and the provider callables MigrationService needs at construction
-    time. The ``core_info`` read seam + ``resolve_system`` resolver re-bake
-    each relocated ROM's ``emulator_override`` into ``launch_options``.
-    Relational migration state (ROM installs, BIOS records, change
-    markers) is read through the injected ``uow_factory``.
+    time. The shared ``active_core`` resolver re-bakes each relocated ROM's
+    full active core into ``launch_options``. Relational migration state
+    (ROM installs, BIOS records, change markers) is read through the
+    injected ``uow_factory``.
     """
 
     migration_file_store: MigrationFileStore
@@ -74,8 +71,6 @@ class MigrationServiceConfig:
     get_retroarch_save_sorting: RetroArchSaveSortingProvider
     active_core: ActiveCoreReader
     get_core_name: CoreNameProviderFn
-    core_info: CoreInfoProvider
-    resolve_system: SystemResolver
     uow_factory: UnitOfWorkFactory
 
 
@@ -94,8 +89,6 @@ class MigrationService:
         self._get_retroarch_save_sorting = config.get_retroarch_save_sorting
         self._active_core = config.active_core
         self._get_core_name = config.get_core_name
-        self._core_info = config.core_info
-        self._resolve_system = config.resolve_system
         self._uow_factory = config.uow_factory
         # Strong refs to in-flight background tasks. ``loop.create_task``
         # alone is not enough — without a strong ref, the loop is free to
@@ -545,7 +538,8 @@ class MigrationService:
                 rom = uow.roms.get(install.rom_id)
                 if rom is None or rom.shortcut_app_id is None:
                     continue
-                invocation = resolve_emulator_invocation({"id": rom.rom_id}, self._relaunch_core_so(rom))
+                core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
+                invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
                 items.append(
                     {
                         "app_id": rom.shortcut_app_id,
@@ -553,28 +547,6 @@ class MigrationService:
                     }
                 )
         return items
-
-    def _relaunch_core_so(self, rom: Rom) -> str | None:
-        """Resolve *rom*'s ``emulator_override`` LABEL to a ``.so`` for the re-bake.
-
-        Returns the resolved ``.so`` so the migrated shortcut keeps the ``-e``
-        override, ``None`` when the ROM has no override (plain launch). A stale
-        LABEL that no longer resolves to a core degrades to the plain launch with
-        a WARNING — never a bogus ``None.so``.
-        """
-        label = rom.emulator_override
-        if label is None:
-            return None
-        system = self._resolve_system(rom.platform_slug)
-        core_so = label_to_core_so(self._core_info.get_available_cores(system), label)
-        if core_so is None:
-            self._logger.warning(
-                "migration: emulator override '%s' for rom_id=%s no longer resolves on %s; baking the plain launch",
-                label,
-                rom.rom_id,
-                system,
-            )
-        return core_so
 
     def _apply_relocations(self, installs, relocations, bios_files, bios_relocations, *, clear_marker):
         """Persist the relocated install and BIOS records (and optionally clear the marker).

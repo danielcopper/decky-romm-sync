@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
-from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -116,8 +115,6 @@ def _make_service(
             get_retroarch_save_sorting=lambda: sort_settings,
             active_core=active_core if active_core is not None else FakeActiveCoreResolver(default=(None, None)),
             get_core_name=get_core_name,
-            core_info=FakeCoreInfoProvider(),
-            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )

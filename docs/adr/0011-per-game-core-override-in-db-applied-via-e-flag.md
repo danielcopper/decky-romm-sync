@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted. **Supersedes the per-game gamelist-override mechanism** shipped by
+Accepted, **partially superseded by [ADR-0012](0012-plugin-owns-core-selection-always-e-no-gamelist.md):** §2
+(`-e`-only-for-overrides) is reversed to always `-e`, §4 (the one remaining system-level gamelist write is kept) is
+reversed to all gamelist read and write dropped, and §3 is refined (the precedence chain loses its gamelist
+`<alternativeEmulator>` layer and gains a per-platform `settings.json` layer). The body below is preserved as design
+history; for current behaviour read it together with ADR-0012.
+
+**Supersedes the per-game gamelist-override mechanism** shipped by
 [#864](https://github.com/danielcopper/decky-romm-sync/issues/864) /
 [#942](https://github.com/danielcopper/decky-romm-sync/pull/942) (closed as the wrong layer). Extends
 [ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md) (the baked-`launch_options` model) with the `-e`

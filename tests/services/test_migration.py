@@ -11,6 +11,7 @@ from conftest import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_migration_file_store import FakeMigrationFileStore
+from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -21,6 +22,7 @@ from adapters.firmware_file import FirmwareFileAdapter
 from adapters.migration_file import MigrationFileAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
+from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
@@ -62,6 +64,20 @@ def plugin(tmp_path, fake_romm_api):
     # and install records both live in this unit now.
     uow = FakeUnitOfWork()
     p._uow = uow
+    # Shared core-info fake so a relaunch test can seed ``available_cores`` and
+    # assert a per-game emulator_override re-bakes the ``-e`` form post-move. The
+    # real ActiveCoreResolver folds the DB override over this fake's es_systems
+    # default — the seam MigrationService re-bakes through on relocation.
+    p._core_info = FakeCoreInfoProvider()
+    p._active_core = ActiveCoreResolver(
+        config=ActiveCoreResolverConfig(
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
+            core_info=p._core_info,
+            platform_core_reader=FakePlatformCoreReader(),
+            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
+            logger=decky.logger,
+        ),
+    )
     p._firmware_service = FirmwareService(
         config=FirmwareServiceConfig(
             romm_api=fake_romm_api,
@@ -94,8 +110,7 @@ def plugin(tmp_path, fake_romm_api):
             log_debug=p._log_debug,
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
-            core_info=FakeCoreInfoProvider(),
-            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
+            active_core=p._active_core,
         ),
     )
 
@@ -105,9 +120,6 @@ def plugin(tmp_path, fake_romm_api):
     def _default_save_sorting() -> tuple[bool, bool]:
         return (True, False)
 
-    # Shared core-info fake so a relaunch test can seed ``available_cores`` and
-    # assert a per-game emulator_override re-bakes the ``-e`` form post-move.
-    p._core_info = FakeCoreInfoProvider()
     p._migration_service = MigrationService(
         config=MigrationServiceConfig(
             migration_file_store=MigrationFileAdapter(),
@@ -119,10 +131,8 @@ def plugin(tmp_path, fake_romm_api):
             get_bios_files_index=lambda: p._firmware_service.bios_files_index,
             retrodeck_paths=FakeRetroDeckPaths(),
             get_retroarch_save_sorting=_default_save_sorting,
-            active_core=FakeActiveCoreResolver(default=(None, None)),
+            active_core=p._active_core,
             get_core_name=_no_core_name,
-            core_info=p._core_info,
-            resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
     )
@@ -1468,8 +1478,6 @@ class TestMigrationFailureInjection:
             "get_retroarch_save_sorting": lambda: (False, False),
             "active_core": FakeActiveCoreResolver(default=(None, None)),
             "get_core_name": lambda core_so: None,
-            "core_info": FakeCoreInfoProvider(),
-            "resolve_system": lambda platform_slug, platform_fs_slug=None: platform_slug,
             "uow_factory": FakeUnitOfWorkFactory(uow=uow),
         }
         defaults.update(overrides)

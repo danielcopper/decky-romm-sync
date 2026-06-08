@@ -1,4 +1,4 @@
-"""Tests for adapters/es_de_config — CoreResolver and GamelistXmlEditorAdapter."""
+"""Tests for adapters/es_de_config — CoreResolver (system-layer core resolution)."""
 
 import logging
 import os
@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 
 from adapters import es_de_config as es_de_config_mod
-from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
+from adapters.es_de_config import CoreResolver
 
 # conftest.py patches decky before this import.
 # main.py adds py_modules to sys.path (provides vdf, etc.).
@@ -18,27 +18,17 @@ from main import Plugin  # noqa: F401
 _TEST_LOGGER = logging.getLogger("test_es_de")
 
 
-def _make_resolver(get_retrodeck_home=None) -> CoreResolver:
+def _make_resolver() -> CoreResolver:
     plugin_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return CoreResolver(
         plugin_dir=plugin_dir,
         logger=_TEST_LOGGER,
-        get_retrodeck_home=get_retrodeck_home,
     )
-
-
-def _make_editor() -> GamelistXmlEditorAdapter:
-    return GamelistXmlEditorAdapter(logger=_TEST_LOGGER)
 
 
 @pytest.fixture
 def resolver() -> CoreResolver:
     return _make_resolver()
-
-
-@pytest.fixture
-def editor() -> GamelistXmlEditorAdapter:
-    return _make_editor()
 
 
 # --- Helpers ---
@@ -59,25 +49,6 @@ SAMPLE_ES_SYSTEMS_XML = """\
     <command label="bsnes">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/bsnes_libretro.so %ROM%</command>
   </system>
 </systemList>
-"""
-
-SAMPLE_GAMELIST_WITH_OVERRIDE = """\
-<?xml version="1.0"?>
-<gameList>
-  <alternativeEmulator>
-    <label>gpSP</label>
-  </alternativeEmulator>
-</gameList>
-"""
-
-SAMPLE_GAMELIST_NO_OVERRIDE = """\
-<?xml version="1.0"?>
-<gameList>
-  <game>
-    <path>./some_game.gba</path>
-    <name>Some Game</name>
-  </game>
-</gameList>
 """
 
 
@@ -207,45 +178,111 @@ class TestParseEsSystems:
             os.unlink(path)
 
 
-class TestReadSystemOverride:
-    """Tests for ``CoreResolver._read_system_override`` (reads alternativeEmulator label)."""
+# A realistic multi-platform excerpt mirroring RetroDECK's shipped es_systems.xml
+# (linux/). The first RetroArch %CORE_RETROARCH% command per system is the
+# es_systems default; standalone emulators (no %CORE_RETROARCH%) are excluded.
+GOLDEN_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>psx</name>
+    <fullname>Sony PlayStation</fullname>
+    <command label="SwanStation">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/swanstation_libretro.so %ROM%</command>
+    <command label="Beetle PSX">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_psx_libretro.so %ROM%</command>
+    <command label="DuckStation">%EMULATOR_DUCKSTATION% %ROM%</command>
+  </system>
+  <system>
+    <name>gba</name>
+    <fullname>Nintendo Game Boy Advance</fullname>
+    <command label="mGBA">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mgba_libretro.so %ROM%</command>
+    <command label="gpSP">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/gpsp_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>snes</name>
+    <fullname>Nintendo SNES</fullname>
+    <command label="Snes9x - Current">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/snes9x_libretro.so %ROM%</command>
+    <command label="bsnes">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/bsnes_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>n64</name>
+    <fullname>Nintendo 64</fullname>
+    <command label="Mupen64Plus-Next">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mupen64plus_next_libretro.so</command>
+    <command label="ParaLLEl N64">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/parallel_n64_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>megadrive</name>
+    <fullname>Sega Mega Drive</fullname>
+    <command label="Genesis Plus GX">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/genesis_plus_gx_libretro.so</command>
+    <command label="BlastEm">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/blastem_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>gbc</name>
+    <fullname>Nintendo Game Boy Color</fullname>
+    <command label="Gambatte">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/gambatte_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>nes</name>
+    <fullname>Nintendo Entertainment System</fullname>
+    <command label="Mesen">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mesen_libretro.so %ROM%</command>
+    <command label="Nestopia">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/nestopia_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>gb</name>
+    <fullname>Nintendo Game Boy</fullname>
+    <command label="Gambatte">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/gambatte_libretro.so %ROM%</command>
+  </system>
+</systemList>
+"""
 
-    def test_no_gamelist_returns_none(self, resolver):
-        result = resolver._read_system_override("/nonexistent/path", "gba")
-        assert result is None
 
-    def test_gamelist_with_alternative_emulator(self, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
-            os.makedirs(gamelist_dir)
-            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
-            with open(gamelist_path, "w") as f:
-                f.write(SAMPLE_GAMELIST_WITH_OVERRIDE)
+class TestGoldenEsSystems:
+    """Lock-in for a realistic multi-platform es_systems.xml parse.
 
-            result = resolver._read_system_override(tmpdir, "gba")
-            assert result == "gpSP"
+    Asserts the parsed ``default_core``/``default_label`` (the es_systems default,
+    i.e. the first RetroArch command per system) for the platforms the plugin
+    cares most about, plus the available-cores enumeration.
+    """
 
-    def test_gamelist_without_override_returns_none(self, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
-            os.makedirs(gamelist_dir)
-            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
-            with open(gamelist_path, "w") as f:
-                f.write(SAMPLE_GAMELIST_NO_OVERRIDE)
+    EXPECTED_DEFAULTS: ClassVar[dict[str, tuple[str, str]]] = {
+        "psx": ("swanstation_libretro", "SwanStation"),
+        "gba": ("mgba_libretro", "mGBA"),
+        "snes": ("snes9x_libretro", "Snes9x - Current"),
+        "n64": ("mupen64plus_next_libretro", "Mupen64Plus-Next"),
+        "megadrive": ("genesis_plus_gx_libretro", "Genesis Plus GX"),
+        "gbc": ("gambatte_libretro", "Gambatte"),
+        "nes": ("mesen_libretro", "Mesen"),
+        "gb": ("gambatte_libretro", "Gambatte"),
+    }
 
-            result = resolver._read_system_override(tmpdir, "gba")
-            assert result is None
+    def test_parses_default_core_and_label_per_platform(self, resolver):
+        path = _write_temp_xml(GOLDEN_ES_SYSTEMS_XML)
+        try:
+            parsed = resolver.parse_es_systems(path)
+        finally:
+            os.unlink(path)
+        for system, (core_so, label) in self.EXPECTED_DEFAULTS.items():
+            assert system in parsed, f"missing system {system}"
+            assert parsed[system]["default_core"] == core_so
+            assert parsed[system]["default_label"] == label
 
-    def test_malformed_gamelist_returns_none(self, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
-            os.makedirs(gamelist_dir)
-            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
-            with open(gamelist_path, "w") as f:
-                f.write("this is garbage not xml {{{")
+    def test_get_active_core_returns_es_systems_default(self, resolver):
+        path = _write_temp_xml(GOLDEN_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                for system, (core_so, label) in self.EXPECTED_DEFAULTS.items():
+                    assert resolver.get_active_core(system) == (core_so, label)
+        finally:
+            os.unlink(path)
 
-            result = resolver._read_system_override(tmpdir, "gba")
-            assert result is None
+    def test_standalone_emulators_excluded_from_available_cores(self, resolver):
+        path = _write_temp_xml(GOLDEN_ES_SYSTEMS_XML)
+        try:
+            parsed = resolver.parse_es_systems(path)
+        finally:
+            os.unlink(path)
+        # psx had a standalone DuckStation command — only the two RetroArch cores remain.
+        psx_labels = set(parsed["psx"]["label_to_core"].keys())
+        assert psx_labels == {"SwanStation", "Beetle PSX"}
 
 
 class TestGetActiveCore:
@@ -267,25 +304,13 @@ class TestGetActiveCore:
     }
 
     def test_default_core_from_live_xml(self):
-        resolver = _make_resolver(get_retrodeck_home=lambda: "/fake/retrodeck")
-        with (
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO),
-            mock.patch.object(CoreResolver, "_read_system_override", return_value=None),
-        ):
+        resolver = _make_resolver()
+        with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
             result = resolver.get_active_core("gba")
         assert result == ("mgba_libretro", "mGBA")
 
-    def test_system_override_takes_precedence(self):
-        resolver = _make_resolver(get_retrodeck_home=lambda: "/fake/retrodeck")
-        with (
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO),
-            mock.patch.object(CoreResolver, "_read_system_override", return_value="gpSP"),
-        ):
-            result = resolver.get_active_core("gba")
-        assert result == ("gpsp_libretro", "gpSP")
-
     def test_fallback_to_core_defaults(self):
-        resolver = _make_resolver(get_retrodeck_home=lambda: None)
+        resolver = _make_resolver()
         defaults = {
             "gba": {
                 "default_core": "mgba_libretro",
@@ -301,7 +326,7 @@ class TestGetActiveCore:
         assert result == ("mgba_libretro", "mGBA")
 
     def test_returns_none_when_all_fail(self):
-        resolver = _make_resolver(get_retrodeck_home=lambda: None)
+        resolver = _make_resolver()
         with (
             mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
             mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
@@ -310,7 +335,7 @@ class TestGetActiveCore:
         assert result == (None, None)
 
     def test_unknown_system_returns_none(self):
-        resolver = _make_resolver(get_retrodeck_home=lambda: None)
+        resolver = _make_resolver()
         with (
             mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO),
             mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
@@ -374,55 +399,6 @@ class TestGetAvailableCores:
         assert result == []
 
 
-class TestSetSystemOverride:
-    def test_creates_new_gamelist(self, editor, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            editor.set_system_override(tmpdir, "gba", "gpSP")
-            result = resolver._read_system_override(tmpdir, "gba")
-            assert result == "gpSP"
-
-    def test_updates_existing_gamelist_preserves_games(self, editor, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
-            os.makedirs(gamelist_dir)
-            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
-            with open(gamelist_path, "w") as f:
-                f.write(SAMPLE_GAMELIST_NO_OVERRIDE)
-
-            editor.set_system_override(tmpdir, "gba", "gpSP")
-
-            # Override should be set
-            result = resolver._read_system_override(tmpdir, "gba")
-            assert result == "gpSP"
-
-            # Game entry should be preserved
-            with open(gamelist_path) as f:
-                content = f.read()
-            assert "some_game.gba" in content
-
-    def test_clears_override(self, editor, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # First set an override
-            editor.set_system_override(tmpdir, "gba", "gpSP")
-            assert resolver._read_system_override(tmpdir, "gba") == "gpSP"
-
-            # Clear it
-            editor.set_system_override(tmpdir, "gba", None)
-            assert resolver._read_system_override(tmpdir, "gba") is None
-
-    def test_replaces_existing_override(self, editor, resolver):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gamelist_dir = os.path.join(tmpdir, "ES-DE", "gamelists", "gba")
-            os.makedirs(gamelist_dir)
-            gamelist_path = os.path.join(gamelist_dir, "gamelist.xml")
-            with open(gamelist_path, "w") as f:
-                f.write(SAMPLE_GAMELIST_WITH_OVERRIDE)
-
-            editor.set_system_override(tmpdir, "gba", "VBA-M")
-            result = resolver._read_system_override(tmpdir, "gba")
-            assert result == "VBA-M"
-
-
 class TestMtimeInvalidation:
     """Caches invalidate when underlying files change on disk."""
 
@@ -474,5 +450,20 @@ class TestMtimeInvalidation:
                 result2 = resolver._load_es_systems()
                 # Same object reference means cache was used
                 assert result1 is result2
+        finally:
+            os.unlink(path)
+
+    def test_reset_cache_forces_reparse(self, resolver):
+        """``reset_cache`` drops the cached parse so the next read re-reads disk."""
+        path = _write_temp_xml(SAMPLE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result1 = resolver._load_es_systems()
+                resolver.reset_cache()
+                result2 = resolver._load_es_systems()
+                # Different object after a reset — the cache was invalidated.
+                assert result1 is not result2
+                # ...but the parsed content is equivalent (same file).
+                assert result1 == result2
         finally:
             os.unlink(path)

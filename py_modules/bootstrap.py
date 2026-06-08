@@ -19,7 +19,7 @@ from adapters.asyncio_sleeper import AsyncioSleeper
 from adapters.cover_art_file_store import CoverArtFileStoreAdapter
 from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
-from adapters.es_de_config import CoreResolver, GamelistXmlEditorAdapter
+from adapters.es_de_config import CoreResolver
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.hostname import HostnameAdapter
 from adapters.machine_id import MachineIdAdapter
@@ -27,6 +27,7 @@ from adapters.migration_file import MigrationFileAdapter
 from adapters.path_probe import PathProbeAdapter
 from adapters.persistence import (
     PersistenceAdapter,
+    PlatformCoreReaderAdapter,
     SettingsPersisterAdapter,
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
@@ -81,11 +82,11 @@ if TYPE_CHECKING:
         DownloadFileStore,
         EventEmitter,
         FirmwareFileStore,
-        GamelistXmlEditor,
         HostnameReader,
         MachineIdReader,
         MigrationFileStore,
         PathExistsReader,
+        PlatformCoreReader,
         PluginMetadataReader,
         RetroArchSaveSortingProvider,
         RetroDeckPaths,
@@ -120,7 +121,6 @@ class AdapterBundle:
     migration_file_store: MigrationFileStore
     rom_file_store: RomFileStore
     save_file_store: SaveFileStore
-    gamelist_editor: GamelistXmlEditor
     path_probe: PathExistsReader
     core_info_provider: CoreInfoProvider
 
@@ -155,6 +155,7 @@ class CallbackBundle:
     retrodeck_paths: RetroDeckPaths
     get_retroarch_save_sorting: RetroArchSaveSortingProvider
     get_core_name: CoreNameProviderFn
+    platform_core_reader: PlatformCoreReader
     settings_persister: SettingsPersister
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
@@ -288,9 +289,7 @@ def bootstrap(
     core_resolver = CoreResolver(
         plugin_dir=plugin_dir,
         logger=logger,
-        get_retrodeck_home=retrodeck_paths.retrodeck_home,
     )
-    gamelist_editor = GamelistXmlEditorAdapter(logger=logger)
 
     persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
     settings = persistence.load_settings()
@@ -303,6 +302,9 @@ def bootstrap(
     settings = migrate_settings(settings)
     persistence.save_settings(settings)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
+    # Binds the same live settings dict so the per-platform-core fan-out resolves
+    # the freshly-written value, not a snapshot.
+    platform_core_reader = PlatformCoreReaderAdapter(settings)
     plugin_metadata = PluginMetadataAdapter()
     # Single source of truth for outgoing User-Agent — read package.json
     # version once at boot and thread the string to every HTTP-talking
@@ -340,7 +342,6 @@ def bootstrap(
         migration_file_store=migration_file_store,
         rom_file_store=rom_file_store,
         save_file_store=save_file_store,
-        gamelist_editor=gamelist_editor,
         path_probe=path_probe,
         core_info_provider=core_resolver,
     )
@@ -351,6 +352,7 @@ def bootstrap(
         retrodeck_paths=retrodeck_paths,
         get_retroarch_save_sorting=retroarch_config.get_retroarch_save_sorting,
         get_core_name=retroarch_core_info.get_corename,
+        platform_core_reader=platform_core_reader,
         settings_persister=settings_persister,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
@@ -403,6 +405,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         config=ActiveCoreResolverConfig(
             uow_factory=cfg.callbacks.uow_factory,
             core_info=cfg.adapters.core_info_provider,
+            platform_core_reader=cfg.callbacks.platform_core_reader,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
             logger=cfg.runtime.logger,
         ),
@@ -425,8 +428,6 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
             active_core=active_core_resolver,
             get_core_name=cfg.callbacks.get_core_name,
-            core_info=cfg.adapters.core_info_provider,
-            resolve_system=cfg.adapters.http_adapter.resolve_system,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
@@ -516,8 +517,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             log_debug=cfg.callbacks.log_debug,
             artwork=artwork_service,
             uow_factory=cfg.callbacks.uow_factory,
-            core_info=cfg.adapters.core_info_provider,
-            resolve_system=cfg.adapters.http_adapter.resolve_system,
+            active_core=active_core_resolver,
         ),
     )
     pending_sync_binding.set(lambda: sync_service.pending_sync)
@@ -533,7 +533,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             clock=cfg.runtime.clock,
             sleeper=cfg.runtime.sleeper,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
-            core_info=cfg.adapters.core_info_provider,
+            active_core=active_core_resolver,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
@@ -622,9 +622,9 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             core_info=cfg.adapters.core_info_provider,
-            gamelist_editor=cfg.adapters.gamelist_editor,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
-            retrodeck_paths=cfg.callbacks.retrodeck_paths,
+            settings=cfg.stores.settings,
+            settings_persister=cfg.callbacks.settings_persister,
             bios_checker=firmware_service,
             uow_factory=cfg.callbacks.uow_factory,
             active_core=active_core_resolver,

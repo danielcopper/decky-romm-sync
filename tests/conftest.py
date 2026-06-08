@@ -82,6 +82,8 @@ def _make_testable_plugin():
         _uow_factory: Any
         _tmp_path: Any
         _core_info: Any
+        _platform_core_reader: Any
+        _active_core: Any
 
     instance = TestablePlugin()
     instance._migration_service = MagicMock()
