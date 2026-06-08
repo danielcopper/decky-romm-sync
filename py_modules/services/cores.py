@@ -91,9 +91,12 @@ class CoreService:
         system default and the menu can highlight the active core (or offer
         Reset). ``platform_core_label`` carries the per-platform override label
         (``settings.json`` ``platform_cores``) so the menu can mark the
-        system-level selection distinctly from the active core. When ``rom_id``
-        is unknown the cores list is empty and the active core is
-        ``(None, None)``.
+        system-level selection distinctly from the active core.
+        ``has_game_override`` reports whether a per-game pin is set — the menu
+        can't infer this from the active core alone (pinning the same core as
+        the per-platform override is indistinguishable), so the flag drives the
+        "follow the system" reset item's checkmark. When ``rom_id`` is unknown
+        the cores list is empty and the active core is ``(None, None)``.
         """
         return await self._loop.run_in_executor(None, self._available_cores_io, rom_id)
 
@@ -105,6 +108,7 @@ class CoreService:
                 "active_core": None,
                 "active_core_label": None,
                 "platform_core_label": None,
+                "has_game_override": False,
             }
         system = self._resolve_system(rom.platform_slug)
         cores = self._core_info.get_available_cores(system)
@@ -114,6 +118,7 @@ class CoreService:
             "active_core": active_so,
             "active_core_label": active_label,
             "platform_core_label": self._settings.get("platform_cores", {}).get(rom.platform_slug),
+            "has_game_override": rom.emulator_override is not None,
         }
 
     def _set_system_core_io(self, platform_slug: str, core_label: str) -> list[dict[str, Any]]:

@@ -186,6 +186,7 @@ class TestGetAvailableCores:
             "active_core": "snes9x_libretro",
             "active_core_label": "Snes9x",
             "platform_core_label": None,
+            "has_game_override": False,
         }
 
     def test_unknown_rom_returns_empty(self, event_loop, service, core_info):
@@ -197,6 +198,7 @@ class TestGetAvailableCores:
             "active_core": None,
             "active_core_label": None,
             "platform_core_label": None,
+            "has_game_override": False,
         }
         assert core_info.available_cores_calls == []
 
@@ -226,6 +228,22 @@ class TestGetAvailableCores:
         assert result["active_core"] == "bsnes_libretro"
         assert result["active_core_label"] == "bsnes"
         assert active_core.calls == [42]
+
+    def test_has_game_override_true_when_rom_is_pinned(self, event_loop, service, uow):
+        # A ROM with a per-game emulator_override surfaces has_game_override=True
+        # so the menu's "Use System Override" reset item drops its ✓ (#211). The
+        # frontend can't infer this from the active core — pinning the same core
+        # as the per-platform override would be indistinguishable.
+        _seed_rom(uow, rom_id=42, platform_slug="snes", emulator_override="bsnes")
+        result = event_loop.run_until_complete(service.get_available_cores(42))
+        assert result["has_game_override"] is True
+
+    def test_has_game_override_false_when_rom_unpinned(self, event_loop, service, uow):
+        # An unpinned ROM (NULL override) follows the system → has_game_override
+        # is False so the reset item carries the ✓ (#211).
+        _seed_rom(uow, rom_id=42, platform_slug="snes")
+        result = event_loop.run_until_complete(service.get_available_cores(42))
+        assert result["has_game_override"] is False
 
     def test_active_marker_falls_back_to_system_default(self, event_loop, service, uow, active_core):
         # An unpinned ROM (NULL override) surfaces the system default via the

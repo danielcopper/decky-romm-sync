@@ -100,6 +100,7 @@ describe("extractCoreInfo", () => {
     active_core: "mupen64plus_next_libretro.so",
     active_core_label: "Mupen64Plus-Next",
     platform_core_label: null,
+    has_game_override: false,
     cores: [
       { core_so: "mupen64plus_next_libretro.so", label: "Mupen64Plus-Next", is_default: true },
       { core_so: "parallel_n64_libretro.so", label: "ParaLLEl N64", is_default: false },
@@ -112,6 +113,17 @@ describe("extractCoreInfo", () => {
     expect(result.activeCoreIsDefault).toBe(true);
     expect(result.availableCores).toHaveLength(2);
     expect(result.platformCoreLabel).toBeNull();
+    expect(result.hasGameOverride).toBe(false);
+  });
+
+  it("maps has_game_override=true through to hasGameOverride (#211)", () => {
+    const result = extractCoreInfo({ ...baseCoreInfo, has_game_override: true });
+    expect(result.hasGameOverride).toBe(true);
+  });
+
+  it("maps has_game_override=false through to hasGameOverride (#211)", () => {
+    const result = extractCoreInfo({ ...baseCoreInfo, has_game_override: false });
+    expect(result.hasGameOverride).toBe(false);
   });
 
   it("marks activeCoreIsDefault=false when active core differs from default", () => {
@@ -140,6 +152,7 @@ describe("extractCoreInfo", () => {
       active_core: null,
       active_core_label: null,
       platform_core_label: null,
+      has_game_override: false,
       cores: [],
     });
     expect(result.availableCores).toEqual([]);

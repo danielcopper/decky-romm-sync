@@ -160,10 +160,15 @@ cores are available for the game's platform.
 
 1. Open a game's detail page
 2. Tap the **CPU button** (microchip icon)
-3. Pick a core from the menu — each entry can carry up to three markers (see below)
+3. Pick a core from the menu, or the **Use System Override** item at the top (see below)
 4. The BIOS status, core badge, and game info panel update immediately
 
-Each core in the menu can show up to three markers, one per role:
+At the top of the menu, above the core list, is a dedicated **Use System Override (X)** item. Selecting it **clears**
+the per-game core so the game follows whatever the system would pick — the per-platform core you set on the System page,
+or the platform's default core when no per-platform override is set. **X** is that fallback core's name, shown in
+parentheses so you know what the game will fall back to.
+
+Each core in the list below can show up to three markers, one per role:
 
 - **(default)** — the RetroDECK/es_systems default core for this platform.
 - **(system)** — the per-platform core you picked on the [System page](#per-platform-system-page) (stored in the
@@ -174,9 +179,15 @@ The three roles are independent, so a single core can carry more than one marker
 per-platform pick happens to equal the default, or "(system) ✓" when the per-platform core is also the one the game
 launches with.
 
-A per-game core takes priority over the platform default. Picking a non-default core from the list **pins** that core
-for the game. To drop the per-game core and follow the platform default again, pick the **default-marked core** (the
-entry labelled "(default)") — that clears the per-game override.
+A per-game core takes priority over the platform default. **Every core in the list pins** when you pick it — including
+the one marked **(default)**. Pinning the default-marked core fixes the game to that specific core even if you later
+change the per-platform override; it is no longer the way to "follow the system".
+
+To drop the per-game core and follow the platform/system core again, pick the **Use System Override** item at the top —
+that is the only thing that clears the per-game override. The **✓** can appear in two places at once: when the game is
+following the system (no per-game core), the **Use System Override** item carries the ✓ **and** so does the core that is
+actually in effect. When you pin a per-game core, only that pinned core carries the ✓ and the **Use System Override**
+item does not.
 
 When you set or reset a per-game core for an installed game, the plugin updates the game's Steam shortcut immediately
 and confirms the change landed before reporting success. If Steam can't accept the change in the current session, you'll
