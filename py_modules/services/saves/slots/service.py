@@ -109,6 +109,7 @@ class SlotsService:
             logger=config.logger,
             save_file_store=config.save_file_store,
             log_debug=config.log_debug,
+            sync_engine=config.sync_engine,
         )
         self._deleter = SlotDeleter(
             settings=config.settings,

@@ -108,6 +108,7 @@ class SaveService:
                 log_debug=config.log_debug,
                 active_core=config.active_core,
                 emit=config.emit,
+                get_save_layout=config.get_save_layout,
             ),
         )
 

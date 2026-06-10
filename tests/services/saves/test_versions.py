@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from domain.save_layout import ContentDir
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
@@ -800,3 +801,59 @@ class TestRollbackToVersion:
         # tracked_save_id still 50
         file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
+
+
+class TestRollbackToVersionContentDirGate:
+    """#239: rollback writes to ``saves_dir``, which RetroArch ignores in
+    content-dir mode — so it is refused before any preflight or destructive I/O."""
+
+    @pytest.mark.asyncio
+    async def test_refuses_and_writes_nothing_on_content_dir(self, tmp_path):
+        svc, fake = make_service(tmp_path, detect_sort_change=lambda: ContentDir())
+        _install_rom(svc, tmp_path)
+        _enable_sync_with_device(svc)
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": local_hash}},
+            },
+        )
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", 50)
+
+        # Reuses the existing ``unsupported`` status + additive reason slug.
+        assert result == {"status": "unsupported", "reason": "savefiles_in_content_dir"}
+        # No preflight sync, no download, no PUT — gate fired before any I/O.
+        assert not any(c[0] in ("upload_save", "download_save_content", "list_saves") for c in fake.call_log), (
+            fake.call_log
+        )
+
+    @pytest.mark.asyncio
+    async def test_in_save_dir_layout_still_rolls_back(self, tmp_path):
+        """Control: a supported layout rolls back normally (no gate)."""
+        svc, fake = make_service(tmp_path)  # default layout is InSaveDir
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        _install_rom(svc, tmp_path)
+        _enable_sync_with_device(svc)
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "files": {"pokemon.srm": {"tracked_save_id": 50, "last_sync_hash": local_hash}},
+            },
+        )
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        result = await svc.rollback_to_version(42, "default", 50)
+
+        assert result["status"] == "ok"
+        assert "reason" not in result

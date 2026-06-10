@@ -21,6 +21,7 @@ from adapters.save_file import SaveFileAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.save_layout import InSaveDir
 from services.saves import SaveService, SaveServiceConfig
 
 
@@ -58,7 +59,10 @@ def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["S
         "plugin_dir": str(tmp_path / "plugin"),
         "emit": emit if emit is not None else _noop_emit,
         "get_core_name": lambda core_so: None,
-        "detect_sort_change": lambda: None,
+        # Supported layout by default; tests that exercise the content-dir
+        # gate override both seams with a ``ContentDir``-returning callable.
+        "get_save_layout": lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
+        "detect_sort_change": lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
         "is_retrodeck_migration_pending": lambda: False,
         "uow_factory": FakeUnitOfWorkFactory(),
     }

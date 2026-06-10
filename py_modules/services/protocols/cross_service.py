@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from models.state import InstalledRomEntry, ShortcutRegistryEntry
 
+    from domain.save_layout import SaveLayout
+
 
 class RetryStrategy(Protocol):
     """HTTP retry wrapper pair consumed by SaveService and PlaytimeService."""
@@ -198,10 +200,12 @@ class SaveSortChangeFn(Protocol):
     ``MigrationService.detect_save_sort_change``. SaveService invokes
     this at the entry point of ``pre_launch_sync`` and
     ``post_exit_sync`` to refresh save-sort state from the live
-    RetroArch config before computing ``saves_dir`` (#238).
+    RetroArch config before computing ``saves_dir`` (#238). It returns
+    the live ``SaveLayout`` it just observed: the SyncEngine reads this
+    to hard-gate save sync when the layout is ``ContentDir`` (#239).
     """
 
-    def __call__(self) -> None: ...
+    def __call__(self) -> SaveLayout: ...
 
 
 class MigrationPendingFn(Protocol):

@@ -25,6 +25,7 @@ from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.save_layout import InSaveDir
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
@@ -105,7 +106,8 @@ def plugin(tmp_path):
             plugin_dir=str(tmp_path / "plugin"),
             emit=AsyncMock(),
             get_core_name=lambda core_so: None,
-            detect_sort_change=lambda: None,
+            get_save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
+            detect_sort_change=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
             is_retrodeck_migration_pending=lambda: False,
             uow_factory=p._uow_factory,
         ),
@@ -509,9 +511,9 @@ class TestPostExitSync:
 
         # Wire a REAL MigrationService on the SAME UoW as the plugin's
         # SaveService, then point SaveService's ``detect_sort_change`` at the
-        # real bound method. ``get_retroarch_save_sorting`` reports the CURRENT
-        # on-disk cfg (NEW: sort_by_content=False, sort_by_core=False) — the
-        # mismatch with the stored marker is what detect will discover.
+        # real bound method. ``get_save_layout`` reports the CURRENT on-disk
+        # cfg (NEW: sort_by_content=False, sort_by_core=False) — the mismatch
+        # with the stored marker is what detect will discover.
         real_migration = MigrationService(
             config=MigrationServiceConfig(
                 migration_file_store=MigrationFileAdapter(),
@@ -522,7 +524,7 @@ class TestPostExitSync:
                 emit=MagicMock(),
                 get_bios_files_index=dict,
                 retrodeck_paths=FakeRetroDeckPaths(),
-                get_retroarch_save_sorting=lambda: (False, False),
+                get_save_layout=lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
                 active_core=FakeActiveCoreResolver(default=(None, None)),
                 get_core_name=lambda core_so: None,
                 uow_factory=plugin._uow_factory,

@@ -88,7 +88,7 @@ if TYPE_CHECKING:
         PathExistsReader,
         PlatformCoreReader,
         PluginMetadataReader,
-        RetroArchSaveSortingProvider,
+        RetroArchSaveLayoutProvider,
         RetroDeckPaths,
         RomFileStore,
         RommApi,
@@ -153,7 +153,7 @@ class CallbackBundle:
     """Provider callables and persister Protocols injected into services."""
 
     retrodeck_paths: RetroDeckPaths
-    get_retroarch_save_sorting: RetroArchSaveSortingProvider
+    get_save_layout: RetroArchSaveLayoutProvider
     get_core_name: CoreNameProviderFn
     platform_core_reader: PlatformCoreReader
     settings_persister: SettingsPersister
@@ -350,7 +350,7 @@ def bootstrap(
     )
     callbacks = CallbackBundle(
         retrodeck_paths=retrodeck_paths,
-        get_retroarch_save_sorting=retroarch_config.get_retroarch_save_sorting,
+        get_save_layout=retroarch_config.get_save_layout,
         get_core_name=retroarch_core_info.get_corename,
         platform_core_reader=platform_core_reader,
         settings_persister=settings_persister,
@@ -425,7 +425,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             emit=cfg.runtime.emit,
             get_bios_files_index=bios_files_index_binding.get,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
-            get_retroarch_save_sorting=cfg.callbacks.get_retroarch_save_sorting,
+            get_save_layout=cfg.callbacks.get_save_layout,
             active_core=active_core_resolver,
             get_core_name=cfg.callbacks.get_core_name,
             uow_factory=cfg.callbacks.uow_factory,
@@ -450,6 +450,9 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         plugin_metadata=cfg.callbacks.plugin_metadata,
         plugin_dir=cfg.runtime.plugin_dir,
         emit=cfg.runtime.emit,
+        # StatusService reports the live layout so the SAVES tab can warn when
+        # saves go to the content dir (#239).
+        get_save_layout=cfg.callbacks.get_save_layout,
         # SaveService must observe fresh sort state before computing saves_dir (#238).
         detect_sort_change=migration_service.detect_save_sort_change,
         is_retrodeck_migration_pending=migration_service.is_retrodeck_migration_pending,

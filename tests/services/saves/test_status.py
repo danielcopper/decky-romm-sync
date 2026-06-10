@@ -6,6 +6,7 @@ import threading
 import pytest
 
 from domain.rom_save_state import RomSaveState
+from domain.save_layout import ContentDir, InSaveDir
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
@@ -103,6 +104,72 @@ class TestSaveStatus:
         assert len(result["files"]) == 1
         assert result["files"][0]["status"] == "upload"
         assert result["files"][0]["server_save_id"] is None
+
+
+class TestSaveStatusContentDir:
+    """get_save_status surfaces the additive ``savefiles_in_content_dir`` flag
+    and a "not supported" display when RetroArch writes saves next to the ROM,
+    while keeping playtime / device_id intact (#239)."""
+
+    @pytest.mark.asyncio
+    async def test_content_dir_sets_flag_and_skips_local_probing(self, tmp_path):
+        svc, _ = make_service(tmp_path, get_save_layout=lambda: ContentDir())
+        _install_rom(svc, tmp_path)
+        # A local save file exists, but content-dir mode must NOT probe for it.
+        _create_save(tmp_path)
+
+        result = await svc.get_save_status(42)
+
+        assert result["savefiles_in_content_dir"] is True
+        # Local probing skipped → no files surfaced even though one exists on disk.
+        assert result["files"] == []
+        # Display reads "not supported", not a misleading "No saves".
+        assert result["save_sync_display"]["status"] == "none"
+        assert "content dir" in result["save_sync_display"]["label"].lower()
+        # Rollback is explicitly unsupported in content-dir mode (#239) — not
+        # left to ``files == []`` to suppress the UI.
+        assert result["rollback_supported"] is False
+
+    @pytest.mark.asyncio
+    async def test_in_save_dir_rollback_supported_true(self, tmp_path):
+        """Control: a supported single-file layout keeps ``rollback_supported`` True."""
+        svc, _ = make_service(tmp_path, get_save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False))
+        _install_rom(svc, tmp_path)
+
+        result = await svc.get_save_status(42)
+
+        assert result["savefiles_in_content_dir"] is False
+        assert result["rollback_supported"] is True
+
+    @pytest.mark.asyncio
+    async def test_content_dir_keeps_playtime_and_device_id(self, tmp_path):
+        svc, _ = make_service(tmp_path, get_save_layout=lambda: ContentDir())
+        _install_rom(svc, tmp_path)
+        _set_device_id(svc, "server-dev-1")
+
+        result = await svc.get_save_status(42)
+
+        assert result["savefiles_in_content_dir"] is True
+        # Non-destructive: identity fields are still present.
+        assert result["device_id"] == "server-dev-1"
+        assert result["rom_id"] == 42
+        assert "playtime" in result
+
+    @pytest.mark.asyncio
+    async def test_in_save_dir_sets_flag_false_and_behaves_normally(self, tmp_path):
+        svc, fake = make_service(
+            tmp_path,
+            get_save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
+        )
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.saves[100] = _server_save()
+
+        result = await svc.get_save_status(42)
+
+        assert result["savefiles_in_content_dir"] is False
+        # Normal behaviour: the local file is probed and surfaced.
+        assert len(result["files"]) >= 1
 
 
 class TestGetSaveStatusComputeAction:

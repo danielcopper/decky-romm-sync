@@ -25,6 +25,7 @@ import {
 import { basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
+import { WarningCard } from "./WarningCard";
 import { SgdbGamePickerModalContent } from "./SgdbGamePickerModal";
 import { applyArtwork } from "../utils/artwork";
 import { hasAnySaveConflict } from "../utils/saveStatus";
@@ -86,6 +87,11 @@ interface InfoState {
   saveSyncEnabled: boolean;
   saveSyncStatus: "synced" | "conflict" | "none" | null;
   saveSyncLabel: string;
+  /** RetroArch `savefiles_in_content_dir=true` — saves go next to the ROM and
+   *  can't be synced (#239). Derived from a LOCAL retroarch.cfg read, so it is
+   *  populated even offline (independent of connectivity). Drives the prominent
+   *  "Save sync off" WarningCard. */
+  savefilesInContentDir: boolean;
   biosNeeded: boolean;
   biosStatus: "ok" | "partial" | "missing" | null; // NOSONAR(typescript:S4323) — inline union inside InfoState; extracting an alias adds indirection for no reuse benefit.
   biosLabel: string;
@@ -112,7 +118,7 @@ import { detach } from "../utils/detach";
 async function loadCached(
   appId: number,
   cancelled: () => boolean,
-  romIdRef: React.MutableRefObject<number | null>,
+  romIdRef: React.RefObject<number | null>,
   setter: React.Dispatch<React.SetStateAction<InfoState>>,
 ) {
   try {
@@ -219,6 +225,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     saveSyncEnabled: false,
     saveSyncStatus: null,
     saveSyncLabel: "",
+    savefilesInContentDir: false,
     biosNeeded: false,
     biosStatus: null,
     biosLabel: "",
@@ -253,12 +260,25 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         if (rid) {
           const saveStatus = await getSaveStatus(rid).catch((): SaveStatus | null => null);
           const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
-          setInfo((prev) => ({ ...prev, saveSyncEnabled: true, saveSyncStatus: ss, saveSyncLabel: sl }));
+          setInfo((prev) => ({
+            ...prev,
+            saveSyncEnabled: true,
+            saveSyncStatus: ss,
+            saveSyncLabel: sl,
+            savefilesInContentDir: !!saveStatus?.savefiles_in_content_dir,
+          }));
         } else {
           setInfo((prev) => ({ ...prev, saveSyncEnabled: true }));
         }
       } else {
-        setInfo((prev) => ({ ...prev, saveSyncEnabled: false, saveSyncStatus: null, saveSyncLabel: "" }));
+        // Save sync turned off entirely — the content-dir banner is meaningless.
+        setInfo((prev) => ({
+          ...prev,
+          saveSyncEnabled: false,
+          saveSyncStatus: null,
+          saveSyncLabel: "",
+          savefilesInContentDir: false,
+        }));
       }
     };
 
@@ -376,6 +396,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
           ...prev,
           saveSyncStatus: ss,
           saveSyncLabel: sl,
+          savefilesInContentDir: !!saveStatus.savefiles_in_content_dir,
           activeSlot: "active_slot" in saveStatus ? (saveStatus.active_slot ?? null) : prev.activeSlot,
         }));
       } catch (e) {
@@ -425,6 +446,37 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       cancelled = true;
     };
   }, [info.saveSyncEnabled, appId]);
+
+  // Content-dir warning probe (#239) — populates `savefilesInContentDir` from a
+  // dedicated getSaveStatus call that is INTENTIONALLY NOT gated on connectivity.
+  // The backend derives `savefiles_in_content_dir` from a LOCAL retroarch.cfg
+  // read (independent of `server_query_failed`), so the banner must surface even
+  // when RomM is offline. The connected-only `doSaveCheck` above can't be relied
+  // on for this. We read getSaveStatus live (not getCachedGameDetail, which does
+  // not carry the flag and may be stale) and consume ONLY the content-dir flag —
+  // the server-dependent save-sync display is owned by doSaveCheck / the event
+  // handlers. Runs once romId + saveSyncEnabled are known.
+  useEffect(() => {
+    let cancelled = false;
+    const romId = info.romId;
+    if (!romId || !info.saveSyncEnabled) return;
+
+    async function probeContentDir(rid: number, isCancelled: () => boolean) {
+      try {
+        const saveStatus = await getSaveStatus(rid);
+        if (isCancelled()) return;
+        const inContentDir = saveStatus.savefiles_in_content_dir === true;
+        setInfo((prev) => ({ ...prev, savefilesInContentDir: inContentDir }));
+      } catch (e) {
+        detach(debugLog(`RomMPlaySection: content-dir probe error: ${e}`));
+      }
+    }
+
+    detach(probeContentDir(romId, () => cancelled));
+    return () => {
+      cancelled = true;
+    };
+  }, [info.romId, info.saveSyncEnabled]);
 
   // Reactive PLAYTIME display (#869) — re-read Steam's overview whenever the
   // playtime write-chokepoint (updatePlaytimeDisplay) fires romm_playtime_changed
@@ -1089,7 +1141,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     );
   }
 
-  return createElement(
+  const playSectionRow = createElement(
     Focusable,
     {
       "data-romm": "true",
@@ -1173,4 +1225,23 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       ),
     ),
   );
+
+  // Content-dir warning (#239) — prominent banner above the play row when
+  // RetroArch writes saves to the content directory. The play row still renders
+  // below it: the game remains fully playable, only save sync is unavailable.
+  if (info.savefilesInContentDir) {
+    return createElement(
+      "div",
+      { style: { display: "flex", flexDirection: "column" } },
+      createElement(WarningCard, {
+        key: "savefiles-content-dir-warning",
+        title: "Save sync off",
+        message:
+          "RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced. Turn it off in RetroArch → Settings → Saving to re-enable save sync.",
+      }),
+      playSectionRow,
+    );
+  }
+
+  return playSectionRow;
 };

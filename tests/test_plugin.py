@@ -886,7 +886,7 @@ class TestMainStartupOrdering:
             ),
             callbacks=CallbackBundle(
                 retrodeck_paths=MagicMock(),
-                get_retroarch_save_sorting=MagicMock(),
+                get_save_layout=MagicMock(),
                 get_core_name=MagicMock(),
                 platform_core_reader=MagicMock(),
                 settings_persister=MagicMock(),

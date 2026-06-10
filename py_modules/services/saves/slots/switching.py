@@ -13,8 +13,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
+from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from lib.list_result import ErrorCode
 from services.saves._helpers import local_save_target
+from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
 from services.saves._settings import resolve_default_slot, save_sync_enabled
 
 if TYPE_CHECKING:
@@ -133,8 +135,11 @@ class SlotSwitcher:
         Pre-checks (all must pass):
         1. Save sync must be enabled.
         2. ROM must be installed.
-        3. No local files with pending changes (changed since last sync to current slot).
-        4. Server must be reachable.
+        3. RetroArch must not write saves to the content dir — otherwise the
+           switch's ``saves_dir`` writes are ignored by RetroArch (#239). The
+           refusal carries ``reason="savefiles_in_content_dir"``.
+        4. No local files with pending changes (changed since last sync to current slot).
+        5. Server must be reachable.
 
         On success:
         - If the new slot has server saves: downloads them, replacing local files.
@@ -155,6 +160,18 @@ class SlotSwitcher:
         info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
             return {"success": False, "reason": "not_installed"}
+
+        # #239: RetroArch writes saves to the content dir — switching slots
+        # would download/delete files under ``saves_dir``, which RetroArch
+        # ignores, so the switch could not take effect. Refuse before any
+        # file write or server fetch.
+        if await self._sync_engine.content_dir_blocked("switch_slot"):
+            self._log_debug(f"switch_slot: content-dir layout for rom {rom_id}; refusing")
+            return {
+                "success": False,
+                "reason": SAVE_SYNC_CONTENT_DIR_REASON,
+                "message": SAVE_SYNC_IN_CONTENT_DIR,
+            }
 
         saves_dir = info["saves_dir"]
         system = info["system"]

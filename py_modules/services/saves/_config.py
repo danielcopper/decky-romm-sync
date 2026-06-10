@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         MachineIdReader,
         MigrationPendingFn,
         PluginMetadataReader,
+        RetroArchSaveLayoutProvider,
         RetroDeckPaths,
         RetryStrategy,
         RommSyncApi,
@@ -103,6 +104,12 @@ class SaveServiceConfig:
         :meth:`PluginMetadataReader.read_version`.
     emit:
         Event emitter for pushing save-sync progress to the frontend.
+    get_save_layout:
+        ``RetroArchSaveLayoutProvider`` seam returning the live
+        ``SaveLayout`` from ``retroarch.cfg``. StatusService reads it so
+        the SAVES tab can surface the ``savefiles_in_content_dir`` warning
+        when RetroArch is set to write saves next to the ROM — the
+        unsupported case where plugin save sync is hard-gated off (#239).
     detect_sort_change:
         Synchronous callback that refreshes save-sort state from the
         live RetroArch config (wired to
@@ -147,6 +154,7 @@ class SaveServiceConfig:
     plugin_dir: str
     get_core_name: CoreNameProviderFn
     emit: EventEmitter
+    get_save_layout: RetroArchSaveLayoutProvider
     detect_sort_change: SaveSortChangeFn
     is_retrodeck_migration_pending: MigrationPendingFn
     uow_factory: UnitOfWorkFactory

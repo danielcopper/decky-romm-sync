@@ -7,6 +7,7 @@ from domain.emulator_tag import detect_core_change
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_attribution import compute_uploaded_by_us
+from domain.save_layout import ContentDir
 from domain.save_status import compute_multi_file_slot, compute_save_sync_display
 from domain.save_status_builders import (
     build_file_status,
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
         ActiveCoreReader,
         DebugLogger,
         EventEmitter,
+        RetroArchSaveLayoutProvider,
         RetryStrategy,
         RommSaveApi,
         UnitOfWorkFactory,
@@ -41,8 +43,10 @@ class StatusServiceConfig:
     repositories), the peer save sub-services (sync_engine, rom_info),
     the Protocol-typed RomM adapter and retry strategy, the plugin event
     loop, the standard-library logger, the ``DebugLogger`` seam, the
-    per-ROM active-core resolver, and the event emitter used to push background
-    status updates to the frontend.
+    per-ROM active-core resolver, the event emitter used to push background
+    status updates to the frontend, and the ``RetroArchSaveLayoutProvider``
+    seam that reports whether RetroArch writes saves to the content dir
+    (the unsupported case surfaced as ``savefiles_in_content_dir`` — #239).
     """
 
     settings: dict[str, Any]
@@ -56,6 +60,7 @@ class StatusServiceConfig:
     log_debug: DebugLogger
     active_core: ActiveCoreReader
     emit: EventEmitter
+    get_save_layout: RetroArchSaveLayoutProvider
 
 
 class StatusService:
@@ -74,6 +79,7 @@ class StatusService:
         self._log_debug = config.log_debug
         self._active_core = config.active_core
         self._emit = config.emit
+        self._get_save_layout = config.get_save_layout
 
     def _status_entry_from_outcome(
         self,
@@ -191,7 +197,13 @@ class StatusService:
         misleading "ready to upload" indicator on what is in fact a
         connectivity blip.
         """
-        info = self._rom_info.get_rom_save_info(rom_id)
+        # RetroArch ``savefiles_in_content_dir=true``: saves live next to the
+        # ROM, outside the saves tree we scan, so save sync is unsupported.
+        # Skip all local save-file probing (the files are not where we look)
+        # but keep playtime / device_id / last_sync_check_at intact (#239).
+        savefiles_in_content_dir = isinstance(self._get_save_layout(), ContentDir)
+
+        info = None if savefiles_in_content_dir else self._rom_info.get_rom_save_info(rom_id)
 
         with self._uow_factory() as uow:
             save_state = uow.rom_save_states.get(rom_id)
@@ -242,6 +254,24 @@ class StatusService:
         playtime_dict = _playtime_to_dict(playtime)
         last_sync_check_at = save_state.last_sync_check_at if save_state else None
 
+        # When saves go to the content dir, override the display with a clear
+        # "not supported" status — no local files were probed, so the normal
+        # computation would report a misleading "No saves" (#239).
+        if savefiles_in_content_dir:
+            save_sync_display = {
+                "status": "none",
+                "label": "Save sync off — saves in content dir",
+                "last_sync_check_at": None,
+            }
+        else:
+            save_sync_display = asdict(
+                compute_save_sync_display(
+                    file_statuses,
+                    last_sync_check_at,
+                    server_query_failed=server_query_failed,
+                )
+            )
+
         return {
             "rom_id": rom_id,
             "files": file_statuses,
@@ -250,13 +280,8 @@ class StatusService:
             "last_sync_check_at": last_sync_check_at,
             "conflicts": conflicts,
             "save_sort_changed": self._rom_info.is_save_sort_changed(),
-            "save_sync_display": asdict(
-                compute_save_sync_display(
-                    file_statuses,
-                    last_sync_check_at,
-                    server_query_failed=server_query_failed,
-                )
-            ),
+            "savefiles_in_content_dir": savefiles_in_content_dir,
+            "save_sync_display": save_sync_display,
             "server_query_failed": server_query_failed,
             # Interim #908 guard: a slot whose current save spans >1 distinct
             # file (e.g. Saturn .bkr/.bcr/.smpc) is an N-file *set*, not a
@@ -266,7 +291,11 @@ class StatusService:
             # until grouped save-states land (#908).
             "multi_file": multi_file.is_multi_file,
             "component_files": multi_file.component_files,
-            "rollback_supported": not multi_file.is_multi_file,
+            # Rollback writes to ``saves_dir``, which RetroArch ignores in
+            # content-dir mode — so rollback is unsupported there regardless of
+            # the (empty) file list. Make it explicit rather than relying on
+            # ``files == []`` to suppress the rollback UI (#239).
+            "rollback_supported": not multi_file.is_multi_file and not savefiles_in_content_dir,
         }
 
     # ------------------------------------------------------------------
@@ -281,6 +310,11 @@ class StatusService:
         and each surfaced file is marked ``status="unknown"`` instead of
         the matrix-derived "ready to upload" label that an empty server
         list would otherwise produce — see ``_get_save_status_io``.
+
+        The additive ``savefiles_in_content_dir: bool`` flag is ``True``
+        when RetroArch writes saves next to the ROM (the unsupported case):
+        local probing is skipped and the display reads "Save sync off",
+        while playtime / device_id stay intact (#239).
 
         The ``rom_save_states`` read-modify-write (the baseline-adopt
         write in ``_get_save_status_io``) runs under the per-ROM sync lock

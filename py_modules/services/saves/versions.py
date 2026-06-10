@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
+from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_status import compute_multi_file_slot
 from services.saves._helpers import local_save_target
 from services.saves._settings import resolve_default_slot
@@ -296,6 +297,13 @@ class VersionsService:
           ``.smpc``). Per-version rollback would revert one component and
           leave the others — an incoherent save — so it is refused.
           Interim #908 guard; grouped atomic-set rollback is tracked there.
+          The same status carries an additive
+          ``"reason": "savefiles_in_content_dir"`` field when the refusal is
+          instead because RetroArch writes saves to the content dir (#239):
+          the rollback's ``saves_dir`` target is ignored by RetroArch, so the
+          switch could never take effect. The frontend already hides the panel
+          via ``get_save_status``'s ``rollback_supported=False``; the
+          additive reason lets a direct caller distinguish the two causes.
         - ``{"status": "version_deleted"}`` if the chosen save id is no
           longer on the server (genuinely deleted — the ``list_saves``
           call succeeded and the id was absent).
@@ -334,6 +342,16 @@ class VersionsService:
             if compute_multi_file_slot(component_files).is_multi_file:
                 self._log_debug(f"rollback_to_version: multi-file slot for rom {rom_id} ({component_files}); refusing")
                 return {"status": "unsupported"}
+
+            # #239: RetroArch writes saves to the content dir — the rollback's
+            # download/PUT target is ``saves_dir``, which RetroArch ignores, so
+            # the switch could not take effect. Refuse before any preflight or
+            # destructive I/O. Reuse the existing ``unsupported`` status (the
+            # frontend already routes it to a benign refusal toast) and add the
+            # ``reason`` slug so a direct caller can distinguish the cause.
+            if await self._sync_engine.content_dir_blocked("rollback_to_version"):
+                self._log_debug(f"rollback_to_version: content-dir layout for rom {rom_id}; refusing")
+                return {"status": "unsupported", "reason": SAVE_SYNC_CONTENT_DIR_REASON}
 
             save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
             core_so = await self._loop.run_in_executor(None, self._resolve_core, rom_id)

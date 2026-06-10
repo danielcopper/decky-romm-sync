@@ -16,8 +16,10 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
+import { toaster } from "@decky/api";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
+import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
 import type { DownloadFailedEvent } from "../types";
 
@@ -117,5 +119,62 @@ describe("CustomPlayButton — download_failed listener", () => {
 
     unmount();
     expect(deckyEventListenerCount("download_failed")).toBe(0);
+  });
+});
+
+describe("CustomPlayButton — pre-launch savefiles_in_content_dir benign skip (#239)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    // Gate predecessors of runPreLaunchSync: tracking configured + no core change
+    // so handlePlay reaches preLaunchSync and then the launch dispatch.
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    // RunGame is the launch sink — assert it fires on the benign-skip path.
+    vi.stubGlobal("SteamClient", {
+      Apps: { RunGame: vi.fn() },
+    });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
+      allApps: [],
+    });
+  });
+
+  it("treats the benign skip as a no-op: no error toast AND the game still launches", async () => {
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+    });
+    // Backend benign-skip blocked shape: success:false but reason is the
+    // content-dir slug, synced 0, no errors, no conflicts.
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      reason: "savefiles_in_content_dir",
+      message: "Save sync is unavailable: RetroArch is set to write saves to the content directory.",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+
+    await act(async () => {
+      playBtn.click();
+      // Drain the handlePlay gate chain (tracking → core → preLaunchSync → launch).
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Launch proceeded — RunGame fired with the resolved gameId.
+    expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
+    // No error / fallback toast surfaced for the benign skip.
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+    // No fallback-launch confirm modal was opened (would mean we treated it as failure).
+    expect(vi.mocked(backend.preLaunchSync)).toHaveBeenCalledWith(42);
   });
 });

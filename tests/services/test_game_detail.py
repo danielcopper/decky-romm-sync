@@ -22,6 +22,7 @@ from adapters.firmware_file import FirmwareFileAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom_save_state import FileSyncState
+from domain.save_layout import InSaveDir
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
@@ -99,7 +100,8 @@ def plugin(tmp_path):
             plugin_dir=str(tmp_path / "plugin"),
             emit=AsyncMock(),
             get_core_name=lambda core_so: None,
-            detect_sort_change=lambda: None,
+            get_save_layout=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
+            detect_sort_change=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
             is_retrodeck_migration_pending=lambda: False,
             uow_factory=FakeUnitOfWorkFactory(),
         ),

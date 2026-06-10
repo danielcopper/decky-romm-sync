@@ -2,8 +2,8 @@
 
 Services query the host RetroDECK/RetroArch/ES-DE environment through
 these Protocols: filesystem path getters (saves, roms, BIOS,
-RetroDECK home), platform-to-system resolution, RetroArch save sorting
-toggles, and RetroArch core lookups for ES-DE configured systems.
+RetroDECK home), platform-to-system resolution, the RetroArch save-file
+layout, and RetroArch core lookups for ES-DE configured systems.
 ``PlatformCoreReader`` exposes the plugin-owned per-platform core
 selection (stored in ``settings.json``, not the ES-DE gamelist) that the
 resolver layers over the es_systems default.
@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from domain.save_layout import SaveLayout
     from lib.retrodeck_health import RetroDeckConfigHealth
 
 
@@ -50,10 +51,10 @@ class RetroDeckPaths(Protocol):
     def config_health(self) -> RetroDeckConfigHealth: ...
 
 
-class RetroArchSaveSortingProvider(Protocol):
-    """Return RetroArch save sorting settings as (sort_by_content, sort_by_core)."""
+class RetroArchSaveLayoutProvider(Protocol):
+    """Return the live RetroArch save-file layout as a ``SaveLayout`` value object."""
 
-    def __call__(self) -> tuple[bool, bool]: ...
+    def __call__(self) -> SaveLayout: ...
 
 
 class CoreResolverFn(Protocol):
@@ -111,14 +112,14 @@ class CoreNameProviderFn(Protocol):
 class RetroArchConfigReader(Protocol):
     """Object seam for ``retroarch.cfg`` reads.
 
-    Held by ``main.py`` to bind ``get_retroarch_save_sorting`` as a
-    callable forwarded into service wiring. Distinct from
-    :class:`RetroArchSaveSortingProvider` (the call-shaped Protocol for
+    Held by ``main.py`` to bind ``get_save_layout`` as a callable
+    forwarded into service wiring. Distinct from
+    :class:`RetroArchSaveLayoutProvider` (the call-shaped Protocol for
     the bound method itself) — that one is what services receive; this
     one is what ``main.py`` holds.
     """
 
-    def get_retroarch_save_sorting(self) -> tuple[bool, bool]: ...
+    def get_save_layout(self) -> SaveLayout: ...
 
 
 class RetroArchCoreInfoReader(Protocol):

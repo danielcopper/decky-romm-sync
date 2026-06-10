@@ -11,6 +11,7 @@ import os
 import pytest
 
 from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.save_layout import ContentDir
 from lib.errors import RommApiError
 from tests.services.saves._helpers import (
     _create_save,
@@ -509,3 +510,78 @@ class TestResolveSyncConflictStaleConflict:
         assert upload_calls[0][2]["save_id"] == 100
         file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
+
+
+class TestResolveSyncConflictContentDirGate:
+    """#239: both keep_local (PUT after reading the local file under saves_dir)
+    and use_server (download into saves_dir) write to a directory RetroArch
+    ignores in content-dir mode — so conflict resolution is refused before any
+    server fetch or file write."""
+
+    def _seed_conflict(self, svc, tmp_path):
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local content")
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(
+                active_slot="default",
+                files={
+                    "pokemon.srm": FileSyncState(
+                        last_sync_hash=_file_md5(str(save_path)),
+                        tracked_save_id=100,
+                    ),
+                },
+            ),
+        )
+        return save_path
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["keep_local", "use_server"])
+    async def test_refuses_and_writes_nothing_on_content_dir(self, tmp_path, action):
+        svc, fake = make_service(tmp_path, detect_sort_change=lambda: ContentDir())
+        save_path = self._seed_conflict(svc, tmp_path)
+        original = save_path.read_bytes()
+        fake.saves[100] = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action=action,
+        )
+
+        assert result["success"] is False
+        assert result["reason"] == "savefiles_in_content_dir"
+        assert "content directory" in result["message"]
+        # No server fetch, no download, no upload — gate fired before the orchestrator.
+        assert not any(c[0] in ("list_saves", "download_save_content", "upload_save") for c in fake.call_log), (
+            fake.call_log
+        )
+        # Local file untouched.
+        assert save_path.read_bytes() == original
+
+    @pytest.mark.asyncio
+    async def test_in_save_dir_layout_still_resolves(self, tmp_path):
+        """Control: a supported layout resolves the conflict normally (no gate)."""
+        svc, fake = make_service(tmp_path)  # default layout is InSaveDir
+        save_path = self._seed_conflict(svc, tmp_path)
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        fake.saves[100] = ss
+        # Identical content so keep_local short-circuits to adopt-without-upload.
+        fake.uploaded_files[100] = str(save_path)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
+
+        assert result["success"] is True
+        assert "reason" not in result

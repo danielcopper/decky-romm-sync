@@ -22,6 +22,7 @@ from adapters.firmware_file import FirmwareFileAdapter
 from adapters.migration_file import MigrationFileAdapter
 from adapters.persistence import PersistenceAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.save_layout import InSaveDir, SaveLayout
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
@@ -117,8 +118,8 @@ def plugin(tmp_path, fake_romm_api):
     def _no_core_name(core_so: str) -> str | None:
         return None
 
-    def _default_save_sorting() -> tuple[bool, bool]:
-        return (True, False)
+    def _default_save_layout() -> SaveLayout:
+        return InSaveDir(sort_by_content=True, sort_by_core=False)
 
     p._migration_service = MigrationService(
         config=MigrationServiceConfig(
@@ -130,7 +131,7 @@ def plugin(tmp_path, fake_romm_api):
             emit=RecordingEmitter(),
             get_bios_files_index=lambda: p._firmware_service.bios_files_index,
             retrodeck_paths=FakeRetroDeckPaths(),
-            get_retroarch_save_sorting=_default_save_sorting,
+            get_save_layout=_default_save_layout,
             active_core=p._active_core,
             get_core_name=_no_core_name,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
@@ -1418,7 +1419,7 @@ class TestDetectSaveSortChangeThreadSafety:
 
         with plugin._uow as uow:
             uow.kv_config.set("save_sort_settings", json.dumps({"sort_by_content": True, "sort_by_core": False}))
-        plugin._migration_service._get_retroarch_save_sorting = lambda: (True, True)
+        plugin._migration_service._get_save_layout = lambda: InSaveDir(sort_by_content=True, sort_by_core=True)
 
         # Use an ``asyncio.Queue``-backed emitter so the test can await the
         # emission from the loop thread regardless of which thread scheduled
@@ -1475,7 +1476,7 @@ class TestMigrationFailureInjection:
             "emit": RecordingEmitter(),
             "get_bios_files_index": dict,
             "retrodeck_paths": FakeRetroDeckPaths(),
-            "get_retroarch_save_sorting": lambda: (False, False),
+            "get_save_layout": lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
             "active_core": FakeActiveCoreResolver(default=(None, None)),
             "get_core_name": lambda core_so: None,
             "uow_factory": FakeUnitOfWorkFactory(uow=uow),

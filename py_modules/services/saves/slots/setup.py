@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
 from domain.rom_save_state import RomSaveState
+from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
+from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
 from services.saves._settings import resolve_default_slot
 
 if TYPE_CHECKING:
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
         UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
+    from services.saves.sync_engine import SyncEngine
 
 
 NO_MIGRATION = object()  # sentinel: no slot migration requested
@@ -50,6 +53,7 @@ class SetupWizard:
         logger: logging.Logger,
         save_file_store: SaveFileStore,
         log_debug: DebugLogger,
+        sync_engine: SyncEngine,
     ) -> None:
         self._settings = settings
         self._uow_factory = uow_factory
@@ -61,6 +65,7 @@ class SetupWizard:
         self._logger = logger
         self._save_file_store = save_file_store
         self._log_debug = log_debug
+        self._sync_engine = sync_engine
 
     def _read_save_state(self, rom_id: int) -> RomSaveState | None:
         with self._uow_factory() as uow:
@@ -203,6 +208,13 @@ class SetupWizard:
         If migrate_from_slot is provided (can be None for legacy no-slot saves),
         migrates saves: upload local files to chosen_slot, then delete old server saves.
         Pass NO_MIGRATION sentinel (the default) to skip migration.
+
+        When a migration is requested but RetroArch writes saves to the content
+        dir (#239), the migration is refused before any upload/delete (the local
+        files it would carry are not under ``saves_dir``); the response carries
+        ``success=False`` with ``reason="savefiles_in_content_dir"``. The slot
+        confirmation itself — a non-destructive metadata flip — is still
+        persisted. The non-migration path is never gated (no file write).
         """
         rom_id = int(rom_id)
         chosen_slot = str(chosen_slot).strip()
@@ -215,6 +227,20 @@ class SetupWizard:
 
         # Migration: re-upload local files to new slot, delete old server saves
         if migrate_from_slot is not NO_MIGRATION:
+            # #239: RetroArch writes saves to the content dir — the migration
+            # uploads local files read from ``saves_dir``, which holds nothing
+            # in content-dir mode, so the migration could not carry real saves.
+            # Refuse the migration before any upload/delete; the slot itself is
+            # still confirmed in state (a non-destructive metadata flip).
+            if await self._sync_engine.content_dir_blocked("confirm_slot_choice"):
+                self._log_debug(f"confirm_slot_choice: content-dir layout for rom {rom_id}; skipping migration")
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                return {
+                    "success": False,
+                    "reason": SAVE_SYNC_CONTENT_DIR_REASON,
+                    "needs_conflict_resolution": False,
+                    "message": SAVE_SYNC_IN_CONTENT_DIR,
+                }
             # migrate_from_slot can be None (legacy no-slot) or a string slot name
             from_slot: str | None = migrate_from_slot if isinstance(migrate_from_slot, str) else None
             try:

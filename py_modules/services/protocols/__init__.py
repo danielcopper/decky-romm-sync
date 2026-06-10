@@ -65,7 +65,7 @@ from services.protocols.paths import (
     PlatformCoreReader,
     RetroArchConfigReader,
     RetroArchCoreInfoReader,
-    RetroArchSaveSortingProvider,
+    RetroArchSaveLayoutProvider,
     RetroDeckPaths,
     SystemResolver,
 )
@@ -136,7 +136,7 @@ __all__ = [
     "PluginMetadataReader",
     "RetroArchConfigReader",
     "RetroArchCoreInfoReader",
-    "RetroArchSaveSortingProvider",
+    "RetroArchSaveLayoutProvider",
     "RetroDeckPaths",
     "RetryStrategy",
     "RomFileStore",

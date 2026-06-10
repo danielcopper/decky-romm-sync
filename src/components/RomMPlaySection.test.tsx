@@ -2808,6 +2808,105 @@ describe("RomMPlaySection", () => {
       expect(queryByTitle("Emulator Core")).toBeNull();
     });
   });
+
+  // ------------------------------------------------------------------
+  // G. savefiles_in_content_dir warning banner (#239)
+  // ------------------------------------------------------------------
+
+  describe("savefiles_in_content_dir warning banner (#239)", () => {
+    // The content-dir probe reads getSaveStatus live (NOT getCachedGameDetail),
+    // gated only on romId + saveSyncEnabled — intentionally NOT on connectivity,
+    // so the banner surfaces offline. These tests force the connection check
+    // offline to prove the banner does not depend on a connected server.
+    function stubSaveStatus(romId: number, savefilesInContentDir: boolean) {
+      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+        rom_id: romId,
+        files: [],
+        playtime: { total_seconds: 0, session_count: 0, last_session_start: null, last_session_duration_sec: null },
+        device_id: "d",
+        last_sync_check_at: null,
+        savefiles_in_content_dir: savefilesInContentDir,
+        save_sync_display: { status: "none", label: "Save sync off — saves in content dir", last_sync_check_at: null },
+      });
+    }
+
+    it("renders the WarningCard with the explanatory message when the flag is true", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        save_sync_enabled: true,
+      });
+      stubSaveStatus(42, true);
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      // Non-vacuous: assert the visible banner copy, not just a flag.
+      expect(container.textContent).toContain("Save sync off");
+      expect(container.textContent).toContain(
+        "RetroArch's 'Write Saves to Content Directory' is enabled, so saves go next to the ROM and can't be synced.",
+      );
+      expect(container.textContent).toContain("RetroArch → Settings → Saving");
+    });
+
+    it("surfaces the banner even when the RomM server is OFFLINE (flag is local)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 7,
+        save_sync_enabled: true,
+      });
+      // Server unreachable — the connection effect goes offline, but the
+      // local-derived content-dir flag must still populate the banner.
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      stubSaveStatus(7, true);
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      // Offline indicator AND the banner are both present.
+      expect(container.textContent).toContain("RomM offline");
+      expect(container.textContent).toContain("Save sync off");
+      expect(container.textContent).toContain("can't be synced");
+    });
+
+    it("does NOT render the banner when the flag is false", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        save_sync_enabled: true,
+      });
+      stubSaveStatus(42, false);
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("Write Saves to Content Directory");
+      // The play row still renders (game remains playable).
+      expect(container.querySelector('[data-testid="play-button"]')).not.toBeNull();
+    });
+
+    it("does NOT probe getSaveStatus for the flag when save sync is disabled", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        save_sync_enabled: false,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.getSaveStatus)).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Write Saves to Content Directory");
+    });
+
+    it("logs via debugLog when the content-dir probe rejects (non-vacuous catch)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        save_sync_enabled: true,
+      });
+      // Reject from getSaveStatus — the probe's catch must log, and the banner
+      // must stay hidden (flag defaults to false).
+      vi.mocked(backend.getSaveStatus).mockRejectedValue(new Error("cfgfail"));
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("content-dir probe error"));
+      expect(container.textContent).not.toContain("Write Saves to Content Directory");
+    });
+  });
 });
 
 // ----- Shared helpers — placed at the bottom of the file so they read like

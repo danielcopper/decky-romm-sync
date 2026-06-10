@@ -36,6 +36,7 @@ from adapters.retrodeck_paths import RetroDeckPathsAdapter
 from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
 from adapters.steam_config import SteamConfigAdapter
+from domain.save_layout import InSaveDir
 from services.achievements import AchievementsService
 from services.cores import CoreService
 from services.downloads import DownloadService
@@ -224,7 +225,7 @@ class TestWireServices:
                 bios=str(tmp_path / "retrodeck" / "bios"),
                 home=str(tmp_path / "retrodeck"),
             ),
-            "get_retroarch_save_sorting": MagicMock(return_value=(True, False)),
+            "get_save_layout": MagicMock(return_value=InSaveDir(sort_by_content=True, sort_by_core=False)),
             "get_core_name": MagicMock(return_value="Snes9x"),
             "platform_core_reader": FakePlatformCoreReader(),
             "settings_persister": MagicMock(),
@@ -270,7 +271,7 @@ class TestWireServices:
             ),
             callbacks=CallbackBundle(
                 retrodeck_paths=deps["retrodeck_paths"],
-                get_retroarch_save_sorting=deps["get_retroarch_save_sorting"],
+                get_save_layout=deps["get_save_layout"],
                 get_core_name=deps["get_core_name"],
                 platform_core_reader=deps["platform_core_reader"],
                 settings_persister=deps["settings_persister"],

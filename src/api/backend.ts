@@ -302,15 +302,16 @@ export const listDevices = callable<[], ListDevicesResponse>("list_devices");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
 export const preLaunchSync = callable<
   [number],
-  { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[] }
+  { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[]; reason?: string }
 >("pre_launch_sync");
 export const syncRomSaves = callable<
   [number],
-  { success: boolean; message: string; synced: number; errors?: string[]; conflicts?: SyncConflict[] }
+  { success: boolean; message: string; synced: number; errors?: string[]; conflicts?: SyncConflict[]; reason?: string }
 >("sync_rom_saves");
-export const syncAllSaves = callable<[], { success: boolean; message: string; synced: number; conflicts: number }>(
-  "sync_all_saves",
-);
+export const syncAllSaves = callable<
+  [],
+  { success: boolean; message: string; synced: number; conflicts: number; reason?: string }
+>("sync_all_saves");
 export const resolveSyncConflict = callable<
   [number, string, number, "keep_local" | "use_server"],
   { success: boolean; message?: string; error_code?: "stale_conflict"; action?: "keep_local" | "use_server" }

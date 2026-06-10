@@ -17,6 +17,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
+
 if TYPE_CHECKING:
     import logging
 
@@ -265,6 +267,20 @@ class SessionLifecycleService:
                 conflicts=[],
                 toast_title=_TOAST_TITLE,
                 toast_body=_TOAST_BODY_FAILED,
+                conflicts_toast=None,
+            )
+
+        if result.get("reason") == SAVE_SYNC_CONTENT_DIR_REASON:
+            # #239 benign skip: RetroArch writes saves to the content dir, so post-exit
+            # sync correctly did nothing. Suppress the failure toast — the game-detail
+            # play section already shows the persistent banner.
+            return SessionFinalizeSyncResult(
+                offline=False,
+                success=False,
+                synced=0,
+                conflicts=[],
+                toast_title=None,
+                toast_body=None,
                 conflicts_toast=None,
             )
 

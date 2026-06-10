@@ -288,10 +288,17 @@ The backend reads `retrodeck.json` → `paths.saves_path` as the source of truth
 (`py_modules/adapters/retrodeck_paths.py`). When that file is unreadable — e.g. a fresh install with no RetroDECK
 configured yet — it falls back to the hardcoded RetroDECK default `~/retrodeck/saves`.
 
-The plugin deliberately does **not** read `savefile_directory` from `retroarch.cfg`. RetroDECK re-derives
-`savefile_directory = saves_path` on every launch/reset/move (its `component_prepare.sh` rewrites the key, and the "move
-data" flow updates `retrodeck.json` and `retroarch.cfg` in lockstep), so `retrodeck.json` is the single source of truth
-and reading the cfg key would only track a value RetroDECK is about to overwrite.
+The plugin deliberately does **not** read `savefile_directory` from `retroarch.cfg`; it takes the saves root from
+`retrodeck.json` → `paths.saves_path`. RetroDECK re-pins `savefile_directory = saves_path` only at **first-run
+install**, **config reset** (explicit / factory / component update / multi-user switch), and **data-move** (`postmove`)
+— **not** on every game launch or routine boot. Between those events `retroarch.cfg` is user-owned and edits persist, so
+the plugin reads the live cfg for save **sorting** to stay correct. The one key it does not yet read —
+`savefiles_in_content_dir` — is therefore a **persistent** blind spot until the user toggles it back or a reset/install
+re-copies the default cfg ([#239](https://github.com/danielcopper/decky-romm-sync/issues/239)).
+
+_Verified against RetroDECK source on 2026-06-09: `RetroDECK/components` `retroarch/component_prepare.sh` sets the key
+only in its `reset` and `postmove` branches, and every `prepare_component` call in `RetroDECK/RetroDECK` uses action
+`reset` / `postmove` / `factory-reset` — none from a launch (`run_game`) path._
 
 ### RetroArch .srm pattern
 
@@ -334,26 +341,36 @@ as the ROM file** (e.g. `roms/gba/Game/Game.srm`) instead of the configured `sav
 `sort_savefiles_*` settings discussed above become irrelevant in that case because saves no longer live in the savefile
 directory at all.
 
-**The plugin does not handle this configuration.** `adapters/retroarch_config.py` reads only
-`sort_savefiles_by_content_enable` and `sort_savefiles_enable` — it does not read or react to
-`savefiles_in_content_dir`. If a user enables it, the plugin's save sync, conflict detection, and save-sort migration
-will silently miss every save because they only look inside `savefile_directory`.
+**The plugin detects this configuration and disables save sync for it — it does not silently miss saves
+([#239](https://github.com/danielcopper/decky-romm-sync/issues/239)).** `adapters/retroarch_config.py` reads all three
+layout keys and models them as a `SaveLayout` value object (`domain/save_layout.py`): `ContentDir` when
+`savefiles_in_content_dir=true`, otherwise `InSaveDir(sort_by_content, sort_by_core)`. When the layout is `ContentDir`,
+the four save-sync entry points (`pre_launch_sync`, `post_exit_sync`, `sync_rom_saves`, `sync_all_saves`) return a
+benign skip (`{success: false, reason: "savefiles_in_content_dir", …}` — the game still launches, no error), and
+`get_save_status` carries an additive `savefiles_in_content_dir: true` flag so the game-detail play section shows a
+banner asking the user to turn the setting back off. Actually _syncing_ ROM-adjacent saves stays unsupported (the
+deferred multi-emulator work).
+
+This blind spot is **persistent**: RetroDECK only restores the `false` default on a full config reset or first-run
+install — never on a normal launch (verified 2026-06-09) — so the plugin reads the layout live on every sync rather than
+assume RetroDECK keeps it off.
 
 **Why this is easy to confuse**: the RetroArch UI labels are deliberately similar. "Write Saves to **Content
 Directory**" controls the **destination** (next to the ROM vs the saves directory), while "Sort Saves **Into Folders by
 Content Directory**" controls the **layout within** the saves directory. They sound nearly identical but mean very
 different things.
 
-| RetroArch UI label                           | cfg key                            | What it controls                                                                                           |
-| -------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Write Saves to Content Directory             | `savefiles_in_content_dir`         | **Destination** — next to ROM (true) vs `savefile_directory` (false). Plugin does **not** handle `true`.   |
-| Sort Saves Into Folders by Content Directory | `sort_savefiles_by_content_enable` | **Layout inside `savefile_directory`** — group by ROM parent folder name. Plugin handles both values.      |
-| Sort Saves Into Folders by Core Name         | `sort_savefiles_enable`            | **Layout inside `savefile_directory`** — further group by RetroArch core name. Plugin handles both values. |
+| RetroArch UI label                           | cfg key                            | What it controls                                                                                                           |
+| -------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Write Saves to Content Directory             | `savefiles_in_content_dir`         | **Destination** — next to ROM (true) vs `savefile_directory` (false). Plugin **detects `true`, warns, skips sync** (#239). |
+| Sort Saves Into Folders by Content Directory | `sort_savefiles_by_content_enable` | **Layout inside `savefile_directory`** — group by ROM parent folder name. Plugin handles both values.                      |
+| Sort Saves Into Folders by Core Name         | `sort_savefiles_enable`            | **Layout inside `savefile_directory`** — further group by RetroArch core name. Plugin handles both values.                 |
 
-**Status**: tracked as an enhancement in [#239](https://github.com/danielcopper/decky-romm-sync/issues/239). Minimum
-scope there is detect-and-warn (read the key, surface a banner explaining save sync is disabled, skip all save
-operations). Full support — resolving save paths relative to the ROM's actual on-disk location — is a larger refactor
-deferred to multi-emulator work.
+**Status**: detect-and-warn is **implemented** ([#239](https://github.com/danielcopper/decky-romm-sync/issues/239)) —
+the layout is read into `SaveLayout`, `ContentDir` hard-gates the four sync entry points, and the play-section banner
+surfaces it. Full support — resolving save paths relative to the ROM's actual on-disk location — remains deferred to the
+multi-emulator save work ([#129](https://github.com/danielcopper/decky-romm-sync/issues/129) /
+[#255](https://github.com/danielcopper/decky-romm-sync/issues/255)).
 
 ## Save-Sort Migration: Automatic Detection and Conflict Resolution
 

@@ -18,6 +18,7 @@ from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from adapters.migration_file import MigrationFileAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from domain.save_layout import ContentDir, InSaveDir, SaveLayout
 from services.migration import MigrationService, MigrationServiceConfig
 
 if TYPE_CHECKING:
@@ -76,6 +77,7 @@ def _make_service(
     tmp_path,
     *,
     sort_settings=(True, False),
+    save_layout=None,
     installed_roms=None,
     state_overrides=None,
     active_core=None,
@@ -87,6 +89,10 @@ def _make_service(
     Returns (service, uow) so callers can seed installs/markers and assert on the
     commit flag and the kv_config values. Pass ``migration_file_store`` to swap
     the real ``MigrationFileAdapter`` for a fake when a test needs failure injection.
+
+    ``sort_settings`` is the ``(sort_by_content, sort_by_core)`` tuple the
+    ``InSaveDir`` layout is built from. Pass an explicit ``save_layout``
+    (e.g. ``ContentDir()``) to override the supported-layout default.
     """
     uow = FakeUnitOfWork()
     if installed_roms:
@@ -96,6 +102,12 @@ def _make_service(
 
     saves_path = str(tmp_path / "saves")
     roms_path = str(tmp_path / "roms")
+
+    layout: SaveLayout = (
+        save_layout
+        if save_layout is not None
+        else InSaveDir(sort_by_content=sort_settings[0], sort_by_core=sort_settings[1])
+    )
 
     svc = MigrationService(
         config=MigrationServiceConfig(
@@ -112,7 +124,7 @@ def _make_service(
                 bios=str(tmp_path / "bios"),
                 home=str(tmp_path),
             ),
-            get_retroarch_save_sorting=lambda: sort_settings,
+            get_save_layout=lambda: layout,
             active_core=active_core if active_core is not None else FakeActiveCoreResolver(default=(None, None)),
             get_core_name=get_core_name,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
@@ -128,8 +140,10 @@ class TestDetectSaveSortChange:
         mock_loop = MagicMock()
         svc._loop = mock_loop
 
-        svc.detect_save_sort_change()
+        layout = svc.detect_save_sort_change()
 
+        # Returns the live InSaveDir layout it observed.
+        assert layout == InSaveDir(sort_by_content=True, sort_by_core=False)
         with uow:
             assert _read_marker(uow, "save_sort_settings") == {
                 "sort_by_content": True,
@@ -150,13 +164,65 @@ class TestDetectSaveSortChange:
         svc._loop = mock_loop
         set_count_before = uow.kv_config.set_count
 
-        svc.detect_save_sort_change()
+        layout = svc.detect_save_sort_change()
 
+        assert layout == InSaveDir(sort_by_content=True, sort_by_core=False)
         mock_loop.create_task.assert_not_called()
         # No marker write occurred (no new kv_config.set beyond the seed).
         assert uow.kv_config.set_count == set_count_before
         with uow:
             assert uow.kv_config.get("save_sort_settings_previous") is None
+
+
+class TestDetectSaveSortChangeContentDir:
+    """ContentDir layout (savefiles_in_content_dir=true) is unsupported — the
+    detect pass must never touch the kv_config sort markers, must return the
+    ContentDir layout for the SyncEngine gate, and must warn only once."""
+
+    def test_content_dir_returns_layout_and_writes_no_markers(self, tmp_path):
+        """ContentDir → no kv_config write at all, returns ContentDir()."""
+        svc, uow = _make_service(tmp_path, save_layout=ContentDir())
+        mock_loop = MagicMock()
+        svc._loop = mock_loop
+        set_count_before = uow.kv_config.set_count
+
+        layout = svc.detect_save_sort_change()
+
+        assert isinstance(layout, ContentDir)
+        # No sort markers written — content-dir saves are outside the saves tree.
+        assert uow.kv_config.set_count == set_count_before
+        with uow:
+            assert uow.kv_config.get("save_sort_settings") is None
+            assert uow.kv_config.get("save_sort_settings_previous") is None
+        mock_loop.create_task.assert_not_called()
+
+    def test_content_dir_does_not_overwrite_existing_sort_markers(self, tmp_path):
+        """A pre-existing InSaveDir observation survives a ContentDir detect."""
+        svc, uow = _make_service(
+            tmp_path,
+            save_layout=ContentDir(),
+            state_overrides={"save_sort_settings": {"sort_by_content": True, "sort_by_core": False}},
+        )
+        set_count_before = uow.kv_config.set_count
+
+        layout = svc.detect_save_sort_change()
+
+        assert isinstance(layout, ContentDir)
+        assert uow.kv_config.set_count == set_count_before
+        with uow:
+            assert _read_marker(uow, "save_sort_settings") == {"sort_by_content": True, "sort_by_core": False}
+
+    def test_content_dir_warns_once_per_process(self, tmp_path, caplog):
+        """The unsupported-state warning fires once, not on every detect pass."""
+        svc, _ = _make_service(tmp_path, save_layout=ContentDir())
+
+        with caplog.at_level(logging.WARNING):
+            svc.detect_save_sort_change()
+            svc.detect_save_sort_change()
+            svc.detect_save_sort_change()
+
+        content_dir_warnings = [r for r in caplog.records if "savefiles_in_content_dir" in r.getMessage()]
+        assert len(content_dir_warnings) == 1
 
     def test_change_emits_event(self, tmp_path):
         """Settings changed — emits event, stores old + new."""
@@ -187,10 +253,11 @@ class TestDetectSaveSortChange:
         original = migration_module.asyncio.run_coroutine_threadsafe
         migration_module.asyncio.run_coroutine_threadsafe = fake_schedule  # type: ignore[assignment]
         try:
-            svc.detect_save_sort_change()
+            layout = svc.detect_save_sort_change()
         finally:
             migration_module.asyncio.run_coroutine_threadsafe = original  # type: ignore[assignment]
 
+        assert layout == InSaveDir(sort_by_content=False, sort_by_core=True)
         with uow:
             assert _read_marker(uow, "save_sort_settings") == {
                 "sort_by_content": False,

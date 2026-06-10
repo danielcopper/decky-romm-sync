@@ -362,6 +362,63 @@ class TestFinalizeSyncToasts:
         assert result.sync.toast_body is None
 
 
+class TestFinalizeContentDirBenignSkip:
+    """#239: when post-exit sync returns the ``savefiles_in_content_dir`` reason,
+    the sync correctly did nothing — suppress the false-failure toast."""
+
+    def test_content_dir_reason_suppresses_failure_toast(self, event_loop, logger):
+        """benign-skip dict → no toast (title/body None), conflicts empty, no false failure."""
+        post = FakePostExitSync(
+            payload={
+                "success": False,
+                "reason": "savefiles_in_content_dir",
+                "message": "Save sync is unavailable: RetroArch is set to write saves to the content directory.",
+                "synced": 0,
+                "errors": [],
+                "conflicts": [],
+            }
+        )
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        # The post-exit sync ran (benign skip is the sync's own verdict)...
+        assert post.calls == [99]
+        # ...but NO toast fires — neither the failure toast nor any other.
+        assert result.sync.toast_title is None
+        assert result.sync.toast_body is None
+        assert result.sync.conflicts_toast is None
+        # Verdict flags reflect a non-error skip.
+        assert result.sync.offline is False
+        assert result.sync.success is False
+        assert result.sync.synced == 0
+        assert result.sync.conflicts == []
+
+    def test_failure_without_content_dir_reason_still_renders_failure_toast(self, event_loop, logger):
+        """Control: a plain ``success=False`` (no content-dir reason) keeps the failure toast."""
+        post = FakePostExitSync(payload={"success": False, "synced": 0, "conflicts": []})
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.toast_title == "RomM Save Sync"
+        assert result.sync.toast_body == "Failed to sync saves after exit"
+
+
 class TestFinalizeConflicts:
     def test_single_conflict_renders_singular_string(self, event_loop, logger):
         """One conflict → "1 save conflict need resolution" (singular form)."""

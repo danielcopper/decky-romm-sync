@@ -12,6 +12,12 @@ export interface SaveSyncSettings {
   autocleanup_limit: number;
 }
 
+/** The `reason` slug the sync callables return when save sync is blocked because
+ *  RetroArch writes saves to the content directory (#239). A BENIGN SKIP — the
+ *  game still launches and no error is surfaced. Mirrors the backend
+ *  `SAVE_SYNC_IN_CONTENT_DIR_REASON`. */
+export const SAVEFILES_IN_CONTENT_DIR_REASON = "savefiles_in_content_dir";
+
 export interface SyncConflict {
   type: "sync_conflict";
   rom_id: number;
@@ -96,6 +102,13 @@ export interface SaveStatus {
   /** False when per-version rollback is unavailable for the slot — currently
    *  only for multi-file saves (mirrors `!multi_file`). */
   rollback_supported?: boolean;
+  /** True when RetroArch's `savefiles_in_content_dir=true` — saves are written
+   *  next to the ROM, outside the saves tree the plugin syncs, so save sync is
+   *  unsupported. Derived from a LOCAL retroarch.cfg read, so it is correct even
+   *  when the server is unreachable (independent of `server_query_failed`). In
+   *  this case `files` is `[]` and `save_sync_display` reports the "off" state
+   *  (#239). */
+  savefiles_in_content_dir?: boolean;
 }
 
 export interface SaveSlotSummary {

@@ -10,6 +10,7 @@ import logging
 
 import pytest
 
+from domain.save_layout import ContentDir, InSaveDir
 from lib.errors import RommApiError
 from tests.services.saves._helpers import (
     _create_save,
@@ -705,6 +706,122 @@ class TestSyncEngineDelegates:
         assert result["success"] is True
         assert len(result["devices"]) == 1
         assert result["devices"][0]["is_current_device"] is True
+
+
+class TestSaveSyncContentDirGate:
+    """All four public sync entry points hard-gate save sync when RetroArch
+    writes saves to the content dir (savefiles_in_content_dir=true). The gate
+    reads ``_current_layout``, populated from ``detect_sort_change``'s return at
+    the top of each flow. The result is the benign-skip shape the frontend
+    treats as "skip, no error, launch proceeds" (#239)."""
+
+    _CONTENT_DIR_SKIP_MESSAGE_FRAGMENT = "content directory"
+
+    def _assert_benign_skip(self, result, *, all_saves=False):
+        assert result["success"] is False
+        assert result["reason"] == "savefiles_in_content_dir"
+        assert self._CONTENT_DIR_SKIP_MESSAGE_FRAGMENT in result["message"]
+        assert result["synced"] == 0
+        assert result["errors"] == []
+        if all_saves:
+            assert result["conflicts"] == 0
+            assert result["conflicts_list"] == []
+            assert result["roms_checked"] == 0
+        else:
+            assert result["conflicts"] == []
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_skips_on_content_dir(self, tmp_path):
+        svc, fake = make_service(tmp_path, detect_sort_change=lambda: ContentDir())
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        ss = _server_save()
+        fake.saves[100] = ss
+
+        result = await svc.pre_launch_sync(42)
+
+        self._assert_benign_skip(result)
+        # No sync ran — the gate fired before any transfer.
+        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_skips_on_content_dir(self, tmp_path):
+        svc, fake = make_service(tmp_path, detect_sort_change=lambda: ContentDir())
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"unsyncable")
+
+        result = await svc.post_exit_sync(42)
+
+        self._assert_benign_skip(result)
+        # The gate fires before the heartbeat probe and before any upload.
+        assert not any(c[0] in ("upload_save", "heartbeat") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_skips_on_content_dir(self, tmp_path):
+        svc, fake = make_service(tmp_path, detect_sort_change=lambda: ContentDir())
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"unsyncable")
+
+        result = await svc.sync_rom_saves(42)
+
+        self._assert_benign_skip(result)
+        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_skips_on_content_dir(self, tmp_path):
+        svc, fake = make_service(tmp_path, detect_sort_change=lambda: ContentDir())
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
+
+        result = await svc.sync_all_saves()
+
+        self._assert_benign_skip(result, all_saves=True)
+        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_in_save_dir_layout_does_not_block(self, tmp_path):
+        """Control: a supported InSaveDir layout syncs normally — no gate."""
+        svc, _ = make_service(
+            tmp_path,
+            detect_sort_change=lambda: InSaveDir(sort_by_content=True, sort_by_core=False),
+        )
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"progress")
+
+        result = await svc.sync_rom_saves(42)
+
+        assert result["success"] is True
+        assert "reason" not in result
+        assert result["synced"] == 1
+
+    @pytest.mark.asyncio
+    async def test_detect_failure_fails_open_does_not_block(self, tmp_path):
+        """A detect that raises leaves ``_current_layout`` unset — sync proceeds."""
+
+        def boom():
+            raise RuntimeError("cfg unreadable")
+
+        svc, _ = make_service(tmp_path, detect_sort_change=boom)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"progress")
+
+        result = await svc.sync_rom_saves(42)
+
+        # Fail-open: no benign-skip reason, sync ran.
+        assert "reason" not in result
+        assert result["success"] is True
+        assert result["synced"] == 1
 
 
 class TestPreLaunchSaveSortGate:

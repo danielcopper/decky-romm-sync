@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.save_extensions import get_save_extensions
+from domain.save_layout import ContentDir
 from domain.save_path import resolve_save_dir
 from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 
@@ -26,12 +27,13 @@ if TYPE_CHECKING:
     from models.state import SaveSortSettings
 
     from domain.rom_install import RomInstall
+    from domain.save_layout import SaveLayout
     from services.protocols import (
         ActiveCoreReader,
         CoreNameProviderFn,
         EventEmitter,
         MigrationFileStore,
-        RetroArchSaveSortingProvider,
+        RetroArchSaveLayoutProvider,
         RetroDeckPaths,
         SettingsPersister,
         UnitOfWorkFactory,
@@ -68,7 +70,7 @@ class MigrationServiceConfig:
     emit: EventEmitter
     get_bios_files_index: Callable[[], dict[str, dict[str, Any]]]
     retrodeck_paths: RetroDeckPaths
-    get_retroarch_save_sorting: RetroArchSaveSortingProvider
+    get_save_layout: RetroArchSaveLayoutProvider
     active_core: ActiveCoreReader
     get_core_name: CoreNameProviderFn
     uow_factory: UnitOfWorkFactory
@@ -86,10 +88,14 @@ class MigrationService:
         self._emit = config.emit
         self._get_bios_files_index = config.get_bios_files_index
         self._retrodeck_paths = config.retrodeck_paths
-        self._get_retroarch_save_sorting = config.get_retroarch_save_sorting
+        self._get_save_layout = config.get_save_layout
         self._active_core = config.active_core
         self._get_core_name = config.get_core_name
         self._uow_factory = config.uow_factory
+        # One-shot guard so the ContentDir "save sync unsupported" warning is
+        # logged at most once per process rather than on every save-sort detect
+        # pass (which runs at the entry of every sync flow).
+        self._content_dir_warned = False
         # Strong refs to in-flight background tasks. ``loop.create_task``
         # alone is not enough — without a strong ref, the loop is free to
         # garbage-collect the task before it completes. ``add_done_callback``
@@ -652,27 +658,51 @@ class MigrationService:
         raw = uow.kv_config.get(_KV_SAVE_SORT_PREVIOUS)
         return json.loads(raw) if raw is not None else None
 
-    def detect_save_sort_change(self) -> None:
-        """Check if RetroArch save sorting settings changed since last run.
+    def detect_save_sort_change(self) -> SaveLayout:
+        """Refresh save-sort state from the live RetroArch config; return the layout.
+
+        Reads the live ``SaveLayout`` and returns it so the SyncEngine can
+        hard-gate save sync when it is ``ContentDir`` (#239). When the
+        layout is ``ContentDir`` the kv_config save-sort change-detection
+        markers are never touched — content-dir saves live next to the ROM,
+        outside the saves tree the plugin syncs, so there is no sort layout
+        to migrate. A single per-process warning is logged so the unsupported
+        state is visible without spamming every sync.
+
+        For the supported ``InSaveDir`` case, runs the cross-run change
+        detection against the stored observation, writing the
+        ``_KV_SAVE_SORT`` / ``_KV_SAVE_SORT_PREVIOUS`` markers and emitting
+        ``save_sort_changed`` when the layout flips (#238).
 
         May be called from a worker thread (via
-        ``SaveService._refresh_save_sort_state`` → ``run_in_executor``) or
+        ``SyncEngine._refresh_save_sort_state`` → ``run_in_executor``) or
         from the loop thread. Use ``asyncio.run_coroutine_threadsafe`` to
         schedule the emit coroutine: it is explicitly thread-safe and
         also works correctly when invoked from the loop thread itself.
         ``loop.create_task`` is NOT thread-safe and races with loop
         internals on CPython (#238 review).
         """
-        sort_by_content, sort_by_core = self._get_retroarch_save_sorting()
+        layout = self._get_save_layout()
+        if isinstance(layout, ContentDir):
+            if not self._content_dir_warned:
+                self._logger.warning(
+                    "RetroArch savefiles_in_content_dir is enabled — saves are written "
+                    "next to the ROM, so plugin save sync is unsupported and is disabled."
+                )
+                self._content_dir_warned = True
+            return layout
+
+        sort_by_content = layout.sort_by_content
+        sort_by_core = layout.sort_by_core
         current: SaveSortSettings = {"sort_by_content": sort_by_content, "sort_by_core": sort_by_core}
         with self._uow_factory() as uow:
             stored = self._read_save_sort_settings(uow)
         if stored is None:
             with self._uow_factory() as uow:
                 uow.kv_config.set(_KV_SAVE_SORT, json.dumps(current))
-            return
+            return layout
         if stored == current:
-            return
+            return layout
         with self._uow_factory() as uow:
             uow.kv_config.set(_KV_SAVE_SORT_PREVIOUS, json.dumps(stored))
             uow.kv_config.set(_KV_SAVE_SORT, json.dumps(current))
@@ -687,6 +717,7 @@ class MigrationService:
             ),
             self._loop,
         )
+        return layout
 
     def _resolve_retroarch_corename(self, rom_id: int) -> tuple[str | None, str | None]:
         """Resolve the RetroArch save subdirectory name for a ROM by ``rom_id``.
