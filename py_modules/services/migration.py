@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from models.state import SaveSortSettings
 
     from domain.rom_install import RomInstall
-    from domain.save_layout import SaveLayout
+    from domain.save_layout import InSaveDir, SaveLayout
     from services.protocols import (
         ActiveCoreReader,
         CoreNameProviderFn,
@@ -690,19 +690,26 @@ class MigrationService:
                     "next to the ROM, so plugin save sync is unsupported and is disabled."
                 )
                 self._content_dir_warned = True
-            return layout
+        else:
+            self._detect_in_save_dir_change(layout)
+        return layout
 
-        sort_by_content = layout.sort_by_content
-        sort_by_core = layout.sort_by_core
-        current: SaveSortSettings = {"sort_by_content": sort_by_content, "sort_by_core": sort_by_core}
+    def _detect_in_save_dir_change(self, layout: InSaveDir) -> None:
+        """Run the cross-run save-sort change detection for a supported ``InSaveDir`` layout.
+
+        Records the current sort settings as the ``_KV_SAVE_SORT`` observation; when they
+        differ from the stored one, sets the ``_KV_SAVE_SORT_PREVIOUS`` pending-migration
+        marker and emits ``save_sort_changed`` so the frontend can offer the migration (#238).
+        """
+        current: SaveSortSettings = {"sort_by_content": layout.sort_by_content, "sort_by_core": layout.sort_by_core}
         with self._uow_factory() as uow:
             stored = self._read_save_sort_settings(uow)
         if stored is None:
             with self._uow_factory() as uow:
                 uow.kv_config.set(_KV_SAVE_SORT, json.dumps(current))
-            return layout
+            return
         if stored == current:
-            return layout
+            return
         with self._uow_factory() as uow:
             uow.kv_config.set(_KV_SAVE_SORT_PREVIOUS, json.dumps(stored))
             uow.kv_config.set(_KV_SAVE_SORT, json.dumps(current))
@@ -717,7 +724,6 @@ class MigrationService:
             ),
             self._loop,
         )
-        return layout
 
     def _resolve_retroarch_corename(self, rom_id: int) -> tuple[str | None, str | None]:
         """Resolve the RetroArch save subdirectory name for a ROM by ``rom_id``.
