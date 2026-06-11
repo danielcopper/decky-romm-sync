@@ -31,7 +31,10 @@ updates:
           - "minor"
           - "patch"
 
-  # Python (test/lint deps pinned in requirements-dev.txt)
+  # Python test/lint + docs deps. Dependabot bumps the version RANGES in the
+  # requirements-*.txt sources; the pinned requirements-*.lock files that CI
+  # installs from are regenerated with uv via `mise run lock-update` (uv stays
+  # the sole compiler — see #986).
   - package-ecosystem: "pip"
     directory: "/"
     schedule:

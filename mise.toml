@@ -1,16 +1,23 @@
 [tools]
-node = "lts"
-pnpm = "latest"
+node = "24"      # major pin — "lts" is a moving alias that silently jumps majors; CI uses node 24
+pnpm = "10.29.3" # exact — must match package.json "packageManager"; bump both together
 python = "3.11"  # match Decky Loader's embedded Python (libpython3.11)
-uv = "latest"    # mise creates venvs via uv internally; expose it so the setup task can install deps without bootstrapping pip
-deno = "2"       # markdown formatter (deno fmt) — pre-commit hook + CI markdown-format check; matches CI's v2.x
+uv = "0.10.2"    # exact — uv creates the venv AND compiles the dependency locks; pin so the local resolver == the lock author
+deno = "2.8"     # minor pin — deno fmt is a formatter; a version jump can reformat Markdown (the CI drift we're killing)
 
 [env]
 _.python.venv = { path = ".venv", create = true }
 
 [tasks.setup]
 description = "Install JS and Python dependencies"
-run = ["pnpm install", "uv pip install -r requirements-dev.txt", "git config core.hooksPath .githooks"]
+run = ["pnpm install", "uv pip install -r requirements-dev.lock", "git config core.hooksPath .githooks"]
+
+[tasks.lock-update]
+description = "Recompile the pinned Python dependency locks from the requirements-*.txt sources (run after editing a source or bumping a pin)"
+run = [
+    "uv pip compile requirements-dev.txt -o requirements-dev.lock",
+    "uv pip compile requirements-docs.txt -o requirements-docs.lock",
+]
 
 [tasks.build]
 description = "Build frontend (dev: with source maps)"

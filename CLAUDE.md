@@ -79,7 +79,9 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Dev reload**: `mise run dev` (build + restart plugin_loader)
 - **Tooling**: mise manages node, pnpm, python, uv. Venv auto-creates at `.venv` (via `_.python.venv` in mise.toml)
   using uv as the underlying tool; `mise run setup` installs Python deps via `uv pip install` (uv is the canonical
-  Python package manager in this project).
+  Python package manager in this project). Python deps are pinned in `requirements-dev.lock` / `requirements-docs.lock`,
+  compiled from the `requirements-*.txt` sources by `uv pip compile`; `mise run setup` and CI install from the lock, and
+  `mise run lock-update` regenerates it after editing a source or bumping a pin.
 - **Pre-commit hook** (`.githooks/pre-commit`, wired by `mise run setup` via `core.hooksPath`): formats staged files —
   `ruff format` + `ruff check` (Python), `prettier --write` (TS/TSX), and `deno fmt` (Markdown). Stays fast (<2s) so
   commits don't become friction — heavy validation (basedpyright, lint-imports, cosmic bans, pytest) is CI-only on PR

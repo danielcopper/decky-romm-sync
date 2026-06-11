@@ -20,6 +20,10 @@ mise run setup        # installs JS + Python dependencies
 This creates a Python virtual environment (auto-activated by mise via `_.python.venv` in `mise.toml`) and installs all
 npm packages.
 
+Python dependencies are installed from `requirements-dev.lock` — fully-pinned versions compiled from
+`requirements-dev.txt` by uv. After changing a source (`requirements-dev.txt` / `requirements-docs.txt`) or bumping a
+pin, run `mise run lock-update` to regenerate the locks.
+
 ## Building
 
 ```bash
