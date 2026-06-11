@@ -387,6 +387,36 @@ property passes → the run reports XPASS → CI fails → the marker must be re
 regression. So a property never gets weakened to go green: it either passes live (a regression guard) or is
 `xfail`-pinned to its open bug.
 
+### Contract tests — real `Plugin` over real `bootstrap`, callables driven frontend-shaped
+
+`tests/contract/` is a tier that crosses the frontend↔backend wire. The unit tests exercise each side against its own
+mocked idea of the other; the contract tier builds the **real** `Plugin` through the **real** `bootstrap()` +
+`wire_services()` (real settings dict, real SQLite + migrations, real file-store adapters, all rooted under `tmp_path`)
+and drives the actual `main.py` callable methods. Only the outermost edges are faked: `romm_api` → `FakeRommApi`,
+`sgdb_adapter` → `FakeSteamGridDbApi`, the Clock/UuidGen/Sleeper seams → the deterministic fakes, `emit` → an
+`AsyncMock`, and `http_adapter.with_retry` → a single-attempt pass-through (so a failure-injection test pays no backoff
+sleep). The harness + its `harness` fixture live in `tests/contract/_harness.py` / `conftest.py`; shared
+relational/server seeding helpers live in `tests/contract/_seed.py`.
+
+Rules for this tier:
+
+- **Call callables exactly as the frontend does** — positional, JSON-shaped arguments with the arg TYPES declared in
+  `src/api/backend.ts` (literal `None` where the TS type says `null`, e.g. `get_installed_rom` returning `None`).
+- **Assert the response SHAPE + behavior (the contract), not delegation.** Pin the literal dict keys, the canonical
+  failure shape (`{success: False, reason, message}`), the discriminated-status union (`status: "ok" | ...`), and the
+  partial-success carve-outs (`server_query_failed: bool`, `recommended_action`). Where a callable has a
+  server-reachable failure mode, exercise BOTH the happy path AND the failure path — the failure-shape assertions are
+  what guard the #1009/#1004-class bugs.
+- The `harness` fixture is **async** so it binds the test's running event loop (the callables `await` on it; a
+  mismatched loop raises "got Future attached to a different loop"). Each test gets a fresh `tmp_path`, so
+  real-bootstrap state never leaks between tests.
+- A wiring drift (a renamed/added service) fails the fixture loudly via the bound-attribute assert, not as a confusing
+  mid-test `AttributeError`.
+
+Phase 2 — a `backend.ts` manifest gate that parses the `callable<[Args], Return>("name")` declarations into an artifact
+the pytest side consumes (so a renamed callable or changed default breaks CI) — is a forthcoming separate PR; it is not
+built yet.
+
 ### Frontend component tests — `@decky/api` event harness
 
 `src/test-utils/decky-api-mock.ts` exposes an in-memory event bus that `addEventListener` / `removeEventListener` route

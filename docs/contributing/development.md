@@ -68,6 +68,24 @@ Hypothesis is a dev-only dependency (pinned in `requirements-dev.txt`, compiled 
 (no timing flakes on shared runners) and a fixed example count. The example database is written to `.hypothesis/`, which
 is gitignored. See the CLAUDE.md "Testing" section for the convention on pinning a property that encodes an open bug.
 
+### Contract tests
+
+`tests/contract/` is a tier that crosses the frontend↔backend wire. Where the unit tests check each side against its own
+mocked idea of the other, the contract tier builds the **real** `Plugin` through the **real** `bootstrap()` +
+`wire_services()` (real settings dict, real SQLite + migrations, real file-store adapters, all under `tmp_path`) and
+drives the actual `main.py` callables **exactly as the frontend does** — positional, JSON-shaped arguments with the arg
+types declared in `src/api/backend.ts` (literal `None` where the TS type says `null`). The assertions pin the response
+_shape_ (canonical failure shape, discriminated-status unions, partial-success flags), not delegation. Only the
+outermost edges are faked: the RomM + SteamGridDB network transports, the Clock/UuidGen/Sleeper seams, `emit`, and the
+retry backoff. Run them like any other test:
+
+```bash
+python -m pytest tests/contract/ -q
+```
+
+A `backend.ts` manifest gate (Phase 2) that pins the frontend and backend to one parsed artifact is a forthcoming
+separate change. See the CLAUDE.md "Testing" section for the full contract-tier rules.
+
 Every backend feature or callable where testing makes sense should have unit tests covering:
 
 - **Happy path** — normal successful operation
