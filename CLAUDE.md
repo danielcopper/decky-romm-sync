@@ -196,7 +196,10 @@ basedpyright, and Sonar (analysis + coverage) so any future vendored package is 
 our code, we don't lint or coverage-track it, but we may patch it (e.g. fix self-imports broken by the move into
 `_vendor/`). Ruff's isort lists `_vendor` under `known-third-party` so the imports group alongside other third-party
 deps. `import-linter` enforces a `domain-stdlib-only` contract that forbids `domain` from importing `_vendor.*` (domain
-stays stdlib-only); no other layer forbids `_vendor`, since adapters legitimately import it.
+stays stdlib-only); no other layer forbids `_vendor`, since adapters legitimately import it. Every vendored package
+ships its upstream `LICENSE` (the release zip redistributes `_vendor/`, and MIT/BSD-style licenses require preserving
+the copyright notice on redistribution) and a provenance entry in `_vendor/README.md` — upstream URL, pinned
+version/commit, and the list of local patches — so updating a vendored dep is a deliberate diff, not "diff and pray".
 
 **Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`)
 and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter

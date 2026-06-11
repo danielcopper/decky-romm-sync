@@ -20,7 +20,6 @@ export default tseslint.config(
       ".worktrees",
       ".venv",
       "site",
-      "py_modules/vdf",
     ],
   },
   js.configs.recommended,

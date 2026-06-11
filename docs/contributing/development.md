@@ -155,7 +155,9 @@ py_modules/
   models/                            # Data shapes (TypedDicts/dataclasses) — independent of other layers
   lib/                               # Cross-cutting utilities (errors, list_result, iso_time, path_safety, late_binding, ...)
   _vendor/                           # Vendored third-party deps — not our code, only imported by adapters
+    README.md                        # Provenance per package: upstream URL, version/commit, local patches
     vdf/                             # Valve Data Format parser (Steam shortcuts.vdf)
+      LICENSE                        # Upstream MIT license — preserved on redistribution
 src/                                 # Frontend TypeScript
   index.tsx                          # Plugin entry, event listeners, QAM router
   components/                        # React components (QAM pages, game detail UI)
