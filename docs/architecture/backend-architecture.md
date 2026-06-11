@@ -350,7 +350,7 @@ Four CI-gated layers keep the dependency direction and the call-site rules from 
 [importlinter:contract:no-adapter-impl-in-services]
 type = forbidden
 source_modules = services
-forbidden_modules = adapters.romm.http, adapters.romm.romm_api, adapters.steam_config, ...
+forbidden_modules = adapters
 
 # Adapters must not import services
 [importlinter:contract:no-services-in-adapters]
@@ -395,6 +395,10 @@ modules = services.library, services.saves, services.playtime, ...
 ```
 
 Run with `PYTHONPATH=py_modules lint-imports` (or `mise run lint`). CI gates on this.
+
+The `service-independence` `modules` list is hand-enumerated, so `scripts/check_service_independence_contract.py`
+(bundled into `mise run lint` and gated in CI) derives the expected services from `py_modules/services/` and fails if
+the contract omits a service or carries a stale entry — keeping the list self-healing rather than silently rotting.
 
 ### 2. Cosmic Python call bans
 

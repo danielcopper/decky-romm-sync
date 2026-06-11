@@ -96,6 +96,10 @@ The `.importlinter` config enforces the layer boundary contracts:
 services may not call `datetime.now()` / `asyncio.sleep()` / `time.time()` / `time.monotonic()` / `uuid.uuid4()` /
 `random.*` directly — they inject the `Clock` / `Sleeper` / `UuidGen` Protocol instead.
 
+`mise run lint` (and CI) also runs `scripts/check_service_independence_contract.py`, which derives the expected service
+list from `py_modules/services/` and fails if `.importlinter`'s `service-independence` contract drifts — omitting a
+service or carrying a stale entry — keeping the hand-maintained `modules` list self-healing.
+
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Code Quality

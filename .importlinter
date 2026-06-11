@@ -7,21 +7,20 @@ root_packages =
     models
 include_external_packages = True
 
-# Services must not import concrete adapters (protocols are OK).
+# Services must not import concrete adapters (Protocols are OK). Forbid the
+# ``adapters`` root package wholesale, not a hand-enumerated denylist: services
+# depend only on Protocols (defined in ``services/protocols/``), so they have
+# zero legitimate adapter imports. A denylist rots — the old 8-module list had
+# silently stopped covering ``adapters.repositories.*`` and ~15 other modules
+# (#985). The completeness of the sibling ``service-independence`` list is
+# guarded by ``scripts/check_service_independence_contract.py``.
 [importlinter:contract:no-adapter-impl-in-services]
 name = Services must not import concrete adapter implementations
 type = forbidden
 source_modules =
     services
 forbidden_modules =
-    adapters.romm.http
-    adapters.romm.romm_api
-    adapters.steam_config
-    adapters.steamgriddb
-    adapters.persistence
-    adapters.retrodeck_paths
-    adapters.retroarch_config
-    adapters.retroarch_core_info
+    adapters
 
 # Adapters must not import services
 [importlinter:contract:no-services-in-adapters]
@@ -116,6 +115,7 @@ name = Services must not import other services
 type = independence
 modules =
     services.achievements
+    services.active_core_resolver
     services.artwork
     services.connection
     services.cores

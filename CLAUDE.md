@@ -98,6 +98,9 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Aggregate field-assignment ban**: `scripts/check_aggregate_field_assignment.py` — AST check that fails CI if
   `services/` assigns `aggregate.field = value` on a `@cosmic_aggregate` root (mutation must go through verb-named
   methods). Enforces the Aggregates `[CP]` rule.
+- **Service-independence contract self-check**: `scripts/check_service_independence_contract.py` — derives the expected
+  service list from `py_modules/services/` and fails CI if `.importlinter`'s `service-independence` contract omits a
+  service or carries a stale entry, keeping the hand-maintained `modules` list self-healing.
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
 ## Architecture — Cosmic Python rules
