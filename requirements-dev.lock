@@ -8,6 +8,8 @@ coverage==7.14.1
     # via pytest-cov
 grimp==3.14
     # via import-linter
+hypothesis==6.155.2
+    # via -r requirements-dev.txt
 import-linter==2.11
     # via -r requirements-dev.txt
 iniconfig==2.3.0
@@ -41,6 +43,8 @@ rich==15.0.0
     # via import-linter
 ruff==0.15.16
     # via -r requirements-dev.txt
+sortedcontainers==2.4.0
+    # via hypothesis
 typing-extensions==4.15.0
     # via
     #   grimp

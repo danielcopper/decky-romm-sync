@@ -6,6 +6,18 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from hypothesis import HealthCheck, settings
+
+# CI-safe hypothesis profile: deadline=None avoids timing flakes on shared CI
+# runners; 200 examples balances coverage against suite runtime. Loaded by
+# default for every property test (#1028).
+settings.register_profile(
+    "ci",
+    deadline=None,
+    max_examples=200,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+settings.load_profile("ci")
 
 # Mirror Decky's sys.path setup: add py_modules/ so `from lib.xxx import` works
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

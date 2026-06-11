@@ -369,6 +369,24 @@ Every backend feature or callable where testing makes sense MUST have unit tests
 Tests mirror the source structure: `tests/services/`, `tests/adapters/`, `tests/domain/`, `tests/models/`, `tests/lib/`.
 Each test file maps 1:1 to a source module. Shared mocks live in `tests/conftest.py`.
 
+### Property-based tests — pure decision kernels (hypothesis)
+
+The pure save-sync decision kernels (`domain/sync_action.py`, `domain/save_path.py`, `domain/iso_time.py`) carry a
+property-test tier on top of the hand-enumerated cases, in `tests/domain/test_*_property.py`. Properties state the
+safety invariant directly (no destructive action without a recovery source; decisions stable under timestamp-format
+variation; canonical-target grouping never mixes targets; replay determinism) and Hypothesis searches a generated input
+space for a counterexample. `hypothesis` is a **dev-only** dependency (`requirements-dev.txt` → `requirements-dev.lock`
+via `mise run lock-update`); it never ships in the plugin. A CI-safe profile in `tests/conftest.py` sets `deadline=None`
+and a fixed `max_examples`; the example DB writes to gitignored `.hypothesis/`.
+
+**Convention — pinning a property that encodes an open bug:** a property states the TRUE invariant, never a watered-down
+one. If the invariant's fix is still open, the property FAILS today — pin it
+`@pytest.mark.xfail(strict=True,
+reason="#<issue>: <one-line>")`. `strict=True` means that the day the fix lands the
+property passes → the run reports XPASS → CI fails → the marker must be removed, and the property then guards against
+regression. So a property never gets weakened to go green: it either passes live (a regression guard) or is
+`xfail`-pinned to its open bug.
+
 ### Frontend component tests — `@decky/api` event harness
 
 `src/test-utils/decky-api-mock.ts` exposes an in-memory event bus that `addEventListener` / `removeEventListener` route

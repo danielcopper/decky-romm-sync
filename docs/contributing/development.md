@@ -52,6 +52,22 @@ with each test file mapping 1:1 to a source module. Shared mocks live in `tests/
 Frontend component tests run with `mise run test:frontend` (`pnpm test`); see the CLAUDE.md "Frontend component tests"
 section for the `@decky/api` event harness.
 
+### Property-based tests
+
+The pure save-sync decision kernels (`domain/sync_action.py`, `domain/save_path.py`, `domain/iso_time.py`) carry an
+extra tier of [Hypothesis](https://hypothesis.readthedocs.io/) property tests (`tests/domain/test_*_property.py`)
+alongside the hand-enumerated cases. They state the safety invariants directly and exercise them across a generated
+input space. Run them like any other test:
+
+```bash
+python -m pytest tests/domain/test_sync_action_property.py tests/domain/test_save_path_property.py -q
+```
+
+Hypothesis is a dev-only dependency (pinned in `requirements-dev.txt`, compiled into `requirements-dev.lock` via
+`mise run lock-update` — it never ships in the plugin). A CI-safe profile in `tests/conftest.py` sets `deadline=None`
+(no timing flakes on shared runners) and a fixed example count. The example database is written to `.hypothesis/`, which
+is gitignored. See the CLAUDE.md "Testing" section for the convention on pinning a property that encodes an open bug.
+
 Every backend feature or callable where testing makes sense should have unit tests covering:
 
 - **Happy path** — normal successful operation
