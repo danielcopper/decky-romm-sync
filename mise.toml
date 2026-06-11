@@ -12,6 +12,10 @@ _.python.venv = { path = ".venv", create = true }
 description = "Install JS and Python dependencies"
 run = ["pnpm install", "uv pip install -r requirements-dev.txt", "git config core.hooksPath .githooks"]
 
+[tasks."worktree:new"]
+description = "Create .worktrees/<type>/<slug>, trust its mise config, install deps so tooling/LSP work immediately (args: <type> <slug> [base=main])"
+run = "bash scripts/worktree-new.sh"
+
 [tasks.build]
 description = "Build frontend (dev: with source maps)"
 run = "pnpm build:dev"
