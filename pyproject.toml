@@ -32,7 +32,7 @@ reportPrivateUsage = "none"
 [tool.ruff]
 target-version = "py311"
 line-length = 120
-extend-exclude = ["py_modules/_vendor", "scripts"]
+extend-exclude = ["py_modules/_vendor", "./scripts"]
 
 [tool.ruff.lint]
 select = [
