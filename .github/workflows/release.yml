@@ -58,6 +58,12 @@ jobs:
         run: |
           mkdir -p /tmp/decky-cli
           curl -L -o /tmp/decky-cli/decky "https://github.com/SteamDeckHomebrew/cli/releases/download/0.0.8/decky-linux-x86_64"
+          # Pin the Decky CLI binary by SHA-256: it runs under sudo to build the
+          # zip every user installs, so it is the pipeline's highest-leverage
+          # supply-chain link. The hash is GitHub's own asset digest for tag 0.0.8
+          # (gh api repos/SteamDeckHomebrew/cli/releases). A re-tagged or swapped
+          # asset now fails the build instead of poisoning a release.
+          echo "6777e356508c1ce887f8e61b0fa4954bb48b32e6d97341eef68ea4e0d6ead9a0  /tmp/decky-cli/decky" | sha256sum -c -
           chmod +x /tmp/decky-cli/decky
           echo "/tmp/decky-cli" >> $GITHUB_PATH
 
@@ -81,13 +87,26 @@ jobs:
         run: |
           BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
           echo "Checking $BUILT_ZIP for required entries..."
-          for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/rom-launcher; do
+          # bootstrap RAISES without 001_initial.sql (plugin fully inert), and the
+          # default registries' packaging rides on Decky-CLI defaults/ handling —
+          # the most fatal omissions, previously uncovered by this smoke test.
+          for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/rom-launcher \
+              py_modules/db/migrations/001_initial.sql py_modules/db/migrations/002_add_emulator_override.sql \
+              defaults/core_defaults.json defaults/bios_registry.json; do
             if ! unzip -l "$BUILT_ZIP" | grep -qE "/$required\b"; then
               echo "ERROR: release zip is missing $required"
               unzip -l "$BUILT_ZIP"
               exit 1
             fi
           done
+          # bin/rom-launcher must stay executable — Steam launches it directly,
+          # and a Decky CLI version bump could silently drop the exec bit.
+          LAUNCHER_PERMS=$(unzip -Z "$BUILT_ZIP" | grep -E '/bin/rom-launcher$' | awk '{print $1}')
+          if [[ "$LAUNCHER_PERMS" != *x* ]]; then
+            echo "ERROR: bin/rom-launcher is not executable in the zip (perms: '$LAUNCHER_PERMS')"
+            unzip -Z "$BUILT_ZIP" | grep -E '/bin/rom-launcher$' || true
+            exit 1
+          fi
           if unzip -l "$BUILT_ZIP" | grep -qE '\.map\b'; then
             echo "ERROR: release zip contains source maps — should have been stripped"
             exit 1
