@@ -26,6 +26,7 @@ from domain.rom_install import RomInstall
 from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 from lib.errors import error_response
 from lib.list_result import ErrorCode
+from lib.path_safety import PathTraversalError, safe_join
 
 if TYPE_CHECKING:
     import logging
@@ -183,7 +184,29 @@ class DownloadService:
         platform_fs_slug = rom_detail.get("platform_fs_slug")
         system = self._resolve_system(platform_slug, platform_fs_slug)
 
-        roms_dir = os.path.join(self._retrodeck_paths.roms_path(), system)
+        roms_path = self._retrodeck_paths.roms_path()
+        try:
+            # ``system`` may be an unmapped server slug passed through verbatim
+            # (ADR-0010). Validate it stays under roms_path BEFORE any make_dirs
+            # so a slug like "../../etc" cannot create or write outside roms.
+            roms_dir = safe_join(roms_path, system)
+        except PathTraversalError as e:
+            self._download_in_progress.discard(rom_id)
+            self._logger.error(f"Rejected download for ROM {rom_id}: unsafe platform slug {system!r}: {e}")
+            await self._emit(
+                "download_failed",
+                {
+                    "rom_id": rom_id,
+                    "rom_name": rom_detail.get("name", ""),
+                    "platform_name": rom_detail.get("platform_name", platform_slug),
+                    "error_message": "Server sent an unsafe platform path — download aborted",
+                },
+            )
+            return {
+                "success": False,
+                "reason": "path_traversal",
+                "message": "Server sent an unsafe platform path — download aborted",
+            }
         file_name, files_missing = resolve_local_file_name(rom_detail)
         if files_missing:
             self._logger.warning(

@@ -1983,6 +1983,59 @@ class TestPathTraversalFsName:
         assert ".." not in queue_entry["file_name"]
 
 
+class TestPathTraversalPlatformSlug:
+    """#967: an unmapped server platform slug must not escape roms_path."""
+
+    @pytest.mark.asyncio
+    async def test_traversal_slug_rejected_before_make_dirs(self, plugin, tmp_path):
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        roms_root = tmp_path / "retrodeck" / "roms"
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(roms_root),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        rom_detail = {
+            "id": 77,
+            "name": "Evil ROM",
+            "fs_name": "game.z64",
+            "fs_size_bytes": 1024,
+            # Unmapped slug passes through resolve_system verbatim (ADR-0010).
+            "platform_slug": "../../etc",
+            "platform_name": "Nintendo 64",
+        }
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        # Track make_dirs to prove the slug is rejected BEFORE any directory work.
+        made_dirs: list[str] = []
+        plugin._download_service._download_file_store.make_dirs = lambda p: made_dirs.append(p)
+
+        from unittest.mock import patch
+
+        with patch.object(plugin._romm_api, "get_rom", return_value=rom_detail):
+            result = await plugin._download_service.start_download(77)
+
+        # Canonical path_traversal failure shape.
+        assert result["success"] is False
+        assert result["reason"] == "path_traversal"
+        assert "message" in result
+        # Rejected before any make_dirs.
+        assert made_dirs == []
+        # No directory created outside the roms root.
+        escape_dir = tmp_path / "etc"
+        assert not escape_dir.exists()
+        # The rom is no longer marked in-progress (cleaned up on rejection).
+        assert 77 not in plugin._download_service._download_in_progress
+        # download_failed event fired so the UI doesn't hang on "downloading".
+        failed = [c for c in decky.emit.call_args_list if c[0][0] == "download_failed"]
+        assert len(failed) == 1
+        assert failed[0][0][1]["rom_id"] == 77
+
+
 class TestCleanupPartialDownload:
     """Tests for _cleanup_partial_download — all paths."""
 
@@ -2125,6 +2178,144 @@ class TestDoDownloadZipFailure:
         assert plugin._download_service._download_queue[66]["status"] == "failed"
         # .zip.tmp should be cleaned up
         assert not os.path.exists(target_path + ".zip.tmp")
+
+
+class TestDoDownloadPostDecodeTraversal:
+    """#968: a ZIP member that passes the ZIP-slip check but decodes to a traversal."""
+
+    @pytest.mark.asyncio
+    async def test_decoded_traversal_aborts_cleans_up_and_emits(self, plugin, tmp_path):
+        import zipfile as zf
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "psx"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "Evil.zip")
+
+        # A ZIP whose member name is a single literal basename with NO real
+        # separator (the %2e/%2f are literal chars), so it passes the pre-decode
+        # ZIP-slip realpath check and extracts inside the dir — plus a legit
+        # member so we can prove the already-extracted file is cleaned up.
+        zip_content_path = tmp_path / "source.zip"
+        with zf.ZipFile(str(zip_content_path), "w") as z:
+            z.writestr("legit.bin", b"\x00" * 50)
+            z.writestr("%2e%2e%2fevil.sh", b"payload")
+        zip_bytes = zip_content_path.read_bytes()
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(zip_bytes)
+
+        rom_detail = {
+            "id": 88,
+            "name": "Evil Multi",
+            "fs_name": "Evil.zip",
+            "fs_name_no_ext": "Evil",
+            "platform_slug": "psx",
+            "platform_name": "PlayStation",
+            "has_multiple_files": True,
+        }
+
+        _seed_rom(plugin._uow, 88, platform_slug="psx")
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[88] = {"rom_id": 88, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(88, rom_detail, target_path, "psx", "Evil.zip")
+
+        # The traversal target must NOT exist anywhere outside the extraction dir.
+        assert not (roms_dir / "evil.sh").exists()
+        assert not (tmp_path / "retrodeck" / "roms" / "evil.sh").exists()
+        assert not (tmp_path / "evil.sh").exists()
+        # Already-extracted members are cleaned up — no half-installed ROM dir.
+        assert not (roms_dir / "Evil").exists()
+        assert not (roms_dir / "Evil.zip").is_dir()
+        # .zip.tmp cleaned up.
+        assert not os.path.exists(target_path + ".zip.tmp")
+        # Nothing persisted.
+        assert plugin._uow.rom_installs.get(88) is None
+        # Queue marked failed.
+        assert plugin._download_service._download_queue[88]["status"] == "failed"
+        # download_failed fired (UI doesn't hang); offending name surfaced.
+        failed = [c for c in decky.emit.call_args_list if c[0][0] == "download_failed"]
+        assert len(failed) == 1
+        assert failed[0][0][1]["rom_id"] == 88
+        assert "evil.sh" in failed[0][0][1]["error_message"]
+        # No download_complete.
+        assert not [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
+
+    @pytest.mark.asyncio
+    async def test_legit_multi_file_subdir_still_extracts(self, plugin, tmp_path):
+        """The #968 fix must not break a legitimate nested-subdir multi-file ROM."""
+        import zipfile as zf
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "switch"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "Game.nsp")
+
+        # Real nested layout with URL-encoded basenames inside a real subdir.
+        zip_content_path = tmp_path / "source.zip"
+        with zf.ZipFile(str(zip_content_path), "w") as z:
+            z.writestr("Game%20Base.nsp", b"\x00" * 100)
+            z.writestr("update/Game%20Update.nsp", b"\x00" * 50)
+        zip_bytes = zip_content_path.read_bytes()
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(zip_bytes)
+
+        rom_detail = {
+            "id": 91,
+            "name": "Game",
+            "fs_name": "Game.nsp",
+            "fs_name_no_ext": "Game",
+            "platform_slug": "switch",
+            "platform_name": "Nintendo Switch",
+            "has_multiple_files": True,
+        }
+
+        _seed_rom(plugin._uow, 91, platform_slug="switch")
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[91] = {"rom_id": 91, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(91, rom_detail, target_path, "switch", "Game.nsp")
+
+        # The encoded names decoded correctly (per-basename) and the install
+        # succeeded — the legit nested ROM is intact.
+        assert plugin._download_service._download_queue[91]["status"] == "completed"
+        install = plugin._uow.rom_installs.get(91)
+        assert install is not None
+        rom_dir = install.rom_dir
+        assert rom_dir is not None
+        assert os.path.exists(os.path.join(rom_dir, "Game Base.nsp"))
+        assert os.path.exists(os.path.join(rom_dir, "update", "Game Update.nsp"))
+        assert [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
 
 
 class TestDoDownloadFailureEmit:

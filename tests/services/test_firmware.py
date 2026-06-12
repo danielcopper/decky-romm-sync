@@ -512,6 +512,62 @@ class TestGetFirmwareStatusBiosAggregates:
         assert plat["server_count"] == 3
         assert plat["local_count"] == 1
 
+    @pytest.mark.asyncio
+    async def test_offline_fallback_skips_registry_entry_with_unsafe_firmware_path(self, plugin, fw, tmp_path):
+        """#966 NIT2: a poisoned registry/fallback ``firmware_path`` is skipped, not joined.
+
+        The registry read paths fall back to the server-supplied ``file_name``
+        when ``firmware_path`` is absent, so a traversal value must be dropped
+        (log-and-skip) rather than steering an ``exists()`` read outside the
+        BIOS sandbox.
+        """
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True, exist_ok=True)
+        (bios_dir / "good.bin").write_bytes(b"\x00" * 100)
+        # A file planted OUTSIDE the bios dir that the traversal would reach.
+        escape_target = tmp_path / "retrodeck" / "evil.bin"
+        escape_target.write_bytes(b"\x00" * 100)
+
+        fw._bios_registry = {
+            "platforms": {
+                "dc": {
+                    "good.bin": {"description": "Good", "required": True, "md5": "", "firmware_path": "good.bin"},
+                    # firmware_path absent → falls back to the (poisoned) file_name key.
+                    "../evil.bin": {"description": "Evil", "required": True, "md5": ""},
+                },
+            },
+        }
+        fw._bios_files_index = {
+            "good.bin": {"description": "Good", "required": True, "md5": "", "platform": "dc"},
+        }
+        fw._loop = asyncio.get_event_loop()
+
+        # Track exists() calls so we can prove none escapes the bios dir.
+        real_exists = fw._firmware_file_store.exists
+        checked: list[str] = []
+
+        def _tracking_exists(path):
+            checked.append(path)
+            return real_exists(path)
+
+        fw._firmware_file_store.exists = _tracking_exists
+
+        with (
+            patch.object(plugin._romm_api, "list_firmware", side_effect=Exception("offline")),
+            patch.object(fw, "_retrodeck_paths", FakeRetroDeckPaths(bios=str(bios_dir))),
+        ):
+            result = await fw.get_firmware_status()
+
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "dc")
+        file_names = {f["file_name"] for f in plat["files"]}
+        # The poisoned entry was dropped; only the clean file remains.
+        assert "../evil.bin" not in file_names
+        assert file_names == {"good.bin"}
+        # No exists() read was steered outside the bios sandbox.
+        real_bios = os.path.realpath(str(bios_dir))
+        for path in checked:
+            assert os.path.realpath(path).startswith(real_bios + os.sep)
+
 
 class TestDownloadFirmware:
     @pytest.mark.asyncio
@@ -577,6 +633,49 @@ class TestDownloadFirmware:
 
         assert result["success"] is False
         assert "reason" in result
+
+    @pytest.mark.asyncio
+    async def test_rejects_traversal_in_server_file_name(self, plugin, fw, tmp_path):
+        """#966: a server ``file_name`` of ``../evil.desktop`` is rejected, nothing written outside BIOS."""
+        bios_dir = tmp_path / "retrodeck" / "bios"
+        bios_dir.mkdir(parents=True)
+        # The traversal target lives a sibling of the bios dir.
+        escape_target = tmp_path / "retrodeck" / "evil.desktop"
+
+        fw_detail = {
+            "id": 10,
+            "file_name": "../evil.desktop",
+            "file_path": "bios/n64/evil.desktop",
+            "file_size_bytes": 10,
+            "md5_hash": "",
+        }
+
+        fw._retrodeck_paths = FakeRetroDeckPaths(bios=str(bios_dir))
+        fw._loop = asyncio.get_event_loop()
+
+        download_called = []
+
+        def fake_download(firmware_id, filename, dest):
+            download_called.append(dest)
+            with open(dest, "wb") as f:
+                f.write(b"evil")
+
+        with (
+            patch.object(plugin._romm_api, "get_firmware", return_value=fw_detail),
+            patch.object(plugin._romm_api, "download_firmware", side_effect=fake_download),
+        ):
+            result = await fw.download_firmware(10)
+
+        # Canonical path_traversal failure shape.
+        assert result["success"] is False
+        assert result["reason"] == "path_traversal"
+        assert "message" in result
+        # No download was ever attempted (rejected before make_dirs / fetch).
+        assert download_called == []
+        # Nothing written outside the BIOS directory.
+        assert not escape_target.exists()
+        # No BIOS record persisted.
+        assert plugin._uow.bios_files.get("n64", "../evil.desktop") is None
 
 
 class TestDownloadAllFirmware:

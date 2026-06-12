@@ -210,6 +210,16 @@ arrive as single-file downloads that never reach the extraction path, so they ge
 
 Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
 
+**Server-supplied paths are validated, fail-stop on traversal**: every server-supplied path component — the firmware
+`file_name`, the ROM platform slug, and post-extraction URL-decoded ZIP member names — is checked through
+`lib/path_safety` (`safe_join` for realpath containment, `safe_path_component` for single-component names) before any
+write. A traversal attempt (`../`, an absolute path, or a `%2e%2e%2f`-encoded ZIP member that decodes to `../` after the
+pre-decode ZIP-slip check passes) **aborts the whole download** rather than skipping the offending entry:
+already-extracted members are cleaned up (no half-installed ROM), a canonical
+`{"success": false, "reason": "path_traversal", "message": ...}` failure is returned, and the `download_failed` event
+fires so the UI doesn't hang on "downloading". Firmware downloads surface the same canonical failure from
+`download_firmware`.
+
 ### Adapters (`py_modules/adapters/`)
 
 Adapters own all I/O and implement the Protocols defined in `services/protocols/`. Selected adapters:

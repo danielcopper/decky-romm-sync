@@ -2,7 +2,111 @@
 
 import os
 
-from lib.path_safety import is_safe_rom_path
+import pytest
+
+from lib.path_safety import (
+    PathTraversalError,
+    is_safe_rom_path,
+    safe_join,
+    safe_path_component,
+)
+
+
+class TestSafePathComponent:
+    def test_accepts_clean_name(self):
+        assert safe_path_component("game.z64") == "game.z64"
+
+    def test_accepts_name_with_spaces_and_parens(self):
+        # Decoded ZIP basenames commonly carry these — must stay valid.
+        assert safe_path_component("Final Fantasy VII (USA).cue") == "Final Fantasy VII (USA).cue"
+
+    def test_rejects_parent_dir(self):
+        with pytest.raises(PathTraversalError):
+            safe_path_component("..")
+
+    def test_rejects_current_dir(self):
+        with pytest.raises(PathTraversalError):
+            safe_path_component(".")
+
+    def test_rejects_empty(self):
+        with pytest.raises(PathTraversalError):
+            safe_path_component("")
+
+    def test_rejects_nul_byte(self):
+        with pytest.raises(PathTraversalError):
+            safe_path_component("evil\x00.sh")
+
+    def test_rejects_absolute_path(self):
+        with pytest.raises(PathTraversalError):
+            safe_path_component("/etc/passwd")
+
+    def test_rejects_separator(self):
+        # A single component must stay a single component.
+        with pytest.raises(PathTraversalError):
+            safe_path_component("a/b")
+
+    def test_rejects_decoded_traversal(self):
+        # ``%2e%2e%2fevil.sh`` decodes to this — the #968 attack vector.
+        with pytest.raises(PathTraversalError):
+            safe_path_component("../evil.sh")
+
+    def test_rejects_embedded_traversal_segment(self):
+        with pytest.raises(PathTraversalError):
+            safe_path_component("sub/../../evil")
+
+
+class TestSafeJoin:
+    def test_accepts_legit_single_component(self, tmp_path):
+        base = str(tmp_path / "bios")
+        os.makedirs(base)
+        result = safe_join(base, "scph5501.bin")
+        assert result == os.path.realpath(os.path.join(base, "scph5501.bin"))
+
+    def test_accepts_legit_multi_component(self, tmp_path):
+        # The registry ``dc/dc_boot.bin`` shape must pass.
+        base = str(tmp_path / "bios")
+        os.makedirs(base)
+        result = safe_join(base, "dc/dc_boot.bin")
+        assert result == os.path.realpath(os.path.join(base, "dc", "dc_boot.bin"))
+
+    def test_rejects_parent_traversal(self, tmp_path):
+        base = str(tmp_path / "bios")
+        os.makedirs(base)
+        with pytest.raises(PathTraversalError):
+            safe_join(base, "../evil.desktop")
+
+    def test_rejects_deep_traversal(self, tmp_path):
+        base = str(tmp_path / "retrodeck" / "roms")
+        os.makedirs(base)
+        with pytest.raises(PathTraversalError):
+            safe_join(base, "../../etc/passwd")
+
+    def test_rejects_absolute_second_arg(self, tmp_path):
+        # os.path.join resets to an absolute part — must be caught.
+        base = str(tmp_path / "bios")
+        os.makedirs(base)
+        with pytest.raises(PathTraversalError):
+            safe_join(base, "/home/deck/.config/autostart/evil.desktop")
+
+    def test_rejects_equality_with_base(self, tmp_path):
+        # Strictly-below semantics: resolving exactly to base is rejected.
+        base = str(tmp_path / "bios")
+        os.makedirs(base)
+        with pytest.raises(PathTraversalError):
+            safe_join(base, ".")
+
+    def test_rejects_symlink_escape(self, tmp_path):
+        # A symlink planted UNDER base pointing OUTSIDE must not be a usable
+        # escape — realpath resolves it, lexical normalization would not.
+        base = tmp_path / "bios"
+        base.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.bin").write_bytes(b"x")
+        # base/link -> ../outside
+        (base / "link").symlink_to(outside)
+        with pytest.raises(PathTraversalError):
+            safe_join(str(base), "link/secret.bin")
 
 
 class TestIsSafeRomPath:

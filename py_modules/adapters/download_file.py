@@ -15,6 +15,8 @@ import shutil
 import urllib.parse
 import zipfile
 
+from lib.path_safety import safe_path_component
+
 
 class DownloadFileAdapter:
     """Synchronous filesystem operations for ROM download files.
@@ -95,15 +97,27 @@ class DownloadFileAdapter:
 
         Walks bottom-up so nested encoded directories are handled
         correctly. A no-op when the decoded name equals the original.
+
+        ``os.walk`` yields each name as a single basename, so a clean
+        decode always stays a single component (e.g. ``Game%20Title.cue``
+        → ``Game Title.cue``). A crafted member like ``%2e%2e%2fevil.sh``
+        passes the pre-decode ZIP-slip check as one safe component, then
+        decodes to ``../evil.sh`` — a traversal. ``safe_path_component``
+        catches that: a decoded name that is not a single safe component
+        raises :class:`PathTraversalError` and the whole extraction
+        aborts (fail-stop) rather than ``os.replace``-ing the file outside
+        the extraction directory.
         """
         for root, dirs, files in os.walk(directory, topdown=False):
             for fname in files:
                 decoded = urllib.parse.unquote(fname)
                 if decoded != fname:
+                    safe_path_component(decoded)
                     os.replace(os.path.join(root, fname), os.path.join(root, decoded))
             for dname in dirs:
                 decoded = urllib.parse.unquote(dname)
                 if decoded != dname:
+                    safe_path_component(decoded)
                     os.replace(os.path.join(root, dname), os.path.join(root, decoded))
 
     def scan_files_with_sizes(self, directory: str) -> list[tuple[str, int]]:

@@ -22,6 +22,7 @@ from domain.bios_file import BiosFile
 from domain.firmware_cache import FirmwareCacheEntry
 from lib.errors import error_response
 from lib.list_result import ErrorCode
+from lib.path_safety import PathTraversalError, safe_join
 
 if TYPE_CHECKING:
     import asyncio
@@ -155,13 +156,77 @@ class FirmwareService:
         Uses firmware_path from bios_registry.json for correct subdirectory
         placement (e.g. dc/dc_boot.bin). Falls back to flat in bios root
         for files not in the registry.
+
+        Both branches go through ``safe_join`` so a server-supplied
+        ``file_name`` (and, defensively, the static registry path) cannot
+        escape the BIOS directory via ``..`` or an absolute path. Raises
+        :class:`PathTraversalError` on an escape attempt — the write path
+        (``download_firmware``) turns that into a canonical failure; the
+        read paths skip the poisoned entry.
         """
         bios_base = self._retrodeck_paths.bios_path()
         file_name = firmware.get("file_name", "")
         reg_entry = self.bios_files_index.get(file_name)
         if reg_entry and reg_entry.get("firmware_path"):
-            return os.path.join(bios_base, reg_entry["firmware_path"])
-        return os.path.join(bios_base, file_name)
+            return safe_join(bios_base, reg_entry["firmware_path"])
+        return safe_join(bios_base, file_name)
+
+    def _safe_firmware_dest_path(self, firmware) -> str | None:
+        """Read-path wrapper for ``_firmware_dest_path`` — ``None`` on a poisoned entry.
+
+        The status queries (``check_platform_bios``, the System-page group)
+        only need to know whether a firmware file is downloaded; a server
+        entry whose ``file_name`` attempts path traversal cannot be on
+        disk, so it is logged and dropped from the listing instead of
+        crashing the whole panel. The write path keeps the raising
+        ``_firmware_dest_path`` so a download attempt fails closed.
+        """
+        try:
+            return self._firmware_dest_path(firmware)
+        except PathTraversalError as e:
+            self._logger.warning(f"Skipping firmware with unsafe file name: {e}")
+            return None
+
+    def _safe_registry_dest_path(self, firmware_path: str) -> str | None:
+        """Containment-check a registry-relative BIOS path — ``None`` on a poisoned entry.
+
+        The registry read paths (``_group_registry_firmware`` and the
+        offline System-page fallback) resolve a ``firmware_path`` that
+        falls back to the server-supplied ``file_name`` when absent, so the
+        raw join can be steered outside the BIOS directory by a compromised
+        server. These are existence-check reads (not writes), so a rejected
+        path is logged and skipped — the panel stays up minus the poisoned
+        entry, mirroring ``_safe_firmware_dest_path``.
+        """
+        bios_base = self._retrodeck_paths.bios_path()
+        try:
+            return safe_join(bios_base, firmware_path)
+        except PathTraversalError as e:
+            self._logger.warning(f"Skipping registry firmware with unsafe path: {e}")
+            return None
+
+    def _build_firmware_status_items(self, firmware_iter) -> list[dict[str, Any]]:
+        """Build ``collect_firmware_status`` items, dropping traversal-poisoned entries.
+
+        Each item carries the resolved ``dest`` and its ``downloaded``
+        flag. A firmware entry whose ``file_name`` fails the path-safety
+        check resolves to ``None`` and is skipped (logged in
+        ``_safe_firmware_dest_path``) so a single malicious entry cannot
+        crash the status query.
+        """
+        items: list[dict[str, Any]] = []
+        for fw in firmware_iter:
+            dest = self._safe_firmware_dest_path(fw)
+            if dest is None:
+                continue
+            items.append(
+                {
+                    "file_name": fw.get("file_name", ""),
+                    "downloaded": self._firmware_file_store.exists(dest),
+                    "dest": dest,
+                }
+            )
+        return items
 
     # ── Firmware list cache ─────────────────────────────────
 
@@ -295,15 +360,9 @@ class FirmwareService:
         for slug in fw_slugs:
             registry_platform.update(self._bios_registry.get("platforms", {}).get(slug, {}))
 
-        items = [
-            {
-                "file_name": fw.get("file_name", ""),
-                "downloaded": self._firmware_file_store.exists(self._firmware_dest_path(fw)),
-                "dest": self._firmware_dest_path(fw),
-            }
-            for fw in self._firmware_cache
-            if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-        ]
+        items = self._build_firmware_status_items(
+            fw for fw in self._firmware_cache if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
+        )
         files = collect_firmware_status(items, registry_platform, active_core_so)
 
         if not files:
@@ -336,9 +395,11 @@ class FirmwareService:
         platforms_map = {}
         for fw in firmware_list:
             platform_slug = firmware_paths.parse_firmware_slug(fw.get("file_path", "")) or "unknown"
+            dest = self._safe_firmware_dest_path(fw)
+            if dest is None:
+                continue
             if platform_slug not in platforms_map:
                 platforms_map[platform_slug] = {"platform_slug": platform_slug, "files": []}
-            dest = self._firmware_dest_path(fw)
             platforms_map[platform_slug]["files"].append(
                 {
                     "id": fw.get("id"),
@@ -352,14 +413,15 @@ class FirmwareService:
 
     def _group_registry_firmware(self):
         """Build platform map from bios registry (offline fallback)."""
-        bios_base = self._retrodeck_paths.bios_path()
         platforms_map = {}
         for reg_slug, reg_files in self._bios_registry.get("platforms", {}).items():
             if reg_slug not in platforms_map:
                 platforms_map[reg_slug] = {"platform_slug": reg_slug, "files": []}
             for file_name, reg_entry in reg_files.items():
                 firmware_path = reg_entry.get("firmware_path", file_name)
-                dest = os.path.join(bios_base, firmware_path)
+                dest = self._safe_registry_dest_path(firmware_path)
+                if dest is None:
+                    continue
                 platforms_map[reg_slug]["files"].append(
                     {
                         "id": None,
@@ -515,7 +577,15 @@ class FirmwareService:
             return error_response(e)
 
         file_name = fw.get("file_name", "")
-        dest = self._firmware_dest_path(fw)
+        try:
+            dest = self._firmware_dest_path(fw)
+        except PathTraversalError as e:
+            self._logger.error(f"Rejected firmware with unsafe file name {file_name!r}: {e}")
+            return {
+                "success": False,
+                "reason": "path_traversal",
+                "message": "Server sent an unsafe firmware file name — download aborted",
+            }
         tmp_path = dest + ".tmp"
 
         try:
@@ -558,8 +628,8 @@ class FirmwareService:
         downloaded = 0
         errors = []
         for fw in platform_firmware:
-            dest = self._firmware_dest_path(fw)
-            if self._firmware_file_store.exists(dest):
+            dest = self._safe_firmware_dest_path(fw)
+            if dest is not None and self._firmware_file_store.exists(dest):
                 continue
             result = await self.download_firmware(fw["id"])
             if result.get("success"):
@@ -586,8 +656,8 @@ class FirmwareService:
         downloaded = 0
         errors = []
         for fw in platform_firmware:
-            dest = self._firmware_dest_path(fw)
-            if self._firmware_file_store.exists(dest):
+            dest = self._safe_firmware_dest_path(fw)
+            if dest is not None and self._firmware_file_store.exists(dest):
                 continue
             result = await self.download_firmware(fw["id"])
             if result.get("success"):
@@ -647,32 +717,27 @@ class FirmwareService:
 
         try:
             firmware_list = await self._loop.run_in_executor(None, self._get_firmware_list)
-            items = [
-                {
-                    "file_name": fw.get("file_name", ""),
-                    "downloaded": self._firmware_file_store.exists(self._firmware_dest_path(fw)),
-                    "dest": self._firmware_dest_path(fw),
-                }
-                for fw in firmware_list
-                if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
-            ]
+            items = self._build_firmware_status_items(
+                fw for fw in firmware_list if firmware_paths.parse_firmware_slug(fw.get("file_path", "")) in fw_slugs
+            )
             files = collect_firmware_status(items, registry_platform, active_core_so)
         except Exception:
             if not registry_platform:
                 return {
                     "needs_bios": False,
                 }
-            bios_base = self._retrodeck_paths.bios_path()
-            registry_items = [
-                {
-                    "file_name": file_name,
-                    "downloaded": self._firmware_file_store.exists(
-                        os.path.join(bios_base, reg_entry.get("firmware_path", file_name))
-                    ),
-                    "dest": os.path.join(bios_base, reg_entry.get("firmware_path", file_name)),
-                }
-                for file_name, reg_entry in registry_platform.items()
-            ]
+            registry_items = []
+            for file_name, reg_entry in registry_platform.items():
+                dest = self._safe_registry_dest_path(reg_entry.get("firmware_path", file_name))
+                if dest is None:
+                    continue
+                registry_items.append(
+                    {
+                        "file_name": file_name,
+                        "downloaded": self._firmware_file_store.exists(dest),
+                        "dest": dest,
+                    }
+                )
             files = collect_firmware_status(registry_items, registry_platform, active_core_so)
 
         if not files:

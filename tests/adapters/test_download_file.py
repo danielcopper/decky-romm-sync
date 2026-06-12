@@ -244,6 +244,44 @@ class TestDecodeUrlEncodedNames:
         # Must not raise
         adapter.decode_url_encoded_names(str(tmp_path))
 
+    def test_rejects_decoded_traversal_member(self, adapter, tmp_path):
+        """#968: a ``%2e%2e%2f``-encoded member name fails-stop, file not moved out."""
+        from lib.path_safety import PathTraversalError
+
+        extract_dir = tmp_path / "extract"
+        extract_dir.mkdir()
+        # A single literal basename containing no real separator — it passed the
+        # pre-decode ZIP-slip check as one safe component. unquote() turns it
+        # into "../evil.sh".
+        encoded = "%2e%2e%2fevil.sh"
+        (extract_dir / encoded).write_text("payload")
+
+        with pytest.raises(PathTraversalError):
+            adapter.decode_url_encoded_names(str(extract_dir))
+
+        # The file was NOT moved outside the extraction dir.
+        assert not (tmp_path / "evil.sh").exists()
+        # The original encoded file is still present (no partial os.replace).
+        assert (extract_dir / encoded).exists()
+
+    def test_legit_multi_file_subdir_decodes_correctly(self, adapter, tmp_path):
+        """A real multi-file ROM with an encoded name inside a real subdir still extracts.
+
+        ``os.walk`` yields each name as a single basename, so a member inside a
+        real ``update/`` subfolder decodes per-basename and stays valid — the
+        #968 fix must not break legitimate nested ROM layouts.
+        """
+        extract_dir = tmp_path / "extract"
+        sub = extract_dir / "update"
+        sub.mkdir(parents=True)
+        (sub / "Zelda%20Update.nsp").write_bytes(b"\x00" * 10)
+        (extract_dir / "Zelda%20Base.nsp").write_bytes(b"\x00" * 10)
+
+        adapter.decode_url_encoded_names(str(extract_dir))
+
+        assert (extract_dir / "Zelda Base.nsp").exists()
+        assert (extract_dir / "update" / "Zelda Update.nsp").exists()
+
 
 class TestScanFilesWithSizes:
     def test_returns_paths_and_sizes(self, adapter, tmp_path):

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import urllib.parse
 
+from lib.path_safety import safe_path_component
+
 
 class FakeDownloadFileStore:
     """In-memory ``DownloadFileStore`` for tests.
@@ -145,10 +147,21 @@ class FakeDownloadFileStore:
             if not stored.startswith(prefix):
                 continue
             rel = stored[len(prefix) :]
-            decoded = urllib.parse.unquote(rel)
-            if decoded != rel:
-                new_path = prefix + decoded
-                self.files[new_path] = self.files.pop(stored)
+            # The real adapter walks the tree and decodes each name as a single
+            # basename, so a legitimate multi-component ``rel`` (e.g.
+            # ``update/Game%20.bin``) is decoded segment-by-segment. Mirror that
+            # here — decode + safe-check each component — so the fake is not
+            # spuriously stricter than the adapter on legit nested layouts,
+            # while still failing-stop on a ``%2e%2e%2f`` → ``..`` segment.
+            segments = rel.split("/")
+            decoded_segments = [urllib.parse.unquote(seg) for seg in segments]
+            if decoded_segments == segments:
+                continue
+            for seg, decoded_seg in zip(segments, decoded_segments, strict=True):
+                if decoded_seg != seg:
+                    safe_path_component(decoded_seg)
+            new_path = prefix + "/".join(decoded_segments)
+            self.files[new_path] = self.files.pop(stored)
 
     def scan_files_with_sizes(self, directory: str) -> list[tuple[str, int]]:
         prefix = directory.rstrip("/") + "/"
