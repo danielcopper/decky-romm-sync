@@ -728,11 +728,11 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
     });
 
-    it("on error_code=version_error → calls setVersionError and stays offline", async () => {
+    it("on reason=version_error → calls setVersionError and stays offline", async () => {
       vi.mocked(backend.testConnection).mockResolvedValue({
         success: false,
         message: "Update required",
-        error_code: "version_error",
+        reason: "version_error",
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();

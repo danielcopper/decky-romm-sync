@@ -24,9 +24,12 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import ContentDir
+from lib.list_result import ErrorCode
 from services.saves._messages import (
     DEVICE_NOT_REGISTERED,
+    DEVICE_NOT_REGISTERED_REASON,
     SAVE_SYNC_DISABLED,
+    SAVE_SYNC_DISABLED_REASON,
     SAVE_SYNC_IN_CONTENT_DIR,
     SAVE_SYNC_IN_CONTENT_DIR_REASON,
 )
@@ -447,6 +450,7 @@ class SyncEngine:
             if self._is_retrodeck_migration_pending():
                 return {
                     "success": False,
+                    "reason": "blocked_by_migration",
                     "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
                     "synced": 0,
                     "blocked_by_migration": True,
@@ -462,6 +466,7 @@ class SyncEngine:
             if self._rom_info.is_save_sort_changed():
                 return {
                     "success": False,
+                    "reason": "save_sort_changed",
                     "message": "RetroArch save sorting changed — migrate saves in Settings first",
                     "synced": 0,
                     "save_sort_changed": True,
@@ -473,7 +478,7 @@ class SyncEngine:
             if not self.get_device_id():
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
-                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
+                    return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
 
             synced, errors, conflicts = await self._run_rom_sync(rom_id)
 
@@ -505,6 +510,7 @@ class SyncEngine:
                 self._logger.info("post_exit_sync skipped: retrodeck migration pending")
                 return {
                     "success": False,
+                    "reason": "blocked_by_migration",
                     "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
                     "synced": 0,
                     "blocked_by_migration": True,
@@ -526,12 +532,18 @@ class SyncEngine:
                 await self._loop.run_in_executor(None, self._romm_api.heartbeat)
             except Exception:
                 self._logger.info("post_exit_sync skipped: server offline")
-                return {"success": False, "message": "Server offline", "synced": 0, "offline": True}
+                return {
+                    "success": False,
+                    "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                    "message": "Server offline",
+                    "synced": 0,
+                    "offline": True,
+                }
 
             if not self.get_device_id():
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
-                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
+                    return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
 
             synced, errors, conflicts = await self._run_rom_sync(rom_id)
 
@@ -561,7 +573,12 @@ class SyncEngine:
         rom_id = int(rom_id)
         async with self.rom_lock(rom_id):
             if not self.is_save_sync_enabled():
-                return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0}
+                return {
+                    "success": False,
+                    "reason": SAVE_SYNC_DISABLED_REASON,
+                    "message": SAVE_SYNC_DISABLED,
+                    "synced": 0,
+                }
 
             # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
             # Manual sync paths must observe fresh sort state too: a user could
@@ -576,7 +593,7 @@ class SyncEngine:
             if not self.get_device_id():
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):
-                    return {"success": False, "message": DEVICE_NOT_REGISTERED}
+                    return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
 
             synced, errors, conflicts = await self._run_rom_sync(rom_id)
 
@@ -601,7 +618,13 @@ class SyncEngine:
     async def sync_all_saves(self) -> dict[str, Any]:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
         if not self.is_save_sync_enabled():
-            return {"success": False, "message": SAVE_SYNC_DISABLED, "synced": 0, "conflicts": 0}
+            return {
+                "success": False,
+                "reason": SAVE_SYNC_DISABLED_REASON,
+                "message": SAVE_SYNC_DISABLED,
+                "synced": 0,
+                "conflicts": 0,
+            }
 
         # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
         # Manual sync paths must observe fresh sort state too: a user could
@@ -616,7 +639,7 @@ class SyncEngine:
         if not self.get_device_id():
             reg = await self.ensure_device_registered()
             if not reg.get("success"):
-                return {"success": False, "message": DEVICE_NOT_REGISTERED}
+                return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
 
         total_synced = 0
         total_errors: list[str] = []
@@ -668,7 +691,7 @@ class SyncEngine:
         the user in the conflict modal. The backend round-trips it: if a
         third device has uploaded a newer save into the slot since the modal
         opened, the picked server head won't match and we return
-        ``error_code="stale_conflict"`` instead of silently overwriting the
+        ``reason="stale_conflict"`` instead of silently overwriting the
         third device's work.
 
         ``action`` is one of:

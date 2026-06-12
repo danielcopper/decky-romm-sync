@@ -44,7 +44,7 @@ import type {
 export interface BackendResult {
   success: boolean;
   message: string;
-  error_code?: RommErrorCode;
+  reason?: RommErrorCode;
   romm_version?: string;
   /** Set when a callable was rejected because a RetroDECK migration is pending. */
   blocked_by_migration?: boolean;
@@ -127,7 +127,7 @@ export const savePlatformSync = callable<[number, boolean], { success: boolean; 
 export const setAllPlatformsSync = callable<[boolean], { success: boolean; message: string }>("set_all_platforms_sync");
 export const getCollections = callable<
   [],
-  { success: boolean; collections: CollectionSyncSetting[]; message?: string; error_code?: RommErrorCode }
+  { success: boolean; collections: CollectionSyncSetting[]; message?: string; reason?: RommErrorCode }
 >("get_collections");
 export const saveCollectionSync = callable<[string, CollectionKind, boolean], { success: boolean; message?: string }>(
   "save_collection_sync",
@@ -314,7 +314,7 @@ export const syncAllSaves = callable<
 >("sync_all_saves");
 export const resolveSyncConflict = callable<
   [number, string, number, "keep_local" | "use_server"],
-  { success: boolean; message?: string; error_code?: "stale_conflict"; action?: "keep_local" | "use_server" }
+  { success: boolean; message?: string; reason?: "stale_conflict"; action?: "keep_local" | "use_server" }
 >("resolve_sync_conflict");
 export const recordSessionStart = callable<[number], { success: boolean }>("record_session_start");
 export const getSaveSyncSettings = callable<[], SaveSyncSettings>("get_save_sync_settings");

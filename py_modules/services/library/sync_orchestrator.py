@@ -32,6 +32,7 @@ from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
 from lib.errors import classify_error
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import logging
@@ -128,7 +129,7 @@ class SyncOrchestrator:
     def start_sync(self):
         box = self._sync_state
         if box.sync_state != SyncState.IDLE:
-            return {"success": False, "message": "Sync already in progress"}
+            return {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
@@ -166,7 +167,7 @@ class SyncOrchestrator:
         """
         box = self._sync_state
         if box.sync_state != SyncState.IDLE:
-            return {"success": False, "message": "Sync already in progress"}
+            return {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
@@ -249,9 +250,9 @@ class SyncOrchestrator:
 
             self._logger.error(f"Sync preview failed: {e}\n{traceback.format_exc()}")
             box.pending_delta = None
-            _code, _msg = classify_error(e)
+            _reason, _msg = classify_error(e)
             await self.emit_progress(SyncStage.ERROR, message=_msg, running=False)
-            return {"success": False, "message": _msg, "error_code": _code}
+            return {"success": False, "reason": _reason, "message": _msg}
         finally:
             box.sync_state = SyncState.IDLE
 
@@ -285,14 +286,18 @@ class SyncOrchestrator:
     async def sync_apply_delta(self, preview_id):
         box = self._sync_state
         if not box.pending_delta or box.pending_delta.preview_id != preview_id:
-            return {"success": False, "message": "Preview expired, please re-sync", "error_code": "stale_preview"}
+            return {
+                "success": False,
+                "reason": ErrorCode.STALE_PREVIEW.value,
+                "message": "Preview expired, please re-sync",
+            }
         age = self._clock.time() - box.pending_delta.created_at
         if age > _PREVIEW_MAX_AGE_SECONDS:
             box.pending_delta = None
             return {
                 "success": False,
+                "reason": ErrorCode.STALE_PREVIEW.value,
                 "message": "Preview is older than 30 minutes, please re-run sync",
-                "error_code": "stale_preview",
             }
         box.pending_delta = None
         box.sync_state = SyncState.RUNNING

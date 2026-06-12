@@ -5,22 +5,24 @@
  * (sync, saves, firmware, downloads, achievements) live in their own files.
  */
 
+/**
+ * Canonical failure-`reason` slugs the backend emits on the `{success: false,
+ * reason, message}` shape (see py_modules/lib/list_result.py `ErrorCode` + the
+ * gate scripts/check_failure_shape.py). The Lean enum plus the bespoke
+ * plain-string reasons the frontend actually routes on. Transport failures
+ * collapse onto `server_unreachable`; 401/403 onto `auth_failed` (distinguished
+ * by `message`, not slug).
+ */
 export type RommErrorCode =
-  | "auth_error"
-  | "forbidden_error"
-  | "connection_error"
-  | "timeout_error"
-  | "ssl_error"
-  | "server_error"
-  | "not_found_error"
-  | "unsupported_error"
+  | "server_unreachable"
+  | "auth_failed"
+  | "not_found"
+  | "unsupported"
+  | "unknown"
   | "version_error"
-  | "config_error"
-  | "disk_error"
-  | "api_error"
   | "stale_conflict"
   | "stale_preview"
-  | "unknown_error";
+  | "config_error";
 
 export interface InstalledRom {
   rom_id: number;

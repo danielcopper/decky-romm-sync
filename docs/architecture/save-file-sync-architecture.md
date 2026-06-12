@@ -11,7 +11,7 @@ more). Standalone emulator saves (PCSX2, DuckStation, Dolphin, PPSSPP, melonDS, 
 
 ## RomM Save API
 
-Requires RomM >= 4.8.1. The plugin rejects servers below 4.8.1 with `error_code: "version_error"`.
+Requires RomM >= 4.8.1. The plugin rejects servers below 4.8.1 with `reason: "version_error"`.
 
 | Endpoint                                                 | Method | Notes                                                                                                                                                                                                                              |
 | -------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -570,7 +570,7 @@ The façade delegates to `SyncEngine.resolve_sync_conflict`, whose rollback sub-
 2. Fetches a fresh server-saves list and re-picks the newest in the active slot.
 3. **Round-trips `server_save_id`**: the caller passes the id the user was shown in the modal. If the freshly-picked
    head's id doesn't match, a third device has uploaded a newer save into the slot between the modal opening and the
-   click. The backend returns `{success: False, error_code: "stale_conflict", message: ...}` instead of dispatching —
+   click. The backend returns `{success: False, reason: "stale_conflict", message: ...}` instead of dispatching —
    silently PUTting local content over the third device's work would be a write-loss. The frontend surfaces an error and
    the user cancels + retries; the next sync re-evaluates the matrix with the fresh head.
 4. Dispatches:

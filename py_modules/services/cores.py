@@ -26,6 +26,7 @@ from domain.shortcut_data import (
     label_to_core_so,
     resolve_emulator_invocation,
 )
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -188,7 +189,7 @@ class CoreService:
             return {"success": True, "bios_status": bios, "rebake_items": rebake_items}
         except Exception as e:
             self._logger.error(f"Failed to set system core: {e}")
-            return {"success": False, "message": str(e)}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": str(e)}
 
     async def set_game_core(self, rom_id: int, label: str) -> dict[str, Any]:
         """Pin the per-game emulator/core override for ``rom_id`` to *label*.

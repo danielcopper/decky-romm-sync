@@ -414,7 +414,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       try {
         const result = await Promise.race([testConnection(), timeoutMs(5000)]);
         if (cancelled) return;
-        if (result.error_code === "version_error") {
+        if (result.reason === "version_error") {
           setVersionError(result.message);
           setRommConnectionState("offline");
           setConnectionState("offline");

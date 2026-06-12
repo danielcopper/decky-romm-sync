@@ -27,6 +27,7 @@ from domain.sgdb_artwork import (
     to_signed_app_id,
 )
 from lib.errors import SgdbApiError, SteamGridDirMissingError
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import logging
@@ -247,20 +248,31 @@ class SteamGridService:
         """Search SGDB by name and enrich the top candidates with thumbnails.
 
         Returns ``{"success": bool, "games": [{"id", "name",
-        "release_year", "thumb_url"}]}``. Returns an empty, unsuccessful
-        result when no API key is configured. Network failures are
-        logged and surfaced as ``{"success": False, "games": []}`` — the
-        callable never raises.
+        "release_year", "thumb_url"}]}`` plus a ``reason`` slug on failure.
+        Returns an empty, unsuccessful result (``reason="no_api_key"``) when
+        no API key is configured. Network failures are logged and surfaced
+        as ``{"success": False, "reason": "server_unreachable", "games":
+        []}`` — the callable never raises.
         """
         if not self._settings.get("steamgriddb_api_key"):
-            return {"success": False, "games": []}
+            return {
+                "success": False,
+                "reason": "no_api_key",
+                "message": "No SteamGridDB API key configured",
+                "games": [],
+            }
         try:
             path = build_autocomplete_path(str(term))
             payload = await self._loop.run_in_executor(None, self._sgdb_api.request, path)
             candidates = parse_autocomplete_results(payload)
         except Exception as e:
             self._logger.warning(f"SGDB name search failed for term={term!r}: {e}")
-            return {"success": False, "games": []}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": f"SteamGridDB search failed: {e}",
+                "games": [],
+            }
 
         capped = candidates[:6]
         thumb_futures = [
@@ -362,20 +374,32 @@ class SteamGridService:
         if not api_key or api_key == "••••":
             api_key = self._settings.get("steamgriddb_api_key", "")
         if not api_key:
-            return {"success": False, "message": "No API key configured"}
+            return {"success": False, "reason": "no_api_key", "message": "No API key configured"}
         try:
             data = await self._loop.run_in_executor(None, self._sgdb_api.verify_api_key, api_key)
             if data.get("success"):
                 return {"success": True, "message": "API key is valid"}
-            return {"success": False, "message": "API key rejected by SteamGridDB"}
+            return {
+                "success": False,
+                "reason": ErrorCode.AUTH_FAILED.value,
+                "message": "API key rejected by SteamGridDB",
+            }
         except SgdbApiError as e:
             self._logger.warning(f"SGDB API key verification HTTP error: {e.status_code}")
             if e.status_code in (401, 403):
-                return {"success": False, "message": "Invalid API key"}
-            return {"success": False, "message": f"SteamGridDB error: HTTP {e.status_code}"}
+                return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": "Invalid API key"}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": f"SteamGridDB error: HTTP {e.status_code}",
+            }
         except Exception as e:
             self._logger.error(f"SGDB API key verification failed: {e}")
-            return {"success": False, "message": f"Connection failed: {e}"}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": f"Connection failed: {e}",
+            }
 
     def save_sgdb_api_key(self, api_key):
         if api_key and api_key != "••••":
@@ -453,7 +477,7 @@ class SteamGridService:
             icon_bytes = base64.b64decode(icon_base64)
         except Exception as e:
             self._logger.error(f"Failed to decode icon base64: {e}")
-            return {"success": False}
+            return {"success": False, "reason": "invalid_payload", "message": "Failed to decode icon data"}
 
         success = await self._loop.run_in_executor(None, self._save_icon_to_grid, app_id, icon_bytes)
         return {"success": success}

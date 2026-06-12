@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
+from lib.list_result import ErrorCode
 from services.saves._config import SaveServiceConfig
 from services.saves._settings import (
     ALLOWED_SETTINGS_KEYS,
@@ -366,6 +367,7 @@ class SaveService:
         if errors:
             return {
                 "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
                 "deleted_count": deleted,
                 "message": f"Deleted {deleted} file(s), {len(errors)} error(s)",
             }
@@ -390,6 +392,7 @@ class SaveService:
         if total_errors:
             return {
                 "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
                 "deleted_count": total_deleted,
                 "message": (f"Deleted {total_deleted} file(s) from {rom_count} ROM(s), {len(total_errors)} error(s)"),
             }

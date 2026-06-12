@@ -187,7 +187,7 @@ export default definePlugin(() => {
     (async () => {
       try {
         const result = await withTimeout(testConnection(), CALLABLE_TIMEOUT);
-        if (result.error_code === "version_error") {
+        if (result.reason === "version_error") {
           setVersionError(result.message);
         } else if (result.success) {
           setVersionError(null);

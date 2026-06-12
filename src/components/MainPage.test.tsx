@@ -451,11 +451,11 @@ describe("MainPage", () => {
       setVerSpy.mockRestore();
     });
 
-    it("testConnection error_code='version_error' surfaces r.message via setVersionError", async () => {
+    it("testConnection reason='version_error' surfaces r.message via setVersionError", async () => {
       vi.mocked(backend.testConnection).mockResolvedValue({
         success: false,
         message: "server out of date",
-        error_code: "version_error",
+        reason: "version_error",
       });
       const setVerSpy = vi.spyOn(connectionState, "setVersionError");
       render(<MainPage onNavigate={vi.fn()} />);

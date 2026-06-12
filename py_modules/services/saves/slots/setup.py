@@ -219,7 +219,12 @@ class SetupWizard:
         rom_id = int(rom_id)
         chosen_slot = str(chosen_slot).strip()
         if not chosen_slot:
-            return {"success": False, "needs_conflict_resolution": False, "message": "Slot name cannot be empty"}
+            return {
+                "success": False,
+                "reason": "invalid_slot_name",
+                "needs_conflict_resolution": False,
+                "message": "Slot name cannot be empty",
+            }
 
         # Load → confirm in memory; migration I/O runs outside the txn.
         save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveState()

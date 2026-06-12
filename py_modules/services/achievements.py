@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.achievements import extract_achievements_from_rom, extract_game_progress
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -158,7 +159,13 @@ class AchievementsService:
                     "total": len(stale["achievements"]),
                     "stale": True,
                 }
-            return {"success": False, "achievements": [], "total": 0, "message": str(e)}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": str(e),
+                "achievements": [],
+                "total": 0,
+            }
 
     def _progress_data_response(self, progress_data):
         """Build a success response from progress_data, excluding cached_at."""
@@ -175,7 +182,13 @@ class AchievementsService:
 
         ra_username = self.get_ra_username() or await self._fetch_ra_username()
         if not ra_username:
-            return {"success": False, "message": "No RA username configured in RomM", "earned": 0, "total": 0}
+            return {
+                "success": False,
+                "reason": "no_ra_username",
+                "message": "No RA username configured in RomM",
+                "earned": 0,
+                "total": 0,
+            }
 
         cached_progress = self.get_progress_cache_entry(rom_id_str)
         if cached_progress:
@@ -206,7 +219,14 @@ class AchievementsService:
             stale_progress = self._achievements_cache.get(rom_id_str, {}).get("user_progress")
             if stale_progress:
                 return {**self._progress_data_response(stale_progress), "stale": True}
-            return {"success": False, "earned": 0, "total": 0, "earned_achievements": [], "message": str(e)}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": str(e),
+                "earned": 0,
+                "total": 0,
+                "earned_achievements": [],
+            }
 
     async def sync_achievements_after_session(self, rom_id):
         """Post-session: force-refresh achievement progress from RomM.

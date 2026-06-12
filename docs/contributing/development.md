@@ -138,6 +138,11 @@ services may not call `datetime.now()` / `asyncio.sleep()` / `time.time()` / `ti
 list from `py_modules/services/` and fails if `.importlinter`'s `service-independence` contract drifts — omitting a
 service or carrying a stale entry — keeping the hand-maintained `modules` list self-healing.
 
+`mise run lint` (and CI) also runs `scripts/check_failure_shape.py --check`, which fails if any `success: False` return
+in `services/` is missing the canonical `reason` + `message` keys or carries the forbidden `error` / `error_code` key —
+collapsing the failure-shape dialects onto one vocabulary (the two documented carve-outs are pattern-exempt). Run it
+without `--check` for a report-mode inventory.
+
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Code Quality

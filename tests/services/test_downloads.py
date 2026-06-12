@@ -215,7 +215,7 @@ class TestStartDownload:
 
         result = await plugin.start_download(9999)
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
 
     @pytest.mark.asyncio
     async def test_checks_disk_space(self, plugin, tmp_path):

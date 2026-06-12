@@ -452,14 +452,14 @@ class TestSyncApplyDelta:
         self._setup_pending_delta(plugin, "correct-id")
         result = await plugin.sync_apply_delta("wrong-id")
         assert result["success"] is False
-        assert result["error_code"] == "stale_preview"
+        assert result["reason"] == "stale_preview"
 
     @pytest.mark.asyncio
     async def test_rejects_when_no_pending_delta(self, plugin):
         assert plugin._sync_service._pending_delta is None
         result = await plugin.sync_apply_delta("any-id")
         assert result["success"] is False
-        assert result["error_code"] == "stale_preview"
+        assert result["reason"] == "stale_preview"
 
     @pytest.mark.asyncio
     async def test_rejects_when_preview_older_than_max_age(self, plugin):
@@ -476,7 +476,7 @@ class TestSyncApplyDelta:
         result = await plugin.sync_apply_delta("preview-abc")
 
         assert result["success"] is False
-        assert result["error_code"] == "stale_preview"
+        assert result["reason"] == "stale_preview"
         assert "30 minutes" in result["message"]
         # Stale delta is cleared so a repeat apply can't pick it up.
         assert plugin._sync_service._pending_delta is None
@@ -695,7 +695,7 @@ class TestSyncPreviewErrorHandling:
 
         result = await plugin._sync_service.sync_preview()
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
         assert plugin._sync_service._sync_state == SyncState.IDLE
         # Error path evicts any pending delta.
         assert plugin._sync_service._pending_delta is None

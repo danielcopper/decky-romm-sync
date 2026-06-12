@@ -1439,7 +1439,7 @@ class TestDeleteSlot:
         result = await svc.delete_slot(42, "save1")
 
         assert result["success"] is False
-        assert result["reason"] == "server_error"
+        assert result["reason"] == "server_unreachable"
         # Slot NOT removed from state (rollback on failure)
         assert "save1" in _require_save_state(svc, 42).slots
 

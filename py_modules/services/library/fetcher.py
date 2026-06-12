@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from domain.sync_state import SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import logging
@@ -110,12 +111,16 @@ class LibraryFetcher:
             platforms: object = await self._loop.run_in_executor(None, self._romm_api.list_platforms)
         except Exception as e:
             self._logger.error(f"Failed to fetch platforms: {e}")
-            _code, _msg = classify_error(e)
-            return {"success": False, "message": _msg, "error_code": _code}
+            _reason, _msg = classify_error(e)
+            return {"success": False, "reason": _reason, "message": _msg}
 
         if not isinstance(platforms, list):
             self._logger.error(f"Unexpected platforms response type: {type(platforms).__name__}")
-            return {"success": False, "message": "Invalid server response", "error_code": "api_error"}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Invalid server response",
+            }
 
         enabled = self._settings.get("enabled_platforms", {})
         result = []
@@ -147,8 +152,8 @@ class LibraryFetcher:
             platforms = await self._loop.run_in_executor(None, self._romm_api.list_platforms)
         except Exception as e:
             self._logger.error(f"Failed to fetch platforms: {e}")
-            _code, _msg = classify_error(e)
-            return {"success": False, "message": _msg, "error_code": _code}
+            _reason, _msg = classify_error(e)
+            return {"success": False, "reason": _reason, "message": _msg}
 
         ep = {}
         for p in platforms:
@@ -164,8 +169,8 @@ class LibraryFetcher:
             user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
         except Exception as e:
             self._logger.error(f"Failed to fetch collections: {e}")
-            _code, _msg = classify_error(e)
-            return {"success": False, "message": _msg, "error_code": _code}
+            _reason, _msg = classify_error(e)
+            return {"success": False, "reason": _reason, "message": _msg}
         try:
             smart_collections = await self._loop.run_in_executor(None, self._romm_api.list_smart_collections)
         except Exception as e:
@@ -257,8 +262,8 @@ class LibraryFetcher:
             user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
         except Exception as e:
             self._logger.error(f"Failed to fetch collections: {e}")
-            _code, _msg = classify_error(e)
-            return {"success": False, "message": _msg, "error_code": _code}
+            _reason, _msg = classify_error(e)
+            return {"success": False, "reason": _reason, "message": _msg}
         for c in user_collections:
             if scope == "my" and bool(c.get("is_favorite", False)):
                 continue
@@ -276,8 +281,8 @@ class LibraryFetcher:
         except Exception as e:
             if scope == "smart":
                 self._logger.error(f"Failed to fetch smart collections: {e}")
-                _code, _msg = classify_error(e)
-                return {"success": False, "message": _msg, "error_code": _code}
+                _reason, _msg = classify_error(e)
+                return {"success": False, "reason": _reason, "message": _msg}
             self._logger.warning(f"Failed to fetch smart collections, continuing without them: {e}")
             return None
         for c in smart_collections:
@@ -297,8 +302,8 @@ class LibraryFetcher:
         except Exception as e:
             if scope == "franchise":
                 self._logger.error(f"Failed to fetch franchise collections: {e}")
-                _code, _msg = classify_error(e)
-                return {"success": False, "message": _msg, "error_code": _code}
+                _reason, _msg = classify_error(e)
+                return {"success": False, "reason": _reason, "message": _msg}
             self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
             return None
         for c in franchise_collections:

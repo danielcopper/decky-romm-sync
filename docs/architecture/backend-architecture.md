@@ -414,7 +414,18 @@ collects the class names decorated with `@cosmic_aggregate` in `domain/` (curren
 `services/` for `<aggregate>.<field> = ...` assignments and fails CI on any it finds. The escape hatch is a trailing
 `# pragma: no aggregate-check` on the offending line. Full detail in [Database Design](database-design.md).
 
-### 4. Enforced: underscore prefix
+### 4. Failure-shape dialect gate
+
+`scripts/check_failure_shape.py --check` (also bundled into `mise run lint`) is a small custom AST linter that enforces
+the **canonical failure shape** for dict-returning callables — every `success: False` return in `services/` must carry
+both `reason` and `message` and must not carry the legacy `error_code` key or a second `error` key. It collapses the
+three dialects that previously coexisted (`error_code`, `error`, and slug-less ad-hoc dicts) onto one vocabulary. The
+two documented carve-outs (discriminated-status unions — a `status` key with no `success`; and partial-success payloads
+carrying an additive `server_query_failed` / `recommended_action` flag) are pattern-exempt. Run without `--check` for
+the report-mode inventory grouped by classification. The routing slugs come from `lib.list_result.ErrorCode` (the Lean
+enum) plus bespoke plain-string reasons for non-server-reachability guards.
+
+### 5. Enforced: underscore prefix
 
 All internal methods use a `_` prefix; public callables (exposed to the frontend via `callable()`) have none. `main.py`
 callable methods delegate directly to the corresponding service method. Even synchronous callable bodies are `async def`

@@ -163,7 +163,7 @@ const SyncConflictModalHost: FC<SyncConflictModalHostProps> = ({ conflict, close
     try {
       const result = await resolveSyncConflict(conflict.rom_id, conflict.filename, conflict.server_save_id, action);
       if (!result.success) {
-        if (result.error_code === "stale_conflict") {
+        if (result.reason === "stale_conflict") {
           const staleMsg =
             "The server save has been updated by another device. Please cancel and retry sync to get the latest version.";
           logError(

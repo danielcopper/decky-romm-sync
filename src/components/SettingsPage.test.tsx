@@ -420,24 +420,31 @@ describe("SettingsPage", () => {
       expect(queryByTestId("devices-section")).toBeNull();
     });
 
-    it("surfaces an error from listDevices via devicesError + empty list", async () => {
+    it("surfaces the human-readable message (not the slug) from listDevices via devicesError + empty list", async () => {
       vi.mocked(backend.getSaveSyncSettings).mockResolvedValue({
         ...defaultSaveSyncSettings(),
         save_sync_enabled: true,
       });
+      // Canonical failure shape: the routing slug lives on `reason`, the
+      // human-readable text on `message`. The UI must render `message`, never
+      // the raw slug (the #972 user-visible bug: "Could not load devices —
+      // list_failed" leaked the slug).
       vi.mocked(backend.listDevices).mockResolvedValue({
         success: false,
         devices: [],
-        error: "auth failed",
+        reason: "server_unreachable",
+        message: "Could not load devices",
       });
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       const d = capturedDevices[capturedDevices.length - 1];
-      expect(d?.devicesError).toBe("auth failed");
+      expect(d?.devicesError).toBe("Could not load devices");
+      // The raw slug must NOT surface to the user.
+      expect(d?.devicesError).not.toBe("server_unreachable");
       expect(d?.registeredDevices).toEqual([]);
     });
 
-    it("falls back to a generic message when error is absent on a failed response", async () => {
+    it("falls back to a generic message when message is absent on a failed response", async () => {
       vi.mocked(backend.getSaveSyncSettings).mockResolvedValue({
         ...defaultSaveSyncSettings(),
         save_sync_enabled: true,
@@ -573,7 +580,7 @@ describe("SettingsPage", () => {
       expect(conn?.hasToken).toBe(true);
     });
 
-    it("surfaces the failure message without setting hasToken (e.g. forbidden_error)", async () => {
+    it("surfaces the failure message without setting hasToken (e.g. 403 auth_failed)", async () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         has_token: false,
@@ -581,7 +588,7 @@ describe("SettingsPage", () => {
       vi.mocked(backend.connectWithCredentials).mockResolvedValue({
         success: false,
         message: "This account cannot create API tokens.",
-        error_code: "forbidden_error",
+        reason: "auth_failed",
       });
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();

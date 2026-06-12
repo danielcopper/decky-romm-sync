@@ -493,6 +493,7 @@ class MigrationService:
         if conflict_strategy is None and conflicts:
             return {
                 "success": False,
+                "reason": "needs_confirmation",
                 "needs_confirmation": True,
                 "conflict_count": len(conflicts),
                 "conflicts": conflicts,
@@ -597,7 +598,7 @@ class MigrationService:
             new_home = uow.kv_config.get(_KV_RETRODECK_HOME) or ""
 
         if not old_home or not new_home or old_home == new_home:
-            return {"success": False, "message": "No path migration needed"}
+            return {"success": False, "reason": "no_migration_needed", "message": "No path migration needed"}
 
         result = await self._loop.run_in_executor(
             None, self._migrate_retrodeck_files_io, old_home, new_home, conflict_strategy
@@ -956,5 +957,5 @@ class MigrationService:
             old = self._read_save_sort_settings_previous(uow)
             new = self._read_save_sort_settings(uow)
         if not old or not new or old == new:
-            return {"success": False, "message": "No save sorting migration needed"}
+            return {"success": False, "reason": "no_migration_needed", "message": "No save sorting migration needed"}
         return await self._loop.run_in_executor(None, self._migrate_save_sort_files_io, old, new, conflict_strategy)

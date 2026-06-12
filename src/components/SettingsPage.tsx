@@ -145,7 +145,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         } else if (result.disabled) {
           setRegisteredDevices(null);
         } else {
-          setDevicesError(result.error ?? "Failed to load devices");
+          setDevicesError(result.message ?? "Failed to load devices");
           setRegisteredDevices([]);
         }
       })

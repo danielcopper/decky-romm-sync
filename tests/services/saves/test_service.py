@@ -88,7 +88,7 @@ class TestDeviceRegistrationServer:
 
         result = await svc.ensure_device_registered()
         assert result["success"] is False
-        assert result.get("error") == "registration_failed"
+        assert result["reason"] == "server_unreachable"
         assert _get_device_id(svc) is None
 
     @pytest.mark.asyncio
@@ -263,7 +263,8 @@ class TestListDevices:
 
         result = await svc.list_devices()
 
-        assert result == {"success": False, "devices": [], "disabled": True}
+        assert result["disabled"] is True
+        assert result["reason"] == "sync_disabled"
 
     @pytest.mark.asyncio
     async def test_list_devices_adapter_error(self, tmp_path):
@@ -275,7 +276,8 @@ class TestListDevices:
         fake.fail_on_next(Exception("server unavailable"))
         result = await svc.list_devices()
 
-        assert result == {"success": False, "devices": [], "error": "list_failed"}
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
 
     @pytest.mark.asyncio
     async def test_list_devices_no_own_id_all_false(self, tmp_path):

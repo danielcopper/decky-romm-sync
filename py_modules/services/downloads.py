@@ -25,6 +25,7 @@ from domain.rom_files import (
 from domain.rom_install import RomInstall
 from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 from lib.errors import error_response
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import logging
@@ -168,7 +169,7 @@ class DownloadService:
     async def start_download(self, rom_id):
         rom_id = int(rom_id)
         if rom_id in self._download_in_progress:
-            return {"success": False, "message": "Already downloading"}
+            return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
 
         self._download_in_progress.add(rom_id)
         try:
@@ -204,7 +205,11 @@ class DownloadService:
             self._download_in_progress.discard(rom_id)
             free_mb = free_space // (1024 * 1024)
             need_mb = required // (1024 * 1024)
-            return {"success": False, "message": f"Not enough disk space ({free_mb}MB free, need {need_mb}MB)"}
+            return {
+                "success": False,
+                "reason": "insufficient_space",
+                "message": f"Not enough disk space ({free_mb}MB free, need {need_mb}MB)",
+            }
 
         target_path = os.path.join(roms_dir, file_name)
 
@@ -216,7 +221,7 @@ class DownloadService:
         except Exception as e:
             self._download_in_progress.discard(rom_id)
             self._logger.error(f"Failed to start download task for ROM {rom_id}: {e}")
-            return {"success": False, "message": "Failed to start download"}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Failed to start download"}
 
         self._download_queue[rom_id] = {
             "rom_id": rom_id,
@@ -565,7 +570,7 @@ class DownloadService:
         rom_id = int(rom_id)
         task = self._download_tasks.get(rom_id)
         if not task:
-            return {"success": False, "message": "No active download for this ROM"}
+            return {"success": False, "reason": "no_active_download", "message": "No active download for this ROM"}
         task.cancel()
         return {"success": True, "message": "Download cancelled"}
 

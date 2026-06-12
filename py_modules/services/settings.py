@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from lib.list_result import ErrorCode
+
 if TYPE_CHECKING:
     import logging
 
@@ -74,7 +76,7 @@ class SettingsService:
             return {"success": True, "message": "Settings saved"}
         except Exception as e:
             self._logger.error(f"Failed to save settings: {e}")
-            return {"success": False, "message": f"Save failed: {e}"}
+            return {"success": False, "reason": "save_failed", "message": f"Save failed: {e}"}
 
     def get_settings(self) -> dict[str, Any]:
         """Return the read-shape settings dict for the frontend.
@@ -99,7 +101,7 @@ class SettingsService:
     def save_log_level(self, level: str) -> dict[str, Any]:
         """Validate and persist the runtime log level."""
         if level not in _VALID_LOG_LEVELS:
-            return {"success": False, "message": "Invalid log level"}
+            return {"success": False, "reason": "invalid_log_level", "message": "Invalid log level"}
         self._settings["log_level"] = level
         self._settings_persister.save_settings()
         return {"success": True}
@@ -126,7 +128,7 @@ class SettingsService:
     def save_steam_input_setting(self, mode: str) -> dict[str, Any]:
         """Validate and persist the Steam Input mode preference."""
         if mode not in _VALID_STEAM_INPUT_MODES:
-            return {"success": False, "message": f"Invalid mode: {mode}"}
+            return {"success": False, "reason": "invalid_mode", "message": f"Invalid mode: {mode}"}
         self._settings["steam_input_mode"] = mode
         self._settings_persister.save_settings()
         return {"success": True}
@@ -143,7 +145,7 @@ class SettingsService:
             return {"success": True, "message": f"Steam Input set to '{mode}' for {len(app_ids)} shortcuts"}
         except Exception as e:
             self._logger.error(f"Failed to apply Steam Input setting: {e}")
-            return {"success": False, "message": "Operation failed"}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Operation failed"}
 
     # ── RetroArch input driver ──────────────────────────────────────────
 
@@ -168,9 +170,17 @@ class SettingsService:
         cannot corrupt the on-disk shape.
         """
         if not isinstance(disabled_defaults, list) or not all(isinstance(s, str) for s in disabled_defaults):
-            return {"success": False, "message": "disabled_defaults must be a list of strings"}
+            return {
+                "success": False,
+                "reason": "invalid_whitelist",
+                "message": "disabled_defaults must be a list of strings",
+            }
         if not isinstance(custom_names, list) or not all(isinstance(s, str) for s in custom_names):
-            return {"success": False, "message": "custom_names must be a list of strings"}
+            return {
+                "success": False,
+                "reason": "invalid_whitelist",
+                "message": "custom_names must be a list of strings",
+            }
         self._settings["whitelist_disabled_defaults"] = disabled_defaults
         self._settings["whitelist_custom_names"] = custom_names
         self._settings_persister.save_settings()

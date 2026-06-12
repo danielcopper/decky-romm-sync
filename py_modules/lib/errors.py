@@ -1,5 +1,7 @@
 """RomM API error types for structured error handling."""
 
+from lib.list_result import ErrorCode
+
 
 class SgdbApiError(Exception):
     """Raised by SteamGridDb adapter for non-2xx HTTP responses.
@@ -90,30 +92,55 @@ class RommUnsupportedError(RommApiError):
 
 
 def classify_error(exc):
-    """Return (error_code, user_friendly_message) for an exception."""
+    """Return ``(reason, user_friendly_message)`` for an exception.
+
+    ``reason`` is a canonical :class:`lib.list_result.ErrorCode` slug
+    (returned as its string value). Several exception types fold onto one
+    slug \u2014 connection/timeout/SSL/5xx/generic-API all map to
+    ``server_unreachable``; 401 and 403 both map to ``auth_failed`` \u2014 but
+    each branch keeps a distinct human ``message``. In particular the 403
+    branch stays distinguishable from the 401 branch: a Cloudflare
+    bot-fight 403 at the tunnel edge is not a wrong-credentials failure, so
+    the two share the ``auth_failed`` slug but explain different remedies.
+    """
     if isinstance(exc, RommAuthError):
-        return "auth_error", "Authentication failed \u2014 check your username and password"
+        return ErrorCode.AUTH_FAILED.value, "Authentication failed \u2014 check your username and password"
     if isinstance(exc, RommForbiddenError):
-        return "forbidden_error", "Access denied \u2014 your account lacks permissions for this action"
+        return ErrorCode.AUTH_FAILED.value, "Access denied \u2014 your account lacks permissions for this action"
     if isinstance(exc, RommSSLError):
-        return "ssl_error", "SSL certificate error \u2014 enable 'Allow Insecure SSL' in settings for self-signed certs"
+        return (
+            ErrorCode.SERVER_UNREACHABLE.value,
+            "SSL certificate error \u2014 enable 'Allow Insecure SSL' in settings for self-signed certs",
+        )
     if isinstance(exc, RommTimeoutError):
-        return "timeout_error", "Request timed out \u2014 server may be overloaded or network is slow"
+        return (
+            ErrorCode.SERVER_UNREACHABLE.value,
+            "Request timed out \u2014 server may be overloaded or network is slow",
+        )
     if isinstance(exc, RommConnectionError):
-        return "connection_error", "Server unreachable \u2014 check your URL and ensure RomM is running"
+        return (
+            ErrorCode.SERVER_UNREACHABLE.value,
+            "Server unreachable \u2014 check your URL and ensure RomM is running",
+        )
     if isinstance(exc, RommServerError):
         code = exc.status_code or 500
-        return "server_error", f"Server error ({code}) \u2014 check your RomM server logs"
+        return ErrorCode.SERVER_UNREACHABLE.value, f"Server error ({code}) \u2014 check your RomM server logs"
     if isinstance(exc, RommNotFoundError):
-        return "not_found_error", "Resource not found on server"
+        return ErrorCode.NOT_FOUND.value, "Resource not found on server"
     if isinstance(exc, RommUnsupportedError):
-        return "unsupported_error", f"This feature requires RomM {exc.min_version} or newer"
+        return ErrorCode.UNSUPPORTED.value, f"This feature requires RomM {exc.min_version} or newer"
     if isinstance(exc, RommApiError):
-        return "api_error", str(exc)
-    return "unknown_error", str(exc)
+        return ErrorCode.SERVER_UNREACHABLE.value, str(exc)
+    return ErrorCode.UNKNOWN.value, str(exc)
 
 
 def error_response(exc, fallback_message=None):
-    """Build a standard {success, message, error_code} dict from an exception."""
-    code, msg = classify_error(exc)
-    return {"success": False, "message": fallback_message or msg, "error_code": code}
+    """Build a canonical ``{success, reason, message}`` dict from an exception.
+
+    ``reason`` is the :func:`classify_error` slug; ``message`` is the
+    human-readable detail (overridable via *fallback_message*). The legacy
+    ``error_code`` key is gone \u2014 this is the single failure shape the
+    frontend reads (``scripts/check_failure_shape.py`` enforces it).
+    """
+    reason, msg = classify_error(exc)
+    return {"success": False, "reason": reason, "message": fallback_message or msg}

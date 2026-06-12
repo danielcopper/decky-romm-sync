@@ -164,69 +164,69 @@ class TestClassifyError:
 
     def test_auth_error(self):
         code, msg = classify_error(RommAuthError("401"))
-        assert code == "auth_error"
+        assert code == "auth_failed"
         assert "Authentication failed" in msg
 
     def test_forbidden_error(self):
         code, msg = classify_error(RommForbiddenError("403"))
-        assert code == "forbidden_error"
+        assert code == "auth_failed"
         assert "Access denied" in msg
 
     def test_ssl_error(self):
         code, msg = classify_error(RommSSLError("cert fail"))
-        assert code == "ssl_error"
+        assert code == "server_unreachable"
         assert "SSL certificate error" in msg
 
     def test_timeout_error(self):
         code, msg = classify_error(RommTimeoutError("timed out"))
-        assert code == "timeout_error"
+        assert code == "server_unreachable"
         assert "timed out" in msg.lower()
 
     def test_connection_error(self):
         code, msg = classify_error(RommConnectionError("refused"))
-        assert code == "connection_error"
+        assert code == "server_unreachable"
         assert "unreachable" in msg.lower()
 
     def test_server_error(self):
         code, msg = classify_error(RommServerError("500", status_code=500))
-        assert code == "server_error"
+        assert code == "server_unreachable"
         assert "500" in msg
 
     def test_server_error_502(self):
         code, msg = classify_error(RommServerError("bad gateway", status_code=502))
-        assert code == "server_error"
+        assert code == "server_unreachable"
         assert "502" in msg
 
     def test_not_found_error(self):
         code, msg = classify_error(RommNotFoundError("missing"))
-        assert code == "not_found_error"
+        assert code == "not_found"
         assert "not found" in msg.lower()
 
     def test_unsupported_error(self):
         code, msg = classify_error(RommUnsupportedError("save content download", "4.7.0"))
-        assert code == "unsupported_error"
+        assert code == "unsupported"
         assert "4.7.0" in msg
         assert "requires RomM" in msg
 
     def test_generic_api_error(self):
         code, msg = classify_error(RommApiError("some API issue"))
-        assert code == "api_error"
+        assert code == "server_unreachable"
         assert msg == "some API issue"
 
     def test_conflict_error_is_api_error(self):
         """RommConflictError is a subclass of RommApiError, not specifically handled."""
         code, msg = classify_error(RommConflictError("conflict"))
-        assert code == "api_error"
+        assert code == "server_unreachable"
         assert msg == "conflict"
 
     def test_unknown_exception_value_error(self):
         code, msg = classify_error(ValueError("bad value"))
-        assert code == "unknown_error"
+        assert code == "unknown"
         assert msg == "bad value"
 
     def test_unknown_exception_runtime_error(self):
         code, msg = classify_error(RuntimeError("something broke"))
-        assert code == "unknown_error"
+        assert code == "unknown"
         assert msg == "something broke"
 
     def test_messages_are_user_friendly_not_tracebacks(self):
@@ -243,54 +243,56 @@ class TestClassifyError:
             assert "File " not in msg
 
     def test_subclass_ordering_auth_before_api(self):
-        """RommAuthError (subclass of RommApiError) should be classified as auth_error, not api_error."""
+        """RommAuthError (subclass of RommApiError) should be classified as auth_failed, not server_unreachable."""
         code, _ = classify_error(RommAuthError("auth fail"))
-        assert code == "auth_error"
+        assert code == "auth_failed"
 
     def test_subclass_ordering_ssl_before_connection(self):
-        """RommSSLError should be classified as ssl_error even though it's a RommApiError."""
+        """RommSSLError should be classified as server_unreachable even though it's a RommApiError."""
         code, _ = classify_error(RommSSLError("cert fail"))
-        assert code == "ssl_error"
+        assert code == "server_unreachable"
 
 
 class TestErrorResponse:
-    """error_response returns a proper {success, message, error_code} dict."""
+    """error_response returns a proper {success, reason, message} dict."""
 
     def test_structure(self):
         resp = error_response(RommAuthError("401"))
         assert resp["success"] is False
         assert "message" in resp
-        assert "error_code" in resp
+        assert "reason" in resp
+        assert "error_code" not in resp
+        assert "error" not in resp
 
     def test_auth_error_code(self):
         resp = error_response(RommAuthError("unauthorized"))
-        assert resp["error_code"] == "auth_error"
+        assert resp["reason"] == "auth_failed"
         assert resp["success"] is False
 
     def test_connection_error_code(self):
         resp = error_response(RommConnectionError("refused"))
-        assert resp["error_code"] == "connection_error"
+        assert resp["reason"] == "server_unreachable"
 
     def test_ssl_error_code(self):
         resp = error_response(RommSSLError("cert fail"))
-        assert resp["error_code"] == "ssl_error"
+        assert resp["reason"] == "server_unreachable"
 
     def test_timeout_error_code(self):
         resp = error_response(RommTimeoutError("timed out"))
-        assert resp["error_code"] == "timeout_error"
+        assert resp["reason"] == "server_unreachable"
 
     def test_server_error_code(self):
         resp = error_response(RommServerError("500", status_code=500))
-        assert resp["error_code"] == "server_error"
+        assert resp["reason"] == "server_unreachable"
 
     def test_unknown_error_code(self):
         resp = error_response(ValueError("bad"))
-        assert resp["error_code"] == "unknown_error"
+        assert resp["reason"] == "unknown"
 
     def test_fallback_message_override(self):
         resp = error_response(RommAuthError("401"), fallback_message="Custom message")
         assert resp["message"] == "Custom message"
-        assert resp["error_code"] == "auth_error"
+        assert resp["reason"] == "auth_failed"
 
     def test_fallback_message_none_uses_default(self):
         resp = error_response(RommAuthError("401"), fallback_message=None)
@@ -298,16 +300,16 @@ class TestErrorResponse:
 
     def test_not_found_error_response(self):
         resp = error_response(RommNotFoundError("missing"))
-        assert resp["error_code"] == "not_found_error"
+        assert resp["reason"] == "not_found"
         assert resp["success"] is False
 
     def test_forbidden_error_response(self):
         resp = error_response(RommForbiddenError("forbidden"))
-        assert resp["error_code"] == "forbidden_error"
+        assert resp["reason"] == "auth_failed"
         assert "Access denied" in resp["message"]
 
     def test_unsupported_error_response(self):
         resp = error_response(RommUnsupportedError("save content download", "4.7.0"))
-        assert resp["error_code"] == "unsupported_error"
+        assert resp["reason"] == "unsupported"
         assert resp["success"] is False
         assert "4.7.0" in resp["message"]

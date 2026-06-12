@@ -128,6 +128,9 @@ jobs:
       - name: Check aggregate field-assignment ban
         run: python scripts/check_aggregate_field_assignment.py
 
+      - name: Check failure-shape dialect gate
+        run: python scripts/check_failure_shape.py --check
+
       - name: Check no bare ignores
         run: bash scripts/check_no_bare_ignores.sh
 

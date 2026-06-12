@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.playtime import Playtime, parse_playtime_note_content
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -201,7 +202,7 @@ class PlaytimeService:
                 uow.playtime.save(rid, pt)
         except sqlite3.IntegrityError as e:
             self._log_debug(f"Failed to record session start for rom {rid}: {e}")
-            return {"success": False, "message": "Unknown ROM"}
+            return {"success": False, "reason": "unknown_rom", "message": "Unknown ROM"}
         return {"success": True}
 
     async def record_session_end(self, rom_id: int) -> dict[str, Any]:
@@ -227,18 +228,22 @@ class PlaytimeService:
             with self._uow_factory() as uow:
                 entry = uow.playtime.get(rom_id)
                 if entry is None or not entry.last_session_start:
-                    return {"success": False, "message": "No active session"}
+                    return {"success": False, "reason": "no_active_session", "message": "No active session"}
                 try:
                     entry.record_session(self._clock.now().isoformat())
                 except ValueError:
-                    return {"success": False, "message": "Failed to calculate session duration"}
+                    return {
+                        "success": False,
+                        "reason": ErrorCode.UNKNOWN.value,
+                        "message": "Failed to calculate session duration",
+                    }
                 uow.playtime.save(rom_id, entry)
                 duration = entry.last_session_duration_sec or 0
                 total_seconds = entry.total_seconds
                 session_count = entry.session_count
         except sqlite3.IntegrityError as e:
             self._log_debug(f"Failed to record session end for rom {rom_id}: {e}")
-            return {"success": False, "message": "Unknown ROM"}
+            return {"success": False, "reason": "unknown_rom", "message": "Unknown ROM"}
 
         # Best-effort sync playtime to RomM server notes (outside the UoW).
         with contextlib.suppress(Exception):

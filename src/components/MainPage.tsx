@@ -206,7 +206,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     testConnection()
       .then((r) => {
         setConnected(r.success);
-        setVersionError(r.error_code === "version_error" ? r.message : null);
+        setVersionError(r.reason === "version_error" ? r.message : null);
       })
       .catch((e) => logError(`Failed to test connection: ${e}`));
     getSettings()

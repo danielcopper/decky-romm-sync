@@ -21,6 +21,7 @@ from domain.bios import collect_firmware_status, compute_bios_level, format_bios
 from domain.bios_file import BiosFile
 from domain.firmware_cache import FirmwareCacheEntry
 from lib.errors import error_response
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -763,6 +764,7 @@ class FirmwareService:
         if errors:
             return {
                 "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
                 "deleted_count": deleted,
                 "message": f"Deleted {deleted} file(s), {len(errors)} error(s)",
             }

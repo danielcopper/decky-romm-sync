@@ -10,16 +10,12 @@ delegation. Covered here:
 - ``get_collections`` (happy + server-failure)
 - ``get_registry_platforms``
 
-Note on the failure shape: ``get_platforms`` / ``get_collections`` return
-``{success: False, message, error_code}`` — the *legacy* failure shape that
-predates the canonical ``{success, reason, message}`` used by the save
-callables. These contract tests assert the shape the backend *actually*
-returns (``error_code``, not ``reason``); pinning the real divergence is the
-point of this tier. ``error_code`` is the ``classify_error`` slug
-(``"connection_error"`` for a ``RommConnectionError``). When #972 (collapse
-the failure-shape dialects onto the canonical shape) lands, these assertions
-will break — that is the intended coupling; update them to the unified shape
-as part of that fix.
+Note on the failure shape: ``get_platforms`` / ``get_collections`` now return
+the canonical ``{success: False, reason, message}`` shape used across the
+callable surface. The ``reason`` slug is ``"server_unreachable"`` for a
+``RommConnectionError``. The earlier legacy divergence (``error_code`` under a
+separate key) has been collapsed onto the unified shape, so these assertions
+pin ``reason``, not ``error_code``.
 """
 
 from __future__ import annotations
@@ -96,16 +92,17 @@ async def test_get_platforms_happy_shape(harness):
 
 
 async def test_get_platforms_server_failure_shape(harness):
-    """Server unreachable → legacy failure shape: success False + message + error_code."""
+    """Server unreachable → canonical failure shape: success False + reason + message."""
     harness.romm.list_platforms_side_effect = RommConnectionError("offline")
     result = await harness.plugin.get_platforms()
     assert result["success"] is False
     assert "platforms" not in result
     assert isinstance(result["message"], str)
     assert result["message"]  # non-empty
-    # error_code is classify_error's slug (NOT a `reason` field) — the legacy shape.
-    assert result["error_code"] == "connection_error"
-    assert "reason" not in result
+    # reason is the canonical slug for a RommConnectionError.
+    assert result["reason"] == "server_unreachable"
+    assert "error_code" not in result
+    assert "error" not in result
 
 
 # ── get_collections ──────────────────────────────────────────────────────
@@ -127,15 +124,16 @@ async def test_get_collections_happy_shape(harness):
 
 
 async def test_get_collections_server_failure_shape(harness):
-    """User-collection fetch failure → legacy failure shape."""
+    """User-collection fetch failure → canonical failure shape."""
     harness.romm.list_collections_side_effect = RommConnectionError("offline")
     result = await harness.plugin.get_collections()
     assert result["success"] is False
     assert "collections" not in result
     assert isinstance(result["message"], str)
     assert result["message"]
-    assert result["error_code"] == "connection_error"
-    assert "reason" not in result
+    assert result["reason"] == "server_unreachable"
+    assert "error_code" not in result
+    assert "error" not in result
 
 
 # ── get_registry_platforms ───────────────────────────────────────────────

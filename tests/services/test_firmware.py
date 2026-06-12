@@ -576,7 +576,7 @@ class TestDownloadFirmware:
             result = await fw.download_firmware(10)
 
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
 
 
 class TestDownloadAllFirmware:
@@ -2290,7 +2290,7 @@ class TestDownloadFirmwareErrors:
 
         # Canonical failure shape, no exception escaped.
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
         assert "Invalid firmware metadata" in result["message"]
         # The renamed/downloaded file was cleaned up — nothing left dangling.
         assert not os.path.exists(os.path.join(str(bios_dir), "orphan.bin"))

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.version import meets_min_version
 from lib.errors import RommForbiddenError, error_response
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -68,20 +69,21 @@ class ConnectionService:
         """Probe the configured server and return a frontend-shaped result dict.
 
         The result dict always carries ``success`` and ``message``. On
-        failure, ``error_code`` classifies the cause (``config_error`` when
+        failure, ``reason`` classifies the cause (``config_error`` when
         the server URL is unset or no token has been minted yet,
-        ``version_error``, or an :func:`lib.errors.error_response` code).
-        On success or version failure, ``romm_version`` carries the
-        detected server version when the heartbeat exposed one.
+        :data:`ErrorCode.VERSION_ERROR`, or an
+        :func:`lib.errors.error_response` slug). On success or version
+        failure, ``romm_version`` carries the detected server version when
+        the heartbeat exposed one.
         """
         if not self._settings.get("romm_url"):
-            return {"success": False, "message": "No server URL configured", "error_code": "config_error"}
+            return {"success": False, "reason": "config_error", "message": "No server URL configured"}
 
         if not self._settings.get("romm_api_token"):
             return {
                 "success": False,
+                "reason": "config_error",
                 "message": "Not signed in — sign in to RomM first",
-                "error_code": "config_error",
             }
 
         try:
@@ -94,7 +96,7 @@ class ConnectionService:
             await self._loop.run_in_executor(None, self._romm_api.list_platforms)
         except Exception as e:
             resp = error_response(e)
-            if resp["error_code"] not in ("auth_error", "forbidden_error"):
+            if resp["reason"] != ErrorCode.AUTH_FAILED.value:
                 resp["message"] = f"Server reachable but API request failed: {resp['message']}"
             return resp
 
@@ -118,11 +120,11 @@ class ConnectionService:
         device previously minted, mints a fresh scoped token, and
         persists ``romm_api_token`` / ``romm_api_token_id``. The
         username/password are never persisted. Returns the same
-        ``success`` / ``message`` / ``error_code`` shape as
+        ``success`` / ``reason`` / ``message`` shape as
         :meth:`test_connection`.
         """
         if not romm_url:
-            return {"success": False, "message": "No server URL configured", "error_code": "config_error"}
+            return {"success": False, "reason": "config_error", "message": "No server URL configured"}
 
         self._settings["romm_url"] = romm_url
         if allow_insecure_ssl is not None:
@@ -147,7 +149,10 @@ class ConnectionService:
         try:
             minted = await self._loop.run_in_executor(None, self._mint, username, password)
         except RommForbiddenError:
-            return {"success": False, "message": _FORBIDDEN_TOKEN_MESSAGE, "error_code": "forbidden_error"}
+            # 403 on token mint: same AUTH_FAILED slug as a 401, but a distinct
+            # message — the account lacks token-creation permission (or a
+            # Cloudflare bot-fight 403 at the edge), not wrong credentials.
+            return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _FORBIDDEN_TOKEN_MESSAGE}
         except Exception as e:
             return error_response(e)
 
@@ -156,8 +161,8 @@ class ConnectionService:
         if not raw_token or token_id is None:
             return {
                 "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
                 "message": "RomM did not return a usable token",
-                "error_code": "api_error",
             }
 
         try:
@@ -233,7 +238,7 @@ class ConnectionService:
         return version
 
     def _version_gate_error(self, version: str | None) -> dict[str, Any] | None:
-        """Return a ``version_error`` dict when *version* is below the minimum.
+        """Return a :data:`ErrorCode.VERSION_ERROR` dict when *version* is below the minimum.
 
         ``development`` builds and an absent version bypass the gate.
         """
@@ -241,12 +246,12 @@ class ConnectionService:
             min_str = ".".join(str(v) for v in self._min_required_version)
             return {
                 "success": False,
+                "reason": ErrorCode.VERSION_ERROR.value,
                 "message": (
                     f"This plugin requires RomM {min_str} or newer. "
                     f"Your server is running {version}. "
                     "Please update your RomM server to continue using this plugin."
                 ),
-                "error_code": "version_error",
                 "romm_version": version,
             }
         return None

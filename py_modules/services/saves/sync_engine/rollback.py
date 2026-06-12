@@ -25,6 +25,7 @@ from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_path import sanitize_save_filename
 from lib.errors import classify_error
+from lib.list_result import ErrorCode
 from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
@@ -113,7 +114,7 @@ class RollbackOrchestrator:
         rom_id = int(rom_id)
 
         if action not in ("keep_local", "use_server"):
-            return {"success": False, "message": f"Invalid action: {action}"}
+            return {"success": False, "reason": "invalid_action", "message": f"Invalid action: {action}"}
 
         validation_error = self._validate_filename(rom_id, action, filename)
         if validation_error:
@@ -121,7 +122,7 @@ class RollbackOrchestrator:
 
         info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
-            return {"success": False, "message": "ROM not installed"}
+            return {"success": False, "reason": "not_installed", "message": "ROM not installed"}
         system = info["system"]
         saves_dir = info["saves_dir"]
 
@@ -136,12 +137,16 @@ class RollbackOrchestrator:
             )
         except Exception as e:
             _code, _msg = classify_error(e)
-            return {"success": False, "message": f"Failed to fetch saves: {_msg}"}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": f"Failed to fetch saves: {_msg}",
+            }
 
         active_slot = save_state.active_slot
         server_in_slot = self._matrix.filter_server_saves_to_slot(server_saves, active_slot)
         if not server_in_slot:
-            return {"success": False, "message": "No server save in active slot"}
+            return {"success": False, "reason": "no_server_save", "message": "No server save in active slot"}
         server = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
 
         actual_server_id = server.get("id")
@@ -155,7 +160,7 @@ class RollbackOrchestrator:
             )
             return {
                 "success": False,
-                "error_code": "stale_conflict",
+                "reason": ErrorCode.STALE_CONFLICT.value,
                 "message": "Server save changed since conflict was shown; please retry sync.",
             }
 
@@ -201,7 +206,7 @@ class RollbackOrchestrator:
             return {"success": True, "action": action}
         except Exception as e:
             self._logger.error(f"resolve_sync_conflict({rom_id}, {filename}, {action}) failed: {e}")
-            return {"success": False, "message": str(e)}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": str(e)}
 
     def _validate_filename(self, rom_id: int, action: str, filename: str) -> dict[str, Any] | None:
         """Reject non-basename filenames; ``None`` if the filename is safe.
@@ -220,14 +225,14 @@ class RollbackOrchestrator:
                 action,
                 e,
             )
-            return {"success": False, "message": "Invalid filename"}
+            return {"success": False, "reason": "invalid_filename", "message": "Invalid filename"}
         if sanitized != filename:
             self._logger.warning(
                 "resolve_sync_conflict(rom_id=%d, action=%s) rejected non-basename filename",
                 rom_id,
                 action,
             )
-            return {"success": False, "message": "Invalid filename"}
+            return {"success": False, "reason": "invalid_filename", "message": "Invalid filename"}
         return None
 
     def _resolve_conflict_use_server(

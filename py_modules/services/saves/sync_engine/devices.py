@@ -16,7 +16,14 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from lib.list_result import ErrorCode
 from services.saves._settings import save_sync_enabled
+
+# Both device callables short-circuit with the identical failure shape when
+# save sync is disabled — kept as one constant so the two branches never drift
+# into a per-call mini-dialect.
+_SYNC_DISABLED_REASON = "sync_disabled"
+_SYNC_DISABLED_MESSAGE = "Save sync is disabled"
 
 if TYPE_CHECKING:
     import asyncio
@@ -103,7 +110,14 @@ class DeviceRegistry:
         (``None``) the call degrades to no-fingerprint registration.
         """
         if not save_sync_enabled(self._settings):
-            return {"success": False, "device_id": "", "device_name": "", "disabled": True}
+            return {
+                "success": False,
+                "reason": _SYNC_DISABLED_REASON,
+                "message": _SYNC_DISABLED_MESSAGE,
+                "device_id": "",
+                "device_name": "",
+                "disabled": True,
+            }
 
         # Probe the RomM version when it has not been observed yet. Device
         # registration is the entrypoint reached from background launchers
@@ -166,12 +180,24 @@ class DeviceRegistry:
         except Exception as e:
             self._logger.warning(f"Server device registration failed: {e}")
 
-        return {"success": False, "device_id": "", "device_name": "", "error": "registration_failed"}
+        return {
+            "success": False,
+            "reason": ErrorCode.SERVER_UNREACHABLE.value,
+            "message": "Could not register device",
+            "device_id": "",
+            "device_name": "",
+        }
 
     async def list_devices(self, *, loop: asyncio.AbstractEventLoop) -> dict[str, Any]:
         """List all devices registered with the RomM server for this user."""
         if not save_sync_enabled(self._settings):
-            return {"success": False, "devices": [], "disabled": True}
+            return {
+                "success": False,
+                "reason": _SYNC_DISABLED_REASON,
+                "message": _SYNC_DISABLED_MESSAGE,
+                "devices": [],
+                "disabled": True,
+            }
         try:
             own_id = await loop.run_in_executor(None, self._get_device_id)
             devices = await loop.run_in_executor(
@@ -185,4 +211,9 @@ class DeviceRegistry:
             return {"success": True, "devices": enriched}
         except Exception as e:
             self._log_debug(f"list_devices failed: {e}")
-            return {"success": False, "devices": [], "error": "list_failed"}
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Could not load devices",
+                "devices": [],
+            }

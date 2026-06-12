@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.platform_names import decode_platform_names
+from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
@@ -88,7 +89,13 @@ class ShortcutRemovalService:
             return await self._loop.run_in_executor(None, self._remove_platform_shortcuts_io, platform_slug)
         except Exception as e:
             self._logger.error(f"Failed to get platform shortcuts: {e}")
-            return {"success": False, "message": f"Failed: {e}", "app_ids": [], "rom_ids": []}
+            return {
+                "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
+                "message": f"Failed: {e}",
+                "app_ids": [],
+                "rom_ids": [],
+            }
 
     def _remove_platform_shortcuts_io(self, platform_slug: str) -> dict[str, Any]:
         with self._uow_factory() as uow:

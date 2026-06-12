@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from lib.list_result import ErrorCode
 from lib.path_safety import is_safe_rom_path
 
 if TYPE_CHECKING:
@@ -104,13 +105,13 @@ class RomRemovalService:
         with self._uow_factory() as uow:
             install = uow.rom_installs.get(rom_id_int)
         if install is None:
-            return {"success": False, "message": "ROM not installed"}
+            return {"success": False, "reason": "not_installed", "message": "ROM not installed"}
 
         try:
             await self._loop.run_in_executor(None, self._remove_rom_io, rom_id_int, install)
         except Exception as e:
             self._logger.error(f"Failed to delete ROM files: {e}")
-            return {"success": False, "message": "Failed to delete ROM files"}
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "Failed to delete ROM files"}
 
         if self._download_queue_cleanup is not None:
             self._download_queue_cleanup.evict(rom_id_int)

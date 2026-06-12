@@ -901,7 +901,7 @@ class TestRetryLogic:
 
 
 class TestTestConnectionErrors:
-    """test_connection returns structured error_code in responses."""
+    """test_connection returns a canonical ``reason`` slug in failure responses."""
 
     @pytest.mark.asyncio
     async def test_config_error_when_url_empty(self, plugin):
@@ -909,7 +909,7 @@ class TestTestConnectionErrors:
         plugin.settings["romm_url"] = ""
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "config_error"
+        assert result["reason"] == "config_error"
         assert "No server URL" in result["message"]
 
     @pytest.mark.asyncio
@@ -924,7 +924,7 @@ class TestTestConnectionErrors:
         plugin._romm_api.list_platforms.side_effect = RommAuthError("401")
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "auth_error"
+        assert result["reason"] == "auth_failed"
         assert "Authentication failed" in result["message"]
 
     @pytest.mark.asyncio
@@ -937,7 +937,7 @@ class TestTestConnectionErrors:
         plugin._romm_api.heartbeat.side_effect = RommConnectionError("refused")
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "connection_error"
+        assert result["reason"] == "server_unreachable"
         assert "unreachable" in result["message"].lower()
 
     @pytest.mark.asyncio
@@ -950,7 +950,7 @@ class TestTestConnectionErrors:
         plugin._romm_api.heartbeat.side_effect = RommSSLError("cert fail")
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "ssl_error"
+        assert result["reason"] == "server_unreachable"
         assert "SSL" in result["message"]
 
     @pytest.mark.asyncio
@@ -979,7 +979,7 @@ class TestTestConnectionErrors:
         plugin._romm_api.list_platforms.side_effect = RommServerError("500", status_code=500)
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "server_error"
+        assert result["reason"] == "server_unreachable"
         assert "Server reachable but API request failed" in result["message"]
 
 
@@ -1010,7 +1010,7 @@ class TestVersionDetection:
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
         assert result["romm_version"] == "4.5.0"
 
     @pytest.mark.asyncio
@@ -1024,7 +1024,7 @@ class TestVersionDetection:
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
 
     @pytest.mark.asyncio
     async def test_47_version_rejected(self, plugin):
@@ -1037,7 +1037,7 @@ class TestVersionDetection:
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
 
     @pytest.mark.asyncio
     async def test_48_minimum_version_accepted(self, plugin):
@@ -1062,7 +1062,7 @@ class TestVersionDetection:
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
 
     @pytest.mark.asyncio
     async def test_development_version_accepted(self, plugin):
@@ -1113,7 +1113,7 @@ class TestVersionDetection:
         plugin._romm_api.heartbeat.side_effect = RommTimeoutError("timed out")
         result = await plugin.test_connection()
         assert result["success"] is False
-        assert result["error_code"] == "timeout_error"
+        assert result["reason"] == "server_unreachable"
 
 
 # ── Tests for uncovered HTTP adapter methods ──────────

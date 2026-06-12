@@ -113,7 +113,7 @@ class TestGetPlatforms:
 
         result = await plugin._sync_service.get_platforms()
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
 
     @pytest.mark.asyncio
     async def test_unexpected_response_type(self, plugin):
@@ -125,7 +125,7 @@ class TestGetPlatforms:
 
         result = await plugin._sync_service.get_platforms()
         assert result["success"] is False
-        assert result["error_code"] == "api_error"
+        assert result["reason"] == "server_unreachable"
 
 
 class TestSavePlatformSync:
@@ -324,7 +324,7 @@ class TestGetCollections:
         result = await plugin._sync_service.get_collections()
 
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
         assert "message" in result
 
     @pytest.mark.asyncio
@@ -636,7 +636,7 @@ class TestSetAllCollectionsSync:
         result = await plugin._sync_service.set_all_collections_sync(True)
 
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
 
     @pytest.mark.asyncio
     async def test_smart_scope_api_error_returns_error_response(self, plugin):
@@ -646,7 +646,7 @@ class TestSetAllCollectionsSync:
         result = await plugin._sync_service.set_all_collections_sync(True, scope="smart")
 
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
         assert "message" in result
         # Settings must not be mutated when the single-scope fetch fails.
         assert plugin._sync_service._settings["enabled_collections"]["smart"] == {}
@@ -659,7 +659,7 @@ class TestSetAllCollectionsSync:
         result = await plugin._sync_service.set_all_collections_sync(True, scope="franchise")
 
         assert result["success"] is False
-        assert "error_code" in result
+        assert "reason" in result
         assert "message" in result
         # Settings must not be mutated when the single-scope fetch fails.
         assert plugin._sync_service._settings["enabled_collections"]["franchise"] == {}

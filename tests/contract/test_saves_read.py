@@ -169,10 +169,10 @@ async def test_get_slot_delete_info_happy_shape(harness):
 
 
 async def test_get_slot_delete_info_not_installed_failure_shape(harness):
-    """Documented guard: sync on but not installed → {success: False, reason: not_installed}."""
+    """Documented guard: sync on but not installed → canonical {success: False, reason, message}."""
     enable_save_sync(harness)
     result = await harness.plugin.get_slot_delete_info(42, "main")
-    assert result == {"success": False, "reason": "not_installed"}
+    assert result == {"success": False, "reason": "not_installed", "message": "ROM is not installed"}
 
 
 async def test_get_slot_delete_info_server_failure_shape(harness):

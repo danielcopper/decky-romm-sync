@@ -431,7 +431,7 @@ class TestResolveSyncConflictStaleConflict:
         )
 
         assert result["success"] is False
-        assert result["error_code"] == "stale_conflict"
+        assert result["reason"] == "stale_conflict"
         assert result["message"]
         # No PUT/POST fired against the head save — the whole point of the guard.
         assert not any(c[0] == "upload_save" for c in fake.call_log)
@@ -471,7 +471,7 @@ class TestResolveSyncConflictStaleConflict:
         )
 
         assert result["success"] is False
-        assert result["error_code"] == "stale_conflict"
+        assert result["reason"] == "stale_conflict"
         # Local file untouched — no silent download of the wrong server save.
         assert save_path.read_bytes() == b"local-stale"
         # State unchanged.

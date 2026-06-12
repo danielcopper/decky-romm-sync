@@ -10,6 +10,11 @@ from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 
 SAVE_SYNC_DISABLED = "Save sync is disabled"
 DEVICE_NOT_REGISTERED = "Device not registered"
+# Bespoke ``reason`` slugs for the canonical failure shape on the save-sync
+# guard returns. Plain strings (not :class:`ErrorCode`) — these are
+# domain-specific skip/guard categories, not server-reachability failures.
+SAVE_SYNC_DISABLED_REASON = "sync_disabled"
+DEVICE_NOT_REGISTERED_REASON = "device_not_registered"
 # RetroArch ``savefiles_in_content_dir=true``: saves are written next to the
 # ROM, outside the saves tree the plugin syncs, so save sync is unavailable.
 # Neutral phrasing — the frontend treats this as a benign skip, not an error.

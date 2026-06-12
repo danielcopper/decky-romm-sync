@@ -26,5 +26,6 @@ export interface ListDevicesResponse {
   success: boolean;
   devices: RegisteredDevice[];
   disabled?: boolean;
-  error?: string;
+  reason?: string;
+  message?: string;
 }

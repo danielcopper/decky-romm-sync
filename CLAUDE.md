@@ -103,6 +103,10 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Service-independence contract self-check**: `scripts/check_service_independence_contract.py` — derives the expected
   service list from `py_modules/services/` and fails CI if `.importlinter`'s `service-independence` contract omits a
   service or carries a stale entry, keeping the hand-maintained `modules` list self-healing.
+- **Failure-shape dialect gate**: `scripts/check_failure_shape.py --check` — AST check that fails CI if any
+  `success: False` return in `services/` is missing the canonical `reason` + `message` keys or carries the forbidden
+  `error` / `error_code` key. The two documented carve-outs (discriminated-status unions, partial-success payloads) are
+  pattern-exempt. Enforces the "Callable response shapes" convention below.
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
 ## Architecture — Cosmic Python rules
@@ -249,15 +253,25 @@ the current state, not a settled ideal. Unification (converge `do_` onto `_io`) 
 ## Callable response shapes — canonical failure shape
 
 Decky callables that return a plain `dict` and can fail use the canonical failure shape
-`{success: False, reason: ErrorCode | str, message: str}`. Reuse `lib.list_result.ErrorCode` for server-reachability
-failures (`ErrorCode.SERVER_UNREACHABLE`). Never duplicate `reason` into a second `error` field; never replace `message`
-with `error`. `[ours]`
+`{success: False, reason: ErrorCode | str, message: str}`. Both `reason` and `message` are **required**. Reuse
+`lib.list_result.ErrorCode` (the Lean enum: `SERVER_UNREACHABLE`, `AUTH_FAILED`, `NOT_FOUND`, `UNSUPPORTED`, `UNKNOWN`,
+plus the frontend-routed `VERSION_ERROR` / `STALE_CONFLICT` / `STALE_PREVIEW`) for the coarse categories; bespoke
+non-server-reachability guards (`config_error`, `sync_disabled`, `not_installed`, `active_slot`, …) stay plain-string
+`reason` values — the `ErrorCode | str` union allows it. Transport failures collapse onto `SERVER_UNREACHABLE`; 401 and
+403 collapse onto `AUTH_FAILED` (same slug, but the `message` stays distinct so a Cloudflare bot-fight 403 reads
+differently from wrong credentials). The legacy `error_code` key and a second `error` key are **forbidden** — never
+duplicate `reason` into `error`, never replace `message` with `error`. `[ours]`
 
-Two carve-outs:
+`scripts/check_failure_shape.py --check` enforces this in CI (`mise run lint` + the CI gate step): every
+`success: False` return in `services/` must carry `reason` + `message` and must not carry `error` / `error_code`. In
+this repo, conventions with a mechanical check stay true; conventions in prose drift.
+
+Two carve-outs (also pattern-exempt in the gate):
 
 - **Discriminated-status unions** (the `status: "ok" | "server_unreachable" | "version_deleted" | …` shape used by the
-  saves version-history callables) keep the `status` discriminant — they carry more than two outcomes, so a binary
-  `success` boolean would erase the routing slug. Failure branches still carry `message: str`, not `error: str`.
+  saves version-history callables) keep the `status` discriminant — a dict with `status` and no `success`. They carry
+  more than two outcomes, so a binary `success` boolean would erase the routing slug. Failure branches still carry
+  `message: str`, not `error: str`.
 - **Partial-success responses** that return a full payload alongside a failure flag (e.g. `get_save_status`'s additive
   `server_query_failed: bool`, `get_save_setup_info`'s `recommended_action: "server_unreachable" | ...`) keep the
   additive flag. The call has half-broken half-working semantics that the binary boolean would erase.

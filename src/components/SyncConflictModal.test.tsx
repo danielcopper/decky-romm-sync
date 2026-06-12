@@ -208,7 +208,7 @@ describe("SyncConflictModal", () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockResolvedValue({
         success: false,
-        error_code: "stale_conflict",
+        reason: "stale_conflict",
         message: "out of date",
       });
 
@@ -239,7 +239,7 @@ describe("SyncConflictModal", () => {
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       vi.mocked(backend.resolveSyncConflict).mockResolvedValue({
         success: false,
-        error_code: "stale_conflict",
+        reason: "stale_conflict",
       });
 
       const conflict = makeConflict();

@@ -513,7 +513,9 @@ class TestSearchSgdbGames:
     async def test_no_api_key(self, plugin):
         plugin._sgdb_service._loop = asyncio.get_event_loop()
         result = await plugin.search_sgdb_games("mario")
-        assert result == {"success": False, "games": []}
+        assert result["success"] is False
+        assert result["games"] == []
+        assert result["reason"] == "no_api_key"
 
     @pytest.mark.asyncio
     async def test_network_error_returns_failure(self, plugin, fake_steamgrid_db_api):
@@ -523,7 +525,9 @@ class TestSearchSgdbGames:
 
         result = await plugin.search_sgdb_games("mario")
 
-        assert result == {"success": False, "games": []}
+        assert result["success"] is False
+        assert result["games"] == []
+        assert result["reason"] == "server_unreachable"
 
     @pytest.mark.asyncio
     async def test_caps_at_six_candidates(self, plugin, fake_steamgrid_db_api):

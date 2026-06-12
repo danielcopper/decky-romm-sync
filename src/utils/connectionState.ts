@@ -7,7 +7,7 @@ export function setRommConnectionState(s: "checking" | "connected" | "offline") 
   _state = s;
 }
 
-/** Version mismatch error — set when server returns error_code: "version_error" */
+/** Version mismatch error — set when server returns reason: "version_error" */
 let _versionError: string | null = null;
 const versionErrorListeners = new Set<(err: string | null) => void>();
 

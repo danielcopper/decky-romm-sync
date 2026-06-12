@@ -89,8 +89,8 @@ class TestTestConnectionBadPath:
         result = event_loop.run_until_complete(service.test_connection())
         assert result == {
             "success": False,
+            "reason": "config_error",
             "message": "No server URL configured",
-            "error_code": "config_error",
         }
         romm_api.heartbeat.assert_not_called()
 
@@ -99,7 +99,7 @@ class TestTestConnectionBadPath:
         settings: dict[str, Any] = {}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
-        assert result["error_code"] == "config_error"
+        assert result["reason"] == "config_error"
 
     def test_no_token_returns_config_error_without_probing(self, event_loop, romm_api, logger):
         """A configured URL but no minted token short-circuits before any network
@@ -109,8 +109,8 @@ class TestTestConnectionBadPath:
         result = event_loop.run_until_complete(service.test_connection())
         assert result == {
             "success": False,
+            "reason": "config_error",
             "message": "Not signed in — sign in to RomM first",
-            "error_code": "config_error",
         }
         romm_api.heartbeat.assert_not_called()
         romm_api.list_platforms.assert_not_called()
@@ -121,7 +121,7 @@ class TestTestConnectionBadPath:
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["success"] is False
-        assert result["error_code"] == "connection_error"
+        assert result["reason"] == "server_unreachable"
         romm_api.set_version.assert_called_once_with(None)
         romm_api.list_platforms.assert_not_called()
 
@@ -132,7 +132,7 @@ class TestTestConnectionBadPath:
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["success"] is False
-        assert result["error_code"] == "server_error"
+        assert result["reason"] == "server_unreachable"
         assert result["message"].startswith("Server reachable but API request failed: ")
 
     def test_list_platforms_auth_error_not_prefixed(self, event_loop, romm_api, logger):
@@ -142,7 +142,7 @@ class TestTestConnectionBadPath:
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["success"] is False
-        assert result["error_code"] == "auth_error"
+        assert result["reason"] == "auth_failed"
         assert not result["message"].startswith("Server reachable")
 
 
@@ -153,7 +153,7 @@ class TestTestConnectionVersionGate:
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["success"] is False
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
         assert result["romm_version"] == "4.5.0"
         assert "4.8.1" in result["message"]
         assert "4.5.0" in result["message"]
@@ -164,7 +164,7 @@ class TestTestConnectionVersionGate:
         romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.0"}}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
 
     def test_development_version_bypasses_gate(self, event_loop, romm_api, logger):
         """``development`` version string skips the minimum-version check."""
@@ -221,7 +221,7 @@ class TestTestConnectionEdgeCases:
             min_required_version=(5, 1, 0),
         )
         result = event_loop.run_until_complete(service.test_connection())
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
         assert "5.1.0" in result["message"]
 
 
@@ -330,7 +330,7 @@ class TestEstablishTokenBadPath:
     def test_empty_url_returns_config_error(self, event_loop, romm_api, logger):
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("", "u", "p"))
-        assert result == {"success": False, "message": "No server URL configured", "error_code": "config_error"}
+        assert result == {"success": False, "reason": "config_error", "message": "No server URL configured"}
         romm_api.mint_client_token.assert_not_called()
 
     def test_unreachable_returns_connection_error_no_mint(self, event_loop, romm_api, logger):
@@ -338,7 +338,7 @@ class TestEstablishTokenBadPath:
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
-        assert result["error_code"] == "connection_error"
+        assert result["reason"] == "server_unreachable"
         romm_api.mint_client_token.assert_not_called()
 
     def test_version_too_old_returns_version_error_no_mint(self, event_loop, romm_api, logger):
@@ -346,7 +346,7 @@ class TestEstablishTokenBadPath:
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
-        assert result["error_code"] == "version_error"
+        assert result["reason"] == "version_error"
         romm_api.mint_client_token.assert_not_called()
 
     def test_forbidden_mint_returns_actionable_message(self, event_loop, romm_api, logger):
@@ -354,7 +354,7 @@ class TestEstablishTokenBadPath:
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
-        assert result["error_code"] == "forbidden_error"
+        assert result["reason"] == "auth_failed"
         assert "cannot create API tokens" in result["message"]
 
     def test_auth_error_mint_returns_auth_error(self, event_loop, romm_api, logger):
@@ -362,21 +362,21 @@ class TestEstablishTokenBadPath:
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
-        assert result["error_code"] == "auth_error"
+        assert result["reason"] == "auth_failed"
 
     def test_missing_raw_token_returns_api_error(self, event_loop, romm_api, logger):
         romm_api.mint_client_token.return_value = {"id": 42}  # no raw_token
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
-        assert result["error_code"] == "api_error"
+        assert result["reason"] == "server_unreachable"
 
     def test_missing_id_returns_api_error(self, event_loop, romm_api, logger):
         romm_api.mint_client_token.return_value = {"raw_token": "rmm_x"}  # no id
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
-        assert result["error_code"] == "api_error"
+        assert result["reason"] == "server_unreachable"
 
     def test_persist_failure_returns_error_and_does_not_raise(self, event_loop, romm_api, logger, settings_persister):
         settings_persister.save_settings.side_effect = OSError("disk full")
@@ -389,7 +389,7 @@ class TestEstablishTokenBadPath:
         )
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
-        assert result["error_code"] == "unknown_error"
+        assert result["reason"] == "unknown"
         assert "disk full" in result["message"]
 
 

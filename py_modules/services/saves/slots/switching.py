@@ -150,7 +150,7 @@ class SlotSwitcher:
 
         # 1. Save sync must be enabled
         if not save_sync_enabled(self._settings):
-            return {"success": False, "reason": "sync_disabled"}
+            return {"success": False, "reason": "sync_disabled", "message": "Save sync is disabled"}
 
         # 2. Slot normalisation (empty → None for legacy mode)
         slot_str = str(new_slot).strip() if new_slot else ""
@@ -159,7 +159,7 @@ class SlotSwitcher:
         # 3. ROM must be installed
         info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
-            return {"success": False, "reason": "not_installed"}
+            return {"success": False, "reason": "not_installed", "message": "ROM is not installed"}
 
         # #239: RetroArch writes saves to the content dir — switching slots
         # would download/delete files under ``saves_dir``, which RetroArch
@@ -189,6 +189,7 @@ class SlotSwitcher:
             return {
                 "success": False,
                 "reason": readiness.get("reason", "pending_uploads"),
+                "message": "Pending local changes — upload or discard first",
                 "files": readiness.get("files", []),
             }
 
@@ -203,7 +204,7 @@ class SlotSwitcher:
         except Exception as e:
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
                 "message": str(e),
             }
 
