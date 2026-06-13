@@ -285,6 +285,7 @@ async function loadData(
   appId: number,
   cancelled: () => boolean,
   romIdRef: React.MutableRefObject<number | null>,
+  platformSlugRef: React.MutableRefObject<string>,
   setter: React.Dispatch<React.SetStateAction<PanelState>>,
 ): Promise<void> {
   try {
@@ -302,6 +303,7 @@ async function loadData(
     const platformSlug = cached.platform_slug || "";
 
     romIdRef.current = romId;
+    platformSlugRef.current = platformSlug;
 
     const biosStatus = biosStatusFromCache(cached.bios_status);
     // bios_level is computed by the backend (`compute_bios_level`) and shipped on
@@ -387,6 +389,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     slotsLoading: false,
   });
   const romIdRef = useRef<number | null>(null);
+  // Tracks the panel's own platform so the broadcast `bios` data-changed
+  // handler can reject events for other platforms without a stale closure
+  // (mirrors romIdRef). bios events fan out to every mounted panel (#1082).
+  const platformSlugRef = useRef<string>("");
   const [migration, setMigration] = useState(getMigrationState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
 
@@ -411,7 +417,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   useEffect(() => {
     let cancelled = false;
 
-    detach(loadData(appId, () => cancelled, romIdRef, setState));
+    detach(loadData(appId, () => cancelled, romIdRef, platformSlugRef, setState));
 
     // Listen for uninstall events to update state (uses ref to avoid stale closure)
     const onUninstall = (e: Event) => {
@@ -461,8 +467,13 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     };
 
     const handleBiosChange = async (detail: Extract<RommDataChangedDetail, { type: "bios" }>) => {
-      if (!detail.platform_slug) return;
+      // bios events fan out to every mounted panel — ignore platforms other
+      // than this panel's own, both to avoid cross-platform BIOS-list bleed
+      // and to skip the wasted checkPlatformBios fetch (#1082). Read via ref
+      // to avoid a stale closure.
+      if (!detail.platform_slug || detail.platform_slug !== platformSlugRef.current) return;
       const updated = await checkPlatformBios(detail.platform_slug).catch((): BiosStatus => ({ needs_bios: false }));
+      if (cancelled) return;
       const biosLevel = updated.needs_bios ? (updated.bios_level ?? null) : null;
       setState((prev) => ({ ...prev, biosStatus: updated.needs_bios ? updated : null, biosLevel }));
     };

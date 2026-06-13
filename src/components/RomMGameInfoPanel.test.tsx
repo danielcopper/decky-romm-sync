@@ -132,7 +132,6 @@ vi.mock("../utils/saveSortMigrationStore", () => ({
   }),
 }));
 import * as saveSortMigrationStore from "../utils/saveSortMigrationStore";
-import { detach } from "../utils/detach";
 
 // ----- @decky/ui — global stub from test-setup.ts covers Focusable +
 // DialogButton. Pass-through is enough for this panel.
@@ -905,22 +904,25 @@ describe("RomMGameInfoPanel", () => {
       expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
     });
 
-    it("bios: detail.platform_slug provided → calls checkPlatformBios; updates biosStatus when needs_bios=true", async () => {
-      await mountWithRomId(60);
+    it("bios: matching platform_slug → calls checkPlatformBios; updates biosStatus when needs_bios=true", async () => {
+      // Panel's own platform is snes; a matching-platform bios event must be
+      // applied (the positive case for the #1082 guard).
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 60,
+        platform_slug: "snes",
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
       vi.mocked(backend.checkPlatformBios).mockResolvedValue({
         needs_bios: true,
         server_count: 2,
         local_count: 2,
         all_downloaded: true,
       });
-      const { container } = await new Promise<{
-        container: HTMLElement;
-      }>((resolve) => {
-        // Already rendered via mountWithRomId — get container via re-render?
-        // Use a fresh render that uses the new mock.
-        const view = render(<RomMGameInfoPanel appId={testAppId} />);
-        detach(flushAsync().then(() => resolve({ container: view.container })));
-      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
       await act(async () => {
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
@@ -938,7 +940,14 @@ describe("RomMGameInfoPanel", () => {
       // The check_platform_bios refresh path now ships bios_level straight from
       // the backend (compute_bios_level) — the handler threads it through, never
       // re-deriving from counts. amber (#d4a72c) is the observable side effect.
-      await mountWithRomId(60);
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 60,
+        platform_slug: "snes",
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
       vi.mocked(backend.checkPlatformBios).mockResolvedValue({
         needs_bios: true,
         server_count: 5,
@@ -982,10 +991,20 @@ describe("RomMGameInfoPanel", () => {
     });
 
     it("bios: checkPlatformBios rejection → falls back to { needs_bios: false } (non-vacuous .catch)", async () => {
-      // Mount without bios_status so biosStatus starts null and the BIOS
-      // tab is NOT visible — the assertion that it STAYS hidden after the
-      // rejection is the fallback-state observable.
-      const { container } = await mountWithRomId(60);
+      // Mount on the snes platform (so the #1082 guard lets the matching
+      // event through) without bios_status, so biosStatus starts null and
+      // the BIOS tab is NOT visible — the assertion that it STAYS hidden
+      // after the rejection is the fallback-state observable.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 60,
+        platform_slug: "snes",
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
       expect(container.textContent).not.toContain("BIOS");
       vi.mocked(backend.checkPlatformBios).mockRejectedValue(new Error("net"));
       await act(async () => {
@@ -1003,6 +1022,95 @@ describe("RomMGameInfoPanel", () => {
       // BIOS tab remains hidden.
       expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("onDataChanged error"));
       expect(container.textContent).not.toContain("BIOS");
+    });
+
+    it("bios: cross-platform event (#1082) → ignored; no fetch, foreign BIOS list never bleeds in", async () => {
+      // Regression for #1082: bios events fan out to every mounted panel.
+      // A gba panel must ignore a psx bios event (e.g. a psx BIOS bulk
+      // download) instead of repainting itself with the psx BIOS list.
+      // Mount a gba panel WITHOUT bios_status, so the BIOS tab starts hidden.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 70,
+        platform_slug: "gba",
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("BIOS");
+
+      // The psx event would, if applied, repaint this panel with a needs_bios
+      // psx status (surfacing the BIOS tab + a psx-specific marker). Make the
+      // assertion non-vacuous: a distinct psx payload that must NOT appear.
+      vi.mocked(backend.checkPlatformBios).mockClear();
+      vi.mocked(backend.checkPlatformBios).mockResolvedValue({
+        needs_bios: true,
+        server_count: 1,
+        local_count: 1,
+        all_downloaded: true,
+        files: [
+          {
+            file_name: "PSX_BLEED_MARKER.bin",
+            description: "PSX BIOS",
+            classification: "required",
+            downloaded: true,
+          },
+        ],
+      } as never);
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "bios", platform_slug: "psx" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Guard returns BEFORE the fetch — checkPlatformBios("psx") never runs.
+      expect(vi.mocked(backend.checkPlatformBios)).not.toHaveBeenCalled();
+      // BIOS tab stayed hidden; the psx marker never bled into this gba panel.
+      expect(container.textContent).not.toContain("BIOS");
+      expect(container.innerHTML).not.toContain("PSX_BLEED_MARKER.bin");
+    });
+
+    it("bios: matching-platform event (#1082) → still applied (guard not over-broad)", async () => {
+      // The guard must reject other platforms WITHOUT blocking the panel's own.
+      // Mount a gba panel and feed it a gba bios event — it must update.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 70,
+        platform_slug: "gba",
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("BIOS");
+
+      vi.mocked(backend.checkPlatformBios).mockClear();
+      vi.mocked(backend.checkPlatformBios).mockResolvedValue({
+        needs_bios: true,
+        server_count: 1,
+        local_count: 1,
+        all_downloaded: true,
+      });
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "bios", platform_slug: "gba" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Own-platform event flows through: fetch fired and BIOS tab surfaced.
+      expect(vi.mocked(backend.checkPlatformBios)).toHaveBeenCalledWith("gba");
+      expect(container.textContent).toContain("BIOS");
     });
 
     it("core_changed: invalidates cache + re-fetches getCachedGameDetail and updates biosStatus state", async () => {
