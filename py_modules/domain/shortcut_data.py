@@ -58,9 +58,15 @@ def label_to_core_so(available_cores: list[dict[str, Any]], label: str) -> str |
 def build_launch_options(invocation: str, path: str) -> str:
     """Compose the Steam shortcut launch command from *invocation* and ROM *path*.
 
-    The path is quoted so paths with spaces survive the launcher's ``exec "$@"``.
+    The path is double-quoted so paths with spaces survive the launcher's
+    ``exec "$@"``. Embedded ``\\`` and ``"`` in the path are backslash-escaped
+    (backslash first, then quote) so a server-controlled ROM filename cannot
+    break out of the quoted token and inject extra argv elements into the
+    emulator invocation. Only the path is escaped — *invocation* is trusted
+    build-time text whose own ``-e "..."`` quoting must survive verbatim.
     """
-    return f'{invocation} "{path}"'
+    escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{invocation} "{escaped}"'
 
 
 def build_shortcuts_data(

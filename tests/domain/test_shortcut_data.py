@@ -1,6 +1,7 @@
 """Tests for domain/shortcut_data.py pure functions."""
 
 import os
+import shlex
 
 from domain.shortcut_data import (
     RETRODECK_INVOCATION,
@@ -106,6 +107,73 @@ class TestBuildLaunchOptions:
 
     def test_empty_path_still_quoted(self):
         assert build_launch_options(RETRODECK_INVOCATION, "") == 'flatpak run net.retrodeck.retrodeck ""'
+
+    # The tests below use shlex.split(posix=True) as a reference POSIX /
+    # ``\"``-honoring tokenizer: it proves the escaping is internally correct (a
+    # server-controlled ROM filename round-trips to exactly ONE final argv token).
+    # Parity with Steam's actual (closed-source) launch-time tokenizer is verified
+    # on-device, not here.
+
+    def test_quote_in_path_round_trips_to_one_arg(self):
+        path = '/roms/gba/Game".gba'
+        result = build_launch_options(RETRODECK_INVOCATION, path)
+        assert shlex.split(result, posix=True) == [
+            "flatpak",
+            "run",
+            "net.retrodeck.retrodeck",
+            path,
+        ]
+
+    def test_argv_injection_attempt_is_neutralized(self):
+        path = '/roms/gba/evil" --inject-flag --foo.gba'
+        result = build_launch_options(RETRODECK_INVOCATION, path)
+        tokens = shlex.split(result, posix=True)
+        # The 3 invocation tokens + exactly ONE final token equal to the original
+        # path: --inject-flag / --foo never become separate argv elements.
+        assert tokens == ["flatpak", "run", "net.retrodeck.retrodeck", path]
+
+    def test_backslash_in_path_round_trips(self):
+        path = "/roms/gba/a\\b.gba"  # one literal backslash
+        result = build_launch_options(RETRODECK_INVOCATION, path)
+        tokens = shlex.split(result, posix=True)
+        assert tokens[-1] == path
+        assert tokens == ["flatpak", "run", "net.retrodeck.retrodeck", path]
+
+    def test_trailing_backslash_does_not_eat_closing_quote(self):
+        path = "/roms/gba/dir\\"  # ends in one literal backslash
+        result = build_launch_options(RETRODECK_INVOCATION, path)
+        tokens = shlex.split(result, posix=True)
+        # Without escaping, the trailing \ would escape the closing " and merge
+        # the token with whatever follows; backslash-escaping keeps it one arg.
+        assert tokens[-1] == path
+        assert tokens == ["flatpak", "run", "net.retrodeck.retrodeck", path]
+
+    def test_combined_backslash_and_quote_round_trips(self):
+        path = '/roms/gba/a\\"b.gba'  # one backslash followed by a quote
+        result = build_launch_options(RETRODECK_INVOCATION, path)
+        tokens = shlex.split(result, posix=True)
+        assert tokens[-1] == path
+        assert tokens == ["flatpak", "run", "net.retrodeck.retrodeck", path]
+
+    def test_path_is_just_a_quote(self):
+        path = '"'  # filename consisting of a single double-quote
+        result = build_launch_options(RETRODECK_INVOCATION, path)
+        assert shlex.split(result, posix=True) == [
+            "flatpak",
+            "run",
+            "net.retrodeck.retrodeck",
+            path,
+        ]
+
+    def test_override_invocation_is_preserved_unescaped(self):
+        invocation = resolve_emulator_invocation({"id": 1}, "mgba")
+        path = '/roms/gba/Game".gba'
+        result = build_launch_options(invocation, path)
+        # The invocation's own -e "..." quoting is part of the trusted prefix and
+        # is NOT escaped — it survives verbatim in the launch string.
+        assert '-e "%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/mgba.so %ROM%"' in result
+        # The path still round-trips to a single final argv token under shlex.
+        assert shlex.split(result, posix=True)[-1] == path
 
 
 class TestBuildShortcutsData:

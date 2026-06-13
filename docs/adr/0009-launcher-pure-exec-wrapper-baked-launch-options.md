@@ -51,8 +51,11 @@ per-game emulator/core override, and which) is a **service-layer DB read** —
 [ADR-0011](0011-per-game-core-override-in-db-applied-via-e-flag.md)'s `ActiveCoreResolver.active_core_for_rom(rom_id)`,
 backed by `roms.emulator_override` — that resolves the core and passes it into the seam. The seam only turns the chosen
 core into a command string. Multi-emulator support ([#129](https://github.com/danielcopper/decky-romm-sync/issues/129))
-extends this single seam, not the launcher. The ROM path is quoted so paths with spaces survive `exec "$@"`.
-`launch_options` carries:
+extends this single seam, not the launcher. The ROM path is double-quoted so paths with spaces survive `exec "$@"`, and
+any embedded `\` and `"` in the path are backslash-escaped (backslash first, then quote) so a server-controlled ROM
+filename cannot break out of the quoted token and inject extra argv elements into the emulator invocation through
+Steam's launch-options tokenizer. Only the path is escaped — the emulator invocation itself is trusted build-time text
+whose own `-e "..."` quoting must survive verbatim. `launch_options` carries:
 
 - the **full command** for an installed ROM, written at **sync** (for ROMs already on disk), at **download-complete**
   (the moment a ROM becomes installed), and **re-resolved on RetroDECK-home migration** (a new
