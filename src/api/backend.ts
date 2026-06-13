@@ -374,6 +374,14 @@ export const refreshMigrationState = callable<[], { retrodeck: MigrationStatus; 
   "refresh_migration_state",
 );
 
+// One-shot corrupt-settings-reset notice. When settings.json was unparseable
+// at boot it is backed up to settings.json.corrupt-<ts> and reset to defaults;
+// the first call returns reset:true with the backup filename, then clears so
+// the toast fires once per process.
+export const consumeSettingsResetNotice = callable<[], { reset: boolean; backed_up_to: string | null }>(
+  "consume_settings_reset_notice",
+);
+
 // End-of-session orchestration — collapses recordSessionEnd + syncAchievementsAfterSession
 // + postExitSync + refreshMigrationState into a single backend round-trip.
 // See SessionLifecycleService in py_modules/services/session_lifecycle.py.

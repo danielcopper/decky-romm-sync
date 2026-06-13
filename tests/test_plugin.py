@@ -464,6 +464,38 @@ class TestInsecureSslSetting:
         assert plugin.settings["romm_allow_insecure_ssl"] is False
 
 
+class TestConsumeSettingsResetNotice:
+    """The consume_settings_reset_notice callable drains the adapter's one-shot
+    corrupt-settings-reset flag and clears it after the first read."""
+
+    @pytest.mark.asyncio
+    async def test_clean_boot_returns_reset_false(self, plugin, tmp_path):
+        import decky
+
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+        result = await plugin.consume_settings_reset_notice()
+        assert result == {"reset": False, "backed_up_to": None}
+
+    @pytest.mark.asyncio
+    async def test_after_corruption_returns_reset_true_then_clears(self, plugin, tmp_path):
+        import decky
+        from fakes.system_time import FakeClock
+
+        settings_dir = str(tmp_path)
+        clock = FakeClock()
+        plugin._persistence = PersistenceAdapter(settings_dir, settings_dir, decky.logger, clock=clock)
+        with open(os.path.join(settings_dir, "settings.json"), "w") as f:
+            f.write("CORRUPT{{{")
+        plugin._persistence.load_settings()
+
+        first = await plugin.consume_settings_reset_notice()
+        assert first["reset"] is True
+        assert first["backed_up_to"] == f"settings.json.corrupt-{int(clock.time())}"
+        # Drains once per process.
+        second = await plugin.consume_settings_reset_notice()
+        assert second == {"reset": False, "backed_up_to": None}
+
+
 class TestSettingsFilePermissions:
     def test_save_settings_creates_file_with_0600(self, plugin, tmp_path):
         import decky
@@ -643,6 +675,8 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_whitelist_settings",
     "update_whitelist_settings",
     "save_collection_platform_groups",
+    # Read-only one-shot corrupt-settings-reset notice drain (frontend toast).
+    "consume_settings_reset_notice",
     # Read-only RetroDECK path-resolution health probe (for the frontend banner).
     "get_retrodeck_status",
     # Cancel operations — must remain callable mid-operation when migration
@@ -901,7 +935,7 @@ class TestMainStartupOrdering:
                 hostname_provider=MagicMock(),
                 machine_id_provider=MagicMock(),
             ),
-            handles=BootstrapHandles(debug_logger=MagicMock()),
+            handles=BootstrapHandles(debug_logger=MagicMock(), persistence=MagicMock()),
         )
 
         with (

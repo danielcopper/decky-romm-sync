@@ -13,7 +13,9 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act } from "@testing-library/react";
+import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
+import { consumeSettingsResetNotice } from "./api/backend";
 import type { DownloadCompleteEvent, SyncStaleData } from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
@@ -243,5 +245,49 @@ describe("index.tsx — migration_relaunch_options listener", () => {
 
     plugin.onDismount();
     expect(deckyEventListenerCount("migration_relaunch_options")).toBe(0);
+  });
+});
+
+describe("index.tsx — corrupt-settings reset notice", () => {
+  beforeEach(() => {
+    vi.mocked(toaster.toast).mockClear();
+    logError.mockClear();
+    vi.mocked(consumeSettingsResetNotice).mockReset();
+  });
+
+  it("toasts the backup path when the boot notice reports a reset", async () => {
+    vi.mocked(consumeSettingsResetNotice).mockResolvedValue({
+      reset: true,
+      backed_up_to: "settings.json.corrupt-1781697600",
+    });
+    const plugin = pluginFactory();
+    await flush();
+
+    expect(toaster.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "RomM Sync",
+        body: expect.stringContaining("settings.json.corrupt-1781697600"),
+      }),
+    );
+    plugin.onDismount();
+  });
+
+  it("does not toast when the boot notice reports no reset", async () => {
+    vi.mocked(consumeSettingsResetNotice).mockResolvedValue({ reset: false, backed_up_to: null });
+    const plugin = pluginFactory();
+    await flush();
+
+    expect(toaster.toast).not.toHaveBeenCalled();
+    plugin.onDismount();
+  });
+
+  it("surfaces a logError when the reset-notice check rejects", async () => {
+    vi.mocked(consumeSettingsResetNotice).mockRejectedValue(new Error("boom"));
+    const plugin = pluginFactory();
+    await flush();
+
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("Failed to check settings reset notice"));
+    expect(toaster.toast).not.toHaveBeenCalled();
+    plugin.onDismount();
   });
 });

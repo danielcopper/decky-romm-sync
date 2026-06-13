@@ -193,6 +193,7 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
     plugin.loop = loop
     plugin.settings = result.stores.settings
     plugin._debug_logger = result.handles.debug_logger
+    plugin._persistence = result.handles.persistence
     plugin._retrodeck_paths = result.callbacks.retrodeck_paths
     for attr, key in _BOUND_SERVICE_ATTRS.items():
         setattr(plugin, attr, services[key])

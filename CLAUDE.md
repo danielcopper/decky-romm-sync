@@ -74,6 +74,14 @@ silent omission. The CI check enforces this.
   it. See [ConnectionService notes](docs/architecture/backend-architecture.md#connectionservice-notes).
 - **Decky callables must be async**: Even if the method body is synchronous, Decky's callable framework requires
   `async def`. Do not remove `async` from callable methods in main.py.
+- **Settings durability**: `settings.json` is written crash-safe — write-tmp → `fsync(tmp)` → `os.replace()` →
+  `fsync(dir)` (the Steam Deck's ext4 can otherwise leave a truncated file on power loss, and boot rewrites the file
+  every run). A corrupt/unparseable `settings.json` is **never silently factory-reset**: it is logged loudly, backed up
+  to `settings.json.corrupt-<ts>` (`<ts>` from the injected `Clock`), and the user is toasted (via the
+  `consume_settings_reset_notice` callable, drained once per process) before defaults are written — so the user knows to
+  re-enter the server URL and sign in, and the original bytes survive for recovery. The settings `version` is stamped
+  `max(stored, _SETTINGS_VERSION)` on write — a file from a newer plugin is **never down-stamped**. `PersistenceAdapter`
+  takes an injected `clock` (bootstrap threads the shared `SystemClock`).
 
 ## Current State
 

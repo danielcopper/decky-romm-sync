@@ -282,8 +282,26 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
   writes from corrupting state.
 - **Schema versioning**: every state file written includes a `version` field. On read, a mismatch causes the file to be
   treated as absent (cache discarded, state reset to defaults) rather than loading incompatible data.
-- **Atomic writes**: data is written to a temporary file in the same directory, then renamed into place with
-  `os.replace()`, so a crash mid-write never leaves a partial file.
+- **Crash-safe atomic writes**: `settings.json` is written with the durable write-tmp → `fsync(tmp)` → `os.replace()` →
+  `fsync(dir)` recipe. The temp file's bytes are forced to disk **before** the rename, and the directory entry the
+  rename creates is forced to disk **after** it. This closes the power-loss window on the Steam Deck's ext4: without the
+  fsyncs, a crash after the rename but before the kernel flushed could leave a truncated or empty `settings.json` —
+  which boot rewrites every run, so the window recurred. The directory fsync is best-effort: on the rare filesystem that
+  rejects it, the error is logged at debug and swallowed (the content is already durable via the temp-file fsync).
+- **Corrupt-file quarantine (never silently factory-reset)**: a `FileNotFoundError` on read is a legitimate first run —
+  defaults are returned silently, no backup, no flag. An **unparseable** `settings.json` (a `JSONDecodeError`, e.g. a
+  truncated file from a prior crash) is the data-loss hazard: returning defaults silently would let the immediate
+  bootstrap save overwrite the corrupt file, wiping the user's RomM URL, API token, SGDB key, and platform/collection
+  selections with no trace. Instead the adapter logs the corruption loudly at error level, renames the unparseable file
+  aside to `settings.json.corrupt-<ts>` (the `<ts>` is the injected `Clock`'s epoch seconds — filesystem-safe), and sets
+  a transient in-memory `_corrupt_reset` flag (never persisted) before returning defaults. If the backup rename itself
+  fails (e.g. permissions), the error is logged and defaults are still returned so boot never crashes. The flag is
+  surfaced to the frontend through the `consume_settings_reset_notice` callable (drains once per process), which toasts
+  the user that their settings were reset and where the backup landed so they can re-enter the server URL and sign in.
+- **Version never down-stamps**: on write, the `version` field is stamped to `max(stored_version, _SETTINGS_VERSION)`. A
+  file written by a **newer** plugin (stored version > current) is preserved as-is rather than down-stamped, so a later
+  re-upgrade does not re-run migrations against down-stamped data. An absent or older version is stamped up to the
+  current `_SETTINGS_VERSION`.
 
 ### Domain (`py_modules/domain/`)
 

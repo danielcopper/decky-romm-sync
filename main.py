@@ -75,6 +75,10 @@ class Plugin:
         )
         self.settings = result.stores.settings
         self._debug_logger = result.handles.debug_logger
+        # Persistence adapter — held directly so consume_settings_reset_notice
+        # can drain the one-shot corrupt-settings-reset flag (a transient
+        # bootstrap signal, not service state) for the frontend toast.
+        self._persistence = result.handles.persistence
         # RetroDECK path resolver — held directly so the get_retrodeck_status
         # callable can read the resolution health without routing through a
         # service (it's a pure adapter read, no orchestration).
@@ -513,3 +517,14 @@ class Plugin:
 
     async def refresh_migration_state(self):
         return await self._migration_service.refresh_state()
+
+    async def consume_settings_reset_notice(self):
+        """Drain the one-shot corrupt-settings-reset notice for the frontend.
+
+        Returns ``{"reset": bool, "backed_up_to": str | None}``. When a
+        corrupt ``settings.json`` was backed up and reset at boot, the first
+        call returns ``reset: True`` with the backup filename; the flag is
+        cleared on read so the toast fires at most once per process. A clean
+        boot returns ``{"reset": False, "backed_up_to": None}``.
+        """
+        return self._persistence.consume_settings_reset_notice()

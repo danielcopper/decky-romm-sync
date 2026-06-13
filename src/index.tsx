@@ -23,6 +23,7 @@ import {
   getAllPlaytime,
   getMigrationStatus,
   getSaveSortMigrationStatus,
+  consumeSettingsResetNotice,
   testConnection,
   logError,
   logInfo,
@@ -227,6 +228,25 @@ export default definePlugin(() => {
         }
       } catch (e) {
         logError(`Failed to check save sort migration status: ${e}`);
+      }
+    })(),
+  );
+
+  // Surface a corrupt-settings reset that happened at boot. The backend backs
+  // up an unparseable settings.json to settings.json.corrupt-<ts> and resets to
+  // defaults; the notice drains once per process so the toast fires only once.
+  detach(
+    (async () => {
+      try {
+        const notice = await consumeSettingsResetNotice();
+        if (notice.reset) {
+          toaster.toast({
+            title: "RomM Sync",
+            body: `Your settings file was corrupt and has been reset. A backup was saved to ${notice.backed_up_to}. Please re-enter your server URL and sign in again.`,
+          });
+        }
+      } catch (e) {
+        logError(`Failed to check settings reset notice: ${e}`);
       }
     })(),
   );

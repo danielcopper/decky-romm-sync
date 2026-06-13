@@ -185,13 +185,15 @@ class BootstrapHandles:
     """Bootstrap outputs ``main.py`` needs that don't fit the wiring bundles.
 
     Anything ``Plugin`` itself binds (not the services) lives here:
-    the debug logger forwarded by ``Plugin._log_debug``. The bundles
-    already cover everything passed to ``wire_services``; this struct
-    keeps those Plugin-only handles typed instead of returning them
-    via the untyped dict shape of yore.
+    the debug logger forwarded by ``Plugin._log_debug`` and the
+    persistence adapter ``Plugin`` reads the one-shot corrupt-settings
+    reset notice from. The bundles already cover everything passed to
+    ``wire_services``; this struct keeps those Plugin-only handles typed
+    instead of returning them via the untyped dict shape of yore.
     """
 
     debug_logger: DebugLogger
+    persistence: PersistenceAdapter
 
 
 @dataclass(frozen=True)
@@ -291,7 +293,11 @@ def bootstrap(
         logger=logger,
     )
 
-    persistence = PersistenceAdapter(settings_dir, runtime_dir, logger)
+    # SystemClock is dependency-free; construct it here so the single shared
+    # instance threads into PersistenceAdapter (corrupt-settings backup stamp)
+    # and every later seam (uuid_gen/sleeper neighbours, runtime bundle).
+    clock = SystemClock()
+    persistence = PersistenceAdapter(settings_dir, runtime_dir, logger, clock=clock)
     settings = persistence.load_settings()
     # One-time JSON→JSON lift (ADR-0003): fold the legacy save-sync knobs +
     # device_name out of save_sync_state.json before the schema bump stamps
@@ -323,7 +329,6 @@ def bootstrap(
     rom_file_store = RomFileAdapter()
     save_file_store = SaveFileAdapter()
     path_probe = PathProbeAdapter()
-    clock = SystemClock()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
@@ -365,7 +370,7 @@ def bootstrap(
         hostname_provider=hostname_provider,
         machine_id_provider=machine_id_provider,
     )
-    handles = BootstrapHandles(debug_logger=debug_logger)
+    handles = BootstrapHandles(debug_logger=debug_logger, persistence=persistence)
 
     return BootstrapResult(
         adapters=adapters,
