@@ -13,7 +13,7 @@ import logging
 import os
 from typing import Any
 
-_SETTINGS_VERSION = 7
+_SETTINGS_VERSION = 8
 _LOCK_EXT = ".lock"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -22,6 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "romm_pass": "",
     "romm_api_token": None,
     "romm_api_token_id": None,
+    "romm_api_token_origin": None,
     "enabled_platforms": {},
     "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
     "collection_create_platform_groups": False,

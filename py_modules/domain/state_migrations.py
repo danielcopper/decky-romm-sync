@@ -29,6 +29,8 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v5_to_v6(new_data)
     if version < 7:
         new_data = _migrate_v6_to_v7(new_data)
+    if version < 8:
+        new_data = _migrate_v7_to_v8(new_data)
     return new_data
 
 
@@ -191,4 +193,18 @@ def _migrate_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
     """
     data.setdefault("platform_cores", {})
     data["version"] = 7
+    return data
+
+
+def _migrate_v7_to_v8(data: dict[str, Any]) -> dict[str, Any]:
+    """v<8 → v8: seed the token's minting origin slot.
+
+    Introduces ``romm_api_token_origin`` as a ``None`` placeholder so
+    post-migration reads find the key. ``None`` means "origin unknown" — a
+    token minted before host-binding — and is treated as legacy by the auth
+    guard (still attached, never blocked). The origin is stamped on the next
+    sign-in; no existing token's origin is inferred here.
+    """
+    data.setdefault("romm_api_token_origin", None)
+    data["version"] = 8
     return data

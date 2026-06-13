@@ -9,6 +9,7 @@ import { FC } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, DialogButton, Field, showModal, ToggleField } from "@decky/ui";
 import { TextInputModal } from "./TextInputModal";
 import { ConnectModal } from "./ConnectModal";
+import { isHttpsUrl } from "../../utils/serverUrl";
 
 interface ConnectionSectionProps {
   url: string;
@@ -57,7 +58,7 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
           </DialogButton>
         </Field>
       </PanelSectionRow>
-      {url.toLowerCase().startsWith("https") && (
+      {isHttpsUrl(url) && (
         <PanelSectionRow>
           <ToggleField
             label="Allow Insecure SSL"

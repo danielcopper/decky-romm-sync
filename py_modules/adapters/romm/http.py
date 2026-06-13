@@ -29,7 +29,9 @@ from lib.errors import (
     RommServerError,
     RommSSLError,
     RommTimeoutError,
+    TokenHostMismatchError,
 )
+from lib.url_host import same_origin
 
 
 class RommHttpAdapter:
@@ -117,13 +119,26 @@ class RommHttpAdapter:
     def auth_header(self) -> str | None:
         """Bearer auth header value, or ``None`` when no Client API Token is stored.
 
+        The token is host-bound: it is sent only to the server it was minted
+        against. When a token is stored together with its minting origin
+        (``romm_api_token_origin``) and that origin no longer matches the
+        current ``romm_url`` origin, a :class:`TokenHostMismatchError` is raised
+        instead of leaking the bearer to a wrong/hostile host (#1039). A legacy
+        token minted before origin stamping (origin ``None``) is still attached,
+        so existing installs keep working until their next sign-in stamps it.
+
         Returning ``None`` lets callers omit the ``Authorization`` header on
         unauthenticated probes (fresh setup, before a token is minted). An empty
         ``Bearer `` value is malformed and some RomM versions 500 on it, which
         would deadlock first-time connection setup.
         """
         token = self._settings.get("romm_api_token") or ""
-        return f"Bearer {token}" if token else None
+        if not token:
+            return None
+        origin = self._settings.get("romm_api_token_origin")
+        if origin is not None and not same_origin(origin, self._settings.get("romm_url")):
+            raise TokenHostMismatchError("Stored token was minted for a different server than the configured URL")
+        return f"Bearer {token}"
 
     def _apply_default_headers(self, req: urllib.request.Request) -> None:
         """Attach the standard outgoing headers: ``User-Agent`` always, and
@@ -195,6 +210,8 @@ class RommHttpAdapter:
     @staticmethod
     def is_retryable(exc: Exception) -> bool:
         """Check if an exception is a transient error worth retrying."""
+        # TokenHostMismatchError is intentionally absent: a wrong-origin token
+        # can never become right by retrying, so with_retry re-raises it at once.
         if isinstance(exc, RommServerError | RommConnectionError | RommTimeoutError):
             return True
         # Backward compat for non-RomM exceptions

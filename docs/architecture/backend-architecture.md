@@ -123,7 +123,7 @@ the rest are single modules. A service over ~700 LOC is the decomposition signal
 | `metadata.py`             | MetadataService — ROM metadata reads from `rom_metadata` (7-day TTL), app_id mapping                                                                                                                                                                                                                                   |
 | `launch_gate.py`          | LaunchGateService — pre-launch gate (rom lookup, install check, save status)                                                                                                                                                                                                                                           |
 | `startup_healing.py`      | StartupHealingService — prunes stale `rom_installs` rows against disk on load (via the UoW) + reconciles orphaned `running` SyncRuns (a hard crash leaves a `running` row → marked errored)                                                                                                                            |
-| `connection.py`           | ConnectionService — connection test + RomM minimum-version gate + Client API Token lifecycle (mint/establish via credentials)                                                                                                                                                                                          |
+| `connection.py`           | ConnectionService — connection test + RomM minimum-version gate + Client API Token lifecycle (mint/establish via credentials, host-bound to the minting origin; see [ConnectionService notes](#connectionservice-notes))                                                                                               |
 | `protocols/`              | Protocol interfaces grouped by concern (see [Protocol Interfaces](#protocol-interfaces))                                                                                                                                                                                                                               |
 
 #### LibraryService decomposition (`services/library/`)
@@ -209,6 +209,38 @@ GameCube/Wii (Dolphin) are never bin/cue and do not reliably launch from a singl
 arrive as single-file downloads that never reach the extraction path, so they get no playlist.
 
 Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
+
+#### ConnectionService notes
+
+**A Client API Token is bound to the server it was minted against.** When the token is minted, the canonical origin of
+`romm_url` (full `scheme://host[:port]`, default ports folded out, path/query dropped — `lib/url_host.normalize_origin`)
+is stored alongside it as `romm_api_token_origin`. `RommHttpAdapter.auth_header()` attaches the bearer **only** when
+that stored origin matches the current `romm_url` origin; on a mismatch it raises `TokenHostMismatchError` instead of
+sending the credential to a host the token was not minted for. The error is non-retryable and maps to a `config_error`
+failure (`Your saved RomM login is for a different server. Sign in again to continue.`), so every data flow fails fast
+until the user re-signs-in. `https://h` and `http://h` are deliberately **different** origins — a plaintext downgrade is
+a different destination, not the same one. A legacy token minted before origin stamping carries
+`romm_api_token_origin =
+None` and is treated as un-bound: it is still attached (never blocked) so existing installs
+keep working until their next sign-in stamps the origin.
+
+**Sign-in ordering: validate → probe → mint → persist (one atomic save).** `establish_token` trims the entered URL and
+rejects a non-http(s) value before any network call. It then holds the candidate URL in memory only — clearing the
+stored token in memory first so the version probe never carries the old server's bearer to the candidate host — and
+persists nothing until the mint succeeds. On any failure (probe unreachable, version too old, forbidden/error mint, no
+usable token, or a disk error) the in-memory auth state is rolled back to the previous working URL + token, and because
+disk was never touched the prior working credentials survive a failed sign-in. Only a successful mint commits
+`romm_url` + SSL flag + token + id + origin to disk in a single `save_settings()` call.
+
+**The old-token DELETE is origin-guarded.** RomM scopes a Client API Token to the account, and re-auth deletes the
+device's previous token. That DELETE is only fired when the old token's stored origin matches the new URL's origin
+(same-server re-auth) — replaying it against a different server would delete an unrelated token there, so the DELETE is
+skipped (and logged) when the origins differ or the old origin is unknown. The DELETE uses Basic auth from the one-time
+credentials, unaffected by the cleared bearer.
+
+The no-sign-in URL change path (`SettingsService.save_server_url`) deliberately does not touch the token, so pointing
+the URL at a different origin leaves the stored token's origin mismatched and the auth-header guard makes subsequent
+data flows fail fast with `config_error` until the user signs in again.
 
 **Server-supplied paths are validated, fail-stop on traversal**: every server-supplied path component — the firmware
 `file_name`, the ROM platform slug, and post-extraction URL-decoded ZIP member names — is checked through

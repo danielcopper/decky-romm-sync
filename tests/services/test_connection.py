@@ -240,8 +240,10 @@ class TestEstablishTokenHappyPath:
         assert result["romm_version"] == "4.8.1"
         assert settings["romm_api_token"] == "rmm_minted"
         assert settings["romm_api_token_id"] == 42
-        # URL persisted + token persisted → at least two saves.
-        assert settings_persister.save_settings.call_count >= 2
+        # The token's minting origin is stamped from the trimmed URL.
+        assert settings["romm_api_token_origin"] == "http://romm.local"
+        # url + ssl + token + id + origin commit in a SINGLE atomic save (#1015).
+        assert settings_persister.save_settings.call_count == 1
 
     def test_mints_with_no_preexisting_token(self, event_loop, romm_api, logger):
         """``establish_token`` is the path that mints the first token — it must
@@ -278,8 +280,8 @@ class TestEstablishTokenHappyPath:
         assert settings["romm_api_token_id"] == 42
         assert "romm_user" not in settings
         assert "romm_pass" not in settings
-        # The token-persist step saves after wiping the credentials.
-        assert settings_persister.save_settings.call_count >= 2
+        # The single token-persist save commits after wiping the credentials.
+        assert settings_persister.save_settings.call_count == 1
 
     def test_token_name_uses_device_name(self, event_loop, romm_api, logger):
         settings = {"device_name": "MyDeck"}
@@ -303,12 +305,37 @@ class TestEstablishTokenHappyPath:
 
 
 class TestEstablishTokenOldTokenDeletion:
-    def test_deletes_old_token_before_mint(self, event_loop, romm_api, logger):
-        settings = {"romm_api_token_id": 99}
+    def test_deletes_old_token_when_origin_matches(self, event_loop, romm_api, logger):
+        """Same-server re-auth (#1038): the old token is revoked on its origin."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "http://romm.local"}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         romm_api.delete_client_token.assert_called_once_with("u", "p", token_id=99)
         assert settings["romm_api_token_id"] == 42
+
+    def test_origin_match_ignores_trailing_slash_and_default_port(self, event_loop, romm_api, logger):
+        """Origin comparison folds path / default port — still the same server."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://romm.local"}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        event_loop.run_until_complete(service.establish_token("https://romm.local:443/romm/", "u", "p"))
+        romm_api.delete_client_token.assert_called_once_with("u", "p", token_id=99)
+
+    def test_skips_delete_when_origin_differs(self, event_loop, romm_api, logger):
+        """#1038: an old token from a DIFFERENT origin is NOT replayed as a DELETE."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://old.server"}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["success"] is True
+        romm_api.delete_client_token.assert_not_called()
+        # The new token still mints + persists.
+        assert settings["romm_api_token"] == "rmm_minted"
+
+    def test_skips_delete_when_old_origin_unknown(self, event_loop, romm_api, logger):
+        """A legacy token with no stored origin is not DELETE-replayed against the new host."""
+        settings = {"romm_api_token_id": 99}  # no romm_api_token_origin
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
+        romm_api.delete_client_token.assert_not_called()
 
     def test_no_delete_when_no_old_token(self, event_loop, romm_api, logger):
         settings: dict[str, Any] = {}
@@ -317,7 +344,7 @@ class TestEstablishTokenOldTokenDeletion:
         romm_api.delete_client_token.assert_not_called()
 
     def test_delete_failure_is_ignored(self, event_loop, romm_api, logger):
-        settings = {"romm_api_token_id": 99}
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "http://romm.local"}
         romm_api.delete_client_token.side_effect = RommServerError("boom", status_code=500)
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
@@ -332,6 +359,24 @@ class TestEstablishTokenBadPath:
         result = event_loop.run_until_complete(service.establish_token("", "u", "p"))
         assert result == {"success": False, "reason": "config_error", "message": "No server URL configured"}
         romm_api.mint_client_token.assert_not_called()
+
+    @pytest.mark.parametrize("bad_url", ["romm.local", "ftp://romm.local", "   ", "https://"])
+    def test_invalid_url_returns_config_error_without_probing(self, event_loop, romm_api, logger, bad_url):
+        """A scheme-less / non-http(s) / hostless URL is rejected before any network call (#1015)."""
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_token(bad_url, "u", "p"))
+        assert result == {"success": False, "reason": "config_error", "message": "Enter a valid http(s):// server URL"}
+        romm_api.heartbeat.assert_not_called()
+        romm_api.mint_client_token.assert_not_called()
+
+    def test_url_is_trimmed_before_use(self, event_loop, romm_api, logger):
+        """Surrounding whitespace is stripped; the trimmed URL is what gets persisted."""
+        settings: dict[str, Any] = {}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_token("  http://romm.local  ", "u", "p"))
+        assert result["success"] is True
+        assert settings["romm_url"] == "http://romm.local"
+        assert settings["romm_api_token_origin"] == "http://romm.local"
 
     def test_unreachable_returns_connection_error_no_mint(self, event_loop, romm_api, logger):
         romm_api.heartbeat.side_effect = RommConnectionError("refused")
@@ -393,9 +438,130 @@ class TestEstablishTokenBadPath:
         assert "disk full" in result["message"]
 
 
+def _working_settings() -> dict[str, Any]:
+    """A settings dict already signed in against the OLD server."""
+    return {
+        "romm_url": "https://old.server",
+        "romm_allow_insecure_ssl": False,
+        "romm_api_token": "rmm_old",
+        "romm_api_token_id": 7,
+        "romm_api_token_origin": "https://old.server",
+    }
+
+
+class TestEstablishTokenSnapshotRestore:
+    """#1015: a failed sign-in must not clobber the previous working state.
+
+    Nothing is persisted before the mint succeeds, and the in-memory dict is
+    rolled back to the previous URL + token on any failure.
+    """
+
+    def _assert_old_state_intact(self, settings: dict[str, Any]) -> None:
+        assert settings["romm_url"] == "https://old.server"
+        assert settings["romm_api_token"] == "rmm_old"
+        assert settings["romm_api_token_id"] == 7
+        assert settings["romm_api_token_origin"] == "https://old.server"
+
+    def test_probe_failure_restores_old_state_and_never_saves(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.heartbeat.side_effect = RommConnectionError("refused")
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["success"] is False
+        self._assert_old_state_intact(settings)
+        settings_persister.save_settings.assert_not_called()
+
+    def test_version_gate_failure_restores_old_state_and_never_saves(
+        self, event_loop, romm_api, logger, settings_persister
+    ):
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.5.0"}}
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["reason"] == "version_error"
+        self._assert_old_state_intact(settings)
+        settings_persister.save_settings.assert_not_called()
+
+    def test_mint_failure_restores_old_state_and_never_saves(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.mint_client_token.side_effect = RommForbiddenError("403")
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["reason"] == "auth_failed"
+        self._assert_old_state_intact(settings)
+        settings_persister.save_settings.assert_not_called()
+
+    def test_persist_failure_restores_old_state(self, event_loop, romm_api, logger, settings_persister):
+        settings_persister.save_settings.side_effect = OSError("disk full")
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["success"] is False
+        self._assert_old_state_intact(settings)
+
+    def test_clears_old_token_before_probe(self, event_loop, romm_api, logger):
+        """The version probe must run with NO bearer — the old token is cleared first (#1039)."""
+        seen: dict[str, Any] = {}
+
+        def _capture_heartbeat():
+            seen["token_during_probe"] = settings.get("romm_api_token")
+            seen["origin_during_probe"] = settings.get("romm_api_token_origin")
+            return {"SYSTEM": {"VERSION": "4.8.1"}}
+
+        romm_api.heartbeat.side_effect = _capture_heartbeat
+        settings = _working_settings()
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert seen["token_during_probe"] is None
+        assert seen["origin_during_probe"] is None
+
+    def test_successful_signin_to_new_origin_stamps_and_persists_once(
+        self, event_loop, romm_api, logger, settings_persister
+    ):
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["success"] is True
+        assert settings["romm_url"] == "https://new.server"
+        assert settings["romm_api_token"] == "rmm_minted"
+        assert settings["romm_api_token_id"] == 42
+        assert settings["romm_api_token_origin"] == "https://new.server"
+        settings_persister.save_settings.assert_called_once_with()
+
+
 class TestMigrateLegacyCredentials:
     def test_mints_and_wipes_credentials(self, event_loop, romm_api, logger, settings_persister):
-        settings = {"romm_user": "alice", "romm_pass": "secret"}
+        settings = {"romm_url": "https://romm.local", "romm_user": "alice", "romm_pass": "secret"}
         service = _make_service(
             settings=settings,
             romm_api=romm_api,
@@ -406,6 +572,8 @@ class TestMigrateLegacyCredentials:
         event_loop.run_until_complete(service.migrate_legacy_credentials())
         assert settings["romm_api_token"] == "rmm_minted"
         assert settings["romm_api_token_id"] == 42
+        # The origin is stamped from the configured URL at migration time.
+        assert settings["romm_api_token_origin"] == "https://romm.local"
         assert "romm_user" not in settings
         assert "romm_pass" not in settings
         settings_persister.save_settings.assert_called_once_with()

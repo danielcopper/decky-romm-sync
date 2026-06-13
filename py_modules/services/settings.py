@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from lib.list_result import ErrorCode
+from lib.url_host import is_valid_server_url
 
 if TYPE_CHECKING:
     import logging
@@ -62,14 +63,24 @@ class SettingsService:
     # ── Server connection settings ───────────────────────────────────────
 
     def save_server_url(self, romm_url: str, allow_insecure_ssl: bool | None = None) -> dict[str, Any]:
-        """Persist the server URL and optional SSL flag.
+        """Persist the trimmed server URL and optional SSL flag.
 
+        Rejects a blank or non-http(s) URL without writing anything.
         Credentials and tokens are never touched here — minting and
         storing the Client API Token is ``ConnectionService``'s job.
         ``allow_insecure_ssl=None`` leaves the SSL flag unchanged.
+
+        This path deliberately does not re-stamp the stored token's origin, so
+        pointing the URL at a different origin leaves the token's origin
+        mismatched — the auth-header guard then fails data flows fast with
+        ``config_error`` until the user signs in again (the intended #1039
+        behavior for the no-sign-in URL-change path).
         """
+        trimmed = romm_url.strip()
+        if not is_valid_server_url(trimmed):
+            return {"success": False, "reason": "config_error", "message": "Enter a valid http(s):// server URL"}
         try:
-            self._settings["romm_url"] = romm_url
+            self._settings["romm_url"] = trimmed
             if allow_insecure_ssl is not None:
                 self._settings["romm_allow_insecure_ssl"] = bool(allow_insecure_ssl)
             self._settings_persister.save_settings()

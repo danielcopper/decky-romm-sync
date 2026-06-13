@@ -500,6 +500,37 @@ describe("SettingsPage", () => {
       expect(pendingEdits.url).toBeUndefined();
     });
 
+    it("rejects an invalid URL inline without calling saveServerUrl", async () => {
+      vi.mocked(backend.saveServerUrl).mockResolvedValue({ success: true, message: "" });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      const conn = capturedConnection[capturedConnection.length - 1];
+
+      await act(async () => {
+        conn?.onUrlChange("romm.local"); // no scheme
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.saveServerUrl)).not.toHaveBeenCalled();
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe(
+        "Enter a valid http:// or https:// server URL",
+      );
+    });
+
+    it("trims the URL before persisting", async () => {
+      vi.mocked(backend.saveServerUrl).mockResolvedValue({ success: true, message: "" });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      const conn = capturedConnection[capturedConnection.length - 1];
+
+      await act(async () => {
+        conn?.onUrlChange("  https://new.url  ");
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.saveServerUrl)).toHaveBeenCalledWith("https://new.url", false);
+    });
+
     it("does not delete the pending URL edit when saveServerUrl rejects (status fallback wired)", async () => {
       vi.mocked(backend.saveServerUrl).mockRejectedValue(new Error("nope"));
       pendingEdits.url = "draft";
@@ -601,6 +632,26 @@ describe("SettingsPage", () => {
       const conn = capturedConnection[capturedConnection.length - 1];
       expect(conn?.status).toBe("This account cannot create API tokens.");
       expect(conn?.hasToken).toBe(false);
+    });
+
+    it("rejects an invalid URL inline without calling connectWithCredentials", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        romm_url: "romm.local", // scheme-less — invalid
+        has_token: false,
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.connectWithCredentials)).not.toHaveBeenCalled();
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe(
+        "Enter a valid http:// or https:// server URL",
+      );
     });
 
     it("sets status='Sign-in failed' when connectWithCredentials throws", async () => {

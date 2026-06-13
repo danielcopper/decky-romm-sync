@@ -91,6 +91,15 @@ class RommUnsupportedError(RommApiError):
         )
 
 
+class TokenHostMismatchError(RommApiError):
+    """Stored token's minting origin does not match the current ``romm_url``.
+
+    Raised before any request carries the bearer token to a host the token was
+    not minted for, so the credential never leaks to a wrong/hostile server.
+    Non-retryable: replaying it cannot succeed, only re-signing-in can.
+    """
+
+
 def classify_error(exc):
     """Return ``(reason, user_friendly_message)`` for an exception.
 
@@ -129,6 +138,8 @@ def classify_error(exc):
         return ErrorCode.NOT_FOUND.value, "Resource not found on server"
     if isinstance(exc, RommUnsupportedError):
         return ErrorCode.UNSUPPORTED.value, f"This feature requires RomM {exc.min_version} or newer"
+    if isinstance(exc, TokenHostMismatchError):
+        return "config_error", "Your saved RomM login is for a different server. Sign in again to continue."
     if isinstance(exc, RommApiError):
         return ErrorCode.SERVER_UNREACHABLE.value, str(exc)
     return ErrorCode.UNKNOWN.value, str(exc)

@@ -108,6 +108,23 @@ class TestSaveServerUrl:
         assert result["success"] is False
         assert "disk full" in result["message"]
 
+    def test_trims_url_before_persisting(self, service, settings, settings_persister):
+        result = service.save_server_url("  https://romm.local  ")
+        assert result["success"] is True
+        assert settings["romm_url"] == "https://romm.local"
+        settings_persister.save_settings.assert_called_once_with()
+
+    @pytest.mark.parametrize("bad_url", ["", "   ", "romm.local", "ftp://romm.local", "https://"])
+    def test_invalid_url_rejected_without_writing(self, service, settings, settings_persister, bad_url):
+        result = service.save_server_url(bad_url)
+        assert result == {
+            "success": False,
+            "reason": "config_error",
+            "message": "Enter a valid http(s):// server URL",
+        }
+        assert "romm_url" not in settings
+        settings_persister.save_settings.assert_not_called()
+
 
 # ── get_settings ───────────────────────────────────────────────────────
 

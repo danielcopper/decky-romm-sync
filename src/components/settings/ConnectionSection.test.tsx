@@ -186,6 +186,17 @@ describe("ConnectionSection", () => {
       expect(toggleCaptured.items).toHaveLength(1);
     });
 
+    it("trims a leading space so a padded https URL still shows the toggle", () => {
+      // Regression: untrimmed startsWith("https") hid the toggle for "  https://...".
+      render(<ConnectionSection {...defaultProps({ url: "  https://romm.local" })} />);
+      expect(toggleCaptured.items).toHaveLength(1);
+    });
+
+    it("stays hidden for a padded http URL", () => {
+      render(<ConnectionSection {...defaultProps({ url: "  http://romm.local" })} />);
+      expect(toggleCaptured.items).toHaveLength(0);
+    });
+
     it("reflects allowInsecureSsl in checked state", () => {
       render(<ConnectionSection {...defaultProps({ url: "https://romm.local", allowInsecureSsl: true })} />);
       expect(toggleCaptured.items[0]?.checked).toBe(true);

@@ -62,6 +62,16 @@ silent omission. The CI check enforces this.
   event). See [ADR-0009](docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md).
 - **RomM minimum version**: Requires RomM >= 4.8.1. Hard-rejected in `test_connection()` — plugin is inert until server
   is updated. `_MIN_REQUIRED_VERSION` tuple in `main.py`.
+- **Token-host binding**: A Client API Token is bound to the server origin it was minted against
+  (`romm_api_token_origin` — canonical `scheme://host[:port]` via `lib/url_host`; `https://h` and `http://h` are
+  different origins). The bearer is sent only when `romm_url`'s origin matches; a mismatch raises
+  `TokenHostMismatchError` in `RommHttpAdapter.auth_header` (non-retryable → `config_error`, "sign in again"), so a
+  wrong/hostile host never receives the credential. Sign-in (`establish_token`) validates the URL, holds the candidate
+  URL in memory while probing (the old token is cleared in memory first so it never leaks to the candidate host), and
+  persists URL+SSL+token+id+origin in a single atomic save only on success — a failed sign-in restores the previous
+  working state, never clobbering disk. The old-token DELETE on re-auth is fired only when the old origin matches the
+  new one (#1038). A legacy token with origin `None` is un-bound: attached, never blocked, until the next sign-in stamps
+  it. See [ConnectionService notes](docs/architecture/backend-architecture.md#connectionservice-notes).
 - **Decky callables must be async**: Even if the method body is synchronous, Decky's callable framework requires
   `async def`. Do not remove `async` from callable methods in main.py.
 

@@ -82,12 +82,13 @@ class TestLocking:
 class TestSettingsSchema:
     """Schema-level expectations for the settings defaults + version stamp."""
 
-    def test_settings_version_is_7(self):
-        assert _SETTINGS_VERSION == 7
+    def test_settings_version_is_8(self):
+        assert _SETTINGS_VERSION == 8
 
     def test_default_settings_carry_token_slots(self):
         assert DEFAULT_SETTINGS["romm_api_token"] is None
         assert DEFAULT_SETTINGS["romm_api_token_id"] is None
+        assert DEFAULT_SETTINGS["romm_api_token_origin"] is None
 
     def test_default_settings_carry_empty_platform_cores(self):
         assert DEFAULT_SETTINGS["platform_cores"] == {}
@@ -96,6 +97,7 @@ class TestSettingsSchema:
         result = adapter.load_settings()
         assert result["romm_api_token"] is None
         assert result["romm_api_token_id"] is None
+        assert result["romm_api_token_origin"] is None
 
 
 class TestVersionStampingOnSave:
@@ -105,7 +107,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 7
+        assert loaded["version"] == 8
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────

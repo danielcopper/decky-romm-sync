@@ -11,6 +11,7 @@ from lib.errors import (
     RommSSLError,
     RommTimeoutError,
     RommUnsupportedError,
+    TokenHostMismatchError,
     classify_error,
     error_response,
 )
@@ -213,6 +214,14 @@ class TestClassifyError:
         assert code == "server_unreachable"
         assert msg == "some API issue"
 
+    def test_token_host_mismatch_maps_to_config_error(self):
+        """TokenHostMismatchError routes to config_error with a re-sign-in message —
+        NOT server_unreachable, even though it subclasses RommApiError."""
+        code, msg = classify_error(TokenHostMismatchError("origin mismatch"))
+        assert code == "config_error"
+        assert "different server" in msg
+        assert "Sign in again" in msg
+
     def test_conflict_error_is_api_error(self):
         """RommConflictError is a subclass of RommApiError, not specifically handled."""
         code, msg = classify_error(RommConflictError("conflict"))
@@ -313,3 +322,11 @@ class TestErrorResponse:
         assert resp["reason"] == "unsupported"
         assert resp["success"] is False
         assert "4.7.0" in resp["message"]
+
+    def test_token_host_mismatch_error_response(self):
+        resp = error_response(TokenHostMismatchError("mismatch"))
+        assert resp["success"] is False
+        assert resp["reason"] == "config_error"
+        assert "different server" in resp["message"]
+        assert "error" not in resp
+        assert "error_code" not in resp

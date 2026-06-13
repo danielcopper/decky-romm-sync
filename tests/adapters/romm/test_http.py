@@ -22,6 +22,7 @@ from lib.errors import (
     RommServerError,
     RommSSLError,
     RommTimeoutError,
+    TokenHostMismatchError,
 )
 
 # conftest.py patches decky before this import
@@ -160,6 +161,55 @@ class TestRommAuthHeader:
         plugin.settings["romm_api_token"] = None
         header = plugin._http_adapter.auth_header()
         assert header is None
+
+    def test_attaches_token_when_origin_none_legacy(self, plugin):
+        """A token minted before host-binding (origin None) is still attached — never blocked."""
+        plugin.settings["romm_url"] = "https://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_legacy"
+        plugin.settings["romm_api_token_origin"] = None
+        assert plugin._http_adapter.auth_header() == "Bearer rmm_legacy"
+
+    def test_attaches_token_when_origin_matches(self, plugin):
+        plugin.settings["romm_url"] = "https://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_bound"
+        plugin.settings["romm_api_token_origin"] = "https://romm.local"
+        assert plugin._http_adapter.auth_header() == "Bearer rmm_bound"
+
+    def test_origin_match_folds_default_port_and_path(self, plugin):
+        """The bound origin equals the current URL even with a default port / path."""
+        plugin.settings["romm_url"] = "https://romm.local:443/romm/"
+        plugin.settings["romm_api_token"] = "rmm_bound"
+        plugin.settings["romm_api_token_origin"] = "https://romm.local"
+        assert plugin._http_adapter.auth_header() == "Bearer rmm_bound"
+
+    def test_raises_on_origin_mismatch(self, plugin):
+        """#1039: the bearer is never sent to a host the token was not minted for."""
+        plugin.settings["romm_url"] = "https://evil.host"
+        plugin.settings["romm_api_token"] = "rmm_bound"
+        plugin.settings["romm_api_token_origin"] = "https://romm.local"
+        with pytest.raises(TokenHostMismatchError):
+            plugin._http_adapter.auth_header()
+
+    def test_raises_on_scheme_downgrade(self, plugin):
+        """http vs https are different origins — a downgrade is a mismatch."""
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_bound"
+        plugin.settings["romm_api_token_origin"] = "https://romm.local"
+        with pytest.raises(TokenHostMismatchError):
+            plugin._http_adapter.auth_header()
+
+    def test_no_raise_without_token_even_if_origin_set(self, plugin):
+        """No token → no header, no raise (the guard only applies when a token exists)."""
+        plugin.settings["romm_url"] = "https://evil.host"
+        plugin.settings.pop("romm_api_token", None)
+        plugin.settings["romm_api_token_origin"] = "https://romm.local"
+        assert plugin._http_adapter.auth_header() is None
+
+
+class TestTokenHostMismatchRetry:
+    def test_token_host_mismatch_is_not_retryable(self):
+        """A wrong-origin token can never succeed by retrying — must stay non-retryable."""
+        assert RommHttpAdapter.is_retryable(TokenHostMismatchError("mismatch")) is False
 
 
 class TestRommBasicAuthRequest:

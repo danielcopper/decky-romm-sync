@@ -31,6 +31,7 @@ import {
 } from "../utils/saveSortMigrationStore";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
+import { trimServerUrl, isValidServerUrl } from "../utils/serverUrl";
 import type { SaveSyncSettings as SaveSyncSettingsType, RetroArchInputCheck } from "../types";
 import { pendingEdits } from "./settings/TextInputModal";
 import { SaveSortMigrationSection } from "./settings/SaveSortMigrationSection";
@@ -267,9 +268,14 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
 
   // --- Connection handlers wired into ConnectionSection ---
   const handleUrlChange = async (value: string) => {
-    setUrl(value);
+    const trimmed = trimServerUrl(value);
+    setUrl(trimmed);
+    if (!isValidServerUrl(trimmed)) {
+      setStatus("Enter a valid http:// or https:// server URL");
+      return;
+    }
     try {
-      await saveServerUrl(value, allowInsecureSsl);
+      await saveServerUrl(trimmed, allowInsecureSsl);
       delete pendingEdits.url;
     } catch {
       setStatus("Failed to save settings");
@@ -284,8 +290,13 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   };
   const handleConnect = async (username: string, password: string) => {
     setStatus("");
+    const trimmed = trimServerUrl(url);
+    if (!isValidServerUrl(trimmed)) {
+      setStatus("Enter a valid http:// or https:// server URL");
+      return;
+    }
     try {
-      const result = await connectWithCredentials(url, username, password, allowInsecureSsl);
+      const result = await connectWithCredentials(trimmed, username, password, allowInsecureSsl);
       setStatus(result.message);
       if (result.success) {
         setHasToken(true);
