@@ -122,6 +122,9 @@ jobs:
       - name: Check service-independence contract is complete
         run: python scripts/check_service_independence_contract.py
 
+      - name: Check callable-manifest parity (frontend ↔ backend)
+        run: python scripts/check_callable_manifest.py
+
       - name: Check Cosmic Python call bans
         run: bash scripts/check_cosmic_call_bans.sh
 

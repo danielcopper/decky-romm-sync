@@ -103,6 +103,11 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Service-independence contract self-check**: `scripts/check_service_independence_contract.py` — derives the expected
   service list from `py_modules/services/` and fails CI if `.importlinter`'s `service-independence` contract omits a
   service or carries a stale entry, keeping the hand-maintained `modules` list self-healing.
+- **Callable-manifest parity gate**: `scripts/check_callable_manifest.py` — derives the frontend callable surface from
+  every `callable<[Args], Return>("name")` in `src/**/*.ts` and the backend surface from the public `async def` methods
+  on the `Plugin` class in `main.py`, and fails CI if they diverge: a name on one side only (either direction) or a
+  matching name whose arity (positional param count) differs. Arg TYPES are out of scope — Python signatures carry no
+  hints, so arity is the only mechanically checkable shape (the contract tier exercises types by driving real values).
 - **Failure-shape dialect gate**: `scripts/check_failure_shape.py --check` — AST check that fails CI if any
   `success: False` return in `services/` is missing the canonical `reason` + `message` keys or carries the forbidden
   `error` / `error_code` key. The two documented carve-outs (discriminated-status unions, partial-success payloads) are
@@ -427,9 +432,15 @@ Rules for this tier:
 - A wiring drift (a renamed/added service) fails the fixture loudly via the bound-attribute assert, not as a confusing
   mid-test `AttributeError`.
 
-Phase 2 — a `backend.ts` manifest gate that parses the `callable<[Args], Return>("name")` declarations into an artifact
-the pytest side consumes (so a renamed callable or changed default breaks CI) — is a forthcoming separate PR; it is not
-built yet.
+Phase 2 — the callable-manifest parity gate — is built: `scripts/check_callable_manifest.py` derives the frontend
+surface from every `callable<[Args], Return>("name")` in `src/**/*.ts` (not just `backend.ts` — one declaration lives in
+`utils/cachedGameDetailStore.ts`) and the backend surface from the public `async def` methods on `Plugin` in `main.py`,
+then fails on any divergence: a name declared on only one side (either direction) or a matching name whose arity
+(positional-param count, `self` dropped) differs. Arg TYPES stay out of scope — Python method signatures carry no hints,
+so arity is the only mechanically checkable shape. The gate runs standalone in CI (`mise run lint` + a CI step) and is
+also surfaced inside the pytest run by `tests/contract/test_callable_manifest.py`, which imports the same two parser
+functions and asserts live parity — so a renamed/added/removed callable or an arity drift breaks both the lint gate and
+the test run.
 
 ### Frontend component tests — `@decky/api` event harness
 

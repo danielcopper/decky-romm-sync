@@ -46,6 +46,7 @@ depends = ["lint:md"]
 run = [
     "PYTHONPATH=py_modules lint-imports",
     "python scripts/check_service_independence_contract.py",
+    "python scripts/check_callable_manifest.py",
     "bash scripts/check_cosmic_call_bans.sh",
     "python scripts/check_failure_shape.py --check",
 ]
