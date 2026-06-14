@@ -75,9 +75,8 @@ class Plugin:
         )
         self.settings = result.stores.settings
         self._debug_logger = result.handles.debug_logger
-        # Persistence adapter — held directly so consume_settings_reset_notice
-        # can drain the one-shot corrupt-settings-reset flag (a transient
-        # bootstrap signal, not service state) for the frontend toast.
+        # Persistence adapter — held directly for the disk-touching callable
+        # paths that read/write settings without routing through a service.
         self._persistence = result.handles.persistence
         # RetroDECK path resolver — held directly so the get_retrodeck_status
         # callable can read the resolution health without routing through a
@@ -518,13 +517,26 @@ class Plugin:
     async def refresh_migration_state(self):
         return await self._migration_service.refresh_state()
 
-    async def consume_settings_reset_notice(self):
-        """Drain the one-shot corrupt-settings-reset notice for the frontend.
+    async def get_settings_reset_notice(self):
+        """Report whether a corrupt ``settings.json`` was reset at boot.
 
-        Returns ``{"reset": bool, "backed_up_to": str | None}``. When a
-        corrupt ``settings.json`` was backed up and reset at boot, the first
-        call returns ``reset: True`` with the backup filename; the flag is
-        cleared on read so the toast fires at most once per process. A clean
-        boot returns ``{"reset": False, "backed_up_to": None}``.
+        Reads the persistent ``_settings_reset_notice`` marker from the live
+        settings dict (written by bootstrap when ``load_settings`` quarantined an
+        unparseable file). Returns ``{"pending": bool, "backed_up_to": str |
+        None}``. Non-consuming — the marker survives a plugin reload and is
+        cleared only by an explicit user acknowledgement in the QAM
+        (``dismiss_settings_reset_notice``), so the frontend banner + game-detail
+        cards stay up until the user dismisses. A clean boot returns
+        ``{"pending": False, "backed_up_to": None}``.
         """
-        return self._persistence.consume_settings_reset_notice()
+        notice = self.settings.get("_settings_reset_notice")
+        return {"pending": notice is not None, "backed_up_to": (notice or {}).get("backed_up_to")}
+
+    async def dismiss_settings_reset_notice(self):
+        """Acknowledge the corrupt-settings reset, clearing the persistent marker.
+
+        The user's explicit ack in the QAM — pops ``_settings_reset_notice`` and
+        persists, so the banner and game-detail cards stay down across reloads.
+        Returns ``{"success": True}``.
+        """
+        return self._settings_service.dismiss_settings_reset_notice()

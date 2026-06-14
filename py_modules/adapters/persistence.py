@@ -94,11 +94,13 @@ class PersistenceAdapter:
         self._runtime_dir = runtime_dir
         self._logger = logger
         self._clock: _ClockPort = clock if clock is not None else SystemClock()
-        # Transient, never-persisted record of a corrupt-settings reset that
-        # happened on the last ``load_settings``. ``None`` means no reset;
-        # otherwise ``{"backed_up_to": <basename>}``. The frontend drains this
-        # once per process via ``consume_settings_reset_notice`` to toast the
-        # user; it is never written to ``settings.json``.
+        # Transient load-time signal of a corrupt-settings reset on the last
+        # ``load_settings``. ``None`` means no reset; otherwise
+        # ``{"backed_up_to": <basename>}``. Bootstrap reads this after migration
+        # and folds it into the settings dict as the persistent
+        # ``_settings_reset_notice`` marker (which survives a reload and clears
+        # on the next successful sign-in); this attribute itself is never
+        # written to disk.
         self._corrupt_reset: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
@@ -164,10 +166,10 @@ class PersistenceAdapter:
         the immediate bootstrap save would then write over the corrupt file,
         destroying the user's server URL, token, and selections), the
         unparseable file is backed up to ``settings.json.corrupt-<ts>`` and a
-        transient :attr:`_corrupt_reset` flag is set so the frontend can toast
-        the user. The error is logged loudly. If the backup rename itself
-        fails, the error is logged and defaults are still returned so boot
-        never crashes.
+        transient :attr:`_corrupt_reset` flag is set so bootstrap can persist
+        the reset marker. The error is logged loudly. If the backup rename
+        itself fails, the error is logged and defaults are still returned so
+        boot never crashes.
         """
         settings_path = os.path.join(self._settings_dir, "settings.json")
         try:
@@ -205,7 +207,7 @@ class PersistenceAdapter:
         is already taken (two corruptions in the same wall-clock second, or a
         clock rollback onto an existing stamp) a ``-<n>`` suffix disambiguates
         so an older backup is never clobbered. Sets :attr:`_corrupt_reset` so
-        the frontend can toast the user once. A failed rename (e.g. perms) is
+        bootstrap can persist the reset marker. A failed rename (e.g. perms) is
         logged and swallowed — boot must not crash.
         """
         stamp = int(self._clock.time())
@@ -223,18 +225,16 @@ class PersistenceAdapter:
             return
         self._corrupt_reset = {"backed_up_to": backup_name}
 
-    def consume_settings_reset_notice(self) -> dict[str, Any]:
-        """Drain the one-shot corrupt-settings-reset notice for the frontend.
+    @property
+    def corrupt_reset(self) -> dict[str, Any] | None:
+        """The corrupt-settings reset recorded by the last ``load_settings``.
 
-        Returns ``{"reset": bool, "backed_up_to": str | None}`` and clears the
-        transient flag so the toast fires at most once per process. On a clean
-        boot (no corruption) returns ``{"reset": False, "backed_up_to": None}``.
+        ``None`` when the file parsed cleanly (or was a legitimate first run);
+        otherwise ``{"backed_up_to": <basename>}`` naming the quarantine backup.
+        Bootstrap reads this once after migration to fold the reset into the
+        persistent ``_settings_reset_notice`` settings marker.
         """
-        notice = self._corrupt_reset
-        self._corrupt_reset = None
-        if notice is None:
-            return {"reset": False, "backed_up_to": None}
-        return {"reset": True, "backed_up_to": notice["backed_up_to"]}
+        return self._corrupt_reset
 
     def save_settings(self, data: dict[str, Any]) -> None:
         """Atomic write of *data* to ``settings.json`` with flock, stamping version.

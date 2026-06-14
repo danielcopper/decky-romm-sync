@@ -294,10 +294,17 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
   bootstrap save overwrite the corrupt file, wiping the user's RomM URL, API token, SGDB key, and platform/collection
   selections with no trace. Instead the adapter logs the corruption loudly at error level, renames the unparseable file
   aside to `settings.json.corrupt-<ts>` (the `<ts>` is the injected `Clock`'s epoch seconds — filesystem-safe), and sets
-  a transient in-memory `_corrupt_reset` flag (never persisted) before returning defaults. If the backup rename itself
-  fails (e.g. permissions), the error is logged and defaults are still returned so boot never crashes. The flag is
-  surfaced to the frontend through the `consume_settings_reset_notice` callable (drains once per process), which toasts
-  the user that their settings were reset and where the backup landed so they can re-enter the server URL and sign in.
+  a transient in-memory `corrupt_reset` flag before returning defaults. If the backup rename itself fails (e.g.
+  permissions), the error is logged and defaults are still returned so boot never crashes. Bootstrap reads that
+  transient flag after migration and — before the immediate save — folds it into the settings dict as a **persistent**
+  `_settings_reset_notice` marker (`{"backed_up_to": <basename>}`), so it survives a plugin reload. The frontend reads
+  it via the non-consuming `get_settings_reset_notice` callable and surfaces a persistent notice — a QAM `PanelSection`
+  banner (with a **Dismiss** button) plus a game-detail `WarningCard` (informational; its copy points the user to the
+  QAM to dismiss) — **not a toast** — telling the user their settings were reset and where the backup landed so they can
+  re-enter the server URL and sign in. The marker is cleared **only by an explicit user acknowledgement**: the QAM
+  Dismiss button calls `dismiss_settings_reset_notice`, which pops `_settings_reset_notice` and persists; the frontend
+  clears the shared store on success so the banner and every game-detail card disappear at once. Sign-in does **not**
+  clear the notice — the user decides when they have read it.
 - **Version never down-stamps**: on write, the `version` field is stamped to `max(stored_version, _SETTINGS_VERSION)`. A
   file written by a **newer** plugin (stored version > current) is preserved as-is rather than down-stamped, so a later
   re-upgrade does not re-run migrations against down-stamped data. An absent or older version is stamped up to the

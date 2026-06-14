@@ -23,7 +23,6 @@ import {
   getAllPlaytime,
   getMigrationStatus,
   getSaveSortMigrationStatus,
-  consumeSettingsResetNotice,
   testConnection,
   logError,
   logInfo,
@@ -35,6 +34,7 @@ import {
   getHostname,
 } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
+import { fetchSettingsResetState } from "./utils/settingsResetStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
@@ -233,18 +233,14 @@ export default definePlugin(() => {
   );
 
   // Surface a corrupt-settings reset that happened at boot. The backend backs
-  // up an unparseable settings.json to settings.json.corrupt-<ts> and resets to
-  // defaults; the notice drains once per process so the toast fires only once.
+  // up an unparseable settings.json to settings.json.corrupt-<ts>, resets to
+  // defaults, and persists a marker that survives reloads. The QAM banner and
+  // game-detail card surface this to the user — no toast needed; the notice
+  // stays up until the next successful sign-in clears the marker.
   detach(
     (async () => {
       try {
-        const notice = await consumeSettingsResetNotice();
-        if (notice.reset) {
-          toaster.toast({
-            title: "RomM Sync",
-            body: `Your settings file was corrupt and has been reset. A backup was saved to ${notice.backed_up_to}. Please re-enter your server URL and sign in again.`,
-          });
-        }
+        await fetchSettingsResetState();
       } catch (e) {
         logError(`Failed to check settings reset notice: ${e}`);
       }

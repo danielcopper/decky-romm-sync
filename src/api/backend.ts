@@ -374,13 +374,18 @@ export const refreshMigrationState = callable<[], { retrodeck: MigrationStatus; 
   "refresh_migration_state",
 );
 
-// One-shot corrupt-settings-reset notice. When settings.json was unparseable
-// at boot it is backed up to settings.json.corrupt-<ts> and reset to defaults;
-// the first call returns reset:true with the backup filename, then clears so
-// the toast fires once per process.
-export const consumeSettingsResetNotice = callable<[], { reset: boolean; backed_up_to: string | null }>(
-  "consume_settings_reset_notice",
+// Persistent corrupt-settings-reset notice. When settings.json was unparseable
+// at boot it is backed up to settings.json.corrupt-<ts> and reset to defaults,
+// and a marker is persisted into the fresh settings.json. This read is
+// non-consuming: it reports pending:true with the backup filename until the
+// user explicitly dismisses it in the QAM, so the banner survives reloads.
+export const getSettingsResetNotice = callable<[], { pending: boolean; backed_up_to: string | null }>(
+  "get_settings_reset_notice",
 );
+
+// Acknowledge the corrupt-settings reset — pops the persistent marker and
+// persists, so the QAM banner + game-detail cards stay down across reloads.
+export const dismissSettingsResetNotice = callable<[], { success: boolean }>("dismiss_settings_reset_notice");
 
 // End-of-session orchestration — collapses recordSessionEnd + syncAchievementsAfterSession
 // + postExitSync + refreshMigrationState into a single backend round-trip.

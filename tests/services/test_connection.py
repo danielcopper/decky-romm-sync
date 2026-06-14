@@ -264,6 +264,40 @@ class TestEstablishTokenHappyPath:
         assert "romm_user" not in settings
         assert "romm_pass" not in settings
 
+    def test_successful_sign_in_preserves_settings_reset_marker(self, event_loop, romm_api, logger, settings_persister):
+        """Sign-in no longer clears the corrupt-settings-reset marker — the notice
+        is cleared only by an explicit user ack in the QAM
+        (``dismiss_settings_reset_notice``), so a successful sign-in PRESERVES it.
+        """
+        settings = {"_settings_reset_notice": {"backed_up_to": "settings.json.corrupt-42"}}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+        assert result["success"] is True
+        # The marker survives the sign-in's token-persist save.
+        assert settings["_settings_reset_notice"] == {"backed_up_to": "settings.json.corrupt-42"}
+
+    def test_failed_sign_in_keeps_settings_reset_marker(self, event_loop, romm_api, logger, settings_persister):
+        """A failed mint must not clear the marker either (it persists nothing)."""
+        romm_api.mint_client_token.side_effect = RommConnectionError("offline")
+        settings = {"_settings_reset_notice": {"backed_up_to": "settings.json.corrupt-42"}}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+        assert result["success"] is False
+        assert settings["_settings_reset_notice"] == {"backed_up_to": "settings.json.corrupt-42"}
+        settings_persister.save_settings.assert_not_called()
+
     def test_wipes_preexisting_legacy_credentials(self, event_loop, romm_api, logger, settings_persister):
         """A pre-existing romm_user / romm_pass pair is dropped once a token is minted."""
         settings = {"romm_user": "alice", "romm_pass": "secret"}

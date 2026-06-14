@@ -186,8 +186,8 @@ class BootstrapHandles:
 
     Anything ``Plugin`` itself binds (not the services) lives here:
     the debug logger forwarded by ``Plugin._log_debug`` and the
-    persistence adapter ``Plugin`` reads the one-shot corrupt-settings
-    reset notice from. The bundles already cover everything passed to
+    persistence adapter ``Plugin`` holds for disk-touching callable paths
+    that bypass a service. The bundles already cover everything passed to
     ``wire_services``; this struct keeps those Plugin-only handles typed
     instead of returning them via the untyped dict shape of yore.
     """
@@ -306,6 +306,13 @@ def bootstrap(
     if settings.get("version", 0) < 4:
         settings = fold_legacy_save_sync_settings(settings, persistence.load_save_sync_state())
     settings = migrate_settings(settings)
+    # If load_settings quarantined a corrupt file this boot, fold the reset into
+    # the settings dict as a persistent marker. Set AFTER migration and BEFORE
+    # the save so it lands in the fresh settings.json and survives a plugin
+    # reload — the frontend surfaces it as a banner (QAM + game detail) until the
+    # next successful sign-in clears it (ConnectionService pops it on persist).
+    if persistence.corrupt_reset is not None:
+        settings["_settings_reset_notice"] = {"backed_up_to": persistence.corrupt_reset["backed_up_to"]}
     persistence.save_settings(settings)
     settings_persister = SettingsPersisterAdapter(persistence, settings)
     # Binds the same live settings dict so the per-platform-core fan-out resolves

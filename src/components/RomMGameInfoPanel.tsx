@@ -52,6 +52,7 @@ import type {
 import type { RommDataChangedDetail } from "../types/events";
 import { biosColorForLevel } from "../utils/biosColor";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
+import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
 import {
   getSaveSortMigrationState,
   onSaveSortMigrationChange,
@@ -61,6 +62,7 @@ import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { applyLoadSlotsResult, applyRefreshSlotResult } from "../utils/slotState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedCard } from "./MigrationBlockedCard";
+import { SettingsResetCard } from "./SettingsResetCard";
 import { detach } from "../utils/detach";
 
 interface RomMGameInfoPanelProps {
@@ -394,13 +396,16 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   // (mirrors romIdRef). bios events fan out to every mounted panel (#1082).
   const platformSlugRef = useRef<string>("");
   const [migration, setMigration] = useState(getMigrationState());
+  const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
 
   useEffect(() => {
     const unsub = onMigrationChange(() => setMigration(getMigrationState()));
+    const unsubSettingsReset = onSettingsResetChange(() => setSettingsReset(getSettingsResetState()));
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortPending(getSaveSortMigrationState().pending));
     return () => {
       unsub();
+      unsubSettingsReset();
       unsubSaveSort();
     };
   }, []);
@@ -680,6 +685,15 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   // --- Version mismatch — replace entire panel with polished error card ---
   if (versionError) {
     return createElement("div", { "data-romm": "true" }, createElement(VersionErrorCard, { message: versionError }));
+  }
+
+  // --- Corrupt-settings reset — surface the reason instead of a bare "offline" ---
+  if (settingsReset.pending) {
+    return createElement(
+      "div",
+      { "data-romm": "true" },
+      createElement(SettingsResetCard, { backedUpTo: settingsReset.backedUpTo, compact: true }),
+    );
   }
 
   // --- Pending RetroDECK migration — block the page until resolved ---

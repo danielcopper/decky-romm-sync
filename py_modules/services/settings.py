@@ -204,3 +204,16 @@ class SettingsService:
         self._settings["collection_create_platform_groups"] = bool(enabled)
         self._settings_persister.save_settings()
         return {"success": True}
+
+    # ── Corrupt-settings reset notice ───────────────────────────────────
+
+    def dismiss_settings_reset_notice(self) -> dict[str, Any]:
+        """Acknowledge the corrupt-settings reset and persist the dismissal.
+
+        Pops the persistent ``_settings_reset_notice`` marker from the live
+        settings dict and saves, so the QAM banner and game-detail cards stay
+        down across reloads. Idempotent — a no-op save when no marker is set.
+        """
+        self._settings.pop("_settings_reset_notice", None)
+        self._settings_persister.save_settings()
+        return {"success": True}

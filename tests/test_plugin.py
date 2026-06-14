@@ -464,36 +464,72 @@ class TestInsecureSslSetting:
         assert plugin.settings["romm_allow_insecure_ssl"] is False
 
 
-class TestConsumeSettingsResetNotice:
-    """The consume_settings_reset_notice callable drains the adapter's one-shot
-    corrupt-settings-reset flag and clears it after the first read."""
+class TestGetSettingsResetNotice:
+    """The get_settings_reset_notice callable reads the persistent
+    ``_settings_reset_notice`` marker from the live settings dict (non-consuming).
+    """
 
     @pytest.mark.asyncio
-    async def test_clean_boot_returns_reset_false(self, plugin, tmp_path):
-        import decky
-
-        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
-        result = await plugin.consume_settings_reset_notice()
-        assert result == {"reset": False, "backed_up_to": None}
+    async def test_no_marker_returns_not_pending(self, plugin):
+        plugin.settings = {"romm_url": "http://romm.local"}
+        result = await plugin.get_settings_reset_notice()
+        assert result == {"pending": False, "backed_up_to": None}
 
     @pytest.mark.asyncio
-    async def test_after_corruption_returns_reset_true_then_clears(self, plugin, tmp_path):
-        import decky
-        from fakes.system_time import FakeClock
+    async def test_marker_present_returns_pending_with_backup(self, plugin):
+        plugin.settings = {"_settings_reset_notice": {"backed_up_to": "settings.json.corrupt-1781697600"}}
+        result = await plugin.get_settings_reset_notice()
+        assert result == {"pending": True, "backed_up_to": "settings.json.corrupt-1781697600"}
 
-        settings_dir = str(tmp_path)
-        clock = FakeClock()
-        plugin._persistence = PersistenceAdapter(settings_dir, settings_dir, decky.logger, clock=clock)
-        with open(os.path.join(settings_dir, "settings.json"), "w") as f:
-            f.write("CORRUPT{{{")
-        plugin._persistence.load_settings()
+    @pytest.mark.asyncio
+    async def test_non_consuming_repeated_reads_stay_pending(self, plugin):
+        """Unlike the old one-shot drain, repeated reads keep reporting pending —
+        the marker is cleared only by an explicit ack, not by reading."""
+        plugin.settings = {"_settings_reset_notice": {"backed_up_to": "settings.json.corrupt-42"}}
+        first = await plugin.get_settings_reset_notice()
+        second = await plugin.get_settings_reset_notice()
+        assert first == {"pending": True, "backed_up_to": "settings.json.corrupt-42"}
+        assert second == first
 
-        first = await plugin.consume_settings_reset_notice()
-        assert first["reset"] is True
-        assert first["backed_up_to"] == f"settings.json.corrupt-{int(clock.time())}"
-        # Drains once per process.
-        second = await plugin.consume_settings_reset_notice()
-        assert second == {"reset": False, "backed_up_to": None}
+    @pytest.mark.asyncio
+    async def test_marker_without_backup_key_returns_none_backup(self, plugin):
+        """A malformed marker (missing backed_up_to) still reports pending with a
+        None backup rather than raising."""
+        plugin.settings = {"_settings_reset_notice": {}}
+        result = await plugin.get_settings_reset_notice()
+        assert result == {"pending": True, "backed_up_to": None}
+
+
+class TestDismissSettingsResetNotice:
+    """The dismiss_settings_reset_notice callable pops the persistent marker and
+    persists the dismissal — the user's explicit QAM acknowledgement."""
+
+    @pytest.mark.asyncio
+    async def test_pops_marker_and_persists(self, plugin):
+        # Mutate the live dict in place (the SettingsService binds this same ref).
+        plugin.settings["_settings_reset_notice"] = {"backed_up_to": "settings.json.corrupt-42"}
+        before = plugin._settings_persister.save_count
+
+        result = await plugin.dismiss_settings_reset_notice()
+
+        assert result == {"success": True}
+        assert "_settings_reset_notice" not in plugin.settings
+        # Read-side now reports not-pending.
+        assert await plugin.get_settings_reset_notice() == {"pending": False, "backed_up_to": None}
+        # The dismissal was persisted.
+        assert plugin._settings_persister.save_count == before + 1
+
+    @pytest.mark.asyncio
+    async def test_idempotent_when_no_marker(self, plugin):
+        """Acking with no marker present is a harmless persisted no-op."""
+        assert "_settings_reset_notice" not in plugin.settings
+        before = plugin._settings_persister.save_count
+
+        result = await plugin.dismiss_settings_reset_notice()
+
+        assert result == {"success": True}
+        assert "_settings_reset_notice" not in plugin.settings
+        assert plugin._settings_persister.save_count == before + 1
 
 
 class TestSettingsFilePermissions:
@@ -675,8 +711,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_whitelist_settings",
     "update_whitelist_settings",
     "save_collection_platform_groups",
-    # Read-only one-shot corrupt-settings-reset notice drain (frontend toast).
-    "consume_settings_reset_notice",
+    # Persistent corrupt-settings-reset notice — the read (banner/card) and the
+    # user's explicit QAM ack must both work regardless of a pending migration.
+    "get_settings_reset_notice",
+    "dismiss_settings_reset_notice",
     # Read-only RetroDECK path-resolution health probe (for the frontend banner).
     "get_retrodeck_status",
     # Cancel operations — must remain callable mid-operation when migration

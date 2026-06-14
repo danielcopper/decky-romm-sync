@@ -187,6 +187,38 @@ class TestBootstrap:
         assert result.adapters.sgdb_adapter._user_agent == "decky-romm-sync/0.0.0"
 
 
+class TestBootstrapSettingsResetMarker:
+    """Bootstrap folds a corrupt-settings reset into the persistent
+    ``_settings_reset_notice`` marker so it survives a plugin reload."""
+
+    def test_corrupt_boot_persists_marker_into_settings(self, tmp_path):
+        import json
+        import os
+
+        settings_dir = tmp_path / "settings"
+        settings_dir.mkdir(parents=True, exist_ok=True)
+        settings_path = settings_dir / "settings.json"
+        settings_path.write_text("NOT VALID JSON {{{")
+
+        result = _bootstrap_for(tmp_path)
+
+        # In-memory dict carries the marker pointing at the quarantined backup.
+        notice = result.stores.settings.get("_settings_reset_notice")
+        assert notice is not None
+        backup_name = notice["backed_up_to"]
+        assert backup_name.startswith("settings.json.corrupt-")
+        assert os.path.exists(settings_dir / backup_name)
+
+        # It was persisted to the fresh settings.json (survives a reload).
+        with open(settings_path) as f:
+            persisted = json.load(f)
+        assert persisted["_settings_reset_notice"] == {"backed_up_to": backup_name}
+
+    def test_clean_boot_writes_no_marker(self, tmp_path):
+        result = _bootstrap_for(tmp_path)
+        assert "_settings_reset_notice" not in result.stores.settings
+
+
 class TestWireServices:
     def _make_deps(self, tmp_path):
         logger = logging.getLogger("test_wire")

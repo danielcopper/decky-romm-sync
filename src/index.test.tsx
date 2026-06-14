@@ -15,7 +15,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
-import { consumeSettingsResetNotice } from "./api/backend";
+import { getSettingsResetNotice } from "./api/backend";
+import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import type { DownloadCompleteEvent, SyncStaleData } from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
@@ -252,37 +253,41 @@ describe("index.tsx — corrupt-settings reset notice", () => {
   beforeEach(() => {
     vi.mocked(toaster.toast).mockClear();
     logError.mockClear();
-    vi.mocked(consumeSettingsResetNotice).mockReset();
+    vi.mocked(getSettingsResetNotice).mockReset();
+    // Reset the module store so a prior test's pending state doesn't leak.
+    setSettingsResetState({ pending: false, backedUpTo: null });
   });
 
-  it("toasts the backup path when the boot notice reports a reset", async () => {
-    vi.mocked(consumeSettingsResetNotice).mockResolvedValue({
-      reset: true,
+  it("populates the store and fires NO toast when the boot notice reports a reset", async () => {
+    vi.mocked(getSettingsResetNotice).mockResolvedValue({
+      pending: true,
       backed_up_to: "settings.json.corrupt-1781697600",
     });
     const plugin = pluginFactory();
     await flush();
 
-    expect(toaster.toast).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "RomM Sync",
-        body: expect.stringContaining("settings.json.corrupt-1781697600"),
-      }),
-    );
+    // Persistent banner store is populated — surfaced by the QAM banner +
+    // game-detail card, not a toast.
+    expect(getSettingsResetState()).toEqual({
+      pending: true,
+      backedUpTo: "settings.json.corrupt-1781697600",
+    });
+    expect(toaster.toast).not.toHaveBeenCalled();
     plugin.onDismount();
   });
 
-  it("does not toast when the boot notice reports no reset", async () => {
-    vi.mocked(consumeSettingsResetNotice).mockResolvedValue({ reset: false, backed_up_to: null });
+  it("leaves the store not-pending and fires no toast when the boot notice reports no reset", async () => {
+    vi.mocked(getSettingsResetNotice).mockResolvedValue({ pending: false, backed_up_to: null });
     const plugin = pluginFactory();
     await flush();
 
+    expect(getSettingsResetState()).toEqual({ pending: false, backedUpTo: null });
     expect(toaster.toast).not.toHaveBeenCalled();
     plugin.onDismount();
   });
 
   it("surfaces a logError when the reset-notice check rejects", async () => {
-    vi.mocked(consumeSettingsResetNotice).mockRejectedValue(new Error("boom"));
+    vi.mocked(getSettingsResetNotice).mockRejectedValue(new Error("boom"));
     const plugin = pluginFactory();
     await flush();
 

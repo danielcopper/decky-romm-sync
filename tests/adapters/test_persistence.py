@@ -404,28 +404,6 @@ class TestCorruptQuarantine:
         assert os.stat(settings_path).st_mode & 0o777 == 0o600
 
 
-class TestResetNotice:
-    def test_clean_boot_returns_reset_false(self, adapter):
-        assert adapter.consume_settings_reset_notice() == {"reset": False, "backed_up_to": None}
-
-    def test_after_corruption_returns_reset_true_then_clears(self, tmp_path, logger):
-        clock = FakeClock(now=datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC))
-        settings_dir = str(tmp_path / "settings")
-        runtime_dir = str(tmp_path / "runtime")
-        os.makedirs(settings_dir, exist_ok=True)
-        os.makedirs(runtime_dir, exist_ok=True)
-        adapter = PersistenceAdapter(settings_dir=settings_dir, runtime_dir=runtime_dir, logger=logger, clock=clock)
-        with open(os.path.join(settings_dir, "settings.json"), "w") as f:
-            f.write("CORRUPT{{{")
-        adapter.load_settings()
-
-        first = adapter.consume_settings_reset_notice()
-        assert first["reset"] is True
-        assert first["backed_up_to"] == f"settings.json.corrupt-{int(clock.time())}"
-        # Drains once: a second read is clean.
-        assert adapter.consume_settings_reset_notice() == {"reset": False, "backed_up_to": None}
-
-
 class TestClockInjection:
     def test_default_clock_used_when_not_injected(self, tmp_path, logger):
         """Constructing without an explicit clock must not crash and the corrupt

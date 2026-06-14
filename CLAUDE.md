@@ -77,9 +77,17 @@ silent omission. The CI check enforces this.
 - **Settings durability**: `settings.json` is written crash-safe — write-tmp → `fsync(tmp)` → `os.replace()` →
   `fsync(dir)` (the Steam Deck's ext4 can otherwise leave a truncated file on power loss, and boot rewrites the file
   every run). A corrupt/unparseable `settings.json` is **never silently factory-reset**: it is logged loudly, backed up
-  to `settings.json.corrupt-<ts>` (`<ts>` from the injected `Clock`), and the user is toasted (via the
-  `consume_settings_reset_notice` callable, drained once per process) before defaults are written — so the user knows to
-  re-enter the server URL and sign in, and the original bytes survive for recovery. The settings `version` is stamped
+  to `settings.json.corrupt-<ts>` (`<ts>` from the injected `Clock`), and the adapter sets a transient `corrupt_reset`
+  flag before defaults are written — so the original bytes survive for recovery. Bootstrap reads that flag after
+  migration and folds it into the settings dict as a **persistent** `_settings_reset_notice` marker (set post-migration,
+  pre-save, so it lands in the fresh `settings.json` and survives a plugin reload). The frontend reads it via the
+  non-consuming `get_settings_reset_notice` callable and surfaces a **persistent notice** — a QAM banner
+  (`SettingsResetBanner`, with a **Dismiss** button) plus a game-detail card (`SettingsResetCard`, informational only —
+  its copy points the user to the QAM to dismiss), mirroring the migration-notice pattern, **not a toast** — so the user
+  knows to re-enter the server URL and sign in. The marker is cleared **only by an explicit user ACK in the QAM**: the
+  Dismiss button calls `dismiss_settings_reset_notice` (→ `SettingsService.dismiss_settings_reset_notice`), which pops
+  `_settings_reset_notice` and persists; the frontend then clears the shared `settingsResetStore` so the banner and
+  every game-detail card disappear at once. Sign-in does **not** clear it. The settings `version` is stamped
   `max(stored, _SETTINGS_VERSION)` on write — a file from a newer plugin is **never down-stamped**. `PersistenceAdapter`
   takes an injected `clock` (bootstrap threads the shared `SystemClock`).
 

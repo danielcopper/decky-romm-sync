@@ -34,6 +34,7 @@ import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgre
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
+import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
 import {
   getSaveSortMigrationState,
   onSaveSortMigrationChange,
@@ -45,6 +46,7 @@ import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth"
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { WarningCard } from "./WarningCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
+import { SettingsResetBanner } from "./SettingsResetBanner";
 import type {
   SyncProgress,
   SyncStage,
@@ -182,6 +184,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [retroarchWarning, setRetroarchWarning] = useState<{ warning: boolean; current?: string } | null>(null);
   const [retrodeckBanner, setRetrodeckBanner] = useState<RetroDeckBanner | null>(null);
   const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
+  const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
   const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -261,10 +264,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     }, 1000);
 
     const unsubMigration = onMigrationChange(() => setMigration(getMigrationState()));
+    const unsubSettingsReset = onSettingsResetChange(() => setSettingsReset(getSettingsResetState()));
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
     return () => {
       unsubProgress();
       unsubMigration();
+      unsubSettingsReset();
       unsubSaveSort();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
       if (downloadPollRef.current) clearInterval(downloadPollRef.current);
@@ -554,6 +559,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
   return (
     <>
+      {settingsReset.pending && <SettingsResetBanner backedUpTo={settingsReset.backedUpTo} />}
       <PanelSection title="Status">
         {retrodeckBanner && (
           <PanelSectionRow>

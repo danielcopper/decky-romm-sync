@@ -459,3 +459,19 @@ class TestSaveCollectionPlatformGroups:
     def test_coerces_falsy(self, service, settings):
         service.save_collection_platform_groups(0)  # type: ignore[arg-type]
         assert settings["collection_create_platform_groups"] is False
+
+
+class TestDismissSettingsResetNotice:
+    def test_pops_marker_and_persists(self, service, settings, settings_persister):
+        settings["_settings_reset_notice"] = {"backed_up_to": "settings.json.corrupt-42"}
+        result = service.dismiss_settings_reset_notice()
+        assert result == {"success": True}
+        assert "_settings_reset_notice" not in settings
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_idempotent_no_marker_still_persists(self, service, settings, settings_persister):
+        assert "_settings_reset_notice" not in settings
+        result = service.dismiss_settings_reset_notice()
+        assert result == {"success": True}
+        assert "_settings_reset_notice" not in settings
+        settings_persister.save_settings.assert_called_once_with()
