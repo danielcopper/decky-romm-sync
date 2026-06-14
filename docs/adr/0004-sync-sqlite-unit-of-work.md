@@ -47,7 +47,17 @@ Unchanged from epic #271 (these were never the contested part): connection **per
 (thin `main.py` callables don't see the factory); **one UoW per platform unit** for library sync (a crash loses only the
 in-flight unit); repositories **return domain aggregates**, not TypedDicts. Runtime per-connection PRAGMAs:
 `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout=5000`, `temp_store=MEMORY`, `isolation_level=None` (the UoW
-issues explicit `BEGIN`/`COMMIT`/`ROLLBACK`); `journal_mode=WAL` is persistent and already set by the #781 runner.
+issues an explicit `BEGIN IMMEDIATE` and an explicit `COMMIT`/`ROLLBACK`); `journal_mode=WAL` is persistent and already
+set by the #781 runner.
+
+**Transaction start is `BEGIN IMMEDIATE`, universally.** Every UoW opens with `BEGIN IMMEDIATE`, never a deferred
+`BEGIN` — the write lock is taken at transaction start. A read-then-write UoW opened deferred takes a read snapshot
+first and then upgrades read → write on its first write; under WAL, if another connection commits in between, that
+upgrade fails immediately with `SQLITE_BUSY_SNAPSHOT`, which `busy_timeout` does **not** retry — so the operation errors
+spuriously. Holding the write lock from the start removes the read → write upgrade entirely; concurrent writers
+serialize on `busy_timeout` instead. The rule is universal (no read-only/write distinction): across the ~116 UoW call
+sites in this single-user, short-DB-op workload, one rule is the safe one-liner with no mislabeling footgun, and the
+only cost — read-only UoWs also taking the write lock — is negligible here.
 
 ## Consequences
 

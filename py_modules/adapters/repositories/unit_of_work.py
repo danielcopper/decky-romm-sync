@@ -1,11 +1,19 @@
 """The synchronous SQLite Unit of Work — the transactional boundary for one operation.
 
 Opens one ``sqlite3`` connection per operation, applies the runtime
-per-connection PRAGMAs, issues an explicit ``BEGIN``, exposes the nine
+per-connection PRAGMAs, issues an explicit ``BEGIN IMMEDIATE``, exposes the nine
 repositories over that shared connection, and commits / rolls back on exit. Used
 as a synchronous context manager from a service's ``run_in_executor`` worker so
 the connection never escapes its worker thread (ADR-0004 — sync ``sqlite3`` over
 ``aiosqlite``, thread-affinity by connection-per-operation).
+
+Every UoW opens with ``BEGIN IMMEDIATE`` (not a deferred ``BEGIN``) so the write
+lock is held from transaction start. A read-then-write UoW therefore never
+upgrades a read snapshot to a write mid-transaction — the upgrade that raises
+``SQLITE_BUSY_SNAPSHOT`` (which ``busy_timeout`` does not retry) when another
+connection commits in between under WAL. Concurrent writers serialize on
+``busy_timeout`` instead. The accepted tradeoff is that read-only UoWs also take
+the write lock — negligible for this single-user, short-DB-op workload.
 
 ``SqliteUnitOfWork`` returns concrete ``SqliteXxxRepository`` instances and never
 imports the ``services``-layer Protocols; it structurally satisfies the
@@ -70,7 +78,13 @@ class SqliteUnitOfWork:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("BEGIN")
+        # BEGIN IMMEDIATE acquires the write lock at transaction start, so a
+        # read-then-write UoW never hits SQLITE_BUSY_SNAPSHOT under concurrent
+        # WAL commits (busy_timeout does not retry a snapshot-upgrade failure);
+        # concurrent writers serialize on busy_timeout=5000 instead. Tradeoff:
+        # read-only UoWs also take the write lock (fine for this single-user,
+        # short-DB-op workload).
+        conn.execute("BEGIN IMMEDIATE")
         self._conn = conn
 
         self.roms = SqliteRomRepository(conn)

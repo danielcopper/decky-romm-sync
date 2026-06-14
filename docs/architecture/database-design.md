@@ -390,9 +390,21 @@ introduce a second I/O paradigm alongside the established `run_in_executor` idio
 **Shape.** `SqliteUnitOfWork(db_path)` is a synchronous context manager. `__enter__` opens one connection
 (`isolation_level=None`, `row_factory = sqlite3.Row`), applies the per-connection PRAGMAs (`foreign_keys=ON`,
 `synchronous=NORMAL`, `busy_timeout=5000`, `temp_store=MEMORY` — `journal_mode=WAL` is already persistent from the
-runner), issues an explicit `BEGIN`, builds the nine repositories over that shared connection, and returns itself.
-`__exit__` commits on a clean exit, rolls back on an exception (then re-raises), and always closes the connection. One
-UoW therefore equals one transaction; writes across several repositories commit or roll back together.
+runner), issues an explicit `BEGIN IMMEDIATE`, builds the nine repositories over that shared connection, and returns
+itself. `__exit__` commits on a clean exit, rolls back on an exception (then re-raises), and always closes the
+connection. One UoW therefore equals one transaction; writes across several repositories commit or roll back together.
+
+**Transaction policy — `BEGIN IMMEDIATE` for every UoW.** The UoW starts its transaction with `BEGIN IMMEDIATE`, not a
+deferred `BEGIN`, so the write lock is acquired at transaction start. The reason: a read-then-write UoW (e.g. the
+reporter's per-rom upsert does a `roms.get` then an `INSERT` in a loop) opened with a deferred `BEGIN` takes a read
+snapshot first, then tries to _upgrade_ read → write on the first `INSERT`. Under WAL, if another connection commits a
+write in between, that upgrade fails **immediately** with `SQLITE_BUSY_SNAPSHOT` — and `busy_timeout` does **not** retry
+a snapshot-upgrade failure, so the operation errors spuriously. `BEGIN IMMEDIATE` holds the write lock from the start,
+so there is no read → write upgrade and no snapshot to invalidate; concurrent writers serialize on `busy_timeout=5000`
+instead of failing. The decision is **universal** — _all_ UoWs use `BEGIN IMMEDIATE`, with no read-only/write
+distinction: across ~116 call sites in a single-user, short-DB-op workload, the universal rule is the safe one-liner
+with no mislabeling footgun. The accepted tradeoff is that read-only UoWs also take the write lock (and so serialize
+against each other) — negligible for this workload.
 
 **Thread affinity.** A `sqlite3` connection is single-thread by default (`check_same_thread=True`, left at its safe
 default). Services run the whole `with uow_factory() as uow:` block inside their synchronous `run_in_executor` worker
