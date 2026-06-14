@@ -59,9 +59,10 @@ def _make_testable_plugin():
     """Return a TestablePlugin instance with test-only attributes declared.
 
     Pre-populates ``_migration_service`` with a non-pending MagicMock so the
-    ``@migration_blocked`` decorator does not raise AttributeError in tests
-    that don't otherwise wire migration state. Tests that exercise the
-    block can override ``is_retrodeck_migration_pending`` per-test.
+    ``@migration_blocked`` decorator passes through (it requires the service and
+    raises RuntimeError if it is unwired) in tests that don't otherwise wire
+    migration state. Tests that exercise the block can override
+    ``is_retrodeck_migration_pending`` per-test.
 
     Also pre-wires a no-op ``_debug_logger`` so any service that consumes
     ``Plugin._log_debug`` (which forwards through ``_debug_logger``) works

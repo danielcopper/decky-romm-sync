@@ -2,8 +2,10 @@
 
 The decorator wraps Decky callables on Plugin so they short-circuit with a
 blocked-dict whenever ``self._migration_service.is_retrodeck_migration_pending()``
-is True. Tests use a minimal fake class with a ``_migration_service`` attribute
-to keep them independent from the full Plugin.
+is True. ``_migration_service`` is a hard requirement: a missing/None service is
+a wiring regression and the wrapper raises ``RuntimeError`` rather than silently
+skipping the safety gate. Tests use a minimal fake class with a
+``_migration_service`` attribute to keep them independent from the full Plugin.
 """
 
 from __future__ import annotations
@@ -122,17 +124,57 @@ class TestMigrationBlockedDecorator:
         assert _FakeOwner.do_thing.__doc__ == ("Demo docstring used to verify @functools.wraps preservation.")
 
     @pytest.mark.asyncio
-    async def test_decorator_no_op_when_migration_service_missing(self):
-        """Defensive path: if _migration_service is absent, the wrapper must
-        still call through to the wrapped method instead of raising."""
+    async def test_raises_when_migration_service_attribute_absent(self):
+        """Regression guard for #970: the gate is a hard data-safety requirement.
+
+        If _migration_service is missing entirely (no attribute), the wrapper
+        must RAISE rather than silently call through — a wiring regression must
+        fail loud. (Non-vacuous: under the old no-op escape hatch this same
+        owner returned "ok" instead of raising.)
+        """
 
         class _OwnerWithoutService:
+            def __init__(self):
+                self.called = False
+
             @migration_blocked
             async def do(self):
+                self.called = True
                 return "ok"
 
-        result = await _OwnerWithoutService().do()
-        assert result == "ok"
+        owner = _OwnerWithoutService()
+        with pytest.raises(RuntimeError) as exc_info:
+            await owner.do()
+        # Message names the gated method and explains the unwired gate.
+        assert "do" in str(exc_info.value)
+        assert "_migration_service" in str(exc_info.value)
+        # The gated callable must NOT have run without the safety gate.
+        assert owner.called is False
+
+    @pytest.mark.asyncio
+    async def test_raises_when_migration_service_is_none(self):
+        """A present-but-None _migration_service is also unwired → raises.
+
+        Mirrors the absent-attribute case for the ``getattr(..., None)`` path:
+        an explicitly-None service is just as much a wiring regression.
+        """
+
+        class _OwnerWithNoneService:
+            def __init__(self):
+                self._migration_service = None
+                self.called = False
+
+            @migration_blocked
+            async def do(self):
+                self.called = True
+                return "ok"
+
+        owner = _OwnerWithNoneService()
+        with pytest.raises(RuntimeError) as exc_info:
+            await owner.do()
+        assert "do" in str(exc_info.value)
+        assert "_migration_service" in str(exc_info.value)
+        assert owner.called is False
 
     @pytest.mark.asyncio
     async def test_returns_blocked_dict_using_mock_service(self):
