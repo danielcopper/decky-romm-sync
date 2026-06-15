@@ -81,23 +81,28 @@ class SlotSwitcher:
         with self._uow_factory() as uow:
             uow.rom_save_states.save(rom_id, save_state)
 
-    def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
+    async def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Set the active save slot for a specific game.
 
         If the slot doesn't exist yet (not on server), it is persisted
         as a local slot. It will be promoted to server once a save is
-        uploaded to it. Owns its own read→mutate→write Unit of Work.
+        uploaded to it. Owns its own read→mutate→write Unit of Work, held
+        under the per-ROM lock so the flip serialises against any in-flight
+        sync/status on the same ROM (see SyncEngine.rom_lock).
         """
         rom_id = int(rom_id)
         slot_str = str(slot).strip() if slot else ""
         # Empty string = legacy mode (None slot)
         resolved_slot: str | None = slot_str if slot_str else None
 
-        with self._uow_factory() as uow:
-            rom_state = uow.rom_save_states.get(rom_id) or RomSaveState()
-            rom_state.switch_active_slot(resolved_slot)
-            uow.rom_save_states.save(rom_id, rom_state)
+        async with self._sync_engine.rom_lock(rom_id):
+            with self._uow_factory() as uow:
+                rom_state = uow.rom_save_states.get(rom_id) or RomSaveState()
+                rom_state.switch_active_slot(resolved_slot)
+                uow.rom_save_states.save(rom_id, rom_state)
 
+        # The background check re-acquires rom_lock when it runs later, so it
+        # must be scheduled outside the held lock above.
         self._loop.create_task(self._status_service.check_save_status_background(rom_id))
         return {"success": True, "active_slot": resolved_slot}
 
@@ -176,75 +181,82 @@ class SlotSwitcher:
         saves_dir = info["saves_dir"]
         system = info["system"]
 
-        save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
+        # The read→mutate→write of the RomSaveState aggregate must serialise
+        # against every other path that touches this ROM's state (sync, status,
+        # the other slot mutations). Hold the per-ROM lock across the whole
+        # critical section — never around the tail ``get_save_status`` below,
+        # which re-acquires the same non-reentrant lock (see SyncEngine.rom_lock).
+        async with self._sync_engine.rom_lock(rom_id):
+            save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
 
-        # 4. Check for pending local changes (hashing — run in executor)
-        readiness = await self._loop.run_in_executor(
-            None,
-            self._check_slot_switch_readiness,
-            rom_id,
-            save_state,
-        )
-        if not readiness.get("ready"):
-            return {
-                "success": False,
-                "reason": readiness.get("reason", "pending_uploads"),
-                "message": "Pending local changes — upload or discard first",
-                "files": readiness.get("files", []),
-            }
-
-        # 5. Fetch server saves for the new slot (also proves server is reachable)
-        try:
-            all_server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
+            # 4. Check for pending local changes (hashing — run in executor)
+            readiness = await self._loop.run_in_executor(
                 None,
-                lambda: self._retry.with_retry(
-                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
-                ),
-            )
-        except Exception as e:
-            return {
-                "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                "message": str(e),
-            }
-
-        # Filter to the target slot (FakeSaveApi doesn't filter, real API may not either)
-        # Normalize "" and None both to None before comparing (legacy saves may use either)
-        slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
-
-        # 6. Update active slot in state (in memory; persisted once at the end)
-        save_state.switch_active_slot(resolved_slot)
-
-        # 7. Sync local state to match the new slot
-        default_slot = resolve_default_slot(self._settings)
-        if slot_saves:
-            # New slot has server saves — download them, replacing local files.
-            # rom_name is guaranteed by the earlier ``info`` check.
-            await self._loop.run_in_executor(
-                None,
-                self._do_switch_downloads,
-                slot_saves,
-                saves_dir,
-                save_state,
-                device_id,
-                system,
-                info["rom_name"],
-                default_slot,
-            )
-        else:
-            # New slot is empty — delete local save files for a fresh start
-            await self._loop.run_in_executor(
-                None,
-                self._delete_local_saves_for_switch,
+                self._check_slot_switch_readiness,
                 rom_id,
                 save_state,
             )
+            if not readiness.get("ready"):
+                return {
+                    "success": False,
+                    "reason": readiness.get("reason", "pending_uploads"),
+                    "message": "Pending local changes — upload or discard first",
+                    "files": readiness.get("files", []),
+                }
 
-        # 8. Update last_sync_check_at and persist the accumulated mutations once.
-        save_state.mark_sync_evaluated(self._clock.now().isoformat())
-        await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+            # 5. Fetch server saves for the new slot (also proves server is reachable)
+            try:
+                all_server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
+                    None,
+                    lambda: self._retry.with_retry(
+                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
+                    ),
+                )
+            except Exception as e:
+                return {
+                    "success": False,
+                    "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                    "message": str(e),
+                }
 
-        # 9. Return fresh status
+            # Filter to the target slot (FakeSaveApi doesn't filter, real API may not either)
+            # Normalize "" and None both to None before comparing (legacy saves may use either)
+            slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
+
+            # 6. Update active slot in state (in memory; persisted once at the end)
+            save_state.switch_active_slot(resolved_slot)
+
+            # 7. Sync local state to match the new slot
+            default_slot = resolve_default_slot(self._settings)
+            if slot_saves:
+                # New slot has server saves — download them, replacing local files.
+                # rom_name is guaranteed by the earlier ``info`` check.
+                await self._loop.run_in_executor(
+                    None,
+                    self._do_switch_downloads,
+                    slot_saves,
+                    saves_dir,
+                    save_state,
+                    device_id,
+                    system,
+                    info["rom_name"],
+                    default_slot,
+                )
+            else:
+                # New slot is empty — delete local save files for a fresh start
+                await self._loop.run_in_executor(
+                    None,
+                    self._delete_local_saves_for_switch,
+                    rom_id,
+                    save_state,
+                )
+
+            # 8. Update last_sync_check_at and persist the accumulated mutations once.
+            save_state.mark_sync_evaluated(self._clock.now().isoformat())
+            await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+
+        # 9. Return fresh status. MUST stay outside the lock above —
+        # get_save_status re-acquires rom_lock(rom_id), which would self-deadlock.
         save_status = await self._status_service.get_save_status(rom_id)
         return {"success": True, "save_status": save_status}
 

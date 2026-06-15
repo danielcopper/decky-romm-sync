@@ -120,6 +120,7 @@ class SlotsService:
             loop=config.loop,
             logger=config.logger,
             log_debug=config.log_debug,
+            sync_engine=config.sync_engine,
         )
 
     # ------------------------------------------------------------------
@@ -140,9 +141,9 @@ class SlotsService:
     # continue to drive the same code path.
     # ------------------------------------------------------------------
 
-    def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
+    async def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Set the active save slot for a specific game."""
-        return self._switcher.set_active_slot(rom_id, slot)
+        return await self._switcher.set_active_slot(rom_id, slot)
 
     async def switch_slot(self, rom_id: int, new_slot: str) -> dict[str, Any]:
         """Switch the active save slot with immediate state sync."""

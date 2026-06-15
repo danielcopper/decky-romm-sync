@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
+    from services.saves.sync_engine import SyncEngine
 
 
 class SlotDeleter:
@@ -43,6 +44,7 @@ class SlotDeleter:
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
         log_debug: DebugLogger,
+        sync_engine: SyncEngine,
     ) -> None:
         self._settings = settings
         self._uow_factory = uow_factory
@@ -52,6 +54,7 @@ class SlotDeleter:
         self._loop = loop
         self._logger = logger
         self._log_debug = log_debug
+        self._sync_engine = sync_engine
 
     def _read_save_state(self, rom_id: int) -> RomSaveState | None:
         with self._uow_factory() as uow:
@@ -179,46 +182,52 @@ class SlotDeleter:
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
 
-        result = await self._loop.run_in_executor(None, self._validate_slot_operation, rom_id, slot)
-        if isinstance(result, dict):
-            return result
-        save_state, slots_dict = result
+        # The read→delete-server→mutate→write of the RomSaveState aggregate must
+        # serialise against every other path that touches this ROM's state.
+        # _delete_server_slot_saves does NOT acquire rom_lock, so calling it
+        # inside the held lock is safe (no re-entry). There is no tail status
+        # call, so no deadlock risk.
+        async with self._sync_engine.rom_lock(rom_id):
+            result = await self._loop.run_in_executor(None, self._validate_slot_operation, rom_id, slot)
+            if isinstance(result, dict):
+                return result
+            save_state, slots_dict = result
 
-        effective_active = save_state.active_slot or ""
-        if slot == effective_active:
+            effective_active = save_state.active_slot or ""
+            if slot == effective_active:
+                return {
+                    "success": False,
+                    "reason": "active_slot",
+                    "message": "Cannot delete the active slot. Switch to a different slot first.",
+                }
+
+            slot_info = slots_dict[slot]
+            source = slot_info.get("source", "server")
+
+            deleted_server_saves = 0
+            cleaned_files = 0
+            deleted_ids: set[int] = set()
+
+            if source == "server":
+                delete_result = await self._delete_server_slot_saves(rom_id, slot)
+                if not delete_result["success"]:
+                    return delete_result
+                deleted_server_saves = delete_result["count"]
+                deleted_ids = delete_result["ids"]
+
+            # Clean up tracked file entries pointing to deleted saves
+            files_state = save_state.files
+            if deleted_ids:
+                to_remove = [fn for fn, fs in files_state.items() if fs.tracked_save_id in deleted_ids]
+                for fn in to_remove:
+                    save_state.delete_file_tracking(fn)
+                    cleaned_files += 1
+
+            save_state.delete_slot_tracking(slot)
+            await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+
             return {
-                "success": False,
-                "reason": "active_slot",
-                "message": "Cannot delete the active slot. Switch to a different slot first.",
+                "success": True,
+                "deleted_server_saves": deleted_server_saves,
+                "cleaned_files": cleaned_files,
             }
-
-        slot_info = slots_dict[slot]
-        source = slot_info.get("source", "server")
-
-        deleted_server_saves = 0
-        cleaned_files = 0
-        deleted_ids: set[int] = set()
-
-        if source == "server":
-            delete_result = await self._delete_server_slot_saves(rom_id, slot)
-            if not delete_result["success"]:
-                return delete_result
-            deleted_server_saves = delete_result["count"]
-            deleted_ids = delete_result["ids"]
-
-        # Clean up tracked file entries pointing to deleted saves
-        files_state = save_state.files
-        if deleted_ids:
-            to_remove = [fn for fn, fs in files_state.items() if fs.tracked_save_id in deleted_ids]
-            for fn in to_remove:
-                save_state.delete_file_tracking(fn)
-                cleaned_files += 1
-
-        save_state.delete_slot_tracking(slot)
-        await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-
-        return {
-            "success": True,
-            "deleted_server_saves": deleted_server_saves,
-            "cleaned_files": cleaned_files,
-        }

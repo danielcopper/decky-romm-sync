@@ -617,10 +617,21 @@ input.
 `pre_launch_sync`, `post_exit_sync`, `sync_rom_saves`, `sync_all_saves`, and `resolve_sync_conflict` for the same
 `rom_id`. `StatusService.get_save_status` also takes the lock — not for the read, but for its one write: the executor
 body adopts a baseline hash (`Skip(adopt_baseline=True)`) and persists it through a `rom_save_states` read-modify-write,
-which would otherwise race a concurrent sync and clobber that sync's update. The lock-free server-saves network fetch
-stays outside the lock; only the local RMW is the critical section. Different rom_ids have independent locks, so
-cross-game concurrency (e.g. Sync All Saves running concurrently with a resolve on one specific rom) is unaffected. The
-lock is created lazily on first access (`SyncEngine.rom_lock(rom_id)`).
+which would otherwise race a concurrent sync and clobber that sync's update. The four **slot mutations** —
+`SlotSwitcher.switch_slot` / `set_active_slot`, `SetupWizard.confirm_slot_choice`, and `SlotDeleter.delete_slot` — take
+the lock too: each loads the `RomSaveState` aggregate, mutates it (active-slot flip, slot-confirm, slot/file tracking
+teardown, switch downloads/deletes), and persists, so without the lock a slot op racing an in-flight sync on the same
+ROM loses updates or PUTs the wrong slot's content into the tracked server save (#1057). The lock-free server-saves
+network fetch stays outside the lock; only the local RMW is the critical section. Different rom_ids have independent
+locks, so cross-game concurrency (e.g. Sync All Saves running concurrently with a resolve on one specific rom) is
+unaffected. The lock is created lazily on first access (`SyncEngine.rom_lock(rom_id)`).
+
+The lock is **not reentrant** (plain `asyncio.Lock`), so a critical section must never call a peer that re-acquires the
+same lock. `switch_slot` is the live instance: its tail `get_save_status` re-takes `rom_lock(rom_id)`, so the lock is
+released at the end of the read-mutate-write block and the status read runs **outside** it — nesting them would
+self-deadlock. The peer calls a slot mutation makes while holding the lock (`content_dir_blocked`,
+`_migrate_slot_saves`, `_delete_server_slot_saves`, the matrix download/upload workers) are all lock-free by design, so
+holding the lock across their server/file I/O is safe and is the intended serialization point.
 
 The realistic race the lock prevents: user clicks Keep Local → executor runs PUT + state mutation → in parallel,
 `post_exit_sync` for a game that just stopped runs and mutates the same per-file state → last-writer-wins on the

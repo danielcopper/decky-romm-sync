@@ -226,41 +226,46 @@ class SetupWizard:
                 "message": "Slot name cannot be empty",
             }
 
-        # Load → confirm in memory; migration I/O runs outside the txn.
-        save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveState()
-        save_state.confirm_slot(chosen_slot)
+        # The read→confirm→(migrate)→write of the RomSaveState aggregate must
+        # serialise against every other path that touches this ROM's state.
+        # content_dir_blocked and _migrate_slot_saves do NOT acquire rom_lock,
+        # so calling them inside the held lock is safe (no re-entry).
+        async with self._sync_engine.rom_lock(rom_id):
+            # Load → confirm in memory; migration I/O runs outside the txn.
+            save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveState()
+            save_state.confirm_slot(chosen_slot)
 
-        # Migration: re-upload local files to new slot, delete old server saves
-        if migrate_from_slot is not NO_MIGRATION:
-            # #239: RetroArch writes saves to the content dir — the migration
-            # uploads local files read from ``saves_dir``, which holds nothing
-            # in content-dir mode, so the migration could not carry real saves.
-            # Refuse the migration before any upload/delete; the slot itself is
-            # still confirmed in state (a non-destructive metadata flip).
-            if await self._sync_engine.content_dir_blocked("confirm_slot_choice"):
-                self._log_debug(f"confirm_slot_choice: content-dir layout for rom {rom_id}; skipping migration")
-                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-                return {
-                    "success": False,
-                    "reason": SAVE_SYNC_CONTENT_DIR_REASON,
-                    "needs_conflict_resolution": False,
-                    "message": SAVE_SYNC_IN_CONTENT_DIR,
-                }
-            # migrate_from_slot can be None (legacy no-slot) or a string slot name
-            from_slot: str | None = migrate_from_slot if isinstance(migrate_from_slot, str) else None
-            try:
-                await self._migrate_slot_saves(rom_id, chosen_slot, from_slot)
-            except Exception as e:
-                self._logger.warning(f"confirm_slot_choice({rom_id}): migration failed: {e}")
-                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-                return {
-                    "success": True,
-                    "needs_conflict_resolution": False,
-                    "message": f"Slot confirmed but migration failed: {e}",
-                }
+            # Migration: re-upload local files to new slot, delete old server saves
+            if migrate_from_slot is not NO_MIGRATION:
+                # #239: RetroArch writes saves to the content dir — the migration
+                # uploads local files read from ``saves_dir``, which holds nothing
+                # in content-dir mode, so the migration could not carry real saves.
+                # Refuse the migration before any upload/delete; the slot itself is
+                # still confirmed in state (a non-destructive metadata flip).
+                if await self._sync_engine.content_dir_blocked("confirm_slot_choice"):
+                    self._log_debug(f"confirm_slot_choice: content-dir layout for rom {rom_id}; skipping migration")
+                    await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                    return {
+                        "success": False,
+                        "reason": SAVE_SYNC_CONTENT_DIR_REASON,
+                        "needs_conflict_resolution": False,
+                        "message": SAVE_SYNC_IN_CONTENT_DIR,
+                    }
+                # migrate_from_slot can be None (legacy no-slot) or a string slot name
+                from_slot: str | None = migrate_from_slot if isinstance(migrate_from_slot, str) else None
+                try:
+                    await self._migrate_slot_saves(rom_id, chosen_slot, from_slot)
+                except Exception as e:
+                    self._logger.warning(f"confirm_slot_choice({rom_id}): migration failed: {e}")
+                    await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                    return {
+                        "success": True,
+                        "needs_conflict_resolution": False,
+                        "message": f"Slot confirmed but migration failed: {e}",
+                    }
 
-        await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-        return {"success": True, "needs_conflict_resolution": False, "message": "Slot confirmed"}
+            await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+            return {"success": True, "needs_conflict_resolution": False, "message": "Slot confirmed"}
 
     async def _migrate_slot_saves(
         self,

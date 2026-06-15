@@ -171,27 +171,30 @@ class TestSaveSlots:
         # State persisted: reload from SQLite and confirm the slots map matches.
         assert "default" in _require_save_state(svc, 123).slots
 
-    def test_set_active_slot(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_set_active_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _seed_save_state(svc, 123, RomSaveState(system="gba", active_slot="default"))
-        result = svc._slots.set_active_slot(123, "desktop")
+        result = await svc._slots.set_active_slot(123, "desktop")
         assert result["success"] is True
         assert _require_save_state(svc, 123).active_slot == "desktop"
 
-    def test_set_active_slot_creates_entry(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_set_active_slot_creates_entry(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _seed_rom(svc, 456)
-        result = svc._slots.set_active_slot(456, "my-slot")
+        result = await svc._slots.set_active_slot(456, "my-slot")
         assert result["success"] is True
         assert _require_save_state(svc, 456).active_slot == "my-slot"
 
-    def test_set_active_slot_empty_sets_none(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_set_active_slot_empty_sets_none(self, tmp_path):
         """Empty string sets active_slot to None (legacy mode)."""
         svc, _ = make_service(tmp_path)
         _seed_rom(svc, 123)
-        result = svc._slots.set_active_slot(123, "")
+        result = await svc._slots.set_active_slot(123, "")
         assert result["success"] is True
         assert result["active_slot"] is None
         assert _require_save_state(svc, 123).active_slot is None
@@ -207,7 +210,7 @@ class TestSaveSlots:
         svc, _ = make_service(tmp_path, emit=fake_emit)
         _install_rom(svc, tmp_path)
 
-        svc._slots.set_active_slot(42, "slot1")
+        await svc._slots.set_active_slot(42, "slot1")
 
         # Give the background task a chance to run
         await asyncio.sleep(0.1)
@@ -1493,3 +1496,147 @@ class TestDeleteSlot:
 
         assert result["success"] is False
         assert result["reason"] == "disabled"
+
+
+class TestSlotMutationLocking:
+    """The slot-mutation RMW critical sections serialise on the per-ROM lock.
+
+    Every slot mutation that does a read→mutate→write on the ``RomSaveState``
+    aggregate must hold ``SyncEngine.rom_lock(rom_id)`` across the critical
+    section, the same lock every sync path and ``get_save_status`` hold. Each
+    test below holds the lock externally, starts the mutation, and proves it
+    cannot proceed until the lock is released — without serialisation a slot
+    op racing an in-flight sync on the same ROM loses updates / corrupts the
+    cross-slot PUT (#1057).
+    """
+
+    def _synced_state(self, local_hash: str, save_id: int = 100) -> RomSaveState:
+        """A save state where ``pokemon.srm`` appears fully synced to ``default``."""
+        return RomSaveState(
+            active_slot="default",
+            slot_confirmed=True,
+            files={
+                "pokemon.srm": FileSyncState(
+                    last_sync_hash=local_hash,
+                    last_sync_at="2026-01-01T00:00:00Z",
+                    last_sync_server_updated_at="2026-01-01T00:00:00Z",
+                    last_sync_server_save_id=save_id,
+                    last_sync_server_size=1024,
+                    tracked_save_id=save_id,
+                ),
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_switch_slot_serialises_on_rom_lock(self, tmp_path):
+        """switch_slot blocks while the per-ROM lock is held, then completes on release."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+        _seed_save_state(svc, 42, self._synced_state(local_hash))
+        fake.saves[200] = _server_save(save_id=200, slot="desktop")
+
+        lock = svc._sync_engine.rom_lock(42)
+        await lock.acquire()
+        task = asyncio.create_task(svc._slots.switch_slot(42, "desktop"))
+        await asyncio.sleep(0.05)
+        assert not task.done()  # blocked on the held lock
+
+        lock.release()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result["success"] is True
+        assert _require_save_state(svc, 42).active_slot == "desktop"
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_serialises_on_rom_lock(self, tmp_path):
+        """delete_slot blocks while the per-ROM lock is held, then completes on release."""
+        svc, _fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "server-dev-1")
+        _install_rom(svc, tmp_path)
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "slots": {
+                    "default": {"source": "server", "count": 1, "latest_updated_at": None},
+                    "save1": {"source": "local", "count": 0, "latest_updated_at": None},
+                },
+                "files": {},
+            },
+        )
+
+        lock = svc._sync_engine.rom_lock(42)
+        await lock.acquire()
+        task = asyncio.create_task(svc._slots.delete_slot(42, "save1"))
+        await asyncio.sleep(0.05)
+        assert not task.done()  # blocked on the held lock
+
+        lock.release()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result["success"] is True
+        assert "save1" not in _require_save_state(svc, 42).slots
+
+    @pytest.mark.asyncio
+    async def test_confirm_slot_choice_serialises_on_rom_lock(self, tmp_path):
+        """confirm_slot_choice blocks while the per-ROM lock is held, then completes on release."""
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _seed_rom(svc, 42)
+
+        lock = svc._sync_engine.rom_lock(42)
+        await lock.acquire()
+        task = asyncio.create_task(svc._slots.confirm_slot_choice(42, "default"))
+        await asyncio.sleep(0.05)
+        assert not task.done()  # blocked on the held lock
+
+        lock.release()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result["success"] is True
+        state = _require_save_state(svc, 42)
+        assert state.slot_confirmed is True
+        assert state.active_slot == "default"
+
+    @pytest.mark.asyncio
+    async def test_set_active_slot_serialises_on_rom_lock(self, tmp_path):
+        """set_active_slot blocks while the per-ROM lock is held, then completes on release."""
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _seed_save_state(svc, 123, RomSaveState(system="gba", active_slot="default"))
+
+        lock = svc._sync_engine.rom_lock(123)
+        await lock.acquire()
+        task = asyncio.create_task(svc._slots.set_active_slot(123, "desktop"))
+        await asyncio.sleep(0.05)
+        assert not task.done()  # blocked on the held lock
+
+        lock.release()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result["success"] is True
+        assert _require_save_state(svc, 123).active_slot == "desktop"
+
+    @pytest.mark.asyncio
+    async def test_switch_slot_does_not_self_deadlock_on_tail_status(self, tmp_path):
+        """switch_slot's tail get_save_status runs outside the lock — no self-deadlock.
+
+        switch_slot acquires rom_lock for its RMW, and get_save_status re-acquires
+        the same non-reentrant lock. If the tail status call were inside the held
+        lock, this would hang. The download path is exercised (target slot has
+        server saves) so the full critical section runs before the tail call.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+        _seed_save_state(svc, 42, self._synced_state(local_hash))
+        fake.saves[200] = _server_save(save_id=200, slot="desktop")
+
+        # wait_for turns a self-deadlock into a clean TimeoutError, not a hung suite.
+        result = await asyncio.wait_for(svc.switch_slot(42, "desktop"), timeout=5)
+        assert result["success"] is True
+        assert "save_status" in result
