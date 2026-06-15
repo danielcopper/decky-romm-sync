@@ -201,23 +201,26 @@ Dimensions:
 - **Local mtime vs server `updated_at`** — only consulted in the `never touched` branch where the algorithm has no other
   ordering signal.
 
-| #  | local file | server in slot | our entry     | local vs baseline | mtime vs server      | decision                            | reason                                                                                                 |
-| -- | ---------- | -------------- | ------------- | ----------------- | -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| 1  | no         | none           | n/a           | n/a               | n/a                  | `Skip(nothing_to_sync)`             | nothing local, nothing server                                                                          |
-| 2  | yes        | none           | n/a           | n/a               | n/a                  | `Upload(POST)`                      | first push for this save (or recovery after server-side wipe)                                          |
-| 3  | no         | ≥1             | never touched | n/a               | n/a                  | `Download(picked)`                  | no relation, pull newest                                                                               |
-| 4  | no         | ≥1             | current=true  | n/a               | n/a                  | `Download(picked)`                  | recovery — server still tracks our last version, local is gone                                         |
-| 5  | no         | ≥1             | current=false | n/a               | n/a                  | `Download(picked)`                  | server moved forward, nothing local to protect                                                         |
-| 6a | yes        | ≥1             | never touched | no baseline       | local mtime ≥ server | `Upload(POST)`                      | post our local as a new save in the slot — no overwrite risk                                           |
-| 6b | yes        | ≥1             | never touched | no baseline       | local mtime < server | `Download(picked)`                  | server is newer than our untracked local                                                               |
-| 7  | yes        | ≥1             | current=true  | unchanged         | n/a                  | `Skip(synced)`                      | steady state                                                                                           |
-| 8  | yes        | ≥1             | current=true  | no baseline       | n/a                  | `Skip(synced, adopt_baseline=true)` | trust server's `is_current=true`, write `last_sync_hash := local_hash` so future drift can be detected |
-| 9  | yes        | ≥1             | current=true  | changed           | n/a                  | `Upload(PUT to picked.id)`          | offline edit — push our changes back onto the save the server still considers ours                     |
-| 10 | yes        | ≥1             | current=false | unchanged         | n/a                  | `Download(picked)`                  | another device synced; we did nothing — adopt their version                                            |
-| 11 | yes        | ≥1             | current=false | no baseline       | n/a                  | `Download(picked)`                  | no baseline → cannot prove our local is newer; server wins                                             |
-| 12 | yes        | ≥1             | current=false | changed           | n/a                  | **`Conflict(picked)`**              | both sides changed independently — only true conflict                                                  |
+| #  | local file | server in slot | our entry     | local vs baseline | mtime vs server      | decision                            | reason                                                                                                   |
+| -- | ---------- | -------------- | ------------- | ----------------- | -------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1  | no         | none           | n/a           | n/a               | n/a                  | `Skip(nothing_to_sync)`             | nothing local, nothing server                                                                            |
+| 2  | yes        | none           | n/a           | n/a               | n/a                  | `Upload(POST)`                      | first push for this save (or recovery after server-side wipe)                                            |
+| 3  | no         | ≥1             | never touched | n/a               | n/a                  | `Download(picked)`                  | no relation, pull newest                                                                                 |
+| 4  | no         | ≥1             | current=true  | n/a               | n/a                  | `Download(picked)`                  | recovery — server still tracks our last version, local is gone                                           |
+| 5  | no         | ≥1             | current=false | n/a               | n/a                  | `Download(picked)`                  | server moved forward, nothing local to protect                                                           |
+| 6a | yes        | ≥1             | never touched | no baseline       | local mtime ≥ server | `Upload(POST)`                      | post our local as a new save in the slot — no overwrite risk                                             |
+| 6b | yes        | ≥1             | never touched | no baseline       | local mtime < server | `Download(picked)`                  | server is newer than our untracked local                                                                 |
+| 6c | yes        | ≥1             | never touched | changed           | n/a                  | **`Conflict(picked)`**              | baseline held from a prior sync but the picked head is a save we never synced — both sides moved (#1059) |
+| 7  | yes        | ≥1             | current=true  | unchanged         | n/a                  | `Skip(synced)`                      | steady state                                                                                             |
+| 8  | yes        | ≥1             | current=true  | no baseline       | n/a                  | `Skip(synced, adopt_baseline=true)` | trust server's `is_current=true`, write `last_sync_hash := local_hash` so future drift can be detected   |
+| 9  | yes        | ≥1             | current=true  | changed           | n/a                  | `Upload(PUT to picked.id)`          | offline edit — push our changes back onto the save the server still considers ours                       |
+| 10 | yes        | ≥1             | current=false | unchanged         | n/a                  | `Download(picked)`                  | another device synced; we did nothing — adopt their version                                              |
+| 11 | yes        | ≥1             | current=false | no baseline       | n/a                  | `Download(picked)`                  | no baseline → cannot prove our local is newer; server wins                                               |
+| 12 | yes        | ≥1             | current=false | changed           | n/a                  | **`Conflict(picked)`**              | both sides changed independently — only true conflict                                                    |
 
-Conflict happens in exactly one row (#12). Every other row resolves silently to a Skip, Upload, or Download.
+Conflict happens in two rows — #12 (we already hold an entry on the picked save) and #6c (we hold a baseline from a
+prior sync but no entry on the picked head). Both are the same situation: the server moved to content we never synced
+while our local diverged from baseline. Every other row resolves silently to a Skip, Upload, or Download.
 
 ### Why row 6a posts instead of overwriting
 
@@ -226,6 +229,15 @@ picked server save and our local mtime is at-or-after the server's `updated_at`.
 (`last_sync_hash`), so we cannot prove drift either way; we also have no claim on the picked save (no `device_syncs`
 entry for our id). POSTing a brand-new save preserves both files: the original picked save stays intact, and our local
 content lands as a separate entry that becomes the new newest. Subsequent syncs pick our save naturally.
+
+### Why row 6c conflicts instead of downloading
+
+Row 6c is the never-touched sibling of row 12. We hold a baseline (`last_sync_hash`) from a prior sync, but the picked
+head is a save we have no `device_syncs` entry for — another timeline became newest while our local diverged from the
+baseline (`local_hash != last_sync_hash`). That is the same "both sides moved independently" situation as row 12, so it
+takes the same exit: a `Conflict` the user resolves, never a silent `Download` that would discard the diverged local
+progress (whose only surviving copy would be the `.romm-backup`). When there is no baseline, or local still matches it,
+we cannot claim divergence — rows 6a/6b apply and the mtime heuristic breaks the tie.
 
 ### Why row 11 downloads instead of uploading
 
@@ -539,9 +551,10 @@ frontend no longer fetches or checks capability flags.
 
 ## Conflict Resolution
 
-A `Conflict` outcome from `compute_sync_action` (matrix row 12) is the only surface that shows a modal. It fires when
-the server has moved forward (`device_syncs[me].is_current=false`) and the local file has diverged from the recorded
-baseline (`local_hash != last_sync_hash`) — both sides have unsynced changes that cannot be silently merged.
+A `Conflict` outcome from `compute_sync_action` (matrix rows 12 and 6c) is the only surface that shows a modal. It fires
+when the local file has diverged from the recorded baseline (`local_hash != last_sync_hash`) while the server moved to
+content we never synced — either on a save we already have an entry for (`device_syncs[me].is_current=false`, row 12) or
+on a new head we have no entry for (row 6c). Both sides have unsynced changes that cannot be silently merged.
 
 ### The modal
 
@@ -553,7 +566,7 @@ side by side, each with size and timestamp. Three actions:
 - **Use Server** → `resolveSyncConflict(rom_id, filename, "use_server")` → backend downloads the picked server save and
   overwrites local.
 - **Cancel** → pure UI close, no callable, no state mutation. The conflict re-fires on the next sync as long as the
-  underlying state still produces matrix row 12.
+  underlying state still produces matrix row 12 or 6c.
 
 The modal is shown by `CustomPlayButton` during pre-launch sync, and by `VersionHistoryPanel.handleRestore` (in
 `SavesTab`) when a version-restore pre-flight returns `conflict_blocked`. Both call `showSyncConflictModal(conflict)`

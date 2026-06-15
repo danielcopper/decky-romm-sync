@@ -23,6 +23,8 @@ Invariants encoded here:
 - Inv4 (#1013): same inputs replayed → same action (pure determinism), and
   after a first-sync ``Upload(None)`` baseline is adopted the next run is
   ``Skip("synced")`` — never another POST.
+- Inv5 (#1059): branch-6 divergence from a held baseline is always a
+  ``Conflict`` — never a silent ``Download``/``Upload``.
 """
 
 from __future__ import annotations
@@ -294,6 +296,39 @@ def test_idempotent_after_branch6_upload_and_baseline_adoption(
     }
     step2 = _action(local_file, [adopted_server], {"last_sync_hash": local_hash}, local_hash)
     assert step2 == Skip(reason="synced")
+
+
+# ---------------------------------------------------------------------------
+# Invariant 5 (#1059): branch-6 divergence from baseline is always a Conflict.
+# ---------------------------------------------------------------------------
+
+
+@given(local_file=_local_files(), server_epoch=_epochs, local_hash=_hashes, baseline=_hashes)
+def test_no_entry_diverged_baseline_is_conflict(
+    local_file: dict[str, Any],
+    server_epoch: float,
+    local_hash: str,
+    baseline: str,
+) -> None:
+    """Branch 6 / #1059 — when the newest server save has no ``device_syncs``
+    entry for our device, we hold a baseline (``last_sync_hash``), and the
+    present local file has diverged from that baseline
+    (``local_hash != last_sync_hash``), the kernel returns ``Conflict`` — never
+    a silent ``Download`` (server replaces diverged local) or ``Upload`` (local
+    replaces a head we never synced). Both sides moved: the chosen head is a
+    save we never synced while local drifted offline. Holds regardless of the
+    mtime ordering between local and the server save.
+    """
+    assume(local_hash != baseline)
+    server = {
+        "id": 7,
+        "slot": 0,
+        "updated_at": _epoch_to_iso(server_epoch, zulu=False, micros=False),
+        "file_extension": "srm",
+        "device_syncs": [{"device_id": OTHER_DEVICE_ID, "is_current": True}],
+    }
+    result = _action(local_file, [server], {"last_sync_hash": baseline}, local_hash)
+    assert result == Conflict(server_save=server)
 
 
 @pytest.mark.xfail(

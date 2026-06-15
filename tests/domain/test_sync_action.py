@@ -339,6 +339,124 @@ def test_no_device_entry_local_mtime_equals_server_epoch_returns_upload_post():
     assert result == Upload(target_save_id=None)
 
 
+def test_no_device_entry_baseline_diverged_server_newer_returns_conflict():
+    """Branch 6 / #1059 — no entry for our device on the newest server save, but
+    we hold a baseline and local has diverged from it. The chosen head is a save
+    we never synced (a NEW save id became the slot head while we played offline),
+    so both sides moved → Conflict, mirroring branch 5. Today branch 6 does
+    mtime-only and Downloads here, silently replacing the diverged local.
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+    server = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result = compute_sync_action(
+        local_file=_local(mtime=server_epoch - 3600),  # local older → today Downloads
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc"},
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_no_device_entry_baseline_diverged_local_newer_returns_conflict():
+    """Branch 6 / #1059 — same divergence-from-baseline case, but local mtime is
+    newer than the server save. Divergence beats mtime: both sides moved → Conflict,
+    not Upload. Today branch 6 does mtime-only and Uploads here.
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+    server = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result = compute_sync_action(
+        local_file=_local(mtime=server_epoch + 3600),  # local newer → today Uploads
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc"},
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_no_device_entry_baseline_matches_preserves_mtime_behavior():
+    """Branch 6 / #1059 — no entry, baseline present, local_hash == last_sync_hash
+    (no divergence). The Conflict guard must NOT fire; the existing mtime split is
+    preserved: Download when local older, Upload(None) when local newer-or-equal.
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+
+    # local older → Download
+    server_a = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result_older = compute_sync_action(
+        local_file=_local(mtime=server_epoch - 3600),
+        server_saves_in_slot=[server_a],
+        files_state={"last_sync_hash": "abc"},
+        device_id=DEVICE_ID,
+        local_hash="abc",  # matches baseline → no divergence
+    )
+    assert result_older == Download(server_save=server_a)
+
+    # local newer-or-equal → Upload(None) (POST)
+    server_b = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result_newer = compute_sync_action(
+        local_file=_local(mtime=server_epoch + 3600),
+        server_saves_in_slot=[server_b],
+        files_state={"last_sync_hash": "abc"},
+        device_id=DEVICE_ID,
+        local_hash="abc",  # matches baseline → no divergence
+    )
+    assert result_newer == Upload(target_save_id=None)
+
+
+def test_no_device_entry_no_baseline_preserves_mtime_behavior():
+    """Branch 6 / #1059 — no entry, NO baseline (last_sync_hash absent). Without a
+    baseline we cannot claim drift, so the Conflict guard must NOT fire and the
+    mtime path is unchanged: Download when local older, Upload(None) when newer.
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+
+    # local older → Download
+    server_a = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result_older = compute_sync_action(
+        local_file=_local(mtime=server_epoch - 3600),
+        server_saves_in_slot=[server_a],
+        files_state={},  # no baseline
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",
+    )
+    assert result_older == Download(server_save=server_a)
+
+    # local newer-or-equal → Upload(None) (POST)
+    server_b = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result_newer = compute_sync_action(
+        local_file=_local(mtime=server_epoch + 3600),
+        server_saves_in_slot=[server_b],
+        files_state={},  # no baseline
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",
+    )
+    assert result_newer == Upload(target_save_id=None)
+
+
 def test_no_device_entry_garbled_server_updated_at_returns_download():
     """Parse-failure path: unparseable server `updated_at` → server effectively
     wins (Download), per the conservative-fallthrough contract.

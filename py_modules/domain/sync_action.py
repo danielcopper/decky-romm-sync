@@ -30,9 +30,12 @@ still tracked on the server but the local copy disappeared. We download to
 recover the canonical content.
 
 When our device has never touched the picked save (no entry in
-``device_syncs``) and the local file is present, we fall back to comparing
-local mtime against ``server.updated_at``: local-newer-or-equal means
-``Upload`` (POST a new save), older means ``Download``.
+``device_syncs``) and the local file is present: if we hold a baseline
+(``last_sync_hash``) and local has diverged from it, both sides moved — the
+chosen head is a save we never synced — so that is a ``Conflict``, the same as
+branch 5. Otherwise we fall back to comparing local mtime against
+``server.updated_at``: local-newer-or-equal means ``Upload`` (POST a new save),
+older means ``Download``.
 
 No I/O. No imports from services or adapters. Stdlib only.
 """
@@ -148,10 +151,16 @@ def _decide_when_not_current(
     return Download(server_save=server)
 
 
-def _decide_when_no_entry(server: dict[str, Any], local_file: dict[str, Any] | None) -> SyncAction:
+def _decide_when_no_entry(
+    server: dict[str, Any], local_file: dict[str, Any] | None, local_hash: str | None, last_sync_hash: str | None
+) -> SyncAction:
     """Branch 6: no ``device_syncs`` entry for our device on the chosen save."""
     if local_file is None:
         return Download(server_save=server)
+    if last_sync_hash and local_hash and local_hash != last_sync_hash:
+        # Both sides moved — the chosen head is a save we never synced while
+        # local diverged from the baseline. Mirrors branch 5: a true Conflict.
+        return Conflict(server_save=server)
     if _local_mtime_ge_server_updated_at(local_file, server):
         # POST our local as a new save in the slot.
         return Upload(target_save_id=None)
@@ -197,4 +206,4 @@ def compute_sync_action(
         return _decide_when_is_current(server, local_file, local_hash, last_sync_hash)
     if our_entry is not None:
         return _decide_when_not_current(server, local_file, local_hash, last_sync_hash)
-    return _decide_when_no_entry(server, local_file)
+    return _decide_when_no_entry(server, local_file, local_hash, last_sync_hash)
