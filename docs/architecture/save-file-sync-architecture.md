@@ -94,10 +94,37 @@ the slot starts fresh — with every prior save recoverable under `.romm-backup`
 - Saves uploaded before v2 (or without slot parameter) have `slot=null`
 - These are separate entries from `slot="default"` — different slot = different save
 - The Slot Setup Wizard detects these and lets users choose how to handle them
+- In the plugin the legacy slot is the equivalence class `slot ∈ {null, ""}`: state stores `active_slot=None`, the
+  persisted slots map keys it `""`, and the server returns `slot: null`. `domain/save_slot.py` (`normalize_slot`) is the
+  single place this equivalence is defined.
+
+#### Addressing legacy saves on the wire (#1061)
+
+RomM filters the `slot` query param by **exact string match**, and legacy saves are stored as `slot: null` — which **no
+param value can address** (`&slot=` matches only `slot==""`; `&slot=null` matches the literal string `"null"`; both
+return `[]`). The **only** way to retrieve legacy saves is to **omit the `slot` param** (the server then returns every
+save for the ROM) and **filter client-side** for `slot ∈ {null, ""}`.
+
+This is the core invariant for every per-slot server read/delete (`get_slot_saves`, `get_slot_delete_info`,
+`delete_slot`): legacy → `slot_query_param(...) == None` (param omitted) + `save_in_slot(...)` client filter; a named
+slot → `&slot=<name>` (server filters) **and** the same client re-filter (defence in depth). A legacy `delete_slot`
+therefore deletes **only** the `slot: null` saves and never touches named slots. Sending `&slot=` (empty) for a legacy
+op was the bug: the server returned `[]`, the local tracking was cleared, and the slot resurrected on the next merge
+(zombie slot).
+
+### Confirming a slot (`confirm_slot_choice`)
+
+The wizard confirms a slot through `confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot)`:
+
+- `chosen_slot=null` confirms **legacy** mode (`active_slot=None`, `slot_confirmed=true`); a non-empty string confirms a
+  named slot; an empty/whitespace string is rejected (`invalid_slot_name`).
+- `migrate` is an explicit boolean — the default (`false`) never migrates. When `true`, saves are migrated from
+  `migrate_from_slot` (`null` = the legacy source) into `chosen_slot`, and a server save is deleted from the old slot
+  **only if it was successfully re-uploaded** into the new one; non-matching saves are left in place and reported (so a
+  save uploaded under a different ROM filename by another device is never destroyed).
 
 ### Not yet implemented
 
-- Save slot migration (moving saves between slots with delete+recreate)
 - Manually selecting a specific save if multiple exist in one slot
 
 ## Device Registration

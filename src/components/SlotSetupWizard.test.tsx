@@ -422,11 +422,14 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(5, "alpha", null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(5, "alpha", false, null);
       expect(onComplete).toHaveBeenCalledOnce();
     });
 
-    it("falls back to the defaultSlot when the server slot is null", async () => {
+    it("tracks LEGACY (null) — not the default slot — when the server slot is null", async () => {
+      // #1061 regression guard: the bug was `s.slot ?? defaultSlot`, which
+      // silently re-homed the user's legacy (no-slot) saves into the default
+      // slot. A null server slot must confirm legacy mode (chosen_slot=null).
       const info = makeSetupInfo({
         default_slot: "fallback",
         server_slots: [{ slot: null, saves: [], count: 1, latest_updated_at: null }],
@@ -442,7 +445,8 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(5, "fallback", null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(5, null, false, null);
+      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalledWith(5, "fallback", false, null);
     });
 
     it("surfaces a failed confirmSlotChoice via the inline error", async () => {
@@ -565,7 +569,7 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(9, "fresh", null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(9, "fresh", false, null);
     });
   });
 
@@ -617,7 +621,7 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(21, "myslot", null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(21, "myslot", false, null);
       // Non-empty submit must NOT open the legacy-mode prompt.
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
       sub.unmount();
@@ -644,7 +648,7 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(3, "padded", null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(3, "padded", false, null);
       sub.unmount();
     });
 
@@ -676,7 +680,11 @@ describe("SlotSetupWizard", () => {
       sub.unmount();
     });
 
-    it("calls handleConfirm('') when the user types whitespace and OKs the nested legacy-mode confirm", async () => {
+    it("confirms LEGACY (null, not '') when the user types whitespace and OKs the nested legacy-mode confirm", async () => {
+      // #1008 regression guard: the legacy choice must send `chosen_slot=null`,
+      // never the empty string "". RomM stores legacy saves as slot=null and no
+      // `slot=` param value (including "") addresses them — sending "" was the
+      // bug. The wire contract is (rom_id, null, migrate=false, from=null).
       const info = makeSetupInfo({ server_slots: [] });
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
         deps.setInfo(info);
@@ -701,7 +709,10 @@ describe("SlotSetupWizard", () => {
         await confirmModalPropsAt(1)?.onOK?.();
       });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(7, "", null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(7, null, false, null);
+      // The empty string "" must never reach the backend — it cannot address
+      // RomM's null-slot legacy saves.
+      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalledWith(7, "", false, null);
       sub.unmount();
     });
   });

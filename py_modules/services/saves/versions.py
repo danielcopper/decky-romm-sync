@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
+from domain.save_slot import save_in_slot, slot_query_param
 from domain.save_status import compute_multi_file_slot
 from services.saves._helpers import local_save_target
 from services.saves._settings import resolve_default_slot
@@ -151,7 +152,7 @@ class VersionsService:
             server_saves = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
-                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot_query_param(slot))
                 ),
             )
         except Exception as e:
@@ -173,7 +174,7 @@ class VersionsService:
                 "uploaded_by_us": (s["id"] in own_upload_ids) if own_upload_ids is not None else None,
             }
             for s in server_saves
-            if s.get("id") != tracked_id
+            if s.get("id") != tracked_id and save_in_slot(s, slot)
         ]
 
         versions.sort(key=lambda v: v["updated_at"], reverse=True)
@@ -378,7 +379,7 @@ class VersionsService:
                 server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                     None,
                     lambda: self._retry.with_retry(
-                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot if slot else None)
+                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot_query_param(slot))
                     ),
                 )
             except Exception as e:
@@ -386,6 +387,12 @@ class VersionsService:
                 # Persist whatever the pre-flight mutated before bailing.
                 await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
                 return {"status": "server_unreachable", "message": str(e)}
+
+            # Scope to the requested slot. Legacy ('' / None) omitted the param
+            # and got every save, so filter to slot:null here too (#1061); a
+            # save_id from another slot then resolves to version_deleted in
+            # _rollback_to_version_io rather than rolling back cross-slot.
+            server_saves = [s for s in server_saves if save_in_slot(s, slot)]
 
             result = await self._loop.run_in_executor(
                 None,

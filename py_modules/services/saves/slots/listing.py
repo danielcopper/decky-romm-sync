@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
+from domain.save_slot import save_in_slot, slot_query_param
 from lib.list_result import ErrorCode
 from services.saves._messages import SAVE_SYNC_DISABLED
 from services.saves._settings import resolve_default_slot, save_sync_enabled
@@ -186,10 +187,14 @@ class SlotListing:
         device_id = await self._loop.run_in_executor(None, self._read_device_id)
 
         try:
+            # Legacy slot ("" → null on the server) can't be addressed by any
+            # ``slot=`` value, so omit the param (slot_query_param → None) and
+            # filter the result client-side (#1061). Named slots filter
+            # server-side and re-filter for safety.
             server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
-                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot_query_param(slot)),
                 ),
             )
             saves = [
@@ -201,6 +206,7 @@ class SlotListing:
                     "emulator": s.get("emulator", ""),
                 }
                 for s in server_saves
+                if save_in_slot(s, slot)
             ]
             return {"success": True, "slot": slot, "saves": saves}
         except Exception as e:

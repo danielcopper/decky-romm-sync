@@ -71,6 +71,28 @@ class TestListFileVersions:
         assert ids_in_order == [60, 50]  # newest first; tracked id=100 excluded
 
     @pytest.mark.asyncio
+    async def test_legacy_slot_excludes_named_versions(self, tmp_path):
+        """#1061: the legacy ('') version history lists only slot:null saves.
+
+        RomM can't address slot:null via the ``slot=`` param, so list_file_versions
+        omits the param (the server returns every save) and must client-filter to
+        the legacy slot — otherwise named-slot versions leak into the legacy
+        version history (and could be rolled back from the legacy panel).
+        """
+        svc, fake = make_service(tmp_path)
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, slot=None, updated_at="2026-03-10T10:00:00Z")
+        fake.saves[11] = _server_save(save_id=11, rom_id=42, slot=None, updated_at="2026-03-01T10:00:00Z")
+        # A named-slot save on the same ROM — must NOT appear in the legacy list.
+        fake.saves[12] = _server_save(save_id=12, rom_id=42, slot="default", updated_at="2026-03-05T10:00:00Z")
+        self._setup_state(svc, tracked_id=10)  # tracked = the newest legacy save
+
+        result = await svc.list_file_versions(42, "", "pokemon.srm")
+
+        assert result["status"] == "ok"
+        ids = [v["id"] for v in result["versions"]]
+        assert ids == [11]  # only the older legacy save; tracked(10) excluded, named(12) not leaked
+
+    @pytest.mark.asyncio
     async def test_foreign_tracked_save_does_not_hide_local_versions(self, tmp_path):
         """When the tracked save was uploaded by another client with a
         different basename, legitimate versions of the local file still

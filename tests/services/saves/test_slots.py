@@ -491,9 +491,11 @@ class TestConfirmSlotChoice:
 
     @pytest.mark.asyncio
     async def test_confirm_empty_slot_rejected(self, tmp_path):
+        """An empty-string slot is still rejected — distinct from the legacy ``None`` slot."""
         svc, _ = make_service(tmp_path)
-        result = await svc.confirm_slot_choice(42, "")
+        result = await svc.confirm_slot_choice(42, "", False, None)
         assert result["success"] is False
+        assert result["reason"] == "invalid_slot_name"
         assert "empty" in result["message"].lower()
 
     @pytest.mark.asyncio
@@ -532,13 +534,44 @@ class TestConfirmSlotChoice:
         assert state.slot_confirmed is True
 
     @pytest.mark.asyncio
-    async def test_confirm_with_legacy_no_slot_migration(self, tmp_path):
-        """Migrate: re-upload to new slot, delete old.
+    async def test_confirm_legacy_slot_none(self, tmp_path):
+        """``chosen_slot=None`` confirms the legacy slot: active_slot None, slot_confirmed True.
 
-        ``None`` for ``migrate_from_slot`` means "migrate from legacy
-        no-slot server saves". Facade translates ``None`` to the
-        no-migration sentinel, so this exercises ``SlotsService`` directly
-        where the legacy ``None`` semantics still live.
+        Was impossible before #1008 — ``None`` collided with the empty-name
+        guard. The explicit contract routes ``None`` to ``confirm_slot(None)``.
+        """
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _seed_rom(svc, 42)
+        result = await svc.confirm_slot_choice(42, None, False, None)
+        assert result["success"] is True
+        state = _require_save_state(svc, 42)
+        assert state.active_slot is None
+        assert state.slot_confirmed is True
+
+    @pytest.mark.asyncio
+    async def test_confirm_no_migration_by_default(self, tmp_path):
+        """``migrate`` defaults to False → no upload / no delete, even with old saves present."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        # Legacy server save that a migration WOULD carry — but no migration runs.
+        fake.saves[1] = _server_save(save_id=1, slot=None)
+
+        result = await svc.confirm_slot_choice(42, "default")
+        assert result["success"] is True
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
+        assert _require_save_state(svc, 42).slot_confirmed is True
+
+    @pytest.mark.asyncio
+    async def test_confirm_with_legacy_no_slot_migration(self, tmp_path):
+        """Migrate from the legacy slot: re-upload to new slot, delete old.
+
+        ``migrate=True`` with ``migrate_from_slot=None`` migrates the legacy
+        no-slot server saves into ``chosen_slot``.
         """
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
@@ -548,7 +581,7 @@ class TestConfirmSlotChoice:
         # Old save on server with slot=None (legacy)
         fake.saves[1] = _server_save(save_id=1, slot=None)
 
-        result = await svc._slots.confirm_slot_choice(42, "default", migrate_from_slot=None)
+        result = await svc.confirm_slot_choice(42, "default", True, None)
         assert result["success"] is True
         # New save should have been uploaded
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
@@ -571,7 +604,7 @@ class TestConfirmSlotChoice:
         # Server save is in "default" slot, but we're migrating from "desktop"
         fake.saves[1] = _server_save(save_id=1, slot="default")
 
-        result = await svc.confirm_slot_choice(42, "default", migrate_from_slot="desktop")
+        result = await svc.confirm_slot_choice(42, "default", True, "desktop")
         assert result["success"] is True
         # No upload or delete should happen (no saves in "desktop" slot)
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
@@ -581,12 +614,7 @@ class TestConfirmSlotChoice:
 
     @pytest.mark.asyncio
     async def test_confirm_migration_failure_still_confirms_slot(self, tmp_path):
-        """Migration failure should still confirm the slot but report the issue.
-
-        Exercises ``SlotsService`` directly because the facade translates
-        ``None`` to the no-migration sentinel; legacy ``None`` migration
-        semantics live on the slots service.
-        """
+        """Migration failure should still confirm the slot but report the issue."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "dev-1")
@@ -600,49 +628,41 @@ class TestConfirmSlotChoice:
 
         fake.upload_save = failing_upload
 
-        result = await svc._slots.confirm_slot_choice(42, "default", migrate_from_slot=None)
+        result = await svc.confirm_slot_choice(42, "default", True, None)
         assert result["success"] is True
         assert "migration failed" in result["message"].lower()
         # Slot is still confirmed despite migration failure
         assert _require_save_state(svc, 42).slot_confirmed is True
 
     @pytest.mark.asyncio
-    async def test_facade_translates_none_to_no_migration(self, tmp_path):
-        """Facade: ``None`` for ``migrate_from_slot`` skips migration."""
+    async def test_confirm_migration_skips_delete_for_save_without_local_file(self, tmp_path):
+        """#1005: an old-slot save with NO matching local file is NOT deleted.
+
+        One old save has a local counterpart (re-uploaded, then its old id
+        deleted); the other has none (left in place, excluded from the delete).
+        """
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
+        # Local file matches "pokemon.srm" only.
         _create_save(tmp_path)
-        fake.saves[1] = _server_save(save_id=1, slot=None)
+        # Two legacy server saves: one with a local match, one orphaned.
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon.srm", slot=None)
+        fake.saves[2] = _server_save(save_id=2, filename="orphan.srm", slot=None)
 
-        result = await svc.confirm_slot_choice(42, "default", migrate_from_slot=None)
+        result = await svc.confirm_slot_choice(42, "default", True, None)
         assert result["success"] is True
-        # No migration occurred — no uploads / no deletes
+        # Only the matched save was re-uploaded.
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(upload_calls) == 0
+        assert len(upload_calls) == 1
+        # Only the carried-over save id (1) is deleted; the orphan (2) survives.
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
-        assert len(delete_calls) == 0
-        assert _require_save_state(svc, 42).slot_confirmed is True
-
-    @pytest.mark.asyncio
-    async def test_facade_translates_no_migration_string_to_no_migration(self, tmp_path):
-        """Facade: ``"__no_migration__"`` string (from frontend) skips migration."""
-        svc, fake = make_service(tmp_path)
-        svc._config.settings["save_sync_enabled"] = True
-        _set_device_id(svc, "dev-1")
-        _install_rom(svc, tmp_path)
-        _create_save(tmp_path)
-        fake.saves[1] = _server_save(save_id=1, slot=None)
-
-        result = await svc.confirm_slot_choice(42, "default", migrate_from_slot="__no_migration__")
-        assert result["success"] is True
-        # No migration occurred — no uploads / no deletes
-        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(upload_calls) == 0
-        delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
-        assert len(delete_calls) == 0
-        assert _require_save_state(svc, 42).slot_confirmed is True
+        assert len(delete_calls) == 1
+        deleted_ids = delete_calls[0][1][0]
+        assert 1 in deleted_ids
+        assert 2 not in deleted_ids
+        assert 2 in fake.saves  # orphan still on the server
 
     @pytest.mark.asyncio
     async def test_is_configured_after_confirm(self, tmp_path):
@@ -741,6 +761,32 @@ class TestGetSlotSaves:
         assert result["slot"] == "default"
         assert result["saves"] == []
         assert "disabled" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_legacy_slot_returns_only_null_saves(self, tmp_path):
+        """#1061: the legacy slot ("") lists ONLY the null-slot saves, omitting ``slot=``.
+
+        RomM stores legacy saves as ``slot: null`` and filters ``slot=`` literally,
+        so the param is omitted and the result is filtered client-side. A named
+        save in the same ROM must not leak into the legacy listing.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "server-dev-1")
+        # Legacy null-slot save (no "slot" key → slot: null) + a named-slot save.
+        fake.saves[1] = _server_save(save_id=1, rom_id=42, filename="legacy.srm", slot=None)
+        fake.saves[2] = _server_save(save_id=2, rom_id=42, filename="named.srm", slot="default")
+
+        result = await svc.get_slot_saves(42, "")
+
+        assert result["success"] is True
+        assert result["slot"] == ""
+        assert {s["id"] for s in result["saves"]} == {1}
+        assert {s["filename"] for s in result["saves"]} == {"legacy.srm"}
+        # The adapter was called with slot omitted (None), never "" or "null".
+        list_calls = [c for c in fake.call_log if c[0] == "list_saves"]
+        assert list_calls
+        assert all(c[2].get("slot") is None for c in list_calls)
 
 
 class TestSwitchSlot:
@@ -1398,7 +1444,7 @@ class TestSlotsContentDirGate:
         _create_save(tmp_path)
         fake.saves[1] = _server_save(save_id=1, slot="desktop")
 
-        result = await svc.confirm_slot_choice(42, "default", migrate_from_slot="desktop")
+        result = await svc.confirm_slot_choice(42, "default", True, "desktop")
 
         assert result["success"] is False
         assert result["reason"] == "savefiles_in_content_dir"
@@ -1631,6 +1677,59 @@ class TestDeleteSlot:
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 1
         assert set(delete_calls[0][1][0]) == {10, 11}
+
+    @pytest.mark.asyncio
+    async def test_delete_legacy_slot_is_surgical(self, tmp_path):
+        """#1061: deleting the legacy slot ("") removes ONLY the null-slot saves.
+
+        The foolproof proof — a legacy delete must omit ``slot=`` and filter
+        client-side, so named-slot saves on the same ROM are left untouched.
+        Before the fix, ``slot=""`` was sent literally (matching nothing → 0
+        deletes) or, worse, the unfiltered list deleted everything.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "server-dev-1")
+        _install_rom(svc, tmp_path)
+        # active_slot is a NAMED slot so the legacy "" slot is deletable.
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "slots": {
+                    "default": {"source": "server", "count": 1, "latest_updated_at": None},
+                    "": {"source": "server", "count": 1, "latest_updated_at": None},
+                    "desktop": {"source": "server", "count": 1, "latest_updated_at": None},
+                },
+            },
+        )
+        # Null-slot (legacy) save + two named-slot saves.
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, filename="legacy.srm", slot=None)
+        fake.saves[11] = _server_save(save_id=11, rom_id=42, filename="named.srm", slot="default")
+        fake.saves[12] = _server_save(save_id=12, rom_id=42, filename="other.srm", slot="desktop")
+
+        result = await svc.delete_slot(42, "")
+
+        assert result["success"] is True
+        # ONLY the legacy null-slot save was deleted.
+        assert result["deleted_server_saves"] == 1
+        delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
+        assert len(delete_calls) == 1
+        assert delete_calls[0][1][0] == [10]
+        # The list_saves for the legacy slot omitted the param (slot None).
+        list_calls = [c for c in fake.call_log if c[0] == "list_saves"]
+        assert list_calls
+        assert all(c[2].get("slot") is None for c in list_calls)
+        # Named-slot saves survive on the server.
+        assert 11 in fake.saves
+        assert 12 in fake.saves
+        # Legacy slot key removed from state; named slots remain.
+        slots_after = _require_save_state(svc, 42).slots
+        assert "" not in slots_after
+        assert "default" in slots_after
+        assert "desktop" in slots_after
 
     @pytest.mark.asyncio
     async def test_delete_slot_local_only_success(self, tmp_path):

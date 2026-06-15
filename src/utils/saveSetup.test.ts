@@ -94,7 +94,7 @@ describe("applyLaunchGateSetupOutcome", () => {
     const outcome: SaveSetupOutcome = { kind: "auto_confirm", slot: "main" };
     const result = await applyLaunchGateSetupOutcome(outcome, deps);
     expect(result).toBe("proceed");
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null);
     expect(deps.toast).not.toHaveBeenCalled();
     expect(deps.dispatchSavesTab).not.toHaveBeenCalled();
   });
@@ -165,7 +165,7 @@ describe("applyWizardInitialSetupResult", () => {
     const result = makeInfo({ recommended_action: "auto_confirm_default", default_slot: "alpha" });
     await applyWizardInitialSetupResult(result, deps);
     expect(deps.setConfirming).toHaveBeenCalledWith(true);
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(7, "alpha", null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(7, "alpha", false, null);
     expect(deps.onComplete).toHaveBeenCalledOnce();
     expect(deps.setError).not.toHaveBeenCalled();
     expect(deps.setInfo).not.toHaveBeenCalled();

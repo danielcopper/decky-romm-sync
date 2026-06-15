@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from services.saves.slots.deletion import SlotDeleter
 from services.saves.slots.listing import SlotListing
-from services.saves.slots.setup import NO_MIGRATION, SetupWizard
+from services.saves.slots.setup import SetupWizard
 from services.saves.slots.switching import SlotSwitcher
 
 if TYPE_CHECKING:
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from services.saves.sync_engine import SyncEngine
 
 
-__all__ = ["NO_MIGRATION", "SlotsService", "SlotsServiceConfig"]
+__all__ = ["SlotsService", "SlotsServiceConfig"]
 
 
 @dataclass(frozen=True)
@@ -164,11 +164,12 @@ class SlotsService:
     async def confirm_slot_choice(
         self,
         rom_id: int,
-        chosen_slot: str,
-        migrate_from_slot: str | None | object = NO_MIGRATION,
+        chosen_slot: str | None,
+        migrate: bool = False,
+        migrate_from_slot: str | None = None,
     ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync."""
-        return await self._setup.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)
+        return await self._setup.confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot)
 
     # ------------------------------------------------------------------
     # Slot deletion — delegates to :class:`SlotDeleter`.

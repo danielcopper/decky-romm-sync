@@ -54,7 +54,12 @@ export interface LaunchGateSetupDeps {
   /** ROM id passed to `confirmSlotChoice` on the auto-confirm branch. */
   rid: number;
   /** Resolves the user's chosen save slot on the backend. */
-  confirmSlotChoice: (rid: number, slot: string, migrate: string | null) => Promise<unknown>;
+  confirmSlotChoice: (
+    rid: number,
+    slot: string | null,
+    migrate: boolean,
+    migrateFrom: string | null,
+  ) => Promise<unknown>;
   /** Shows a Decky toast — wrapped as a callback so the helper is dispatch-agnostic. */
   toast: (body: string) => void;
   /** Switches to the Saves tab — wrapped as a callback so the helper is
@@ -75,7 +80,8 @@ export async function applyLaunchGateSetupOutcome(
     return "abort";
   }
   if (outcome.kind === "auto_confirm") {
-    await deps.confirmSlotChoice(deps.rid, outcome.slot, null);
+    // Auto-confirm of a named/default slot — never migrate.
+    await deps.confirmSlotChoice(deps.rid, outcome.slot, false, null);
     return "proceed";
   }
   // Server has saves — user must configure in saves tab.
@@ -89,7 +95,12 @@ export async function applyLaunchGateSetupOutcome(
  *  pass spies. */
 export interface WizardSetupDeps {
   romId: number;
-  confirmSlotChoice: (rid: number, slot: string, migrate: string | null) => Promise<{ success?: boolean } | undefined>;
+  confirmSlotChoice: (
+    rid: number,
+    slot: string | null,
+    migrate: boolean,
+    migrateFrom: string | null,
+  ) => Promise<{ success?: boolean } | undefined>;
   setError: (message: string | null) => void;
   setConfirming: (confirming: boolean) => void;
   setInfo: (info: SaveSetupInfo) => void;
@@ -116,7 +127,8 @@ export async function applyWizardInitialSetupResult(result: SaveSetupInfo, deps:
   if (result.recommended_action === "auto_confirm_default") {
     deps.setConfirming(true);
     try {
-      await deps.confirmSlotChoice(deps.romId, result.default_slot, null);
+      // Auto-confirm of the default slot — never migrate.
+      await deps.confirmSlotChoice(deps.romId, result.default_slot, false, null);
       if (!deps.isCancelled()) deps.onComplete();
     } catch (e) {
       if (!deps.isCancelled()) {

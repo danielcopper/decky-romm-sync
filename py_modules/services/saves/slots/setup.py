@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from domain.emulator_tag import build_emulator_tag
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
+from domain.save_slot import save_in_slot, slot_query_param
 from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
 from services.saves._settings import resolve_default_slot
 
@@ -32,9 +33,6 @@ if TYPE_CHECKING:
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.sync_engine import SyncEngine
-
-
-NO_MIGRATION = object()  # sentinel: no slot migration requested
 
 
 class SetupWizard:
@@ -198,16 +196,22 @@ class SetupWizard:
     async def confirm_slot_choice(
         self,
         rom_id: int,
-        chosen_slot: str,
-        migrate_from_slot: str | None | object = NO_MIGRATION,
+        chosen_slot: str | None,
+        migrate: bool = False,
+        migrate_from_slot: str | None = None,
     ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync.
 
         Sets slot_confirmed=true and active_slot in state.
 
-        If migrate_from_slot is provided (can be None for legacy no-slot saves),
-        migrates saves: upload local files to chosen_slot, then delete old server saves.
-        Pass NO_MIGRATION sentinel (the default) to skip migration.
+        ``chosen_slot`` selects the slot: ``None`` confirms the LEGACY slot
+        (active_slot=None), a non-empty string confirms that named slot, and a
+        string that strips to ``""`` is rejected as an invalid slot name.
+
+        When ``migrate`` is true, migrates saves from ``migrate_from_slot``
+        (``None`` = the legacy no-slot source) into ``chosen_slot``: upload local
+        files to ``chosen_slot``, then delete the old server saves. ``migrate``
+        defaults to false (no migration).
 
         When a migration is requested but RetroArch writes saves to the content
         dir (#239), the migration is refused before any upload/delete (the local
@@ -217,14 +221,19 @@ class SetupWizard:
         persisted. The non-migration path is never gated (no file write).
         """
         rom_id = int(rom_id)
-        chosen_slot = str(chosen_slot).strip()
-        if not chosen_slot:
-            return {
-                "success": False,
-                "reason": "invalid_slot_name",
-                "needs_conflict_resolution": False,
-                "message": "Slot name cannot be empty",
-            }
+        # ``None`` is the legacy slot — confirm_slot(None) sets active_slot=None +
+        # slot_confirmed=True. A string is stripped; an empty result is rejected.
+        if chosen_slot is None:
+            normalized_slot: str | None = None
+        else:
+            normalized_slot = str(chosen_slot).strip()
+            if not normalized_slot:
+                return {
+                    "success": False,
+                    "reason": "invalid_slot_name",
+                    "needs_conflict_resolution": False,
+                    "message": "Slot name cannot be empty",
+                }
 
         # The read→confirm→(migrate)→write of the RomSaveState aggregate must
         # serialise against every other path that touches this ROM's state.
@@ -233,10 +242,10 @@ class SetupWizard:
         async with self._sync_engine.rom_lock(rom_id):
             # Load → confirm in memory; migration I/O runs outside the txn.
             save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveState()
-            save_state.confirm_slot(chosen_slot)
+            save_state.confirm_slot(normalized_slot)
 
             # Migration: re-upload local files to new slot, delete old server saves
-            if migrate_from_slot is not NO_MIGRATION:
+            if migrate:
                 # #239: RetroArch writes saves to the content dir — the migration
                 # uploads local files read from ``saves_dir``, which holds nothing
                 # in content-dir mode, so the migration could not carry real saves.
@@ -251,10 +260,10 @@ class SetupWizard:
                         "needs_conflict_resolution": False,
                         "message": SAVE_SYNC_IN_CONTENT_DIR,
                     }
-                # migrate_from_slot can be None (legacy no-slot) or a string slot name
-                from_slot: str | None = migrate_from_slot if isinstance(migrate_from_slot, str) else None
+                # migrate_from_slot can be None (legacy no-slot) or a string slot name;
+                # normalized_slot is None for a legacy target (uploads omit the param).
                 try:
-                    await self._migrate_slot_saves(rom_id, chosen_slot, from_slot)
+                    await self._migrate_slot_saves(rom_id, normalized_slot, migrate_from_slot)
                 except Exception as e:
                     self._logger.warning(f"confirm_slot_choice({rom_id}): migration failed: {e}")
                     await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
@@ -270,24 +279,30 @@ class SetupWizard:
     async def _migrate_slot_saves(
         self,
         rom_id: int,
-        chosen_slot: str,
+        chosen_slot: str | None,
         migrate_from_slot: str | None,
     ) -> None:
         """Migrate server saves from one slot to another.
 
-        For each local file: upload with new slot, then delete old server save.
-        Safe order: POST first, DELETE after.
+        Only saves that were actually re-uploaded (a local file matched the
+        save's ``file_name`` AND the upload succeeded) are deleted from the old
+        slot — #1005-safe: a save with no local counterpart is left untouched so
+        the migration never destroys data that exists nowhere else. Saves that
+        could not be carried over are collected and reported. Safe order for the
+        carried-over saves: POST first, DELETE after.
         """
         device_id = await self._loop.run_in_executor(None, self._read_device_id)
 
-        # Find server saves in the old slot
+        # Find server saves in the old slot. The legacy source (None/"") can't be
+        # addressed by ``slot=`` (RomM stores it as null), so list ALL saves and
+        # filter client-side via save_in_slot (#1061).
         all_saves = await self._loop.run_in_executor(
             None,
             lambda: self._retry.with_retry(
                 lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
             ),
         )
-        old_slot_saves = [s for s in all_saves if s.get("slot") == migrate_from_slot]
+        old_slot_saves = [s for s in all_saves if save_in_slot(s, migrate_from_slot)]
         if not old_slot_saves:
             return
 
@@ -300,29 +315,42 @@ class SetupWizard:
         emulator = build_emulator_tag(core_so)
 
         ids_to_delete: list[int] = []
+        not_carried: list[str] = []
 
         for old_save in old_slot_saves:
             fname = old_save.get("file_name", "")
             local_file = local_by_name.get(fname)
-            if local_file and self._save_file_store.is_file(local_file["path"]):
-                # Upload to new slot
-                await self._loop.run_in_executor(
-                    None,
-                    lambda lf=local_file, em=emulator: self._retry.with_retry(
-                        lambda: self._romm_api.upload_save(
-                            rom_id,
-                            lf["path"],
-                            em,
-                            device_id=device_id,
-                            slot=chosen_slot,
-                        ),
-                    ),
-                )
             old_id = old_save.get("id")
+            if not (local_file and self._save_file_store.is_file(local_file["path"])):
+                # No local counterpart → cannot carry it over. Do NOT delete it
+                # (it would vanish from the server with no re-upload, #1005).
+                not_carried.append(fname)
+                continue
+            # Upload to new slot, then mark the old id for deletion. Only on a
+            # successful upload — a failed upload propagates and aborts the loop
+            # before its old id is queued, so nothing un-carried is deleted.
+            await self._loop.run_in_executor(
+                None,
+                lambda lf=local_file, em=emulator: self._retry.with_retry(
+                    lambda: self._romm_api.upload_save(
+                        rom_id,
+                        lf["path"],
+                        em,
+                        device_id=device_id,
+                        slot=slot_query_param(chosen_slot),
+                    ),
+                ),
+            )
             if old_id is not None:
                 ids_to_delete.append(old_id)
 
-        # Delete old saves
+        if not_carried:
+            self._logger.warning(
+                f"_migrate_slot_saves({rom_id}): {len(not_carried)} old save(s) had no local file to carry "
+                f"over and were left in place: {not_carried}",
+            )
+
+        # Delete only the carried-over saves
         if ids_to_delete:
             await self._loop.run_in_executor(
                 None,

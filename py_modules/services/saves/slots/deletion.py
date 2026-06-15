@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from domain.save_slot import save_in_slot, slot_query_param
 from lib.list_result import ErrorCode
 from services.saves._settings import save_sync_enabled
 
@@ -109,13 +110,17 @@ class SlotDeleter:
         if source == "server":
             device_id = await self._loop.run_in_executor(None, self._read_device_id)
             try:
+                # Legacy slot ("" → null on the server) is addressed by omitting
+                # ``slot=`` and filtering client-side (#1061), so a legacy delete
+                # inspects ONLY the null saves. Named slots filter server-side and
+                # re-filter for safety.
                 server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                     None,
                     lambda: self._retry.with_retry(
-                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
+                        lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot_query_param(slot)),
                     ),
                 )
-                server_save_ids = [s["id"] for s in server_saves]
+                server_save_ids = [s["id"] for s in server_saves if save_in_slot(s, slot)]
             except Exception as e:
                 # Don't return a fake "0 server saves" — the confirmation modal
                 # would render "delete 0 saves" and the user would confirm a
@@ -154,13 +159,16 @@ class SlotDeleter:
         """Delete all server saves in a slot. Returns result dict with count and IDs."""
         device_id = await self._loop.run_in_executor(None, self._read_device_id)
         try:
+            # Legacy slot ("" → null on the server) deletes ONLY the null saves:
+            # omit ``slot=`` and filter client-side (#1061). Named slots filter
+            # server-side and re-filter for safety.
             server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(
-                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot),
+                    lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot_query_param(slot)),
                 ),
             )
-            save_ids = [s["id"] for s in server_saves]
+            save_ids = [s["id"] for s in server_saves if save_in_slot(s, slot)]
             if save_ids:
                 await self._loop.run_in_executor(
                     None,

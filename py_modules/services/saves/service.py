@@ -25,7 +25,6 @@ from services.saves._settings import (
 )
 from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
 from services.saves.slots import SlotsService, SlotsServiceConfig
-from services.saves.slots.service import NO_MIGRATION
 from services.saves.status import StatusService, StatusServiceConfig
 from services.saves.sync_engine import SyncEngine, SyncEngineConfig
 from services.saves.versions import VersionsService, VersionsServiceConfig
@@ -247,18 +246,17 @@ class SaveService:
     async def confirm_slot_choice(
         self,
         rom_id: int,
-        chosen_slot: str,
-        migrate_from_slot: str | None | object = NO_MIGRATION,
+        chosen_slot: str | None,
+        migrate: bool = False,
+        migrate_from_slot: str | None = None,
     ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync.
 
-        ``migrate_from_slot`` may be the ``NO_MIGRATION`` sentinel, ``None``,
-        or ``"__no_migration__"`` (the string the frontend sends when no
-        migration is requested). All three are treated as "no migration".
+        ``chosen_slot`` is ``None`` for the legacy slot or the slot name. Migration
+        runs only when ``migrate`` is true, carrying saves from ``migrate_from_slot``
+        (``None`` = the legacy no-slot source) into ``chosen_slot``.
         """
-        if migrate_from_slot is None or migrate_from_slot == "__no_migration__":
-            migrate_from_slot = NO_MIGRATION
-        return await self._slots.confirm_slot_choice(rom_id, chosen_slot, migrate_from_slot)
+        return await self._slots.confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot)
 
     async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Return info about what deleting a slot would do, for the confirmation modal."""
