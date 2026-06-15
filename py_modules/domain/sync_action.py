@@ -30,12 +30,20 @@ still tracked on the server but the local copy disappeared. We download to
 recover the canonical content.
 
 When our device has never touched the picked save (no entry in
-``device_syncs``) and the local file is present: if we hold a baseline
+``device_syncs``) and the local file is present: first, if the local content is
+byte-identical to that server save — RomM stamps each save with a
+``content_hash``, so ``server.content_hash == local_hash`` proves identity
+without any I/O — we adopt it as the baseline (``Skip(adopt_baseline=True)``)
+rather than POSTing a duplicate of bytes the server already holds (copied SD
+card, restored backup, fresh reinstall). Otherwise, if we hold a baseline
 (``last_sync_hash``) and local has diverged from it, both sides moved — the
 chosen head is a save we never synced — so that is a ``Conflict``, the same as
-branch 5. Otherwise we fall back to comparing local mtime against
+branch 5. Failing both, we fall back to comparing local mtime against
 ``server.updated_at``: local-newer-or-equal means ``Upload`` (POST a new save),
-older means ``Download``.
+older means ``Download``. Known fallback gap: when a server save lacks
+``content_hash`` (older / migrated saves), the dedup check is skipped and the
+mtime path can still POST a byte-identical duplicate — no slow-path content
+fetch is attempted here.
 
 No I/O. No imports from services or adapters. Stdlib only.
 """
@@ -157,6 +165,11 @@ def _decide_when_no_entry(
     """Branch 6: no ``device_syncs`` entry for our device on the chosen save."""
     if local_file is None:
         return Download(server_save=server)
+    # #1013: local content is byte-identical to this server save (RomM-provided
+    # content_hash) → adopt it as the baseline instead of POSTing a duplicate.
+    server_hash = server.get("content_hash")
+    if server_hash and local_hash and server_hash == local_hash:
+        return Skip(reason="synced", adopt_baseline=True)
     if last_sync_hash and local_hash and local_hash != last_sync_hash:
         # Both sides moved — the chosen head is a save we never synced while
         # local diverged from the baseline. Mirrors branch 5: a true Conflict.

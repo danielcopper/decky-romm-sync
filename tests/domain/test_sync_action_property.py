@@ -20,9 +20,12 @@ Invariants encoded here:
   carried ``server_save`` being the recovery source.
 - Inv3 (#1014): the action is identical under semantically-equal
   ``updated_at`` / ``mtime`` ISO renderings.
-- Inv4 (#1013): same inputs replayed → same action (pure determinism), and
-  after a first-sync ``Upload(None)`` baseline is adopted the next run is
-  ``Skip("synced")`` — never another POST.
+- Inv4 (#1013): same inputs replayed → same action (pure determinism); after a
+  first-sync ``Upload(None)`` baseline is adopted the next run is
+  ``Skip("synced")`` — never another POST; and a branch-6 save whose
+  server-provided ``content_hash`` already equals the local content is adopted
+  as the baseline (``Skip(adopt_baseline=True)``) rather than re-POSTed. Now
+  enforced live (no longer xfail-pinned).
 - Inv5 (#1059): branch-6 divergence from a held baseline is always a
   ``Conflict`` — never a silent ``Download``/``Upload``.
 """
@@ -32,7 +35,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-import pytest
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
@@ -331,10 +333,6 @@ def test_no_entry_diverged_baseline_is_conflict(
     assert result == Conflict(server_save=server)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1013: branch 6 ignores content hashes — byte-identical content with no device entry POSTs a duplicate",
-)
 @given(local_file=_local_files(), server_epoch=_epochs, local_hash=_hashes)
 def test_no_entry_identical_content_does_not_duplicate(
     local_file: dict[str, Any],
@@ -350,13 +348,8 @@ def test_no_entry_identical_content_does_not_duplicate(
     the local mtime is at-or-after the server's ``updated_at``. The correct
     action adopts the existing server save as the baseline
     (``Skip(adopt_baseline=True)``); POSTing a second copy of identical bytes
-    creates a duplicate server save and churns autocleanup.
-
-    Today branch 6 (`_decide_when_no_entry`) compares only mtime and returns
-    ``Upload(target_save_id=None)`` — this property fails until #1013 threads
-    the server content hash into the decision. When the fix lands the property
-    XPASSes, ``strict=True`` flips the run red, the marker is removed, and the
-    property guards against the duplicate-POST regression thereafter.
+    creates a duplicate server save and churns autocleanup. Guards against the
+    duplicate-POST regression.
     """
     local_file = {**local_file, "mtime": server_epoch + 3600}
     server = {

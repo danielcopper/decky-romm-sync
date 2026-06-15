@@ -457,6 +457,99 @@ def test_no_device_entry_no_baseline_preserves_mtime_behavior():
     assert result_newer == Upload(target_save_id=None)
 
 
+def test_no_device_entry_identical_content_returns_skip_adopt_baseline():
+    """Branch 6 / #1013 — no entry for our device, local present, and the picked
+    server save's ``content_hash`` equals ``local_hash`` (copied SD card, restored
+    backup, fresh reinstall). The local bytes already exist on the server, so adopt
+    that save as the baseline (``Skip(synced, adopt_baseline=True)``) instead of
+    POSTing a duplicate — even when local mtime is at-or-after the server's
+    ``updated_at`` (today branch 6 does mtime-only and returns ``Upload(None)``).
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+    server = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    server["content_hash"] = "abc"
+    result = compute_sync_action(
+        local_file=_local(mtime=server_epoch + 3600),  # local newer → today Uploads
+        server_saves_in_slot=[server],
+        files_state={},
+        device_id=DEVICE_ID,
+        local_hash="abc",  # byte-identical to the server save
+    )
+    assert result == Skip(reason="synced", adopt_baseline=True)
+
+
+def test_no_device_entry_different_content_returns_upload_post():
+    """Branch 6 / #1013 — no entry, local present, server ``content_hash`` differs
+    from ``local_hash``, local mtime >= server. The dedup guard must NOT fire on a
+    hash mismatch; the existing mtime path is preserved → ``Upload(None)`` (POST).
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+    server = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    server["content_hash"] = "server-hash"
+    result = compute_sync_action(
+        local_file=_local(mtime=server_epoch + 3600),
+        server_saves_in_slot=[server],
+        files_state={},
+        device_id=DEVICE_ID,
+        local_hash="local-hash",  # differs → not a duplicate
+    )
+    assert result == Upload(target_save_id=None)
+
+
+def test_no_device_entry_missing_content_hash_falls_back_to_mtime():
+    """Branch 6 / #1013 — no entry, local present, the server save carries NO
+    ``content_hash`` key (older / migrated saves may lack it). The dedup check is
+    skipped and the existing mtime path is unchanged: local mtime >= server →
+    ``Upload(None)`` (POST). The known fallback gap — no slow-path content fetch.
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+    server = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    # No "content_hash" key at all.
+    result = compute_sync_action(
+        local_file=_local(mtime=server_epoch + 3600),
+        server_saves_in_slot=[server],
+        files_state={},
+        device_id=DEVICE_ID,
+        local_hash="abc",
+    )
+    assert result == Upload(target_save_id=None)
+
+
+def test_no_device_entry_diverged_baseline_with_different_content_hash_returns_conflict():
+    """Branch 6 / #1059 regression with #1013 present — no entry, baseline held and
+    local diverged from it (``local_hash != last_sync_hash``), and the server's
+    ``content_hash`` differs from ``local_hash`` too. The dedup guard must not
+    swallow this: content differs from both baseline and head → ``Conflict``.
+    """
+    server_updated_at = "2024-01-01T12:00:00+00:00"
+    server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
+    server = _server_save(
+        updated_at=server_updated_at,
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    server["content_hash"] = "server-hash"  # != local, so dedup must not fire
+    result = compute_sync_action(
+        local_file=_local(mtime=server_epoch + 3600),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc"},
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",  # diverged from baseline AND from server head
+    )
+    assert result == Conflict(server_save=server)
+
+
 def test_no_device_entry_garbled_server_updated_at_returns_download():
     """Parse-failure path: unparseable server `updated_at` → server effectively
     wins (Download), per the conservative-fallthrough contract.
