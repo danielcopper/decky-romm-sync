@@ -136,7 +136,7 @@ export interface SlotSavesResponse {
 
 export interface SwitchSlotResponse {
   success: boolean;
-  reason?: "pending_uploads" | "server_unreachable" | "sync_disabled" | "not_installed";
+  reason?: "pending_uploads" | "server_unreachable" | "sync_disabled" | "not_installed" | "switch_incomplete";
   message?: string;
   files?: string[];
   save_status?: SaveStatus;

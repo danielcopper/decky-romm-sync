@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from lib.list_result import ErrorCode
@@ -111,7 +112,8 @@ class SlotSwitcher:
 
         A switch is unsafe if local files have changed since the last sync
         to the current slot — those changes would be lost.
-        Files that were never synced do not block (they'll be deleted on switch).
+        Files that were never synced do not block: the switch quarantines them
+        into ``.romm-backup`` rather than destroying them (#965).
 
         Returns ``{"ready": True}`` or
         ``{"ready": False, "reason": str, "files": list[str]}``.
@@ -146,10 +148,13 @@ class SlotSwitcher:
         4. No local files with pending changes (changed since last sync to current slot).
         5. Server must be reachable.
 
-        On success:
-        - If the new slot has server saves: downloads them, replacing local files.
-        - If the new slot is empty: deletes local save files (fresh start).
-        - Never uploads — saves are not carried between slots.
+        On success the local saves dir and per-file tracking are made coherent
+        with the new slot: every local file the new slot does not provide is
+        quarantined into ``.romm-backup`` (never destroyed — #965) and untracked,
+        the newest server save per canonical target is downloaded (#1058), and
+        nothing is uploaded — saves are not carried between slots. A partial
+        download failure still persists the flipped slot and returns
+        ``reason="switch_incomplete"`` so the caller can retry.
         """
         rom_id = int(rom_id)
 
@@ -223,81 +228,95 @@ class SlotSwitcher:
             # Normalize "" and None both to None before comparing (legacy saves may use either)
             slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
 
-            # 6. Update active slot in state (in memory; persisted once at the end)
+            # 6. Flip active slot in memory.
             save_state.switch_active_slot(resolved_slot)
 
-            # 7. Sync local state to match the new slot
+            # 7. Make the saves dir + tracking coherent with the new slot:
             default_slot = resolve_default_slot(self._settings)
-            if slot_saves:
-                # New slot has server saves — download them, replacing local files.
-                # rom_name is guaranteed by the earlier ``info`` check.
-                await self._loop.run_in_executor(
-                    None,
-                    self._do_switch_downloads,
-                    slot_saves,
-                    saves_dir,
-                    save_state,
-                    device_id,
-                    system,
-                    info["rom_name"],
-                    default_slot,
-                )
-            else:
-                # New slot is empty — delete local save files for a fresh start
-                await self._loop.run_in_executor(
-                    None,
-                    self._delete_local_saves_for_switch,
-                    rom_id,
-                    save_state,
-                )
+            targets = self._newest_server_saves_by_target(slot_saves, info["rom_name"])
+            switch_errors = await self._loop.run_in_executor(
+                None, self._apply_slot_switch, rom_id, saves_dir, system, save_state, device_id, targets, default_slot
+            )
 
-            # 8. Update last_sync_check_at and persist the accumulated mutations once.
+            # 8. Persist the coherent state regardless of partial download failures.
             save_state.mark_sync_evaluated(self._clock.now().isoformat())
             await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+
+            if switch_errors:
+                return {
+                    "success": False,
+                    "reason": "switch_incomplete",
+                    "message": f"Switched to slot but {len(switch_errors)} save(s) failed to download — retry",
+                }
 
         # 9. Return fresh status. MUST stay outside the lock above —
         # get_save_status re-acquires rom_lock(rom_id), which would self-deadlock.
         save_status = await self._status_service.get_save_status(rom_id)
         return {"success": True, "save_status": save_status}
 
-    def _do_switch_downloads(
+    @staticmethod
+    def _newest_server_saves_by_target(slot_saves: list[dict[str, Any]], rom_name: str) -> dict[str, dict[str, Any]]:
+        """Pick the newest server save per canonical local target.
+
+        Two server saves mapping to one local target (e.g. both resolve to
+        ``<rom_name>.srm``) collapse to only the newest by ``updated_at``, so the
+        on-disk result + ``tracked_save_id`` are deterministic rather than
+        server-list-order dependent (#1058). Keyed by the canonical target
+        filename the save downloads into.
+        """
+        newest: dict[str, dict[str, Any]] = {}
+        for ss in slot_saves:
+            target = local_save_target(ss, rom_name)
+            current = newest.get(target)
+            if current is None:
+                newest[target] = ss
+                continue
+            if (parse_iso_to_epoch(ss.get("updated_at")) or 0.0) > (
+                parse_iso_to_epoch(current.get("updated_at")) or 0.0
+            ):
+                newest[target] = ss
+        return newest
+
+    def _apply_slot_switch(
         self,
-        slot_saves: list[dict[str, Any]],
+        rom_id: int,
         saves_dir: str,
+        system: str,
         save_state: RomSaveState,
         device_id: str | None,
-        system: str,
-        rom_name: str,
+        targets: dict[str, dict[str, Any]],
         default_slot: str | None,
-    ) -> None:
-        """Download all saves from *slot_saves* into *saves_dir*.
+    ) -> list[str]:
+        """Make the local saves dir + tracking match the new slot.
 
-        Each save lands at ``<saves_dir>/<rom_name>.<server.file_extension>`` —
-        the canonical RetroArch path. Mutates *save_state* in memory; the caller
-        owns the write Unit of Work. Runs synchronously; call via
-        ``run_in_executor``.
+        Quarantines every local save file the new slot does not provide (and
+        drops its tracking) so no stale file lingers to upload into the new slot
+        (#1058) and no never-synced save is destroyed without a backup (#965),
+        then downloads the newest server save per target. Mutates *save_state*
+        in memory; the caller owns the write Unit of Work. Runs synchronously —
+        call via ``run_in_executor``. Returns the filenames whose download
+        failed (empty when all succeeded).
         """
-        for server_save in slot_saves:
-            target = local_save_target(server_save, rom_name)
-            self._sync_engine.do_download_save(
-                server_save, saves_dir, target, save_state, device_id, system, default_slot
-            )
+        target_names = set(targets)
 
-    def _delete_local_saves_for_switch(self, rom_id: int, save_state: RomSaveState) -> None:
-        """Delete local save files and clear file tracking state for a slot switch.
+        # Quarantine + untrack every local file the new slot does not provide.
+        for lf in self._rom_info.find_save_files(rom_id):
+            if lf["filename"] not in target_names:
+                self._sync_engine.quarantine_local_file(saves_dir, lf["filename"])
+                save_state.delete_file_tracking(lf["filename"])
 
-        Unlike delete_local_saves (the callable), this preserves slot config
-        (active_slot, slot_confirmed, slots dict) and only clears files + tracking.
-        Mutates *save_state* in memory; the caller owns the write Unit of Work.
-        Runs synchronously — call via run_in_executor.
-        """
-        local_files = self._rom_info.find_save_files(rom_id)
-        for lf in local_files:
+        # Drop stale baseline entries that have no local file.
+        for fn in list(save_state.files):
+            if fn not in target_names:
+                save_state.delete_file_tracking(fn)
+
+        errors: list[str] = []
+        for target_name, server_save in targets.items():
             try:
-                self._save_file_store.remove_file(lf["path"])
-                self._log_debug(f"Deleted local save for switch: {lf['filename']}")
+                self._sync_engine.do_download_save(
+                    server_save, saves_dir, target_name, save_state, device_id, system, default_slot
+                )
             except Exception as e:
-                self._log_debug(f"Failed to delete {lf['filename']} during switch: {e}")
-
-        # Clear file tracking state (but keep slot config)
-        save_state.clear_baselines()
+                self._log_debug(f"switch_slot: failed to download {target_name}: {e}")
+                errors.append(target_name)
+        return errors

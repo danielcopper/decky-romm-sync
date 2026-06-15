@@ -230,17 +230,33 @@ class MatrixExecutor:
             ),
         )
 
-        # Backup existing local save before overwriting
-        if self._save_file_store.is_file(local_path):
-            backup_dir = os.path.join(saves_dir, ".romm-backup")
-            self._save_file_store.make_dirs(backup_dir)
-            ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
-            name, ext = os.path.splitext(filename)
-            self._save_file_store.rename(local_path, os.path.join(backup_dir, f"{name}_{ts}{ext}"))
+        # Back up the existing local save before the download overwrites it.
+        self.quarantine_local_file(saves_dir, filename)
 
         self._save_file_store.rename(tmp_path, local_path)
         self.update_file_sync_state(save_state, filename, server_save, local_path, system, default_slot=default_slot)
         self._log_debug(f"Downloaded save: {filename}")
+
+    def quarantine_local_file(self, saves_dir: str, filename: str) -> bool:
+        """Move a local save file aside into ``.romm-backup`` before it is destroyed.
+
+        The single source of truth for the save-file backup discipline: both the
+        download-overwrite path (:meth:`do_download_save`) and the slot-switch
+        removal path route through here, so no local save is ever destroyed
+        without a recoverable copy (#965). The backup lands at
+        ``<saves_dir>/.romm-backup/<name>_<ts><ext>`` (``<ts>`` from the injected
+        clock). Returns ``True`` when a file was moved, ``False`` when there was
+        nothing at *filename* to back up.
+        """
+        local_path = os.path.join(saves_dir, filename)
+        if not self._save_file_store.is_file(local_path):
+            return False
+        backup_dir = os.path.join(saves_dir, ".romm-backup")
+        self._save_file_store.make_dirs(backup_dir)
+        ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
+        name, ext = os.path.splitext(filename)
+        self._save_file_store.rename(local_path, os.path.join(backup_dir, f"{name}_{ts}{ext}"))
+        return True
 
     @staticmethod
     def _resolve_upload_slot(save_state: RomSaveState, device_id: str | None) -> str | None:

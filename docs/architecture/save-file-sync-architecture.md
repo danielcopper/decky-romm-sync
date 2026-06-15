@@ -66,6 +66,29 @@ different save states per device).
 - Normal single-device flow: exactly 1 save entry per game per slot
 - Multi-device: all devices share the same save entry via `tracked_save_id`
 
+### Switching slots
+
+`switch_slot` makes the active slot, the local saves directory, and per-file tracking coherent with the chosen slot in
+one locked critical section (the per-rom `asyncio.Lock` — see the "Per-rom asyncio.Lock" section). After the pre-checks
+pass (sync enabled, ROM installed, not a content-dir layout, no un-uploaded local changes on tracked files, server
+reachable):
+
+1. The active slot is flipped in memory.
+2. Every local save file the target slot does **not** provide is quarantined into `.romm-backup` (never deleted
+   outright) and dropped from tracking — so no stale extension (e.g. a `.rtc` left behind when the new slot holds only
+   `.srm`) lingers to upload into the new slot, and a never-synced local save is always recoverable (#965, #1058).
+3. For each canonical local target the new slot **does** provide, the **newest** server save by `updated_at` is
+   downloaded. Two server saves mapping to one target collapse to the newest, so the on-disk result and
+   `tracked_save_id` are deterministic, not server-list-order dependent (#1058). The download backs up the file it
+   overwrites through the same `.romm-backup` quarantine.
+4. The flipped slot + tracking are persisted once, **regardless of partial download failure**: a failed leg still
+   persists this coherent state and returns `reason="switch_incomplete"` so the caller can retry — the completed targets
+   are already correct, and a failed target re-resolves as `Download` on the next sync. Saves are never carried between
+   slots; the switch only downloads or quarantines, never uploads.
+
+An empty target slot is just the case where step 3 is a no-op: every local file is quarantined, tracking is cleared, and
+the slot starts fresh — with every prior save recoverable under `.romm-backup`.
+
 ### The `none` slot (legacy)
 
 - Saves uploaded before v2 (or without slot parameter) have `slot=null`

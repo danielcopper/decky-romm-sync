@@ -925,7 +925,7 @@ class TestSwitchSlot:
 
     @pytest.mark.asyncio
     async def test_empty_slot_deletes_local_files(self, tmp_path):
-        """New slot is empty → local save files deleted and file tracking cleared."""
+        """New slot is empty → local save files quarantined and file tracking cleared."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _install_rom(svc, tmp_path)
@@ -940,8 +940,12 @@ class TestSwitchSlot:
 
         assert result["success"] is True
         assert _require_save_state(svc, 42).active_slot == "brand-new-slot"
-        # Local save file removed
+        # Local save file removed from its slot path
         assert not save_path.exists()
+        # ...but quarantined under .romm-backup — never destroyed (#965)
+        backup_dir = save_path.parent / ".romm-backup"
+        backups = list(backup_dir.glob("pokemon_*.srm"))
+        assert len(backups) == 1
         # File tracking state cleared so next play starts fresh
         assert _require_save_state(svc, 42).files == {}
         # No downloads happened
@@ -1072,6 +1076,245 @@ class TestSwitchSlot:
         # Must be "" (legacy key), NOT "default"
         assert "" in slot_names
         assert "default" not in slot_names
+
+    @pytest.mark.asyncio
+    async def test_residual_local_file_quarantined(self, tmp_path):
+        """#1058: switching to an .srm-only slot quarantines the stale .rtc.
+
+        Both .srm and .rtc are present and synced under the current slot. The
+        target slot provides only the .srm, so the .rtc the new slot does not
+        cover must be moved aside (never left to upload into the new slot) and
+        its baseline dropped, while the .srm is downloaded.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+
+        srm_path = _create_save(tmp_path, ext=".srm", content=b"srm bytes")
+        rtc_path = _create_save(tmp_path, ext=".rtc", content=b"rtc bytes")
+        srm_hash = _file_md5(str(srm_path))
+        rtc_hash = _file_md5(str(rtc_path))
+
+        # Both files fully synced under the current "default" slot.
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(
+                active_slot="default",
+                slot_confirmed=True,
+                files={
+                    "pokemon.srm": FileSyncState(
+                        last_sync_hash=srm_hash,
+                        last_sync_server_save_id=100,
+                        tracked_save_id=100,
+                    ),
+                    "pokemon.rtc": FileSyncState(
+                        last_sync_hash=rtc_hash,
+                        last_sync_server_save_id=101,
+                        tracked_save_id=101,
+                    ),
+                },
+            ),
+        )
+
+        # The target slot provides only an .srm (no file_extension → "srm").
+        fake.saves[500] = _server_save(save_id=500, slot="target")
+
+        result = await svc.switch_slot(42, "target")
+
+        assert result["success"] is True
+        state = _require_save_state(svc, 42)
+        assert state.active_slot == "target"
+
+        # The stale .rtc is gone from its slot path...
+        assert not rtc_path.exists()
+        # ...and quarantined under .romm-backup (#965).
+        backup_dir = rtc_path.parent / ".romm-backup"
+        assert len(list(backup_dir.glob("pokemon_*.rtc"))) == 1
+        # Its baseline is dropped from tracking (no residual upload candidate).
+        assert "pokemon.rtc" not in state.files
+        # The .srm target was downloaded and is still tracked.
+        assert "pokemon.srm" in state.files
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert any(c[1][0] == 500 for c in download_calls)
+
+    @pytest.mark.asyncio
+    async def test_newest_server_save_per_target_wins(self, tmp_path):
+        """#1058: two server saves → one local target → only the newest downloads.
+
+        Both server saves resolve to the same canonical ``pokemon.srm`` target.
+        The newest by ``updated_at`` must win on disk + ``tracked_save_id``,
+        independent of list order — so it is listed FIRST here, which would lose
+        under a naive last-listed-wins iteration.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+        _seed_save_state(svc, 42, self._synced_state(local_hash))
+
+        # Both map to pokemon.srm. The NEWEST is listed first; an older one last.
+        fake.saves[900] = _server_save(
+            save_id=900, slot="target", filename="newest.srm", updated_at="2026-05-01T00:00:00Z"
+        )
+        fake.saves[800] = _server_save(
+            save_id=800, slot="target", filename="older.srm", updated_at="2026-01-01T00:00:00Z"
+        )
+        fake.set_server_save_content(900, b"newest content")
+        fake.set_server_save_content(800, b"older content")
+
+        result = await svc.switch_slot(42, "target")
+
+        assert result["success"] is True
+        state = _require_save_state(svc, 42)
+        # Only the newest (900) was downloaded.
+        download_ids = [c[1][0] for c in fake.call_log if c[0] == "download_save_content"]
+        assert download_ids == [900]
+        # tracked_save_id points at the newest server save.
+        assert state.files["pokemon.srm"].tracked_save_id == 900
+        # On-disk bytes are the newest content.
+        assert save_path.read_bytes() == b"newest content"
+
+    @pytest.mark.asyncio
+    async def test_partial_download_failure_persists_flip(self, tmp_path):
+        """#1058: one target fails to download → slot still flipped + persisted.
+
+        Two distinct targets (different rom_name would differ, but here two
+        extensions map to two targets); one download is injected to fail. The
+        response carries reason=switch_incomplete, the active slot is still
+        flipped and persisted, and the succeeded target's tracking is written —
+        a coherent partial state, not a stale-slot/partial-disk mix.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+        _seed_save_state(svc, 42, self._synced_state(local_hash))
+
+        # Two server saves in the target slot, mapping to distinct targets
+        # (.srm vs .rtc via explicit file_extension).
+        srm_save = _server_save(save_id=700, slot="target")
+        srm_save["file_extension"] = "srm"
+        rtc_save = _server_save(save_id=701, slot="target", filename="pokemon.rtc")
+        rtc_save["file_extension"] = "rtc"
+        fake.saves[700] = srm_save
+        fake.saves[701] = rtc_save
+        fake.set_server_save_content(700, b"good srm")
+        fake.set_server_save_content(701, b"never lands")
+
+        # Inject a download failure on the .rtc target only.
+        fake.fail_download_on(701, RommApiError(500, "download blew up"))
+
+        result = await svc.switch_slot(42, "target")
+
+        assert result["success"] is False
+        assert result["reason"] == "switch_incomplete"
+        assert "message" in result
+
+        state = _require_save_state(svc, 42)
+        # Active slot was flipped and persisted despite the failure.
+        assert state.active_slot == "target"
+        # The succeeded target's tracking was written (coherent state).
+        assert state.files["pokemon.srm"].tracked_save_id == 700
+        # The failed target left no tracking entry.
+        assert "pokemon.rtc" not in state.files
+
+    @pytest.mark.asyncio
+    async def test_failed_target_with_prior_baseline_self_heals(self, tmp_path):
+        """#1058: a failed download on a target the new slot provides leaves a coherent, self-healing state.
+
+        The local file's extension IS provided by the new slot, so it is a
+        download target (never the non-target quarantine path). The download
+        fails — and because do_download_save writes to a temp file and only
+        backs up + moves on success, the original local file is untouched (not
+        quarantined-then-lost) and its prior baseline stays intact, still
+        matching the on-disk bytes. The active slot is flipped + persisted with
+        reason=switch_incomplete; the next sync re-resolves the target as a
+        Download against the newer server save, so the state self-heals.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"original local bytes")
+        local_hash = _file_md5(str(save_path))
+        # pokemon.srm fully synced under the current slot (tracked_save_id=100).
+        _seed_save_state(svc, 42, self._synced_state(local_hash))
+
+        # The target slot provides the same canonical pokemon.srm target...
+        fake.saves[700] = _server_save(save_id=700, slot="target")
+        fake.set_server_save_content(700, b"server bytes that never land")
+        # ...but its download fails.
+        fake.fail_download_on(700, RommApiError(500, "download blew up"))
+
+        result = await svc.switch_slot(42, "target")
+
+        assert result["success"] is False
+        assert result["reason"] == "switch_incomplete"
+
+        state = _require_save_state(svc, 42)
+        assert state.active_slot == "target"
+        # The original local file is untouched — not lost, not quarantined.
+        assert save_path.read_bytes() == b"original local bytes"
+        backup_dir = save_path.parent / ".romm-backup"
+        assert not (backup_dir.exists() and list(backup_dir.glob("pokemon_*.srm")))
+        # The prior baseline is preserved and still matches the on-disk bytes,
+        # so the file is not seen as diverged — it re-resolves as Download next sync.
+        assert state.files["pokemon.srm"].last_sync_hash == local_hash
+
+    @pytest.mark.asyncio
+    async def test_empty_slot_quarantines_synced_and_unsynced(self, tmp_path):
+        """#965: switching to an empty slot quarantines every local save, lost none.
+
+        The slot holds both a never-synced file (no baseline) and a synced file.
+        Each is moved aside into .romm-backup (recoverable, never destroyed) and
+        cleared from ``files``.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+
+        synced_path = _create_save(tmp_path, ext=".srm", content=b"synced bytes")
+        unsynced_path = _create_save(tmp_path, ext=".rtc", content=b"never-synced bytes")
+        synced_hash = _file_md5(str(synced_path))
+
+        # Only the .srm is tracked; the .rtc was never synced (no baseline).
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(
+                active_slot="default",
+                slot_confirmed=True,
+                files={
+                    "pokemon.srm": FileSyncState(
+                        last_sync_hash=synced_hash,
+                        last_sync_server_save_id=100,
+                        tracked_save_id=100,
+                    ),
+                },
+            ),
+        )
+
+        # Empty target slot — no server saves at all.
+        result = await svc.switch_slot(42, "empty-slot")
+
+        assert result["success"] is True
+        state = _require_save_state(svc, 42)
+        assert state.active_slot == "empty-slot"
+
+        # Both files gone from their slot paths...
+        assert not synced_path.exists()
+        assert not unsynced_path.exists()
+        # ...both recoverable under .romm-backup (#965).
+        backup_dir = synced_path.parent / ".romm-backup"
+        assert len(list(backup_dir.glob("pokemon_*.srm"))) == 1
+        assert len(list(backup_dir.glob("pokemon_*.rtc"))) == 1
+        # Tracking cleared of both.
+        assert state.files == {}
+        # Nothing downloaded.
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert len(download_calls) == 0
 
 
 class TestSlotsContentDirGate:

@@ -37,6 +37,7 @@ class FakeSaveApi:
         self._next_save_id = 1000
         self._next_note_id = 2000
         self._fail_on_next: Exception | None = None
+        self._fail_download_on: dict[int, Exception] = {}  # save_id -> exc for download_save_content
         self.heartbeat_raises: Exception | None = None
         self._registered_devices: list[dict[str, Any]] = []
         self._next_device_id = 1
@@ -44,6 +45,16 @@ class FakeSaveApi:
     def fail_on_next(self, exc: Exception) -> None:
         """Make the next call raise the given exception."""
         self._fail_on_next = exc
+
+    def fail_download_on(self, save_id: int, exc: Exception) -> None:
+        """Make ``download_save_content`` raise *exc* for a specific *save_id*.
+
+        Unlike :meth:`fail_on_next` (which fires on the next call of any method),
+        this targets one save's download so a multi-target switch can fail just
+        one leg and exercise the partial-failure path. Fires every time the save
+        is requested until cleared.
+        """
+        self._fail_download_on[save_id] = exc
 
     def set_server_save_content(self, save_id: int, content: bytes) -> None:
         """Stage server-side bytes for *save_id* without writing to disk.
@@ -221,6 +232,8 @@ class FakeSaveApi:
             ("download_save_content", (save_id, dest_path), {"device_id": device_id, "optimistic": optimistic})
         )
         self._check_fail()
+        if save_id in self._fail_download_on:
+            raise self._fail_download_on[save_id]
 
         self.downloaded_files[save_id] = dest_path
         self._materialize_download(save_id, dest_path)
