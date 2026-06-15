@@ -137,6 +137,12 @@ jobs:
       - name: Check no bare ignores
         run: bash scripts/check_no_bare_ignores.sh
 
+      - name: Check emit↔listener event parity (backend ↔ frontend)
+        run: python scripts/check_event_parity.py
+
+      - name: Check settings-owner confinement
+        run: python scripts/check_settings_owner.py
+
   sonarcloud:
     runs-on: ubuntu-latest
     needs: [test, frontend-test]

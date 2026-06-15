@@ -49,6 +49,8 @@ run = [
     "python scripts/check_callable_manifest.py",
     "bash scripts/check_cosmic_call_bans.sh",
     "python scripts/check_failure_shape.py --check",
+    "python scripts/check_event_parity.py",
+    "python scripts/check_settings_owner.py",
 ]
 
 [tasks.deploy]

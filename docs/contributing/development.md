@@ -151,6 +151,16 @@ param count) differs. Arg types stay out of scope (Python signatures carry no hi
 checkable shape. The same parity assertion is surfaced inside the pytest run by
 `tests/contract/test_callable_manifest.py`.
 
+`mise run lint` (and CI) also runs `scripts/check_event_parity.py`, which fails if a backend `emit("name", ...)` event
+has no matching frontend `addEventListener("name", ...)` (or vice versa). The event names are bare string literals, so
+the gate matches the two surfaces by literal event name — the backend side parsed via AST (`emit` / `_emit` calls), the
+frontend side via a text scan of bare `addEventListener` calls. Static sibling of the callable-manifest gate, for the
+event channel. The same parity assertion is surfaced inside the pytest run by `tests/contract/test_event_parity.py`.
+
+`mise run lint` (and CI) also runs `scripts/check_settings_owner.py`, which fails if the `settings.json` filename
+literal appears anywhere except its owning adapter (`adapters/persistence.py`); confining the literal to one module
+keeps all settings writes in the single crash-safe owner.
+
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Code Quality

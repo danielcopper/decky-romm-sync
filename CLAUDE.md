@@ -140,6 +140,34 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
   pattern-exempt. Enforces the "Callable response shapes" convention below.
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
+## Invariant register — cross-cutting safety rules
+
+The audit's clearest pattern: every rule with a mechanical check held; every rule that lived in prose or in a reviewer's
+head drifted. This register is the single inventory of the cross-cutting safety rules — the ones that span files, so no
+diff-scoped review (human or agent) sees the whole rule — plus the current enforcement tier of each. It is a **map of
+the enforcement surface, not the enforcement itself**: a `check`/`test` rule is enforced by the named artifact; a
+`prompt-only` rule is not yet mechanized and is injected here so review carries it verbatim until a check exists. The
+moment a `prompt-only` rule gets a mechanical check it moves to the `check` tier — a rule is never weakened to stay
+green, and a real drift is a finding to triage, never an exemption. `[ours]`
+
+| Invariant                                                                              | Tier               | Enforced by                                                                                          |
+| -------------------------------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
+| Callable failures use `{success, reason, message}` (never `error` / `error_code`)      | check              | `scripts/check_failure_shape.py --check`                                                             |
+| Frontend↔backend callable parity (names + arity)                                       | check              | `scripts/check_callable_manifest.py`                                                                 |
+| Every backend `emit` event name has a frontend listener, and vice versa                | check              | `scripts/check_event_parity.py`                                                                      |
+| `settings.json` is written only by its owner (`adapters/persistence.py`)               | check              | `scripts/check_settings_owner.py`                                                                    |
+| Aggregate state mutated only via verb-named methods (no field assignment)              | check              | `scripts/check_aggregate_field_assignment.py`                                                        |
+| Services never call clocks / sleep / uuid / random directly (inject the Protocol)      | check              | `scripts/check_cosmic_call_bans.sh`                                                                  |
+| Service-independence contract list stays complete                                      | check              | `scripts/check_service_independence_contract.py`                                                     |
+| Layer import direction (services ↛ adapters, adapters ↛ services, …)                   | check              | `.importlinter` (`lint-imports`)                                                                     |
+| No bare `# type: ignore` / blanket suppressions                                        | check              | `scripts/check_no_bare_ignores.sh`                                                                   |
+| Server-supplied path components pass `safe_join` (`lib/path_safety.py`)                | test + prompt-only | traversal tests per path builder; new call sites are prompt-only                                     |
+| No sentinel objects on the wire — explicit JSON-representable tagged values only       | prompt-only        | mechanize with #1032 (after tagged values replace the sentinels)                                     |
+| Every destructive op has backup-or-confirm; never delete data that exists nowhere else | prompt-only        | mechanize via a destructive-ops funnel with the #794 delete-path fixes (#965 / #974 / #1005 / #1062) |
+
+When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
+register is what that sweep checks against (see #1030).
+
 ## Architecture — Cosmic Python rules
 
 Cosmic Python ("Architecture Patterns with Python", Percival & Gregory) is our north star, adapted for a single-user
