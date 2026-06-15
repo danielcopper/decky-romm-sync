@@ -183,7 +183,9 @@ The algorithm is `compute_sync_action` in `py_modules/domain/sync_action.py`. Th
 
 Server-only saves (no matching local file) are grouped by their target local filename (`rom_name.<ext>`) before being
 passed to `compute_sync_action`. The algorithm picks the newest in the group, so older stacked versions in the same slot
-are not separately surfaced.
+are not separately surfaced. The same grouping applies to local files: each local file is matrix-evaluated only against
+the server saves sharing its canonical target, so a multi-file save set (e.g. `Game.srm` + `Game.rtc`) never
+cross-contaminates extensions — `Game.srm` is never resolved against a newer `Game.rtc` server record.
 
 ## Decision Matrix
 

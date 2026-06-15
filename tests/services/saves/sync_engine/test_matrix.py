@@ -699,6 +699,103 @@ class TestOlderVersionSkipping:
         assert len(download_calls) == 0
 
 
+class TestMultiFileSaveSetGrouping:
+    """Regression for #1006.
+
+    A multi-file save set (e.g. GBA ``Game.srm`` + ``Game.rtc``) must be
+    matrix-evaluated extension-by-extension: each local file is compared only
+    against the server saves sharing its canonical target. Before the fix the
+    local-file loop handed ``compute_sync_action`` the whole slot, so
+    ``Game.srm`` was evaluated against ``Game.rtc``'s (newer) server record —
+    cross-extension corruption.
+    """
+
+    def test_each_local_file_evaluated_only_against_its_own_target(self, tmp_path):
+        """Each local file's outcome carries only the server saves whose canonical
+        target is that file — and the resolved chosen server is the same-extension
+        record, never the newer save of a sibling extension."""
+        from domain.save_status_builders import resolve_chosen_server
+
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        # Two-extension save set: .srm + .rtc both present on disk.
+        srm_path = _create_save(tmp_path, content=b"srm bytes", ext=".srm")
+        rtc_path = _create_save(tmp_path, content=b"rtc bytes", ext=".rtc")
+        srm_hash = _file_md5(str(srm_path))
+        rtc_hash = _file_md5(str(rtc_path))
+
+        # .srm server record: canonical target pokemon.srm, OLDER. is_current so
+        # the matrix picks Skip(synced) → chosen-server falls back to candidates.
+        srm_ss = _server_save_with_syncs(
+            save_id=10,
+            filename="pokemon [old].srm",
+            updated_at="2026-03-24T10:00:00",
+            slot="default",
+            device_syncs=[{"device_id": "dev-1", "is_current": True}],
+        )
+        srm_ss["file_extension"] = "srm"
+        # .rtc server record: canonical target pokemon.rtc, slot-wide NEWEST.
+        rtc_ss = _server_save_with_syncs(
+            save_id=20,
+            filename="pokemon [new].rtc",
+            updated_at="2026-03-24T15:00:00",
+            slot="default",
+            device_syncs=[{"device_id": "dev-1", "is_current": True}],
+        )
+        rtc_ss["file_extension"] = "rtc"
+
+        # Per-file baselines matching each local hash → both resolve to Skip(synced).
+        save_state = rom_save_state_from_dict(
+            {
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 10,
+                        "last_sync_hash": srm_hash,
+                        "last_sync_server_updated_at": "2026-03-24T10:00:00",
+                    },
+                    "pokemon.rtc": {
+                        "tracked_save_id": 20,
+                        "last_sync_hash": rtc_hash,
+                        "last_sync_server_updated_at": "2026-03-24T15:00:00",
+                    },
+                },
+            }
+        )
+        info = svc._sync_engine._rom_info.get_rom_save_info(42)
+        assert info is not None
+
+        outcomes = {
+            o.filename: o
+            for o in svc._sync_engine._matrix.iter_matrix_outcomes(
+                42,
+                [srm_ss, rtc_ss],
+                save_state=save_state,
+                device_id="dev-1",
+                info=info,
+            )
+        }
+
+        # Each canonical target appears, evaluated against ITS OWN server record only.
+        srm_outcome = outcomes["pokemon.srm"]
+        assert [s["id"] for s in srm_outcome.server_candidates] == [10]
+        # The chosen server (consumed at dispatch/status time) is the .srm record,
+        # NOT the slot-wide newest .rtc one.
+        chosen_srm = resolve_chosen_server(srm_outcome.action, srm_outcome.server_candidates)
+        assert chosen_srm is not None
+        assert chosen_srm["id"] == 10
+
+        rtc_outcome = outcomes["pokemon.rtc"]
+        assert [s["id"] for s in rtc_outcome.server_candidates] == [20]
+        chosen_rtc = resolve_chosen_server(rtc_outcome.action, rtc_outcome.server_candidates)
+        assert chosen_rtc is not None
+        assert chosen_rtc["id"] == 20
+
+
 class TestOwnUploadIds:
     """Tests for own_upload_ids tracking and the uploaded_by_us flag."""
 

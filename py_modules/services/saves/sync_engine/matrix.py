@@ -552,9 +552,15 @@ class MatrixExecutor:
                 else None
             )
             local_size = self._save_file_store.get_size(local_path) if local_exists else None
+            # Group server saves to this file's own canonical target — symmetric
+            # with the server-only loop below — so a multi-file save set never
+            # cross-contaminates extensions (#1006). Without this, a sibling
+            # extension's newer server record would win max(updated_at) and the
+            # file would be evaluated/dispatched against the wrong save.
+            group = [ss for ss in server_in_slot if local_save_target(ss, rom_name) == filename]
             action = compute_sync_action(
                 local_file=self._build_local_input(local_path, filename),
-                server_saves_in_slot=server_in_slot,
+                server_saves_in_slot=group,
                 files_state=_file_state_to_dict(file_state),
                 device_id=device_id_str,
                 local_hash=local_hash,
@@ -567,7 +573,7 @@ class MatrixExecutor:
                 local_mtime_iso=local_mtime_iso,
                 local_size=local_size,
                 file_state=file_state,
-                server_candidates=server_in_slot,
+                server_candidates=group,
             )
 
         # Group server saves by canonical local target filename. Server-only
