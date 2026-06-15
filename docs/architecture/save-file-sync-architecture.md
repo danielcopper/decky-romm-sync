@@ -5,9 +5,13 @@
 decky-romm-sync provides bidirectional save file synchronization between RetroDECK and a self-hosted RomM server. Saves
 are uploaded after play sessions and downloaded before game launch, enabling seamless multi-device play.
 
-The initial implementation covers **RetroArch per-game `.srm` saves only**. This includes all systems that use RetroArch
-cores via RetroDECK (NES, SNES, GB, GBC, GBA, Genesis, N64, PSX via RetroArch cores, Saturn, Dreamcast, PC Engine, and
-more). Standalone emulator saves (PCSX2, DuckStation, Dolphin, PPSSPP, melonDS, etc.) are deferred to Phase 7.
+The scope is **per-game RetroArch save files** across all systems that use RetroArch cores via RetroDECK (NES, SNES, GB,
+GBC, GBA, Genesis, N64, PSX via RetroArch cores, Saturn, Dreamcast, PC Engine, and more). Each system's full save-file
+**set** is discovered and synced — the default `.srm` / `.rtc` / `.sav` plus system-specific extensions (e.g. Saturn
+`.bkr` / `.bcr` / `.smpc`, NDS `.dsv`, Sega CD `.brm`); the extension list lives in `domain/save_extensions.py`. Every
+file syncs **independently against the server save sharing its own canonical target**, so a multi-file set never
+cross-mixes extensions. Standalone emulator saves (PCSX2, DuckStation, Dolphin, PPSSPP, melonDS, etc.) are deferred to
+Phase 7.
 
 ## RomM Save API
 
