@@ -305,10 +305,11 @@ class SlotSwitcher:
                 self._sync_engine.quarantine_local_file(saves_dir, lf["filename"])
                 save_state.delete_file_tracking(lf["filename"])
 
-        # Drop stale baseline entries that have no local file.
-        for fn in list(save_state.files):
-            if fn not in target_names:
-                save_state.delete_file_tracking(fn)
+        # Drop stale baseline entries that have no local file. Snapshot the
+        # keys first — delete_file_tracking mutates save_state.files.
+        stale_tracked = [fn for fn in save_state.files if fn not in target_names]
+        for fn in stale_tracked:
+            save_state.delete_file_tracking(fn)
 
         errors: list[str] = []
         for target_name, server_save in targets.items():
