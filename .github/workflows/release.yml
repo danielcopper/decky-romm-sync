@@ -88,11 +88,14 @@ jobs:
           BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
           echo "Checking $BUILT_ZIP for required entries..."
           # bootstrap RAISES without 001_initial.sql (plugin fully inert), and the
-          # default registries' packaging rides on Decky-CLI defaults/ handling —
-          # the most fatal omissions, previously uncovered by this smoke test.
+          # default registries are the most fatal omissions, previously uncovered
+          # by this smoke test. The Decky CLI FLATTENS the repo's defaults/ dir
+          # into the plugin root at package time, so the registries ship as
+          # core_defaults.json / bios_registry.json (no defaults/ prefix) — which
+          # is exactly where the runtime reads them (es_de_config.py / firmware.py).
           for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/rom-launcher \
               py_modules/db/migrations/001_initial.sql py_modules/db/migrations/002_add_emulator_override.sql \
-              defaults/core_defaults.json defaults/bios_registry.json; do
+              core_defaults.json bios_registry.json; do
             if ! unzip -l "$BUILT_ZIP" | grep -qE "/$required\b"; then
               echo "ERROR: release zip is missing $required"
               unzip -l "$BUILT_ZIP"
