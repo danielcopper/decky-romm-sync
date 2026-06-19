@@ -569,8 +569,12 @@ class TestResolveSyncConflictContentDirGate:
         """Control: a supported layout resolves the conflict normally (no gate)."""
         svc, fake = make_service(tmp_path)  # default layout is InSaveDir
         save_path = self._seed_conflict(svc, tmp_path)
+        # The conflict is on the active "default" slot, so the server save lives
+        # in "default" too — a legacy (slot:null) save is no longer matched under
+        # a named slot (#1061).
         ss = _server_save_with_syncs(
             device_syncs=[{"device_id": "device-1", "is_current": False}],
+            slot="default",
         )
         fake.saves[100] = ss
         # Identical content so keep_local short-circuits to adopt-without-upload.

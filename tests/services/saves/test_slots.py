@@ -1362,6 +1362,56 @@ class TestSwitchSlot:
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
 
+    @pytest.mark.asyncio
+    async def test_switch_to_empty_named_slot_does_not_surface_legacy_save(self, tmp_path):
+        """#1061: a legacy (slot:null) save must NOT bleed into an empty named slot.
+
+        The on-device carry-over: with a legacy save on the server, switching to
+        an empty named slot left the local file quarantined (correct) BUT the
+        active slot's status pulled the legacy save in (the old
+        filter_server_saves_to_slot matched null under any named slot) — so the
+        saves tab showed, and the sync downloaded, the legacy save into the slot.
+        After the fix the named slot is empty: no legacy server reference, no
+        download.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "server-dev-1")
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"legacy content")
+        local_hash = _file_md5(str(save_path))
+        # Local is synced to the legacy slot; the server holds only the legacy save.
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(
+                system="gba",
+                active_slot=None,
+                slot_confirmed=True,
+                slots={
+                    "": {"source": "server", "count": 1, "latest_updated_at": None},
+                    "test": {"source": "local", "count": 0, "latest_updated_at": None},
+                },
+                files={"pokemon.srm": FileSyncState(last_sync_hash=local_hash, tracked_save_id=77)},
+            ),
+        )
+        fake.saves[77] = _server_save(save_id=77, slot=None)  # legacy save on the server
+        fake.set_server_save_content(77, b"legacy content")
+
+        result = await svc.switch_slot(42, "test")
+
+        assert result["success"] is True
+        # The local file was quarantined (no carry-over on disk).
+        assert not save_path.exists()
+        # The legacy save was never downloaded into the test slot.
+        download_ids = [c[1][0] for c in fake.call_log if c[0] == "download_save_content"]
+        assert 77 not in download_ids
+        # The active test slot's status surfaces NO server save — the legacy save
+        # stays legacy-only (the carry-over display bug is gone).
+        status = result["save_status"]
+        surfaced_server_ids = [f.get("server_save_id") for f in status["files"]]
+        assert 77 not in surfaced_server_ids
+
 
 class TestSlotsContentDirGate:
     """#239: slot-switch and slot-choice migration write to ``saves_dir``,

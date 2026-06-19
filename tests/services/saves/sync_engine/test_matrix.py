@@ -261,6 +261,25 @@ class TestV47SyncFlow:
         legacy.switch_active_slot(None)  # active=None, adds the "" slots key
         assert M._resolve_upload_slot(legacy, "dev", "default") is None
 
+    def test_filter_server_saves_to_slot_isolates_legacy(self):
+        """#1061: a legacy (slot:null) save belongs ONLY to the legacy slot.
+
+        Regression for the on-device carry-over: the old filter matched a null
+        save under ANY named active slot (``slot == active or slot is None``), so
+        the legacy save bled into a named slot's status and got synced into it.
+        Exact slot membership keeps each slot isolated.
+        """
+        from services.saves.sync_engine.matrix import MatrixExecutor as M
+
+        saves = [{"id": 75, "slot": "default"}, {"id": 77, "slot": None}, {"id": 74, "slot": "default"}]
+        # Named slot the legacy save does NOT belong to → empty (no leak).
+        assert [s["id"] for s in M.filter_server_saves_to_slot(saves, "test")] == []
+        # Named slot → only its own saves, never the legacy null one.
+        assert [s["id"] for s in M.filter_server_saves_to_slot(saves, "default")] == [75, 74]
+        # Legacy mode (None or "") → only the null save.
+        assert [s["id"] for s in M.filter_server_saves_to_slot(saves, None)] == [77]
+        assert [s["id"] for s in M.filter_server_saves_to_slot(saves, "")] == [77]
+
     def test_v47_skip_when_is_current(self, tmp_path):
         """v4.7: server says is_current=True, local unchanged → skip."""
         svc, fake = make_service(tmp_path)

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
 from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.save_slot import save_in_slot
 from domain.sync_action import (
     Conflict,
     Download,
@@ -369,14 +370,16 @@ class MatrixExecutor:
     def filter_server_saves_to_slot(
         server_saves: list[dict[str, Any]], active_slot: str | None
     ) -> list[dict[str, Any]]:
-        """Filter server saves to the active slot.
+        """Filter server saves to the active slot by exact slot membership.
 
-        Saves with ``slot=None`` (legacy/no-slot) are accepted under any active
-        slot; in legacy mode (no active slot) we only keep saves without a slot.
+        A legacy (``slot:null`` / ``""``) save belongs ONLY to the legacy slot —
+        it is never surfaced under a named slot. Sharing
+        :func:`domain.save_slot.save_in_slot` keeps the sync matrix, the status
+        display, and rollback consistent with the per-slot read/delete paths
+        (#1061): the legacy save is visible and syncable only in legacy mode, so
+        it can't bleed into a named slot's status or get downloaded into it.
         """
-        if active_slot:
-            return [ss for ss in server_saves if ss.get("slot") == active_slot or ss.get("slot") is None]
-        return [ss for ss in server_saves if not ss.get("slot")]
+        return [ss for ss in server_saves if save_in_slot(ss, active_slot)]
 
     def _build_local_input(self, local_path: str, filename: str) -> dict[str, Any]:
         """Build the dict shape consumed by ``compute_sync_action``."""
