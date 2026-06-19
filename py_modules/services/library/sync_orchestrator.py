@@ -681,6 +681,10 @@ class SyncOrchestrator:
         # Emit per-unit apply event + wait for the frontend callback.
         box.unit_complete_event = asyncio.Event()
         box.last_unit_results = None
+        # Reset the abandoned-unit stash so a prior timed-out unit can't
+        # leak its state into this one's late-ack commit (#1052).
+        box.unit_abandoned = False
+        box.pending_unit_roms = []
         box.sync_last_heartbeat = self._clock.monotonic()
         await self._emit(
             "sync_apply_unit",
@@ -697,12 +701,26 @@ class SyncOrchestrator:
 
         applied = await self._wait_for_unit_complete(unit, box.unit_complete_event)
         if applied is None:
-            # Heartbeat timeout or cancel — drop the unit's pending state
-            # and surface the cancellation. The orchestrator's outer loop
-            # observes CANCELLING and stops.
-            box.pending_sync = {}
-            box.unit_complete_event = None
-            box.sync_state = SyncState.CANCELLING
+            # The wait gave up — but the reason matters. The outer loop
+            # observes CANCELLING and stops either way; what differs is
+            # whether the frontend's in-flight work is recoverable.
+            if box.is_cancelling():
+                # User cancel: in-flight work is intentionally discarded.
+                # Drop the pending state and null the event so a stray late
+                # ack can't commit a cancelled unit.
+                box.pending_sync = {}
+                box.unit_complete_event = None
+            else:
+                # Heartbeat timeout: the frontend has already created this
+                # unit's Steam shortcuts and will still fire its late
+                # ``report_unit_results`` ack. Keep ``pending_sync`` +
+                # ``unit_complete_event`` and stash the unit's ROMs so the
+                # late ack commits the delivered bindings instead of leaving
+                # orphan shortcuts (#1052). Flag the unit abandoned so the
+                # reporter drives that commit itself.
+                box.unit_abandoned = True
+                box.pending_unit_roms = unit_roms
+                box.sync_state = SyncState.CANCELLING
             return 0
 
         # Per-unit commit: the reporter upserts each acked ROM into the

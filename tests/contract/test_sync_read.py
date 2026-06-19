@@ -155,3 +155,58 @@ async def test_get_registry_platforms_counts_bound_roms(harness):
     assert set(entry.keys()) == {"name", "slug", "count"}
     assert entry["slug"] == "snes"
     assert entry["count"] == 2
+
+
+# ── report_unit_results — late ack after heartbeat-timeout abandon (#1052) ────
+
+
+async def test_report_unit_results_signal_shape(harness):
+    """The happy path (orchestrator still waiting): record + signal, pin the shape."""
+    import asyncio
+
+    box = harness.plugin._sync_service._box
+    box.unit_complete_event = asyncio.Event()
+
+    result = await harness.plugin.report_unit_results({"10": 9001})
+
+    assert result == {"success": True, "count": 1}
+    assert box.unit_complete_event.is_set()
+    # The orchestrator drives the commit on the happy path — nothing bound yet.
+    assert await harness.plugin.get_app_id_rom_id_map() == {}
+
+
+async def test_report_unit_results_late_ack_binds_orphan(harness):
+    """A late ack on an abandoned unit (heartbeat timeout) commits the binding,
+    so the frontend-created shortcut becomes a bound row instead of an orphan
+    that the next sync re-creates as a duplicate (#1052).
+
+    End-to-end over the real Plugin/bootstrap: set the timeout state the
+    orchestrator leaves behind, call the callable frontend-shaped, then assert
+    ``get_app_id_rom_id_map`` resolves the appId to the rom_id."""
+    box = harness.plugin._sync_service._box
+    # The state a heartbeat timeout leaves: pending_sync staged, event already
+    # None (the wait returned), unit flagged abandoned with its ROMs stashed.
+    box.pending_sync = {
+        42: {
+            "name": "Orphan Game",
+            "fs_name": "orphan.gba",
+            "platform_slug": "gba",
+            "cover_path": "",
+        },
+    }
+    box.unit_complete_event = None
+    box.unit_abandoned = True
+    box.pending_unit_roms = [{"id": 42}]
+
+    # Before the ack: the appId is NOT in the map (would be an orphan).
+    assert await harness.plugin.get_app_id_rom_id_map() == {}
+
+    result = await harness.plugin.report_unit_results({"42": 100001})
+
+    assert result == {"success": True, "count": 1}
+    # The orphan is now a bound row — the next sync's getExistingRomMShortcuts
+    # maps it and takes the update branch (no duplicate).
+    assert await harness.plugin.get_app_id_rom_id_map() == {"100001": 42}
+    # The abandoned-unit stash is cleared so a duplicate ack no-ops.
+    assert box.unit_abandoned is False
+    assert box.pending_unit_roms == []

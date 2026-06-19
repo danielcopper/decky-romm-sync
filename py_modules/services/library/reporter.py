@@ -375,15 +375,32 @@ class SyncReporter:
     async def report_unit_results(self, rom_id_to_app_id):
         """Frontend-Callable: ack that this unit's shortcuts have been applied.
 
-        Records the rom_id→app_id mapping into the state box and signals
-        the orchestrator's per-unit wait event. The orchestrator drives
-        the actual per-unit commit (the ``roms`` upsert + metadata stamp,
-        atomic in one write UoW) after this returns.
+        Records the rom_id→app_id mapping into the state box, then routes by
+        the unit's coordination state:
+
+        * The orchestrator is still waiting (``unit_complete_event`` live):
+          signal the event and let the orchestrator drive the per-unit
+          commit. The happy path — unchanged.
+        * The orchestrator abandoned the unit on a heartbeat timeout
+          (``unit_abandoned``): the frontend already created the Steam
+          shortcuts, so commit the delivered bindings here rather than
+          discard them (#1052). Rebuilds ``acked_roms`` from the stashed
+          unit ROMs (the ``metadatum`` source) so metadata is stamped too,
+          then clears the abandoned-unit stash.
+        * Neither (a stray duplicate ack): no-op, so nothing is
+          double-committed.
         """
         box = self._sync_state
         box.last_unit_results = dict(rom_id_to_app_id)
         if box.unit_complete_event is not None:
             box.unit_complete_event.set()
+        elif box.unit_abandoned:
+            acked_roms = [r for r in box.pending_unit_roms if str(r["id"]) in rom_id_to_app_id]
+            await self.commit_unit_results(dict(rom_id_to_app_id), acked_roms)
+            box.unit_abandoned = False
+            box.pending_unit_roms = []
+            box.pending_sync = {}
+            box.last_unit_results = None
 
         self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
         return {"success": True, "count": len(rom_id_to_app_id)}

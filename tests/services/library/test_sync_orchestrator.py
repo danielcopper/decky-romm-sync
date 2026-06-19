@@ -1678,6 +1678,88 @@ class TestReportUnitResults:
         assert result["count"] == 2
         assert plugin._sync_service._box.last_unit_results == {"10": 9001, "11": 9002}
 
+    @pytest.mark.asyncio
+    async def test_late_ack_after_abandon_commits_binding(self, plugin):
+        """A late ack on an abandoned unit (heartbeat timeout) commits the
+        delivered bindings itself instead of discarding them (#1052).
+
+        The orchestrator already nulled no state on a timeout — it kept
+        ``pending_sync`` and flagged ``unit_abandoned`` with the unit's ROMs
+        stashed. The ack drives ``commit_unit_results`` directly, persists the
+        ``roms`` binding + metadata, and clears the abandoned-unit stash."""
+        box = plugin._sync_service._box
+        # Timeout state the orchestrator leaves behind: pending_sync staged,
+        # event already None (the wait returned), unit flagged abandoned with
+        # its live RomM fetch stashed.
+        box.pending_sync = {
+            42: {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""},
+        }
+        box.unit_complete_event = None
+        box.unit_abandoned = True
+        box.pending_unit_roms = [{"id": 42, "metadatum": {"genres": ["RPG"]}}]
+
+        result = await plugin.report_unit_results({"42": 100001})
+
+        assert result == {"success": True, "count": 1}
+        # The binding was committed (not discarded).
+        with plugin._uow as uow:
+            rom = uow.roms.get(42)
+            meta = uow.rom_metadata.get(42)
+        assert rom is not None
+        assert rom.shortcut_app_id == 100001
+        # Metadata stamped from the stashed unit ROMs.
+        assert meta is not None
+        assert meta.genres == ("RPG",)
+        # The abandoned-unit stash is cleared so a duplicate ack no-ops.
+        assert box.unit_abandoned is False
+        assert box.pending_unit_roms == []
+        assert box.pending_sync == {}
+        assert box.last_unit_results is None
+
+    @pytest.mark.asyncio
+    async def test_late_ack_stamps_only_stashed_acked_roms(self, plugin):
+        """A ROM acked but absent from the stash still binds, but stamps no
+        metadata (its ``metadatum`` source is gone) — the binding is the
+        load-bearing data, metadata is best-effort (#1052)."""
+        box = plugin._sync_service._box
+        box.pending_sync = {
+            42: {"name": "A", "fs_name": "a.z64", "platform_slug": "gb", "cover_path": ""},
+        }
+        box.unit_complete_event = None
+        box.unit_abandoned = True
+        # The stash carries a DIFFERENT rom than the one acked.
+        box.pending_unit_roms = [{"id": 99, "metadatum": {"genres": ["RPG"]}}]
+
+        result = await plugin.report_unit_results({"42": 100001})
+
+        assert result == {"success": True, "count": 1}
+        with plugin._uow as uow:
+            rom = uow.roms.get(42)
+            meta = uow.rom_metadata.get(42)
+        # Binding still committed.
+        assert rom is not None
+        assert rom.shortcut_app_id == 100001
+        # No metadata: rom 42 was not in the stash → empty acked_roms.
+        assert meta is None
+
+    @pytest.mark.asyncio
+    async def test_stray_ack_when_not_abandoned_is_noop(self, plugin):
+        """An ack with no live wait and no abandoned flag (a stray duplicate)
+        records nothing on disk — it must not double-commit (#1052)."""
+        box = plugin._sync_service._box
+        box.unit_complete_event = None
+        box.unit_abandoned = False
+        box.pending_sync = {}
+
+        result = await plugin.report_unit_results({"42": 100001})
+
+        assert result == {"success": True, "count": 1}
+        # The mapping is still recorded, but NOTHING is committed.
+        assert box.last_unit_results == {"42": 100001}
+        assert plugin._uow.committed is False
+        with plugin._uow as uow:
+            assert uow.roms.get(42) is None
+
 
 class TestCommitUnitResults:
     """Orchestrator-driven per-unit commit: cover-path finalize + ``roms`` + ``rom_metadata`` upsert."""
@@ -2005,8 +2087,13 @@ class TestSyncOneUnitCollectionAndCancel:
         assert applied == 0
 
     @pytest.mark.asyncio
-    async def test_wait_returning_none_clears_pending_and_cancels(self, plugin, fake_romm_api):
-        """When _wait_for_unit_complete returns None, the unit drops state + flips CANCELLING."""
+    async def test_user_cancel_clears_pending_and_drops_event(self, plugin, fake_romm_api):
+        """A user cancel during the wait discards in-flight work: pending_sync
+        cleared, unit event nulled, no abandoned-unit stash.
+
+        ``_wait_for_unit_complete`` returns None while the box is already
+        CANCELLING (the cancel branch), so the unit's in-flight state is
+        intentionally dropped and a stray late ack can't commit it (#1052)."""
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
@@ -2022,11 +2109,12 @@ class TestSyncOneUnitCollectionAndCancel:
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
 
-        # Simulate heartbeat timeout / cancel inside _wait_for_unit_complete.
-        async def wait_returns_none(_unit, _event):
-            return None
+        # The wait observes a user cancel: flip CANCELLING, then give up (None).
+        async def wait_user_cancel(_unit, _event):
+            plugin._sync_service._sync_state = SyncState.CANCELLING
+            return
 
-        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_returns_none
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_user_cancel
         plugin._sync_service._sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -2039,10 +2127,60 @@ class TestSyncOneUnitCollectionAndCancel:
             platform_rom_ids=set(),
         )
         assert applied == 0
-        # pending_sync was cleared, unit event reference dropped, state flipped.
+        # User cancel: pending_sync cleared, unit event dropped, state CANCELLING.
         assert plugin._sync_service._pending_sync == {}
         assert plugin._sync_service._box.unit_complete_event is None
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
+        # No abandoned-unit stash — a cancel intentionally discards the work.
+        assert plugin._sync_service._box.unit_abandoned is False
+        assert plugin._sync_service._box.pending_unit_roms == []
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_timeout_retains_pending_and_stashes_roms(self, plugin, fake_romm_api):
+        """A heartbeat timeout (not a cancel) RETAINS the unit's in-flight state so
+        a late ``report_unit_results`` can still commit the delivered bindings.
+
+        The wait returns None while the box is still RUNNING (the timeout
+        branch): ``pending_sync`` + ``unit_complete_event`` survive, the unit
+        is flagged abandoned, and its ROMs are stashed for the late-ack commit
+        (#1052). The box flips CANCELLING so the outer loop stops."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}],
+        )
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        # Heartbeat timeout: the wait gives up (None) WITHOUT a user cancel.
+        async def wait_timeout(_unit, _event):
+            return
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_timeout
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        applied = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+        assert applied == 0
+        # Timeout: pending_sync + unit event RETAINED so a late ack can commit.
+        assert plugin._sync_service._pending_sync != {}
+        assert plugin._sync_service._box.unit_complete_event is not None
+        assert plugin._sync_service._sync_state == SyncState.CANCELLING
+        # Unit flagged abandoned with its ROMs stashed for the late-ack commit.
+        assert plugin._sync_service._box.unit_abandoned is True
+        assert [r["id"] for r in plugin._sync_service._box.pending_unit_roms] == [1]
 
 
 class TestPerUnitMetadataStamping:

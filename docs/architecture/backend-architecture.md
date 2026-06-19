@@ -159,6 +159,20 @@ RomM each sync and is cached in a `kv_config` row for offline reads. Removing a 
 [ADR-0007](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0007-rom-retention-identity-anchor.md).
 The full schema and aggregate model are in [Database Design](database-design.md).
 
+**Per-unit wait: timeout vs. cancel.** The orchestrator emits `sync_apply_unit`, then waits on `unit_complete_event`
+(heartbeat-clocked) for the frontend's `report_unit_results` ack. When the wait returns `None` the teardown branches on
+the cause (#1052):
+
+- **User cancel** (`is_cancelling()` already True at the return) — in-flight work is intentionally discarded: clear
+  `pending_sync`, null `unit_complete_event`. A stray late ack then no-ops.
+- **Heartbeat timeout** (still RUNNING) — the frontend has already created this unit's Steam shortcuts and will fire a
+  late `report_unit_results`. The orchestrator **keeps** `pending_sync` + `unit_complete_event`, flags `unit_abandoned`,
+  and stashes the unit's ROMs in `pending_unit_roms`, then flips CANCELLING so the loop stops.
+  `SyncReporter.report_unit_results` observes `unit_abandoned` and drives `commit_unit_results` **itself** (rebuilding
+  `acked_roms` from the stash so metadata is stamped too), persisting the delivered bindings instead of leaving orphan
+  shortcuts that the next sync re-creates as duplicates. The committed binding is mapped by the next sync's
+  existing-shortcut scan, so no active orphan deletion is needed (a Steam shortcut is the sole record of its tile).
+
 #### DownloadService notes
 
 RomM exposes three mutually exclusive file-layout flags on every ROM detail. They control how the server stores files

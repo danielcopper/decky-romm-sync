@@ -198,3 +198,25 @@ write is observable rather than assumed. Only `exe`/name changes still need dele
 
 When creating multiple shortcuts in a loop, a 50ms delay between each `addShortcut()` call prevents corrupting Steam's
 internal shortcut state. Without this delay, some shortcuts may silently fail to register.
+
+### A per-unit heartbeat timeout must not discard the unit's delivered bindings
+
+The per-unit apply pipeline emits `sync_apply_unit`, then waits for the frontend's `report_unit_results` ack. If the
+frontend stops heartbeating for longer than the per-unit timeout (`_UNIT_HEARTBEAT_TIMEOUT_SEC`, 60s — e.g. a unit
+large/slow enough that real heartbeats lag), the wait gives up. But by then the frontend has **already created the Steam
+shortcuts** and will still fire its late `report_unit_results`. Dropping that ack is data loss: the bindings are never
+written to `roms`, so `get_app_id_rom_id_map` doesn't know about the shortcuts, and the next sync re-creates them as
+**duplicates** (an unmapped exe-detected shortcut takes the `addShortcut` branch).
+
+So a heartbeat **timeout** is handled differently from a **user cancel** (#1052):
+
+- **User cancel** — in-flight work is intentionally discarded. The orchestrator clears `pending_sync` and nulls
+  `unit_complete_event`, so a stray late ack can't commit a cancelled unit.
+- **Heartbeat timeout** — the orchestrator keeps `pending_sync`, flags `unit_abandoned`, and stashes the unit's ROMs in
+  `pending_unit_roms`. The late `report_unit_results` observes the flag and drives `commit_unit_results` itself,
+  persisting the delivered bindings (and metadata from the stash). Do **not** re-clear `pending_sync` on timeout — that
+  re-opens the orphan/duplicate loop.
+
+The committed binding self-heals the duplicate hazard: a bound `roms` row is mapped by `getExistingRomMShortcuts` next
+sync, so `resolveShortcutAppId` takes the update branch. The orchestrator does **not** add active orphan deletion — a
+Steam shortcut is the sole record of its tile (the "never delete data that exists nowhere else" invariant).
