@@ -201,6 +201,7 @@ class SlotSwitcher:
                 rom_id,
                 save_state,
             )
+            self._log_debug(f"switch_slot: rom={rom_id} new_slot={new_slot!r} readiness={readiness}")
             if not readiness.get("ready"):
                 return {
                     "success": False,
@@ -227,6 +228,11 @@ class SlotSwitcher:
             # Filter to the target slot (FakeSaveApi doesn't filter, real API may not either)
             # Normalize "" and None both to None before comparing (legacy saves may use either)
             slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
+            self._log_debug(
+                f"switch_slot: fetch rom={rom_id} resolved_slot={resolved_slot!r} "
+                f"server_all={[(s.get('id'), s.get('slot')) for s in all_server_saves]} "
+                f"slot_saves_ids={[s.get('id') for s in slot_saves]}"
+            )
 
             # 6. Flip active slot in memory.
             save_state.switch_active_slot(resolved_slot)
@@ -298,12 +304,18 @@ class SlotSwitcher:
         failed (empty when all succeeded).
         """
         target_names = set(targets)
+        local_now = self._rom_info.find_save_files(rom_id)
+        self._log_debug(
+            f"switch_slot: apply rom={rom_id} targets={list(target_names)} "
+            f"local_files={[lf['filename'] for lf in local_now]} tracked={list(save_state.files)}"
+        )
 
         # Quarantine + untrack every local file the new slot does not provide.
-        for lf in self._rom_info.find_save_files(rom_id):
+        for lf in local_now:
             if lf["filename"] not in target_names:
-                self._sync_engine.quarantine_local_file(saves_dir, lf["filename"])
+                moved = self._sync_engine.quarantine_local_file(saves_dir, lf["filename"])
                 save_state.delete_file_tracking(lf["filename"])
+                self._log_debug(f"switch_slot: quarantine {lf['filename']} moved={moved}")
 
         # Drop stale baseline entries that have no local file. Snapshot the
         # keys first — delete_file_tracking mutates save_state.files.
@@ -313,6 +325,10 @@ class SlotSwitcher:
 
         errors: list[str] = []
         for target_name, server_save in targets.items():
+            self._log_debug(
+                f"switch_slot: download target={target_name} save_id={server_save.get('id')} "
+                f"slot={server_save.get('slot')!r}"
+            )
             try:
                 self._sync_engine.do_download_save(
                     server_save, saves_dir, target_name, save_state, device_id, system, default_slot
