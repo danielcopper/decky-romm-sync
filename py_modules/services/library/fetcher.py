@@ -360,8 +360,7 @@ class LibraryFetcher:
         # materializes the full map on first view, so a partial map here always
         # reflects explicit per-platform choices, never the sentinel (#1007).
         enabled = self._settings.get("enabled_platforms", {})
-        no_prefs = len(enabled) == 0
-        self._logger.info(f"Platform filter: {len(enabled)} prefs saved, no_prefs={no_prefs}")
+        self._logger.info(f"Platform filter: {len(enabled)} prefs saved, no_prefs={not enabled}")
         self._logger.info(f"Enabled platforms: {[k for k, v in enabled.items() if v]}")
         platforms = [p for p in platforms if resolve_sync_enabled(enabled, str(p["id"]))]
         self._logger.info(f"Syncing {len(platforms)} platforms: {[p['name'] for p in platforms]}")
