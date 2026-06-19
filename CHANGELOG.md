@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.22.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.21.0...decky-romm-sync-v0.22.0) (2026-06-19)
+
+
+### Features
+
+* **saves:** detect & gate save sync when savefiles_in_content_dir is on ([#239](https://github.com/danielcopper/decky-romm-sync/issues/239)) ([#963](https://github.com/danielcopper/decky-romm-sync/issues/963)) ([8ac2de2](https://github.com/danielcopper/decky-romm-sync/commit/8ac2de29a93da87e4aed5179a077e660c4b54dfe))
+
+
+### Bug Fixes
+
+* **connection:** bind stored token to its minting server origin ([#1015](https://github.com/danielcopper/decky-romm-sync/issues/1015), [#1038](https://github.com/danielcopper/decky-romm-sync/issues/1038), [#1039](https://github.com/danielcopper/decky-romm-sync/issues/1039)) ([#1089](https://github.com/danielcopper/decky-romm-sync/issues/1089)) ([a94e3d9](https://github.com/danielcopper/decky-romm-sync/commit/a94e3d93b80dfa0f8840cd2cb45fa65c6419d7a7))
+* **migration:** fail loud when the migration_blocked gate is unwired ([#970](https://github.com/danielcopper/decky-romm-sync/issues/970)) ([#1093](https://github.com/danielcopper/decky-romm-sync/issues/1093)) ([aba54ab](https://github.com/danielcopper/decky-romm-sync/commit/aba54ab329f31cd6f0b2513e775bba40457ee663))
+* **persistence:** BEGIN IMMEDIATE in the UoW to avoid un-retried SQLITE_BUSY_SNAPSHOT ([#1011](https://github.com/danielcopper/decky-romm-sync/issues/1011)) ([#1092](https://github.com/danielcopper/decky-romm-sync/issues/1092)) ([3674ef6](https://github.com/danielcopper/decky-romm-sync/commit/3674ef6f3b291252ae2b1ba5f3175b325b7ed3c6))
+* **persistence:** crash-safe settings writes + corrupt-file quarantine ([#1010](https://github.com/danielcopper/decky-romm-sync/issues/1010)) ([#1090](https://github.com/danielcopper/decky-romm-sync/issues/1090)) ([d794705](https://github.com/danielcopper/decky-romm-sync/commit/d7947052d9fb5c4773e8ef742fe6b81ba3d9367d))
+* **persistence:** surface settings-reset as a persistent acknowledgeable notice ([#1091](https://github.com/danielcopper/decky-romm-sync/issues/1091)) ([99eadb1](https://github.com/danielcopper/decky-romm-sync/commit/99eadb1957fb23b4918a172e813b156867b91b65))
+* **saves:** adopt identical server save instead of POSTing a duplicate ([#1013](https://github.com/danielcopper/decky-romm-sync/issues/1013)) ([#1099](https://github.com/danielcopper/decky-romm-sync/issues/1099)) ([5e7dd62](https://github.com/danielcopper/decky-romm-sync/commit/5e7dd62cbb2b4a46e06cf76fc3dea835401c321a))
+* **saves:** branch-6 conflicts on baseline divergence instead of silent download ([#1059](https://github.com/danielcopper/decky-romm-sync/issues/1059)) ([#1095](https://github.com/danielcopper/decky-romm-sync/issues/1095)) ([06652d1](https://github.com/danielcopper/decky-romm-sync/commit/06652d132c50d818b72f522ead0d244606ed99fc))
+* **saves:** group the matrix local-file loop by canonical target ([#1006](https://github.com/danielcopper/decky-romm-sync/issues/1006)) ([#1096](https://github.com/danielcopper/decky-romm-sync/issues/1096)) ([d33ba7f](https://github.com/danielcopper/decky-romm-sync/commit/d33ba7f818553d9d97989eac0b733554dbc184a1))
+* **saves:** hold the per-ROM sync lock across slot mutations ([#1057](https://github.com/danielcopper/decky-romm-sync/issues/1057)) ([#1100](https://github.com/danielcopper/decky-romm-sync/issues/1100)) ([d01a3fd](https://github.com/danielcopper/decky-romm-sync/commit/d01a3fd5f91bbb7df65a4acd482bece95a2e5a39))
+* **saves:** legacy-slot wire contract — address slot:null saves + explicit confirm_slot_choice ([#1061](https://github.com/danielcopper/decky-romm-sync/issues/1061), [#1008](https://github.com/danielcopper/decky-romm-sync/issues/1008), [#1004](https://github.com/danielcopper/decky-romm-sync/issues/1004), [#1005](https://github.com/danielcopper/decky-romm-sync/issues/1005)) ([#1102](https://github.com/danielcopper/decky-romm-sync/issues/1102)) ([3e1864d](https://github.com/danielcopper/decky-romm-sync/commit/3e1864d3ae1dc0fd7ab577bc0f555be1ffd58c7c))
+* **saves:** make switch_slot file handling coherent and backup-safe ([#1058](https://github.com/danielcopper/decky-romm-sync/issues/1058), [#965](https://github.com/danielcopper/decky-romm-sync/issues/965)) ([#1101](https://github.com/danielcopper/decky-romm-sync/issues/1101)) ([24d93a9](https://github.com/danielcopper/decky-romm-sync/commit/24d93a9a8f0bee1b0c3f44171843ebc410044153))
+* **security:** reject path traversal in firmware/download joins via lib safe_join ([#1081](https://github.com/danielcopper/decky-romm-sync/issues/1081)) ([48e8839](https://github.com/danielcopper/decky-romm-sync/commit/48e883989d24f6859c532d42a1032fba335f9cae)), closes [#966](https://github.com/danielcopper/decky-romm-sync/issues/966) [#967](https://github.com/danielcopper/decky-romm-sync/issues/967) [#968](https://github.com/danielcopper/decky-romm-sync/issues/968)
+* **shortcuts:** escape quotes in launch_options path to block argv injection ([#1084](https://github.com/danielcopper/decky-romm-sync/issues/1084)) ([16770f5](https://github.com/danielcopper/decky-romm-sync/commit/16770f551ded84c4fd94d824de76eafab4d4d45d)), closes [#969](https://github.com/danielcopper/decky-romm-sync/issues/969)
+* **ui:** per-game BIOS panel ignores bios change-events for other platforms ([#1083](https://github.com/danielcopper/decky-romm-sync/issues/1083)) ([b44c6c7](https://github.com/danielcopper/decky-romm-sync/commit/b44c6c798a82c8a9deb34e85fdf0d148c208d353)), closes [#1082](https://github.com/danielcopper/decky-romm-sync/issues/1082)
+
 ## [0.21.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.20.0...decky-romm-sync-v0.21.0) (2026-06-08)
 
 
