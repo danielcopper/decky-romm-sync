@@ -27,11 +27,11 @@ OTHER_DEVICE_ID = "device-xyz"
 # ---------------------------------------------------------------------------
 
 
-def _local(filename: str = "save.srm", mtime: float = 1_700_000_000.0) -> dict[str, Any]:
+def _local(filename: str = "save.srm", mtime: float = 1_700_000_000.0, size: int = 8192) -> dict[str, Any]:
     return {
         "filename": filename,
         "path": f"/tmp/{filename}",
-        "size": 8192,
+        "size": size,
         "mtime": mtime,
     }
 
@@ -101,6 +101,82 @@ def test_is_current_true_local_diverged_returns_upload_put():
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={"last_sync_hash": "abc"},
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",
+    )
+    assert result == Upload(target_save_id=42)
+
+
+def test_is_current_true_zero_byte_local_returns_conflict():
+    """Row 9b / #1062 — is_current=true + diverged local that is 0 bytes → Conflict,
+    NOT an in-place PUT. RomM versions only on POST, so a PUT of the empty file
+    would overwrite the only good server copy with no recoverable version.
+    """
+    server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result = compute_sync_action(
+        local_file=_local(size=0),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
+        device_id=DEVICE_ID,
+        local_hash="EMPTY-HASH",  # diverges from baseline
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_is_current_true_zero_byte_local_no_baseline_size_returns_conflict():
+    """Row 9b / #1062 — the 0-byte gate is unconditional: even with no recorded
+    ``last_sync_local_size`` baseline, a diverged 0-byte local is a Conflict, not a PUT.
+    """
+    server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result = compute_sync_action(
+        local_file=_local(size=0),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc"},  # no last_sync_local_size
+        device_id=DEVICE_ID,
+        local_hash="EMPTY-HASH",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_is_current_true_shrunken_local_returns_conflict():
+    """Row 9b / #1062 — is_current=true + diverged local dramatically smaller than
+    the recorded baseline size (truncated / partial write) → Conflict, not PUT.
+    """
+    server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result = compute_sync_action(
+        local_file=_local(size=100),  # < 50% of 8192
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
+        device_id=DEVICE_ID,
+        local_hash="TRUNCATED",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_is_current_true_plausible_size_diverged_still_uploads_put():
+    """Row 9 / #1062 regression — is_current=true + diverged local of a plausible
+    size (no shrink) still PUTs in place. The guard must NOT fire on a normal edit.
+    """
+    server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result = compute_sync_action(
+        local_file=_local(size=8000),  # ~same size as baseline
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
+        device_id=DEVICE_ID,
+        local_hash="DIFFERENT",
+    )
+    assert result == Upload(target_save_id=42)
+
+
+def test_is_current_true_grown_local_uploads_put():
+    """Row 9 / #1062 regression — a diverged local that GREW past the baseline is a
+    plausible edit → PUT, never Conflict.
+    """
+    server = _server_save(save_id=42, device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
+    result = compute_sync_action(
+        local_file=_local(size=16384),  # larger than baseline
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "abc", "last_sync_local_size": 8192},
         device_id=DEVICE_ID,
         local_hash="DIFFERENT",
     )

@@ -1336,6 +1336,60 @@ class TestSyncRomSavesDispatch:
         file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
+    def test_sync_rom_saves_zero_byte_local_conflicts_no_put(self, tmp_path):
+        """#1062: is_current=true + a 0-byte diverged local → Conflict, NO PUT.
+
+        A crashed emulator / full disk left a 0-byte save. RomM PUTs in place
+        (no recoverable version), so the matrix must refuse the upload and surface
+        a conflict the user resolves instead of silently destroying the only good
+        server copy. The local 0-byte file is left untouched on disk.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # Local save is 0 bytes (truncated by the crash).
+        save_path = _create_save(tmp_path, content=b"")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        fake.saves[100] = ss
+
+        # Baseline recorded a healthy 8 KiB save; the divergent local is now empty.
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,  # baseline differs from current local
+                        "last_sync_server_updated_at": ss["updated_at"],
+                        "last_sync_local_size": 8192,
+                    }
+                }
+            },
+        )
+
+        synced, errors, conflicts = _do_sync(svc, 42)
+
+        assert synced == 0
+        assert errors == []
+        # NO upload (PUT) was issued — the destructive overwrite was refused.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        # A conflict entry was surfaced for the user to resolve.
+        assert len(conflicts) == 1
+        c = conflicts[0]
+        assert c["type"] == "sync_conflict"
+        assert c["rom_id"] == 42
+        assert c["filename"] == "pokemon.srm"
+        assert c["server_save_id"] == 100
+        assert c["local_hash"] == local_hash
+        assert c["local_size"] == 0
+        # The 0-byte local file is left in place (not deleted by the refusal).
+        assert save_path.exists()
+
     def test_sync_rom_saves_skip_with_adopt_baseline_writes_hash(self, tmp_path):
         """is_current=true + local present + no baseline → Skip + adopt_baseline:
         no I/O but state.last_sync_hash gets recorded as local_hash."""

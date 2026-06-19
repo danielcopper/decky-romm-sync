@@ -28,6 +28,9 @@ Invariants encoded here:
   enforced live (no longer xfail-pinned).
 - Inv5 (#1059): branch-6 divergence from a held baseline is always a
   ``Conflict`` — never a silent ``Download``/``Upload``.
+- Inv6 (#1062): branch-4 (is_current=true) never emits an in-place PUT for a
+  0-byte / implausibly-shrunken diverged local save — that would overwrite the
+  only good server copy with no recoverable version; it is a ``Conflict``.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from typing import Any
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
+from domain.save_size import is_implausibly_shrunken
 from domain.sync_action import (
     Conflict,
     Download,
@@ -113,7 +117,8 @@ def _server_saves(draw: st.DrawFn) -> dict[str, Any]:
 
 
 _server_lists = st.lists(_server_saves(), min_size=0, max_size=5)
-_files_states = st.fixed_dictionaries({}, optional={"last_sync_hash": _hashes})
+_sizes = st.integers(min_value=0, max_value=1_048_576)
+_files_states = st.fixed_dictionaries({}, optional={"last_sync_hash": _hashes, "last_sync_local_size": _sizes})
 
 
 def _action(
@@ -363,3 +368,58 @@ def test_no_entry_identical_content_does_not_duplicate(
     result = _action(local_file, [server], {}, local_hash)
     # Identical content already on the server → adopt it, never POST a duplicate.
     assert result == Skip(reason="synced", adopt_baseline=True)
+
+
+# ---------------------------------------------------------------------------
+# Invariant 6 (#1062): branch-4 never PUTs a 0-byte / shrunken local in place.
+# ---------------------------------------------------------------------------
+
+
+@given(
+    server_epoch=_epochs,
+    local_hash=_hashes,
+    baseline=_hashes,
+    new_size=st.integers(min_value=0, max_value=1_048_576),
+    baseline_size=st.one_of(st.none(), st.integers(min_value=0, max_value=1_048_576)),
+)
+def test_is_current_implausible_local_never_puts_in_place(
+    server_epoch: float,
+    local_hash: str,
+    baseline: str,
+    new_size: int,
+    baseline_size: int | None,
+) -> None:
+    """Branch 4 / #1062 — when our device is ``is_current=true`` on the picked
+    save, the present local has diverged from the held baseline, AND the local
+    size is implausible (0-byte or shrunk past the threshold versus the recorded
+    baseline size), the kernel returns ``Conflict`` — never ``Upload`` (an
+    in-place PUT that RomM applies with no recoverable version, destroying the
+    only good copy). The safety invariant stated directly: no in-place overwrite
+    of a server save with a corrupt-looking local file.
+    """
+    assume(local_hash != baseline)
+    local_file = {
+        "filename": "Game.srm",
+        "path": "/tmp/Game.srm",
+        "size": new_size,
+        "mtime": server_epoch,
+    }
+    files_state: dict[str, Any] = {"last_sync_hash": baseline}
+    if baseline_size is not None:
+        files_state["last_sync_local_size"] = baseline_size
+    server = {
+        "id": 7,
+        "slot": 0,
+        "updated_at": _epoch_to_iso(server_epoch, zulu=False, micros=False),
+        "file_extension": "srm",
+        "device_syncs": [{"device_id": DEVICE_ID, "is_current": True}],
+    }
+
+    result = _action(local_file, [server], files_state, local_hash)
+
+    if is_implausibly_shrunken(new_size, baseline_size):
+        # Corrupt-looking local → never an in-place PUT; route to the user.
+        assert result == Conflict(server_save=server)
+    else:
+        # Plausible divergent edit → the normal in-place PUT.
+        assert result == Upload(target_save_id=7)

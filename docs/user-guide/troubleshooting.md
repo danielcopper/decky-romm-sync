@@ -62,6 +62,22 @@ always overwrites your local save. Switch to "Newest Wins" or "Ask Me" if you pl
 
 Also make sure each person using RomM has their own account — shared accounts cause saves to overwrite each other.
 
+### Conflict prompt after a crash or power loss
+
+**Symptom**: After an emulator crash, a full disk, or a power loss mid-save, the next sync shows a conflict prompt
+instead of uploading — and the local save shown is 0 bytes or much smaller than expected.
+
+**Why**: A crash can leave a 0-byte or truncated save file on disk. The plugin refuses to upload it over your good
+server copy, because the server overwrites the existing save **in place** — there would be no older version left to
+recover. So instead of silently destroying your progress, it asks you to choose.
+
+**Fix**: In the conflict prompt, pick **Use Server** to restore the good copy from RomM (the bad local file is moved
+aside into the `.romm-backup` folder next to your saves first, so nothing is lost). Only pick **Keep Local** if you are
+certain the small/empty local file is the one you want to keep — that uploads it and replaces the server copy.
+
+If you need to recover a save by hand, look in the `.romm-backup` folder inside your saves directory (e.g.
+`<saves_path>/gba/.romm-backup/`): every file the plugin moves aside is timestamped there.
+
 ## Artwork Missing
 
 ### No SteamGridDB API key

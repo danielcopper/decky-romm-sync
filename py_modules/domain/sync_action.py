@@ -19,7 +19,12 @@ When our device is flagged ``is_current=true`` but local diverges from the
 baseline, we emit ``Upload`` with a PUT target — the offline edit gets
 pushed at the decision point rather than being deferred to a later phase.
 No user prompt is needed because nobody else can have moved the server
-forward (we're still flagged current).
+forward (we're still flagged current). The one exception is a local save
+that looks corrupt — 0-byte or implausibly shrunk versus the recorded
+baseline size (a crashed emulator / full disk). RomM's PUT overwrites the
+save in place with no recoverable version, so rather than destroy the only
+good copy we route that case to ``Conflict`` for the user to resolve
+(``domain/save_size.is_implausibly_shrunken``).
 
 When ``is_current=false`` AND local diverges, both sides moved
 independently — that is the only true ``Conflict`` and it requires a user
@@ -54,6 +59,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from domain.iso_time import parse_iso_to_epoch
+from domain.save_size import is_implausibly_shrunken
 
 # ---------------------------------------------------------------------------
 # SyncAction variants
@@ -129,7 +135,11 @@ def _local_mtime_ge_server_updated_at(local_file: dict[str, Any], server: dict[s
 
 
 def _decide_when_is_current(
-    server: dict[str, Any], local_file: dict[str, Any] | None, local_hash: str | None, last_sync_hash: str | None
+    server: dict[str, Any],
+    local_file: dict[str, Any] | None,
+    local_hash: str | None,
+    last_sync_hash: str | None,
+    last_sync_local_size: int | None,
 ) -> SyncAction:
     """Branch 4: ``our_entry.is_current=True`` on the chosen save."""
     if local_file is None:
@@ -140,6 +150,11 @@ def _decide_when_is_current(
         # Pure state mutation, no I/O.
         return Skip(reason="synced", adopt_baseline=True)
     if local_hash and local_hash != last_sync_hash:
+        if is_implausibly_shrunken(local_file.get("size"), last_sync_local_size):
+            # 0-byte / truncated local (crashed emulator, full disk). A PUT
+            # would overwrite the only good server copy in place with no
+            # recoverable version — let the user decide instead (#1062).
+            return Conflict(server_save=server)
         # Played offline since last sync; server unchanged — PUT the diverged
         # local content against the existing save id.
         return Upload(target_save_id=server.get("id"))
@@ -214,9 +229,10 @@ def compute_sync_action(
     device_syncs = server.get("device_syncs") or []
     our_entry = next((ds for ds in device_syncs if ds.get("device_id") == device_id), None)
     last_sync_hash = files_state.get("last_sync_hash")
+    last_sync_local_size = files_state.get("last_sync_local_size")
 
     if our_entry and our_entry.get("is_current"):
-        return _decide_when_is_current(server, local_file, local_hash, last_sync_hash)
+        return _decide_when_is_current(server, local_file, local_hash, last_sync_hash, last_sync_local_size)
     if our_entry is not None:
         return _decide_when_not_current(server, local_file, local_hash, last_sync_hash)
     return _decide_when_no_entry(server, local_file, local_hash, last_sync_hash)
