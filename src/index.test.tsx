@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
-import { getSettingsResetNotice } from "./api/backend";
+import { getSettingsResetNotice, getAllPlaytime, getAppIdRomIdMap } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import type { DownloadCompleteEvent, SyncStaleData } from "./types";
 
@@ -41,6 +41,19 @@ vi.mock("./utils/syncManager", () => ({
   initUnitSyncManager: vi.fn(() => () => {}),
 }));
 
+// Observe the collection create/update + stale-cleanup calls fired by
+// onSyncComplete. getHostname resolves a fixed hostname so the machine-scoped
+// `RomM: <platform> (steamdeck)` suffix is deterministic.
+const createOrUpdateCollections = vi.fn().mockResolvedValue(undefined);
+const createOrUpdateRomMCollections = vi.fn().mockResolvedValue(undefined);
+const clearPlatformCollection = vi.fn().mockResolvedValue(undefined);
+vi.mock("./utils/collections", () => ({
+  createOrUpdateCollections: (...args: unknown[]) => createOrUpdateCollections(...args),
+  createOrUpdateRomMCollections: (...args: unknown[]) => createOrUpdateRomMCollections(...args),
+  clearPlatformCollection: (...args: unknown[]) => clearPlatformCollection(...args),
+  getHostname: vi.fn().mockResolvedValue("steamdeck"),
+}));
+
 // Observe the launch-options confirm-poll.
 const setLaunchOptionsConfirmed = vi.fn().mockResolvedValue(true);
 const removeShortcut = vi.fn();
@@ -60,6 +73,7 @@ vi.mock("./api/backend", async () => {
   };
 });
 
+import { applyAllPlaytime } from "./patches/metadataPatches";
 import definePluginResult from "./index";
 
 // `definePlugin` is stubbed in test-setup to return its factory unchanged, so
@@ -293,6 +307,122 @@ describe("index.tsx — corrupt-settings reset notice", () => {
 
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("Failed to check settings reset notice"));
     expect(toaster.toast).not.toHaveBeenCalled();
+    plugin.onDismount();
+  });
+});
+
+describe("index.tsx — sync_complete stale-collection cleanup (#1040)", () => {
+  // A SNES platform collection and a [Faves] RomM smart-collection, both
+  // machine-scoped to "steamdeck" (the getHostname mock). Delete is a vi.fn so
+  // the smart-collection delete is observable; the platform collection is
+  // removed via the mocked clearPlatformCollection, so only its presence in
+  // userCollections matters for the stale filter.
+  function seedCollections(): {
+    snes: { Delete: ReturnType<typeof vi.fn> };
+    faves: { Delete: ReturnType<typeof vi.fn> };
+  } {
+    const snes = { id: "snes-id", displayName: "RomM: Super Nintendo (steamdeck)", Delete: vi.fn() };
+    const faves = { id: "faves-id", displayName: "RomM: [Faves] (steamdeck)", Delete: vi.fn() };
+    vi.stubGlobal("collectionStore", { userCollections: [snes, faves] });
+    return { snes, faves };
+  }
+
+  type SyncCompletePayload = {
+    platform_app_ids: Record<string, number[]>;
+    romm_collection_app_ids?: Record<string, number[]>;
+    total_games: number;
+    cancelled?: boolean;
+  };
+
+  function emitSyncComplete(payload: SyncCompletePayload): void {
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", payload);
+    });
+  }
+
+  beforeEach(() => {
+    createOrUpdateCollections.mockClear();
+    createOrUpdateRomMCollections.mockClear();
+    clearPlatformCollection.mockClear();
+    vi.mocked(applyAllPlaytime).mockClear();
+    vi.mocked(applyAllPlaytime).mockResolvedValue(undefined);
+    vi.mocked(toaster.toast).mockClear();
+    logError.mockClear();
+    // Give the playtime re-apply detach a well-shaped payload so it reaches
+    // applyAllPlaytime instead of throwing on a destructure of undefined.
+    vi.mocked(getAllPlaytime).mockResolvedValue({ playtime: {} });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
+  });
+
+  it("runs the stale cleanup on a completed (non-cancelled) sync", async () => {
+    const { faves } = seedCollections();
+    const plugin = pluginFactory();
+
+    // Only "Nintendo 64" is active — SNES and [Faves] are stale and removed.
+    emitSyncComplete({ platform_app_ids: { "Nintendo 64": [1] }, total_games: 1 });
+    await flush();
+
+    expect(clearPlatformCollection).toHaveBeenCalledWith("Super Nintendo");
+    expect(faves.Delete).toHaveBeenCalledTimes(1);
+    plugin.onDismount();
+  });
+
+  it("skips the stale cleanup on a cancelled sync with a partial map (regression)", async () => {
+    const { snes, faves } = seedCollections();
+    const plugin = pluginFactory();
+
+    // Cancel reached only "Nintendo 64"; SNES + [Faves] must SURVIVE.
+    emitSyncComplete({ platform_app_ids: { "Nintendo 64": [1] }, total_games: 1, cancelled: true });
+    await flush();
+
+    expect(clearPlatformCollection).not.toHaveBeenCalled();
+    expect(snes.Delete).not.toHaveBeenCalled();
+    expect(faves.Delete).not.toHaveBeenCalled();
+    plugin.onDismount();
+  });
+
+  it("skips the stale cleanup on an early cancel with an empty map (full-wipe case)", async () => {
+    const { snes, faves } = seedCollections();
+    const plugin = pluginFactory();
+
+    // Cancel fired before unit 1 — the map is empty. Treating it as the active
+    // set would wipe EVERY RomM collection; nothing must be deleted.
+    emitSyncComplete({ platform_app_ids: {}, total_games: 0, cancelled: true });
+    await flush();
+
+    expect(clearPlatformCollection).not.toHaveBeenCalled();
+    expect(snes.Delete).not.toHaveBeenCalled();
+    expect(faves.Delete).not.toHaveBeenCalled();
+    plugin.onDismount();
+  });
+
+  it("still fires the cancelled toast and re-applies playtime on a cancelled sync", async () => {
+    seedCollections();
+    const plugin = pluginFactory();
+    // The factory's own init runs one initial playtime apply; clear it so the
+    // assertion counts only the apply triggered by sync_complete.
+    await flush();
+    vi.mocked(applyAllPlaytime).mockClear();
+    vi.mocked(toaster.toast).mockClear();
+
+    emitSyncComplete({ platform_app_ids: { "Nintendo 64": [1] }, total_games: 1, cancelled: true });
+    await flush();
+
+    expect(toaster.toast).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining("cancelled") }));
+    expect(applyAllPlaytime).toHaveBeenCalledTimes(1);
+    plugin.onDismount();
+  });
+
+  it("still creates/updates the reached platforms' collections on a cancelled sync", async () => {
+    seedCollections();
+    const plugin = pluginFactory();
+
+    emitSyncComplete({ platform_app_ids: { "Nintendo 64": [1] }, total_games: 1, cancelled: true });
+    await flush();
+
+    // The additive create/update path is NOT gated on cancel — the platforms
+    // that DID complete still get their collections.
+    expect(createOrUpdateCollections).toHaveBeenCalledWith({ "Nintendo 64": [1] });
     plugin.onDismount();
   });
 });

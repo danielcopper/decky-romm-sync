@@ -297,7 +297,15 @@ export default definePlugin(() => {
             await createOrUpdateRomMCollections(data.romm_collection_app_ids);
           }
 
-          if (typeof collectionStore !== "undefined") {
+          // Stale-collection cleanup deletes any RomM collection not in
+          // data.platform_app_ids / romm_collection_app_ids. On a cancelled run
+          // those maps are PARTIAL (only the platforms reached before the cancel,
+          // empty if the cancel fired before unit 1), so treating them as the
+          // authoritative active-set would delete collections for unreached
+          // platforms — wiping library organization. Only run cleanup on a
+          // completed sync. The additive create/update above stays safe on a
+          // partial run. (#1040)
+          if (!data.cancelled && typeof collectionStore !== "undefined") {
             const hostname = await getHostname();
             const suffix = ` (${hostname})`;
 

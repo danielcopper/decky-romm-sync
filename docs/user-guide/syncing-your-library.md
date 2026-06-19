@@ -24,7 +24,9 @@ games appear in the Steam Library with cover art, metadata, and organized into c
 
 <!-- Screenshot: Sync in progress with progress bar -->
 
-You can tap **Cancel Sync** to stop mid-sync. Games already added will remain.
+You can tap **Cancel Sync** to stop mid-sync. Games already added will remain. A cancelled sync never removes any Steam
+collections — stale-collection cleanup only runs after a sync finishes in full, so cancelling can never wipe the
+collections for platforms the run did not reach.
 
 ## Per-Platform Toggles
 

@@ -126,6 +126,23 @@ quotes internally.
 
 See: `py_modules/adapters/steam_config.py`
 
+## Collection management
+
+Steam collections are managed entirely on the frontend via `collectionStore`, not by writing the shortcut's `tags` VDF
+field. The plugin owns machine-scoped collections named `RomM: <platform> (<hostname>)` for platforms and
+`RomM: [<name>] (<hostname>)` for synced RomM collections. The `sync_complete` event carries `platform_app_ids` and
+`romm_collection_app_ids` maps; `onSyncComplete` (`src/index.tsx`) creates/updates the collections for the maps it
+receives and then runs a **stale-collection cleanup** that deletes any `RomM: …` collection for this machine whose
+platform/collection name is absent from those maps.
+
+The cleanup is **gated on a completed (non-cancelled) sync** (`!data.cancelled`). On a cancelled run the maps are
+**partial** — they list only the platforms the run reached before the cancel (empty if the cancel fired before the first
+unit), because the backend builds `platform_app_ids` from the cross-unit accumulator of reached platforms. Treating a
+partial map as the authoritative active-set would delete the collections for unreached platforms — an early cancel would
+wipe the entire library organization. The additive create/update path stays ungated, so the platforms that did complete
+still get their collections; only the destructive deletion is skipped on cancel. Steam collections are not backed up, so
+the safe behavior on a partial/cancelled run is to delete nothing.
+
 ## App IDs and Artwork
 
 `SteamClient.Apps.AddShortcut()` returns the real `appId`, so the plugin does **not** compute shortcut app IDs itself —
