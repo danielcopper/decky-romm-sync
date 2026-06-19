@@ -16,6 +16,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
 from domain.sync_state import SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
@@ -122,7 +123,22 @@ class LibraryFetcher:
                 "message": "Invalid server response",
             }
 
+        # Only platforms with ROMs are shown (and thus toggleable), so the
+        # materialized map covers exactly the set the user can act on.
+        shown_ids = [str(p["id"]) for p in platforms if p.get("rom_count", 0) > 0]
+
+        # Self-heal the empty-map sentinel into an explicit all-True map at the
+        # first read with a live platform list, so every later single-key
+        # ``save_platform_sync`` write is a partial update of a complete map —
+        # a one-platform toggle can never again be misread as "rest disabled"
+        # (#1007). Idempotent: only fires while the map is the empty sentinel.
         enabled = self._settings.get("enabled_platforms", {})
+        materialized = materialize_enabled_platforms(enabled, shown_ids)
+        if materialized is not None:
+            self._settings["enabled_platforms"] = materialized
+            self._settings_persister.save_settings()
+            enabled = materialized
+
         result = []
         for p in platforms:
             rom_count = p.get("rom_count", 0)
@@ -135,7 +151,7 @@ class LibraryFetcher:
                     "name": p.get("name", ""),
                     "slug": p.get("slug", ""),
                     "rom_count": rom_count,
-                    "sync_enabled": enabled.get(pid, len(enabled) == 0),
+                    "sync_enabled": resolve_sync_enabled(enabled, pid),
                 }
             )
         return {"success": True, "platforms": result}
@@ -339,11 +355,15 @@ class LibraryFetcher:
             self._logger.error(f"Unexpected platforms response type: {type(platforms).__name__}")
             return []
 
+        # Empty map = "all platforms enabled" (the safety floor for a user who
+        # syncs without ever opening the Platforms page). ``get_platforms``
+        # materializes the full map on first view, so a partial map here always
+        # reflects explicit per-platform choices, never the sentinel (#1007).
         enabled = self._settings.get("enabled_platforms", {})
         no_prefs = len(enabled) == 0
         self._logger.info(f"Platform filter: {len(enabled)} prefs saved, no_prefs={no_prefs}")
         self._logger.info(f"Enabled platforms: {[k for k, v in enabled.items() if v]}")
-        platforms = [p for p in platforms if enabled.get(str(p["id"]), no_prefs)]
+        platforms = [p for p in platforms if resolve_sync_enabled(enabled, str(p["id"]))]
         self._logger.info(f"Syncing {len(platforms)} platforms: {[p['name'] for p in platforms]}")
         return platforms
 

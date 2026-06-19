@@ -37,6 +37,9 @@ individual platforms.
 4. Use **Enable All** / **Disable All** for bulk changes
 5. Only enabled platforms are included in the next sync
 
+All platforms are enabled by default until you change a toggle. Turning one platform off affects only that platform —
+every other platform stays enabled and keeps syncing.
+
 <!-- Screenshot: Platforms page with toggle switches and ROM counts -->
 
 ## Collections
