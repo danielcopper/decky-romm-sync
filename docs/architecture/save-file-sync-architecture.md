@@ -112,6 +112,13 @@ therefore deletes **only** the `slot: null` saves and never touches named slots.
 op was the bug: the server returned `[]`, the local tracking was cleared, and the slot resurrected on the next merge
 (zombie slot).
 
+The **upload** side honours the same equivalence (`MatrixExecutor._resolve_upload_slot`): a sync on the legacy slot
+(`active_slot=None` with a populated `slots` map — the state after switching to / confirming legacy) uploads with the
+`slot` param **omitted**, so the server stores a `slot: null` save. Only a brand-new ROM (no `slots` yet) seeds the
+configured default slot for its first sync. Returning `"default"` for `active_slot=None` was a sibling of the same bug —
+a save played on the legacy slot was misfiled into the default slot, so switching back to legacy found nothing on the
+server (#1061).
+
 ### Confirming a slot (`confirm_slot_choice`)
 
 The wizard confirms a slot through `confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot)`:

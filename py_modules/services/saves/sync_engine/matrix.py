@@ -259,13 +259,31 @@ class MatrixExecutor:
         return True
 
     @staticmethod
-    def _resolve_upload_slot(save_state: RomSaveState, device_id: str | None) -> str | None:
-        """The slot field to send with an upload; ``None`` when device sync is off."""
+    def _resolve_upload_slot(
+        save_state: RomSaveState, device_id: str | None, default_slot: str | None = None
+    ) -> str | None:
+        """The slot field to send with an upload; ``None`` when device sync is off.
+
+        With device sync on, a named ``active_slot`` uploads to that slot. An
+        ``active_slot`` of ``None`` is ambiguous and must be disambiguated by the
+        ``slots`` map (the same signal :meth:`update_file_sync_state` uses to seed
+        the active slot):
+
+        - **Explicit legacy** (``active_slot`` None but ``slots`` populated — the
+          state after switching to / confirming the legacy slot) → ``None`` so the
+          save is POSTed as ``slot:null``. Returning ``"default"`` here misfiled a
+          legacy save into the default slot (#1061).
+        - **Brand-new ROM** (``active_slot`` None and ``slots`` empty — never
+          configured) → the configured ``default_slot`` so its first sync lands in
+          the default slot, matching the active-slot seeding.
+        """
         if not device_id:
             return None
         if save_state.active_slot is not None:
             return save_state.active_slot
-        return "default"
+        if save_state.slots:
+            return None
+        return default_slot or "default"
 
     def _confirm_upload_sync(self, upload_id: int | None, device_id: str | None) -> None:
         """Ack the uploaded save on the server's DeviceSaveSync row (non-fatal)."""
@@ -302,7 +320,7 @@ class MatrixExecutor:
         emulator = build_emulator_tag(core_so)
 
         # v4.7: pass device_id and slot
-        slot = self._resolve_upload_slot(save_state, device_id)
+        slot = self._resolve_upload_slot(save_state, device_id, default_slot)
 
         result = self._retry.with_retry(
             lambda: self._romm_api.upload_save(
