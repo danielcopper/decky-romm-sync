@@ -373,7 +373,7 @@ describe("SlotSetupWizard", () => {
       });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
-      expect(container.textContent).toContain("(no slot)");
+      expect(container.textContent).toContain("Legacy (no slot)");
     });
 
     it("displays an empty-string slot as '(no slot)'", async () => {
@@ -385,7 +385,7 @@ describe("SlotSetupWizard", () => {
       });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
-      expect(container.textContent).toContain("(no slot)");
+      expect(container.textContent).toContain("Legacy (no slot)");
     });
 
     it("falls back to the raw iso string when the timestamp is malformed", async () => {

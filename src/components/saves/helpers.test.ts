@@ -13,15 +13,15 @@ import type { DeviceSyncInfo, SaveStatus, SyncConflict, SlotDeleteInfo } from ".
 
 describe("displaySlot", () => {
   it("returns '(no slot)' for null", () => {
-    expect(displaySlot(null)).toBe("(no slot)");
+    expect(displaySlot(null)).toBe("Legacy (no slot)");
   });
 
   it("returns '(no slot)' for undefined", () => {
-    expect(displaySlot(undefined)).toBe("(no slot)");
+    expect(displaySlot(undefined)).toBe("Legacy (no slot)");
   });
 
   it("returns '(no slot)' for empty string", () => {
-    expect(displaySlot("")).toBe("(no slot)");
+    expect(displaySlot("")).toBe("Legacy (no slot)");
   });
 
   it("returns the slot name as-is for non-empty input", () => {

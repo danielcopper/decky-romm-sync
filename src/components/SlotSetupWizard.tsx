@@ -13,7 +13,7 @@ interface SlotSetupWizardProps {
 }
 
 function displaySlot(slot: string | null): string {
-  if (slot === null || slot === "") return "(no slot)";
+  if (slot === null || slot === "") return "Legacy (no slot)";
   return slot;
 }
 

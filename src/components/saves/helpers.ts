@@ -8,9 +8,9 @@ import type { DeviceSyncInfo, SaveStatus, SyncConflict, SlotDeleteInfo } from ".
 
 export const MUTED_COLOR = "#8f98a0";
 
-/** Display a slot name, using "(no slot)" for null/empty values */
+/** Display a slot name, labelling the null/empty (legacy) slot explicitly */
 export function displaySlot(slot: string | null | undefined): string {
-  if (slot === null || slot === undefined || slot === "") return "(no slot)";
+  if (slot === null || slot === undefined || slot === "") return "Legacy (no slot)";
   return slot;
 }
 

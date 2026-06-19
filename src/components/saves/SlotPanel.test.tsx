@@ -697,7 +697,7 @@ describe("SlotPanel", () => {
 
   it("renders '(no slot)' for an empty slot name", () => {
     const { container } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ slot: "" }) })} />);
-    expect(container.textContent).toContain("(no slot)");
+    expect(container.textContent).toContain("Legacy (no slot)");
   });
 
   it("loads and renders inactive slot files when expanded", async () => {
