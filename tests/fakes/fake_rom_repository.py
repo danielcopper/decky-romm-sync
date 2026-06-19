@@ -33,6 +33,16 @@ class FakeRomRepository:
 
     def save(self, rom: Rom) -> None:
         self.save_count += 1
+        # Mirror production's collision-safe bind (rom.py save + the 003 partial
+        # unique index): a bound appId belongs to at most one row, so unbind any
+        # SIBLING row holding it first (ADR-0007 — unbind, never delete). The
+        # rom_id guard keeps a same-rom re-save idempotent. Without this the
+        # dict store would silently keep two rows sharing one appId and diverge
+        # from real SQLite (#1036).
+        if rom.shortcut_app_id is not None:
+            for other_id, other in self._roms.items():
+                if other_id != rom.rom_id and other.shortcut_app_id == rom.shortcut_app_id:
+                    other.unbind_shortcut()
         self._roms[rom.rom_id] = copy.deepcopy(rom)
 
     def delete(self, rom_id: int) -> None:

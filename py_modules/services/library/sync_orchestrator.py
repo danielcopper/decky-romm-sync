@@ -27,6 +27,7 @@ from domain.sync_diff import (
     classify_roms,
     compute_collection_diff,
     compute_platform_collection_diff,
+    select_stale_removals,
 )
 from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
@@ -390,6 +391,10 @@ class SyncOrchestrator:
         platform_rom_ids: set[int] = set()
         total_games_applied = 0
         cancelled = False
+        # Reset the per-run set of appIds the reporter binds (across both the
+        # happy-path and late-ack commit paths). The stale scan excludes it so
+        # a new rom_id reusing an old appId is never wrongly removed (#1036).
+        box.committed_app_ids = set()
         # Capture the run id up front so the error path can mark the run
         # ``errored`` even after finalize nulls ``box.current_sync_id``
         # (reporter.finalize_per_unit_run runs before the terminal write,
@@ -826,8 +831,13 @@ class SyncOrchestrator:
         # reporter's finalize unbinds it (which NULLs the binding); the
         # frontend removes the Steam shortcut directly by ``app_id`` so it
         # never has to re-resolve rom_id→app_id after the binding is gone.
+        # ``committed_app_ids`` (every appId this run bound, across both commit
+        # paths) is excluded so a new rom_id reusing an old appId is never
+        # wrongly removed (#1036).
         if not cancelled:
-            stale = await self._loop.run_in_executor(None, self._scan_stale_roms, synced_rom_ids)
+            stale = await self._loop.run_in_executor(
+                None, self._scan_stale_roms, synced_rom_ids, set(self._sync_state.committed_app_ids)
+            )
         else:
             stale = []
         await self._emit(
@@ -893,7 +903,7 @@ class SyncOrchestrator:
                     paths[rom_id] = install.file_path
             return paths
 
-    def _scan_stale_roms(self, synced_rom_ids: set[int]) -> list[tuple[int, int]]:
+    def _scan_stale_roms(self, synced_rom_ids: set[int], synced_app_ids: set[int]) -> list[tuple[int, int]]:
         """Return ``(rom_id, app_id)`` for bound ROMs not synced this run.
 
         Unbound (stale) rows are skipped — they were already cleared on a
@@ -902,13 +912,21 @@ class SyncOrchestrator:
         reporter's finalize unbinds the row; the orchestrator threads it
         into the ``sync_stale`` payload so the frontend removes the Steam
         shortcut without re-resolving rom_id→app_id after the unbind.
+
+        Any candidate whose ``app_id`` is in *synced_app_ids* — an appId this
+        run bound to a freshly-synced ROM — is excluded by
+        :func:`select_stale_removals`: a new server-issued ``rom_id`` can reuse
+        an old appId (unchanged ``exe + name``), so the old colliding row looks
+        stale but its appId now belongs to the new row. Removing it would wipe
+        the shortcut the run just created/updated (#1036).
         """
         with self._uow_factory() as uow:
-            return [
+            candidate_stale = [
                 (rom.rom_id, rom.shortcut_app_id)
                 for rom in uow.roms.iter_all()
                 if rom.shortcut_app_id is not None and rom.rom_id not in synced_rom_ids
             ]
+        return select_stale_removals(candidate_stale, synced_app_ids)
 
     # ── Artwork delegation ───────────────────────────────────────
 

@@ -7,6 +7,7 @@ from domain.sync_diff import (
     classify_roms,
     compute_collection_diff,
     compute_platform_collection_diff,
+    select_stale_removals,
     should_include_in_platform_collection,
 )
 
@@ -360,3 +361,42 @@ class TestComputePlatformCollectionDiff:
         ]
         result = compute_platform_collection_diff(sd, {1, 2}, [], False)
         assert result["added_count"] == 1
+
+
+class TestSelectStaleRemovals:
+    """``select_stale_removals`` — drop any stale candidate whose appId this run re-bound (#1036)."""
+
+    def test_excludes_resynced_appid(self):
+        """An old colliding rom_id whose appId was re-bound this run is NOT removed.
+
+        rom 1 (old) and rom 2 (new) both resolve to appId 5000; the run bound
+        5000 to rom 2, so rom 1 looks stale but its appId is live → excluded."""
+        candidate_stale = [(1, 5000)]
+        result = select_stale_removals(candidate_stale, {5000})
+        assert result == []
+
+    def test_keeps_genuinely_stale_non_resynced_appid(self):
+        """A stale ROM whose appId was NOT bound this run is still removed."""
+        candidate_stale = [(99, 9900)]
+        result = select_stale_removals(candidate_stale, {5000})
+        assert result == [(99, 9900)]
+
+    def test_mixed_keeps_only_non_resynced(self):
+        """The collision row drops; the genuinely-stale row stays."""
+        candidate_stale = [(1, 5000), (99, 9900)]
+        result = select_stale_removals(candidate_stale, {5000})
+        assert result == [(99, 9900)]
+
+    def test_empty_synced_app_ids_is_passthrough(self):
+        """No appId bound this run → every candidate survives unchanged."""
+        candidate_stale = [(1, 5000), (99, 9900)]
+        result = select_stale_removals(candidate_stale, set())
+        assert result == [(1, 5000), (99, 9900)]
+
+    def test_empty_candidates_is_empty(self):
+        assert select_stale_removals([], {5000}) == []
+
+    def test_preserves_candidate_order(self):
+        candidate_stale = [(3, 3000), (1, 1000), (2, 2000)]
+        result = select_stale_removals(candidate_stale, set())
+        assert result == [(3, 3000), (1, 1000), (2, 2000)]

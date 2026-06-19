@@ -1264,6 +1264,102 @@ class TestDoSyncPerUnit:
         assert stale_events == [{"remove": [{"rom_id": 99, "app_id": 9900}]}]
 
     @pytest.mark.asyncio
+    async def test_appid_reuse_collision_excluded_from_sync_stale(self, plugin, fake_romm_api):
+        """A new server-issued rom_id reusing an old appId must NOT be wiped (#1036).
+
+        Old row (rom 1, app 5000) survives a server switch / re-import; the new
+        ROM (rom 2) for the same game produces the SAME appId (unchanged
+        exe+name). The frontend re-acks app 5000 for rom 2; the real commit
+        binds rom 2 and records app 5000 in ``committed_app_ids``. The stale
+        scan flags old rom 1 — but ``select_stale_removals`` excludes app 5000
+        (bound this run), so ``sync_stale`` carries NO removal and the live
+        shortcut survives."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # Old colliding row from before the reassignment: rom 1 bound to app 5000.
+        # No completed run is seeded so the platform full-fetches (no incremental
+        # skip), exercising the real commit path for the new rom_id.
+        _seed_rom_row(plugin, 1, app_id=5000, platform_slug="n64", name="A", fs_name="a.z64")
+        # The server now serves the same game under a NEW rom_id (2).
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 2, "name": "A"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        # The frontend re-uses the same appId (CRC32 of unchanged exe+name) and
+        # acks it for the new rom_id. The REAL commit runs so committed_app_ids
+        # is populated and the repo unbinds the colliding sibling.
+        async def ack_same_appid(_unit, event):
+            event.set()
+            return {"2": 5000}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_same_appid
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # The load-bearing assertion: app 5000 is NOT emitted for removal.
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        assert stale_events == [{"remove": []}], (
+            f"appId-reuse collision leaked a removal that would wipe the live shortcut: {stale_events}"
+        )
+        # The new row holds the binding; the old row is unbound (ADR-0007 — kept).
+        with plugin._uow as uow:
+            assert uow.roms.get(2).shortcut_app_id == 5000
+            assert uow.roms.get(1).shortcut_app_id is None
+            assert {r.rom_id for r in uow.roms.iter_all()} == {1, 2}
+
+    @pytest.mark.asyncio
+    async def test_genuinely_stale_still_removed_alongside_collision(self, plugin, fake_romm_api):
+        """A genuinely-stale ROM (its appId NOT bound this run) is still removed,
+        even while a colliding appId is excluded — the fix narrows removals, it
+        does not disable the stale path (#1036)."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # rom 1 collides (app 5000 re-bound to rom 2 this run); rom 99 is a
+        # genuinely-removed ROM on a now-disabled platform (app 9900, not re-bound).
+        # No completed run seeded → full fetch (no skip) so the real commit runs.
+        _seed_rom_row(plugin, 1, app_id=5000, platform_slug="n64", name="A", fs_name="a.z64")
+        _seed_rom_row(plugin, 99, app_id=9900, platform_slug="gba", name="Z", fs_name="z.gba")
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 2, "name": "A"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def ack_same_appid(_unit, event):
+            event.set()
+            return {"2": 5000}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_same_appid
+        plugin._sync_service._sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        # rom 99 (app 9900) is removed; the colliding app 5000 is excluded.
+        assert stale_events == [{"remove": [{"rom_id": 99, "app_id": 9900}]}]
+
+    @pytest.mark.asyncio
     async def test_downloads_artwork_when_not_skipped(self, plugin, fake_romm_api):
         import decky
 
@@ -1759,6 +1855,64 @@ class TestReportUnitResults:
         assert plugin._uow.committed is False
         with plugin._uow as uow:
             assert uow.roms.get(42) is None
+
+
+class TestLateAckReconciliationWithStaleScan:
+    """#1052 ↔ #1036 reconciliation: a binding committed via the late-ack path
+    must be excluded from a stale scan, exactly like a happy-path binding.
+
+    ``committed_app_ids`` accumulates from EVERY commit — both the orchestrator's
+    in-loop ack and the reporter's late-ack commit (#1052). If it only captured
+    the happy path, a late-committed binding could still be wiped by a later
+    stale scan, re-opening the #1036 data-loss bug."""
+
+    @pytest.mark.asyncio
+    async def test_late_ack_appid_excluded_from_subsequent_stale_scan(self, plugin):
+        """A unit times out → its binding commits late via report_unit_results →
+        a subsequent stale scan does NOT remove that appId.
+
+        The late ack both binds the row (app 5000) AND records it in
+        committed_app_ids; the stale scan then excludes app 5000 even though the
+        old colliding row (rom 1) looks stale (#1036 collision via the #1052
+        late-ack path)."""
+        box = plugin._sync_service._box
+        # Old colliding bound row (a prior server's rom_id for the same game).
+        _seed_rom_row(plugin, 1, app_id=5000, platform_slug="n64", name="A", fs_name="a.z64")
+
+        # Reset the per-run committed-appId accumulator (the orchestrator does
+        # this at the start of _do_sync_per_unit; mirror it for this unit-level test).
+        box.committed_app_ids = set()
+
+        # The heartbeat-timeout state the orchestrator leaves behind for the NEW
+        # rom_id (2), which the frontend acks with the SAME reused appId.
+        box.pending_sync = {
+            2: {"name": "A", "fs_name": "a.z64", "platform_slug": "n64", "cover_path": ""},
+        }
+        box.unit_complete_event = None
+        box.unit_abandoned = True
+        box.pending_unit_roms = [{"id": 2}]
+
+        # Late ack: commits the binding AND records app 5000 in committed_app_ids.
+        await plugin.report_unit_results({"2": 5000})
+
+        assert 5000 in box.committed_app_ids
+        # rom 2 now holds app 5000; rom 1 was unbound by the collision-safe save.
+        with plugin._uow as uow:
+            assert uow.roms.get(2).shortcut_app_id == 5000
+            assert uow.roms.get(1).shortcut_app_id is None
+
+        # A subsequent stale scan (rom 1 not in synced_rom_ids) must NOT emit
+        # app 5000 for removal — it's a freshly-committed binding.
+        stale = await plugin.loop.run_in_executor(
+            None,
+            plugin._sync_service._orchestrator._scan_stale_roms,
+            set(),  # synced_rom_ids — neither rom counts as synced for this scan
+            set(box.committed_app_ids),
+        )
+        # rom 1 is already unbound (Layer 2), so it's not even a candidate; and
+        # if it were, app 5000 is in committed_app_ids (Layer 1) → excluded.
+        assert all(app_id != 5000 for _rid, app_id in stale)
+        assert stale == []
 
 
 class TestCommitUnitResults:

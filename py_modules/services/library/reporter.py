@@ -408,14 +408,21 @@ class SyncReporter:
     async def commit_unit_results(self, rom_id_to_app_id, acked_roms):
         """Per-unit commit: cover-path finalize then atomic ``roms`` + metadata upsert.
 
-        Called by the orchestrator once the frontend has acked the unit's
-        shortcuts. The ``roms`` upsert and the cached-metadata stamp land
-        in one write UoW (Rom row first, then ``rom_metadata`` — FK-safe),
-        so a ROM and its metadata are always consistent across a crash.
-        ``acked_roms`` is the live RomM fetch for the acked ROMs — the
-        source of each ROM's ``metadatum``.
+        Called once the frontend has acked the unit's shortcuts — by the
+        orchestrator on the happy path, or by :meth:`report_unit_results`
+        itself on the heartbeat-timeout late-ack path (#1052). The ``roms``
+        upsert and the cached-metadata stamp land in one write UoW (Rom row
+        first, then ``rom_metadata`` — FK-safe), so a ROM and its metadata
+        are always consistent across a crash. ``acked_roms`` is the live
+        RomM fetch for the acked ROMs — the source of each ROM's
+        ``metadatum``.
+
+        Records every bound appId in the shared box so the stale-removal scan
+        excludes appIds this run committed, whichever path drove the commit —
+        a new rom_id reusing an old appId must not look stale (#1036).
         """
         await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id, acked_roms)
+        self._sync_state.committed_app_ids.update(int(aid) for aid in rom_id_to_app_id.values())
 
     # ── Registry queries ─────────────────────────────────────────
 

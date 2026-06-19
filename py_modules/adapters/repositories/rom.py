@@ -62,13 +62,33 @@ class SqliteRomRepository(BaseRepository):
         return _row_to_rom(row) if row is not None else None
 
     def get_by_app_id(self, app_id: int) -> Rom | None:
+        # ORDER BY rom_id DESC LIMIT 1: the partial unique index on
+        # shortcut_app_id (migration 003) guarantees at most one bound row per
+        # appId, so this is single-row in practice. The deterministic order is
+        # belt-and-braces for any pre-migration / edge state — it resolves to
+        # the newest (MAX rom_id) binding, matching the 003 de-dup's keep-MAX
+        # rule, instead of an unspecified scan-order row.
         row = self._conn.execute(
-            f"SELECT {_SELECT_COLUMNS} FROM roms WHERE shortcut_app_id = ?",
+            f"SELECT {_SELECT_COLUMNS} FROM roms WHERE shortcut_app_id = ? ORDER BY rom_id DESC LIMIT 1",
             (app_id,),
         ).fetchone()
         return _row_to_rom(row) if row is not None else None
 
     def save(self, rom: Rom) -> None:
+        # Collision-safe bind: a new server-issued rom_id can reuse an old appId
+        # (CRC32 of unchanged exe+name) after a server switch / re-import. Unbind
+        # any SIBLING row already holding this appId first, so the partial unique
+        # index on shortcut_app_id (migration 003) accepts the re-bind. The
+        # rom_id != ? guard keeps save() idempotent (never touches the row being
+        # upserted, so a same-rom re-save is a no-op here). Unbind-only — the
+        # sibling row survives, only its binding is NULLed (ADR-0007), never a
+        # DELETE. Skipped when the ROM carries no binding (nothing to collide).
+        if rom.shortcut_app_id is not None:
+            self._conn.execute(
+                "UPDATE roms SET shortcut_app_id = NULL WHERE shortcut_app_id = ? AND rom_id != ?",
+                (rom.shortcut_app_id, rom.rom_id),
+            )
+
         # UPSERT (ON CONFLICT … DO UPDATE), never INSERT OR REPLACE: REPLACE
         # deletes-then-inserts the parent row, and that DELETE fires the
         # ON DELETE CASCADE on the per-ROM child tables, silently wiping install,

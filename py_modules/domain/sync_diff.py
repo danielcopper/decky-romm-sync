@@ -65,6 +65,22 @@ def classify_roms(
     return ClassificationResult(new, changed, unchanged_ids, stale, disabled_count)
 
 
+def select_stale_removals(
+    candidate_stale: list[tuple[int, int]],
+    synced_app_ids: set[int],
+) -> list[tuple[int, int]]:
+    """Stale ``(rom_id, app_id)`` removals minus any app_id re-bound this run.
+
+    Safety invariant: never remove a Steam shortcut whose appId was bound by a
+    ROM synced this run. A new server-issued ``rom_id`` can reuse an old appId
+    (the appId is ``CRC32(exe + name)``, unchanged across a server switch /
+    re-import — #1036). The old colliding ``rom_id`` then looks stale, but its
+    still-live appId now belongs to the freshly-synced row, so emitting it for
+    removal would wipe the shortcut the run just created/updated.
+    """
+    return [(rid, aid) for rid, aid in candidate_stale if aid not in synced_app_ids]
+
+
 def compute_collection_diff(
     collection_memberships: dict[str, list[int]],
     last_synced_collections: list[str],

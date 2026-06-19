@@ -67,6 +67,26 @@ it. The sync engine processes removals before additions to minimise churn.
 
 See: `src/utils/steamShortcuts.ts`
 
+### appId reuse across a server switch / re-import
+
+Because the appId is `CRC32(exe + name)` and both are **stable for a given ROM across syncs** (the exe is the constant
+`…/bin/rom-launcher`, the name is the RomM `name`), the same game always hashes to the **same appId** — even after its
+server-issued `rom_id` changes. Switching the RomM server URL (or re-importing on the same server) reissues `rom_id`s;
+the `roms` rows survive (ADR-0007 retention) and the new `rom_id` for an unchanged game resolves to the appId the old
+`rom_id` already holds.
+
+Two guards keep this from wiping a freshly-synced shortcut (`#1036`):
+
+- **One appId, one bound row.** `SqliteRomRepository.save()` unbinds any sibling row holding the appId before the
+  per-`rom_id` UPSERT, and migration `003`'s partial unique index on `shortcut_app_id` enforces it (see
+  [Database Design](database-design.md)). A re-import never leaves two bound rows sharing one appId.
+- **Stale-removal excludes appIds bound this run.** The finalize stale pass flags bound rows whose `rom_id` wasn't
+  synced this run — which includes the old colliding `rom_id`. `domain/sync_diff.py:select_stale_removals` removes any
+  candidate whose appId is in the run's `committed_app_ids` (every appId bound this run, across both the happy-path and
+  the heartbeat-timeout late-ack commit paths), so the appId the run just bound to the new `rom_id` is never emitted for
+  removal. The `get_by_app_id` reverse lookup orders `rom_id DESC LIMIT 1` so it resolves the live (newest) binding for
+  any pre-migration edge state.
+
 ## BIsModOrShortcut
 
 Non-Steam shortcuts return `BIsModOrShortcut() = true` by default. This is their natural state — Steam uses this flag to

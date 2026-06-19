@@ -96,6 +96,99 @@ class TestUnboundShortcut:
         assert uow.roms.get_by_app_id(6000) is None
 
 
+class TestShortcutAppIdCollision:
+    """A new rom_id reusing an old appId (server switch / re-import) must not leave
+    two bound rows sharing one appId: save() unbinds the sibling, the 003 partial
+    unique index enforces it, and get_by_app_id resolves deterministically (#1036)."""
+
+    def test_collision_save_unbinds_sibling_and_binds_new(self, uow: SqliteUnitOfWork):
+        """Re-binding app 5000 to a new rom_id unbinds the old colliding row —
+        no IntegrityError against the 003 unique index, one bound row per appId."""
+        uow.roms.save(_rom(1, app_id=5000))
+        # A new server-issued rom_id resolves to the SAME appId (unchanged exe+name).
+        uow.roms.save(_rom(2, app_id=5000))
+
+        old = uow.roms.get(1)
+        new = uow.roms.get(2)
+        assert old is not None
+        assert new is not None
+        # Old row survives (ADR-0007) but is unbound; new row holds the appId.
+        assert old.shortcut_app_id is None
+        assert new.shortcut_app_id == 5000
+        # Raw: exactly one bound row carries appId 5000.
+        assert uow._conn is not None
+        bound = uow._conn.execute("SELECT COUNT(*) FROM roms WHERE shortcut_app_id = 5000").fetchone()[0]
+        assert bound == 1
+
+    def test_idempotent_resave_same_rom_keeps_binding(self, uow: SqliteUnitOfWork):
+        """Re-saving the SAME rom_id+appId is a no-op for the sibling-unbind guard
+        (the rom_id != ? guard never unbinds the row being upserted)."""
+        uow.roms.save(_rom(1, app_id=5000))
+        uow.roms.save(_rom(1, app_id=5000))
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.shortcut_app_id == 5000
+        assert uow.roms.count() == 1
+
+    def test_two_distinct_bound_appids_coexist(self, uow: SqliteUnitOfWork):
+        """Distinct appIds are independent — binding one never disturbs the other."""
+        uow.roms.save(_rom(1, app_id=5000))
+        uow.roms.save(_rom(2, app_id=6000))
+
+        first = uow.roms.get(1)
+        second = uow.roms.get(2)
+        assert first is not None
+        assert second is not None
+        assert first.shortcut_app_id == 5000
+        assert second.shortcut_app_id == 6000
+
+    def test_multiple_unbound_rows_coexist(self, uow: SqliteUnitOfWork):
+        """The partial index allows many NULL-appId rows — saving an unbound ROM
+        never triggers the sibling-unbind (no appId to collide on)."""
+        r1 = _rom(1, app_id=5000)
+        r1.unbind_shortcut()
+        r2 = _rom(2, app_id=6000)
+        r2.unbind_shortcut()
+        uow.roms.save(r1)
+        uow.roms.save(r2)
+
+        first = uow.roms.get(1)
+        second = uow.roms.get(2)
+        assert first is not None
+        assert second is not None
+        assert first.shortcut_app_id is None
+        assert second.shortcut_app_id is None
+        assert uow.roms.count() == 2
+
+    def test_get_by_app_id_is_deterministic_newest_wins(self, uow: SqliteUnitOfWork):
+        """After the collision-safe re-bind, get_by_app_id resolves the live
+        (newest) binding — never the unbound old row."""
+        uow.roms.save(_rom(1, app_id=5000))
+        uow.roms.save(_rom(2, app_id=5000))
+
+        found = uow.roms.get_by_app_id(5000)
+        assert found is not None
+        assert found.rom_id == 2
+
+    def test_collision_save_preserves_sibling_children(self, uow: SqliteUnitOfWork):
+        """Unbinding the colliding sibling NULLs only its binding — its per-ROM
+        children (install/metadata/playtime/saves) survive (ADR-0007, never a DELETE)."""
+        uow.roms.save(_rom(1, app_id=5000))
+        _seed_children(uow, 1)
+
+        uow.roms.save(_rom(2, app_id=5000))
+
+        # Sibling row + every cascade child still present.
+        old = uow.roms.get(1)
+        assert old is not None
+        assert old.shortcut_app_id is None
+        assert uow.rom_installs.get(1) is not None
+        assert uow.rom_metadata.get(1) is not None
+        assert uow.playtime.get(1) is not None
+        assert uow.rom_save_states.get(1) is not None
+
+
 class TestDelete:
     def test_delete_removes_row(self, uow: SqliteUnitOfWork):
         uow.roms.save(_rom(1))

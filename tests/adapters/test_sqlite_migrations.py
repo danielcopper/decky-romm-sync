@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from adapters.sqlite_migrations import MIGRATIONS_DIR, apply_migrations
+from adapters.sqlite_migrations import MIGRATIONS_DIR, _discover_migrations, apply_migrations
 
 # The 13 tables the shipped v1 schema (001_initial.sql) declares.
 _V1_TABLES = {
@@ -50,6 +50,15 @@ def _columns(db_path: str, table: str) -> set[str]:
         conn.close()
 
 
+def _indexes(db_path: str, table: str) -> set[str]:
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(f"PRAGMA index_list({table})").fetchall()
+        return {row[1] for row in rows}
+    finally:
+        conn.close()
+
+
 def _set_user_version(db_path: str, version: int) -> None:
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
@@ -58,8 +67,9 @@ def _set_user_version(db_path: str, version: int) -> None:
         conn.close()
 
 
-# Highest NNN in the shipped migrations dir (001_initial + 002_add_emulator_override).
-_SHIPPED_VERSION = 2
+# Highest NNN in the shipped migrations dir (001_initial + 002_add_emulator_override
+# + 003_unique_shortcut_app_id).
+_SHIPPED_VERSION = 3
 
 
 class TestEmptyDatabase:
@@ -72,7 +82,8 @@ class TestEmptyDatabase:
 
         assert final_version == _SHIPPED_VERSION
         assert _user_version(db_path) == _SHIPPED_VERSION
-        # 002 only ALTERs roms; the table set is unchanged from v1.
+        # 002 ALTERs roms, 003 adds an index — neither adds a table, so the
+        # table set is unchanged from v1.
         assert _tables(db_path) == _V1_TABLES
 
     def test_creates_missing_parent_directory(self, tmp_path: Path):
@@ -101,9 +112,110 @@ class TestEmptyDatabase:
 
         apply_migrations(db_path)
 
-        assert _user_version(db_path) == 2
+        assert _user_version(db_path) == _SHIPPED_VERSION
         assert "emulator_override" in _columns(db_path, "roms")
         assert "emulator_override" not in _columns(db_path, "rom_installs")
+
+
+def _insert_rom(conn: sqlite3.Connection, rom_id: int, app_id: int | None) -> None:
+    """Insert a minimal ``roms`` row directly (bypassing the adapter) for migration tests."""
+    conn.execute(
+        "INSERT INTO roms (rom_id, platform_slug, name, fs_name, shortcut_app_id, last_synced_at) "
+        "VALUES (?, 'snes', ?, ?, ?, '2026-01-01T00:00:00Z')",
+        (rom_id, f"Game {rom_id}", f"game_{rom_id}.sfc", app_id),
+    )
+
+
+class Test003UniqueShortcutAppId:
+    """003 — partial unique index on shortcut_app_id + de-dup of pre-existing collisions (#1036)."""
+
+    def test_index_exists_after_full_apply(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) >= 3
+        assert "idx_roms_shortcut_app_id" in _indexes(db_path, "roms")
+
+    def test_v2_db_with_collision_dedups_keep_max_and_builds_index(self, tmp_path: Path):
+        """A v2 DB holding a duplicate-appId collision de-dups (keep MAX rom_id),
+        then the unique index builds cleanly — the upgrade path #1036 fixes."""
+        db_path = str(tmp_path / "romm_sync.db")
+        # Apply through 002 only, then seed a collision before 003 runs.
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 2)))
+        assert _user_version(db_path) == 2
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            # Two bound rows share appId 5000; rom 7 is the higher (newer) id.
+            _insert_rom(conn, 3, 5000)
+            _insert_rom(conn, 7, 5000)
+            # A third, distinct bound appId must survive untouched.
+            _insert_rom(conn, 9, 6000)
+        finally:
+            conn.close()
+
+        # Now apply 003 against the real shipped migrations dir.
+        final_version = apply_migrations(db_path)
+
+        assert final_version == _SHIPPED_VERSION
+        assert "idx_roms_shortcut_app_id" in _indexes(db_path, "roms")
+        conn = sqlite3.connect(db_path)
+        try:
+            bindings = dict(conn.execute("SELECT rom_id, shortcut_app_id FROM roms ORDER BY rom_id").fetchall())
+        finally:
+            conn.close()
+        # keep-MAX: rom 7 keeps 5000, rom 3 is unbound (NULL), rom 9 untouched.
+        assert bindings == {3: None, 7: 5000, 9: 6000}
+
+    def test_multiple_null_rows_coexist(self, tmp_path: Path):
+        """The partial index allows many unbound (NULL appId) rows — only bound
+        appIds are unique."""
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, None)
+            _insert_rom(conn, 2, None)
+            _insert_rom(conn, 3, None)
+            null_count = conn.execute("SELECT COUNT(*) FROM roms WHERE shortcut_app_id IS NULL").fetchone()[0]
+        finally:
+            conn.close()
+        assert null_count == 3
+
+    def test_bound_appid_collision_rejected_by_index(self, tmp_path: Path):
+        """Once the index exists, a raw INSERT of a second row sharing a bound
+        appId raises IntegrityError — the constraint is real."""
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, 5000)
+            with pytest.raises(sqlite3.IntegrityError):
+                _insert_rom(conn, 2, 5000)
+        finally:
+            conn.close()
+
+
+def _only_migrations_through(tmp_path: Path, max_version: int) -> Path:
+    """Copy the shipped migrations up to (and including) ``max_version`` into a temp dir.
+
+    Lets a test apply the schema through an earlier version, seed state, then
+    apply the remaining shipped migrations against the real dir.
+    """
+    import shutil
+
+    subset = tmp_path / f"migrations_through_{max_version}"
+    subset.mkdir()
+    for version, path in _discover_migrations(MIGRATIONS_DIR):
+        if version <= max_version:
+            shutil.copy(path, subset / Path(path).name)
+    return subset
 
 
 class TestPartiallyMigratedDatabase:

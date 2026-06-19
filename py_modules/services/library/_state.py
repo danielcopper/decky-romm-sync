@@ -77,6 +77,12 @@ class LibrarySyncStateBox:
     # ``metadatum``), stashed so a late ack can rebuild ``acked_roms`` for
     # the commit it drives. Reset between units alongside ``last_unit_results``.
     pending_unit_roms: list[dict[str, Any]] = field(default_factory=list)
+    # Every Steam appId bound by a ``commit_unit_results`` this run, across
+    # BOTH the happy path and the heartbeat-timeout late-ack path (#1052).
+    # The stale-removal scan excludes these so a new server-issued rom_id that
+    # reuses an old appId (CRC32 of unchanged exe+name) can't wipe the shortcut
+    # the run just bound (#1036). Reset at the start of each run.
+    committed_app_ids: set[int] = field(default_factory=set)
 
     def is_cancelling(self) -> bool:
         """True while a cancel has been requested for the in-flight run."""
