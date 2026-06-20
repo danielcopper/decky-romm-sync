@@ -35,6 +35,7 @@ import {
 } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
 import { fetchSettingsResetState } from "./utils/settingsResetStore";
+import { resetSyncDelta, recordSyncRemoved, getSyncDelta } from "./utils/syncDeltaStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
@@ -270,12 +271,26 @@ export default definePlugin(() => {
     cancelled?: boolean;
   }) => {
     logInfo(`sync_complete received: ${data.total_games} games, cancelled=${data.cancelled ?? false}`);
-    toaster.toast({
-      title: "RomM Sync",
-      body: data.cancelled
-        ? `Sync cancelled. ${data.total_games} games processed.`
-        : `Sync complete! ${data.total_games} games added.`,
-    });
+
+    // Report the TRUE delta, not the total processed set. The library applies
+    // whole platforms, so total_games is not a real delta — the exact, honest
+    // counts are the shortcuts the frontend actually created and removed this
+    // run (tracked in syncDeltaStore, deduplicated across platform/collection
+    // units). Omit a zero part; "Library up to date." when nothing changed.
+    const { added, removed } = getSyncDelta();
+    const parts: string[] = [];
+    if (added > 0) parts.push(`${added} added`);
+    if (removed > 0) parts.push(`${removed} removed`);
+    const summary = parts.join(", ");
+    let body: string;
+    if (data.cancelled) {
+      body = summary ? `Sync cancelled — ${summary} so far.` : "Sync cancelled.";
+    } else {
+      body = summary ? `Sync complete — ${summary}.` : "Library up to date.";
+    }
+    toaster.toast({ title: "RomM Sync", body });
+    // Defensive reset; sync_plan also resets at the start of the next run.
+    resetSyncDelta();
 
     // Update RomM app ID set with newly synced shortcuts
     for (const appIds of Object.values(data.platform_app_ids)) {
@@ -375,6 +390,9 @@ export default definePlugin(() => {
   // ``sync_plan`` arrives once per run with the full work queue (info only
   // for now — future PR adds a per-platform progress view).
   const syncPlanListener = addEventListener<[SyncPlanData]>("sync_plan", (data: SyncPlanData) => {
+    // sync_plan fires once per run, before any unit — reset the per-run delta
+    // so the terminal toast counts only this run's created/removed shortcuts.
+    resetSyncDelta();
     logInfo(`sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total`);
   });
 
@@ -385,7 +403,12 @@ export default definePlugin(() => {
   const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", (data: SyncStaleData) => {
     if (!Array.isArray(data.remove) || data.remove.length === 0) return;
     for (const { app_id } of data.remove) {
-      if (app_id) removeShortcut(app_id);
+      if (app_id) {
+        removeShortcut(app_id);
+        // Record the removal as a real "removed" delta. The store dedups across
+        // the per-unit sync_stale emits so a shortcut removed once is counted once.
+        recordSyncRemoved(app_id);
+      }
     }
     logInfo(`sync_stale: removed ${data.remove.length} stale shortcuts`);
   });

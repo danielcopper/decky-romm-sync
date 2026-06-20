@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import * as backend from "../api/backend";
 import { emitDeckyEvent } from "../test-utils/decky-api-mock";
+import { resetSyncDelta, getSyncDelta } from "./syncDeltaStore";
 import type { SyncApplyUnitData } from "../types";
 
 const setLaunchOptionsConfirmed = vi.fn().mockResolvedValue(true);
@@ -119,5 +120,61 @@ describe("syncManager — once-per-run existing-shortcut scan cache", () => {
 
     // A new run_id is a cache miss → fresh scan.
     expect(getExistingRomMShortcuts).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("syncManager — records created shortcuts into the per-run delta store", () => {
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    resetSyncDelta();
+  });
+
+  it("records a freshly created shortcut's appId as an 'added' delta", async () => {
+    // rom 42 has no existing appId → create path → addShortcut returns 6000.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    addShortcut.mockResolvedValue(6000);
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-create"));
+      await flush(120);
+    });
+
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(getSyncDelta()).toEqual({ added: 1, removed: 0 });
+  });
+
+  it("does NOT record the update path (existing shortcut) as a delta", async () => {
+    // rom 42 already maps to appId 5000 → update path, never addShortcut.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-update"));
+      await flush(120);
+    });
+
+    expect(addShortcut).not.toHaveBeenCalled();
+    expect(getSyncDelta()).toEqual({ added: 0, removed: 0 });
+  });
+
+  it("does NOT record when addShortcut fails to resolve an appId (null)", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    addShortcut.mockResolvedValue(null);
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-create-fail"));
+      await flush(120);
+    });
+
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(getSyncDelta()).toEqual({ added: 0, removed: 0 });
   });
 });

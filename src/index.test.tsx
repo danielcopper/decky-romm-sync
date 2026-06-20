@@ -17,7 +17,8 @@ import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
 import { getSettingsResetNotice, getAllPlaytime, getAppIdRomIdMap } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
-import type { DownloadCompleteEvent, SyncStaleData } from "./types";
+import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
+import type { DownloadCompleteEvent, SyncPlanData, SyncStaleData } from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
   registerGameDetailPatch: vi.fn(),
@@ -423,6 +424,162 @@ describe("index.tsx — sync_complete stale-collection cleanup (#1040)", () => {
     // The additive create/update path is NOT gated on cancel — the platforms
     // that DID complete still get their collections.
     expect(createOrUpdateCollections).toHaveBeenCalledWith({ "Nintendo 64": [1] });
+    plugin.onDismount();
+  });
+});
+
+describe("index.tsx — sync_complete toast shows the true delta (#744)", () => {
+  // total_games is intentionally MISLEADING in these payloads (the bug): the
+  // toast must ignore it and report the real created/removed delta tracked by
+  // syncDeltaStore. created is seeded via recordSyncCreated (the mocked
+  // syncManager would do this on the create path); removed flows through the
+  // real sync_stale listener.
+  type SyncCompletePayload = {
+    platform_app_ids: Record<string, number[]>;
+    romm_collection_app_ids?: Record<string, number[]>;
+    total_games: number;
+    cancelled?: boolean;
+  };
+
+  function lastToastBody(): string | undefined {
+    const calls = vi.mocked(toaster.toast).mock.calls;
+    if (calls.length === 0) return undefined;
+    const last = calls[calls.length - 1]![0] as { body?: string };
+    return last.body;
+  }
+
+  beforeEach(() => {
+    vi.mocked(toaster.toast).mockClear();
+    logError.mockClear();
+    vi.mocked(applyAllPlaytime).mockResolvedValue(undefined);
+    vi.mocked(getAllPlaytime).mockResolvedValue({ playtime: {} });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
+    // No RomM collections so the stale-cleanup detach is a no-op for these tests.
+    vi.stubGlobal("collectionStore", { userCollections: [] });
+    resetSyncDelta();
+  });
+
+  it("reports 'X added, Y removed' when both are non-zero (ignores total_games)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 2, total_roms: 2 });
+    });
+    // Two distinct shortcuts created this run (what the syncManager create path records).
+    recordSyncCreated(100);
+    recordSyncCreated(200);
+    // One shortcut removed via the real sync_stale listener.
+    act(() => {
+      emitDeckyEvent<[SyncStaleData]>("sync_stale", { remove: [{ rom_id: 7, app_id: 700 }] });
+    });
+
+    // total_games=53 is the misleading total — the toast must NOT use it.
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 53 });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync complete — 2 added, 1 removed.");
+    plugin.onDismount();
+  });
+
+  it("omits the zero part — only removals → 'Sync complete — N removed.'", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 1, total_roms: 0 });
+    });
+    act(() => {
+      emitDeckyEvent<[SyncStaleData]>("sync_stale", {
+        remove: [
+          { rom_id: 7, app_id: 700 },
+          { rom_id: 8, app_id: 800 },
+        ],
+      });
+    });
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 53 });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync complete — 2 removed.");
+    plugin.onDismount();
+  });
+
+  it("reports 'Library up to date.' when nothing changed (the #744 repro)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 1, total_roms: 53 });
+    });
+    // No creates, no removes — but total_games=53 (the old toast wrongly said
+    // "53 games added"). The fixed toast must say the library is up to date.
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 53 });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Library up to date.");
+    plugin.onDismount();
+  });
+
+  it("dedups a shortcut created in two units (platform + collection) — counted once", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 2, total_roms: 1 });
+    });
+    // Same appId surfaces in its platform unit and a collection unit; the Set
+    // in the store collapses it to one "added".
+    recordSyncCreated(100);
+    recordSyncCreated(100);
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 1 });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync complete — 1 added.");
+    plugin.onDismount();
+  });
+
+  it("on cancel with partial work → 'Sync cancelled — … so far.'", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 3, total_roms: 10 });
+    });
+    recordSyncCreated(100);
+    recordSyncCreated(200);
+    recordSyncCreated(300);
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 53,
+        cancelled: true,
+      });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync cancelled — 3 added so far.");
+    plugin.onDismount();
+  });
+
+  it("on cancel before any work → 'Sync cancelled.' (no delta)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 3, total_roms: 10 });
+    });
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 53,
+        cancelled: true,
+      });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync cancelled.");
     plugin.onDismount();
   });
 });

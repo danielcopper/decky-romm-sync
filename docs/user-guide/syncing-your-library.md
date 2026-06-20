@@ -18,7 +18,9 @@ games appear in the Steam Library with cover art, metadata, and organized into c
 1. Open the QAM and navigate to the plugin
 2. Tap **Sync Library** on the main page
 3. A progress bar shows the sync status
-4. When complete, a summary appears (e.g. "Added 42 games from 5 platforms")
+4. When complete, a toast reports what actually changed — the true delta, not the total in your library. It shows the
+   number of shortcuts added and/or removed this run (e.g. "Sync complete — 42 added, 3 removed."), omitting a part that
+   is zero. If nothing changed, it reads "Library up to date."
 
 ![RomM Sync QAM panel with connection status and the Sync Library button](../assets/screenshot-qam.jpg)
 

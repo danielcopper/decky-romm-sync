@@ -3,6 +3,7 @@ import type { SyncAddItem, SyncApplyUnitData } from "../types";
 import { getArtworkBase64, reportUnitResults, syncHeartbeat, logInfo, logError } from "../api/backend";
 import { getExistingRomMShortcuts, addShortcut, setLaunchOptionsConfirmed } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
+import { recordSyncCreated } from "./syncDeltaStore";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -48,7 +49,11 @@ async function resolveShortcutAppId(item: SyncAddItem, existing: Map<number, num
     await setLaunchOptionsConfirmed(existingAppId, item.launch_options);
     return existingAppId;
   }
-  return (await addShortcut(item)) ?? undefined;
+  // Create path: a fresh shortcut. Record its appId as a real "added" delta —
+  // the update path above is excluded (the shortcut already existed).
+  const createdAppId = (await addShortcut(item)) ?? undefined;
+  if (createdAppId) recordSyncCreated(createdAppId);
+  return createdAppId;
 }
 
 /**
