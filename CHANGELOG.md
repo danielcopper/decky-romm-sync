@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.22.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.22.0...decky-romm-sync-v0.22.1) (2026-06-20)
+
+
+### Bug Fixes
+
+* **library:** materialize full enabled-platforms map so one un-toggle never disables others ([#1108](https://github.com/danielcopper/decky-romm-sync/issues/1108)) ([db6f889](https://github.com/danielcopper/decky-romm-sync/commit/db6f889b21ef49c477382fd26c349271f0906cb1))
+* **saves:** gate the in-place PUT against 0-byte / truncated local saves ([#1062](https://github.com/danielcopper/decky-romm-sync/issues/1062)) ([#1107](https://github.com/danielcopper/decky-romm-sync/issues/1107)) ([f11d7aa](https://github.com/danielcopper/decky-romm-sync/commit/f11d7aafa490f89ab3077ed12cd895fdb06a83e7))
+* **sync:** persist late-acked unit bindings + stop appId-reuse wiping a freshly-synced shortcut ([#1052](https://github.com/danielcopper/decky-romm-sync/issues/1052), [#1036](https://github.com/danielcopper/decky-romm-sync/issues/1036)) ([#1109](https://github.com/danielcopper/decky-romm-sync/issues/1109)) ([2fdb145](https://github.com/danielcopper/decky-romm-sync/commit/2fdb14539c27ce3f74dd487ba2dc9809384894d7))
+* **sync:** post-sync toast shows the true created/removed delta, not total_games ([#1112](https://github.com/danielcopper/decky-romm-sync/issues/1112)) ([3e018de](https://github.com/danielcopper/decky-romm-sync/commit/3e018de02d4a19a04d2ed69a4896c55852168b36)), closes [#744](https://github.com/danielcopper/decky-romm-sync/issues/744)
+* **sync:** skip stale-collection cleanup on cancelled sync ([#1040](https://github.com/danielcopper/decky-romm-sync/issues/1040)) ([#1106](https://github.com/danielcopper/decky-romm-sync/issues/1106)) ([3a6c712](https://github.com/danielcopper/decky-romm-sync/commit/3a6c712b7bf9a1d7e1819829f7140f7a36ca852a))
+
 ## [0.22.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.21.0...decky-romm-sync-v0.22.0) (2026-06-19)
 
 
