@@ -105,7 +105,7 @@ jobs:
       # uv is the project's canonical Python package manager (mise pins 0.10.2;
       # `mise run setup` installs via uv). Use it in CI too for parity + speed,
       # and so the lock-sync check below can run `uv pip compile`.
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0
         with:
           version: "0.10.2"
 
