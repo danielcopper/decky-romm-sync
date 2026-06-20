@@ -1,7 +1,7 @@
 pytest>=9.0.3,<10.0
 pytest-asyncio>=1.3.0,<1.4  # 1.4.0 changed event-loop semantics; tracked in #806
 pytest-cov>=7.1.0,<8.0
-hypothesis>=6.155.2,<7.0  # property-based tests for the save-sync decision kernels (#1028)
+hypothesis>=6.155.6,<7.0  # property-based tests for the save-sync decision kernels (#1028)
 ruff>=0.15.18,<0.16
 basedpyright>=1.39.7,<2.0
 import-linter>=2.11,<3.0
