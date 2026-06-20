@@ -138,6 +138,12 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
   `success: False` return in `services/` is missing the canonical `reason` + `message` keys or carries the forbidden
   `error` / `error_code` key. The two documented carve-outs (discriminated-status unions, partial-success payloads) are
   pattern-exempt. Enforces the "Callable response shapes" convention below.
+- **Lockfile constraint gate**: `scripts/check_lock_sync.py` — asserts every direct dependency pinned in
+  `requirements-*.lock` satisfies the version constraint declared in its `requirements-*.txt` source (and that every
+  source dep is present in the lock). A constraint bump that isn't followed by `mise run lock-update` is inert (CI +
+  `mise run setup` install from the lock) and can leave the lock silently violating the source (the #1113/#1114/#1115
+  drift); this gate forces the regeneration into the same PR. It checks satisfaction, not "is it the newest", so it is
+  deterministic and offline — an unrelated transitive upstream release never flaps it.
 - **pytest-cov**: Branch coverage reported to SonarCloud.
 
 ## Invariant register — cross-cutting safety rules
@@ -161,6 +167,7 @@ green, and a real drift is a finding to triage, never an exemption. `[ours]`
 | Service-independence contract list stays complete                                                      | check              | `scripts/check_service_independence_contract.py`                                                                                                                                                                                                    |
 | Layer import direction (services ↛ adapters, adapters ↛ services, …)                                   | check              | `.importlinter` (`lint-imports`)                                                                                                                                                                                                                    |
 | No bare `# type: ignore` / blanket suppressions                                                        | check              | `scripts/check_no_bare_ignores.sh`                                                                                                                                                                                                                  |
+| Every pinned version in `requirements-*.lock` satisfies its `requirements-*.txt` source constraint     | check              | `scripts/check_lock_sync.py`                                                                                                                                                                                                                        |
 | Server-supplied path components pass `safe_join` (`lib/path_safety.py`)                                | test + prompt-only | traversal tests per path builder; new call sites are prompt-only                                                                                                                                                                                    |
 | No sentinel objects on the wire — explicit JSON-representable tagged values only                       | prompt-only        | mechanize with #1032 (after tagged values replace the sentinels)                                                                                                                                                                                    |
 | Every destructive op has backup-or-confirm; never delete data that exists nowhere else                 | prompt-only        | save-file removals route through `MatrixExecutor.quarantine_local_file` (the `.romm-backup` funnel — #965/#1058 done); mechanize the rest via the #794 delete-path fixes (#974 / #1005 / #1062)                                                     |

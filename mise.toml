@@ -51,6 +51,7 @@ run = [
     "python scripts/check_failure_shape.py --check",
     "python scripts/check_event_parity.py",
     "python scripts/check_settings_owner.py",
+    "python scripts/check_lock_sync.py",
 ]
 
 [tasks.deploy]

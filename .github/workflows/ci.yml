@@ -101,11 +101,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements-dev.lock
+
+      # uv is the project's canonical Python package manager (mise pins 0.10.2;
+      # `mise run setup` installs via uv). Use it in CI too for parity + speed,
+      # and so the lock-sync check below can run `uv pip compile`.
+      - uses: astral-sh/setup-uv@v8
+        with:
+          version: "0.10.2"
 
       - name: Install lint dependencies
-        run: pip install -r requirements-dev.lock
+        run: uv pip install --system -r requirements-dev.lock
 
       - name: Ruff check
         run: ruff check .
@@ -142,6 +147,9 @@ jobs:
 
       - name: Check settings-owner confinement
         run: python scripts/check_settings_owner.py
+
+      - name: Check dependency locks satisfy their source constraints
+        run: python scripts/check_lock_sync.py
 
   sonarcloud:
     runs-on: ubuntu-latest
