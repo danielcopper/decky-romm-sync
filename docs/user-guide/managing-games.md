@@ -58,6 +58,11 @@ Some games ship as more than one file — multi-disc PS1 titles, a base game plu
 downloads these as a single ZIP, which the plugin extracts automatically. You just download and play; the layout is
 handled for you.
 
+After the byte transfer finishes, the download button and the QAM queue show a brief **Extracting…** phase with its own
+progress (the percentage climbs back from 0 as the archive unpacks — a large Switch or disc image takes a moment). The
+extraction can't be cancelled, so the cancel/pause controls are replaced by a spinner until it's done; the game then
+flips to **Installed** as usual. Single-file ROMs download as a bare file and skip this phase entirely.
+
 The plugin gives the extracted game its own folder and names that folder after the real **launch file** (including the
 extension, e.g. `Final Fantasy VII (USA).m3u/` or `Halo 3 (USA).iso/`) so that ES-DE collapses it into a single game
 entry instead of showing a folder plus loose files.

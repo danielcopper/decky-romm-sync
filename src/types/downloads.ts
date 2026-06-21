@@ -8,7 +8,7 @@ export interface DownloadItem {
   rom_name: string;
   platform_name: string;
   file_name: string;
-  status: "queued" | "downloading" | "completed" | "failed" | "cancelled" | "paused";
+  status: "queued" | "downloading" | "extracting" | "completed" | "failed" | "cancelled" | "paused";
   progress: number;
   bytes_downloaded: number;
   total_bytes: number;

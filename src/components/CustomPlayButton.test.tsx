@@ -428,6 +428,97 @@ describe("CustomPlayButton — pause/resume on active download (#1124)", () => {
   });
 });
 
+describe("CustomPlayButton — extraction phase on a multi-file download", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(backend.startDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.cancelDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [] });
+  });
+
+  // Drive the button into its active-download render, then optionally hand it a
+  // follow-up frame (an extracting frame, here). Mirrors renderDownloading/
+  // renderActive above but parameterised on the second frame.
+  async function renderWithFrames(frames: DownloadProgressEvent[]): Promise<ReturnType<typeof render>> {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const downloadBtn = await utils.findByText("Download");
+
+    await act(async () => {
+      downloadBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    for (const frame of frames) {
+      act(() => {
+        emitDeckyEvent<[DownloadProgressEvent]>("download_progress", frame);
+      });
+    }
+
+    return utils;
+  }
+
+  const downloadingFrame: DownloadProgressEvent = {
+    rom_id: 42,
+    rom_name: "Test ROM",
+    platform_name: "PSX",
+    file_name: "game.zip",
+    status: "downloading",
+    progress: 1,
+    bytes_downloaded: 1000,
+    total_bytes: 1000,
+    resumable: false,
+  };
+
+  const extractingFrame: DownloadProgressEvent = {
+    rom_id: 42,
+    rom_name: "Test ROM",
+    platform_name: "PSX",
+    file_name: "game.zip",
+    status: "extracting",
+    progress: 0.42,
+    bytes_downloaded: 4200,
+    total_bytes: 10000,
+    resumable: false,
+  };
+
+  it("shows 'Extracting… N%' (N from extracted bytes/total) once an extracting frame arrives", async () => {
+    const { findByText } = await renderWithFrames([downloadingFrame, extractingFrame]);
+    // 4200 / 10000 = 42% — the label reads the uncompressed-byte fraction.
+    expect(await findByText("Extracting… 42%")).toBeInTheDocument();
+  });
+
+  it("removes the cancel control during extraction and surfaces a disabled throbber instead", async () => {
+    const { findByLabelText, queryByLabelText } = await renderWithFrames([downloadingFrame, extractingFrame]);
+
+    // The disabled throbber is the only right-side action while extracting.
+    const throbber = await findByLabelText("Extracting");
+    expect(throbber).toBeInTheDocument();
+    expect(throbber).toBeDisabled();
+
+    // No cancel X and no pause/resume dropdown during extraction.
+    expect(queryByLabelText("Cancel download")).toBeNull();
+    expect(queryByLabelText("Download actions")).toBeNull();
+  });
+
+  it("keeps the (neutral-restyled) cancel X in the normal downloading phase", async () => {
+    // The normal downloading phase still carries the cancel X — now restyled to
+    // the Steam-native translucent-white look. The @decky/ui mock drops inline
+    // `style`, so the colour itself isn't observable here; assert the control
+    // renders and is enabled (cancellable) — the contrast with the extracting
+    // phase's disabled throbber is what the restyle test pair guards.
+    const { findByLabelText, queryByLabelText } = await renderWithFrames([downloadingFrame]);
+    const cancelX = await findByLabelText("Cancel download");
+
+    expect(cancelX).toBeInTheDocument();
+    expect(cancelX).toHaveClass("romm-btn-cancel");
+    expect(cancelX).not.toBeDisabled();
+    // While downloading (not extracting) there's no throbber action.
+    expect(queryByLabelText("Extracting")).toBeNull();
+  });
+});
+
 describe("CustomPlayButton — pre-launch savefiles_in_content_dir benign skip (#239)", () => {
   beforeEach(() => {
     vi.mocked(getCachedGameDetail).mockReset();

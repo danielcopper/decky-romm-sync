@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import os
 import urllib.parse
+from typing import TYPE_CHECKING
 
 from lib.path_safety import safe_path_component
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class FakeDownloadFileStore:
@@ -121,7 +125,13 @@ class FakeDownloadFileStore:
                 matches.append(stored)
         return matches
 
-    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> None:
+    def extract_zip(
+        self,
+        archive_path: str,
+        dest_dir: str,
+        safe_root: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> None:
         self.extract_calls.append((archive_path, dest_dir, safe_root))
         if archive_path not in self.files:
             raise FileNotFoundError(archive_path)
@@ -131,9 +141,17 @@ class FakeDownloadFileStore:
         # Fake-mode: derive extracted entries from a paired dict the test set.
         members = getattr(self, "_zip_members", {}).get(archive_path, {})
         self.make_dirs(dest_dir)
+        # Drive the progress callback with running (extracted, total) byte
+        # counts so service tests can observe the "extracting" frames the
+        # real adapter emits per member chunk.
+        total = sum(len(data) for data in members.values())
+        extracted = 0
         for name, data in members.items():
             full = os.path.join(dest_dir, name)
             self.files[full] = data
+            extracted += len(data)
+            if progress_callback is not None:
+                progress_callback(extracted, total)
 
     def set_zip_members(self, archive_path: str, members: dict[str, bytes]) -> None:
         if not hasattr(self, "_zip_members"):

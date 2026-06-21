@@ -9,7 +9,7 @@
  * with action: Uninstall.
  */
 
-import { useState, useEffect, useRef, FC } from "react";
+import { useState, useEffect, useRef, FC, ReactElement } from "react";
 import { addEventListener, removeEventListener, toaster } from "@decky/api";
 import { Focusable, DialogButton, ConfirmModal, Menu, MenuItem, showContextMenu, showModal } from "@decky/ui";
 import { appActionButtonClasses, basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
@@ -70,6 +70,13 @@ interface DownloadProgress {
   resumable: boolean;
   /** True once a paused frame arrives; the transfer is frozen, awaiting Resume. */
   paused: boolean;
+  /**
+   * True once an `extracting` frame arrives — the byte transfer is done and the
+   * multi-file ZIP is being unpacked. The transfer is not cancellable here, so
+   * the right-side action becomes a disabled throbber instead of the cancel X /
+   * Pause-Resume chevron.
+   */
+  extracting: boolean;
 }
 
 function lerpColor(a: [number, number, number], b: [number, number, number], t: number): string {
@@ -156,13 +163,20 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       // No post-await `cancelled` guard needed: React 18 no-ops a setState on an
       // unmounted component, and a remount keeps its own state.
       const entry = queue.downloads.find((d) => d.rom_id === rid);
-      if (entry && (entry.status === "downloading" || entry.status === "queued" || entry.status === "paused")) {
+      if (
+        entry &&
+        (entry.status === "downloading" ||
+          entry.status === "queued" ||
+          entry.status === "paused" ||
+          entry.status === "extracting")
+      ) {
         setActionPending(true);
         setDlProgress({
           bytesDownloaded: entry.bytes_downloaded,
           totalBytes: entry.total_bytes,
-          resumable: entry.resumable,
+          resumable: entry.status === "extracting" ? false : entry.resumable,
           paused: entry.status === "paused",
+          extracting: entry.status === "extracting",
         });
       }
     } catch (e) {
@@ -232,11 +246,15 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         } else {
           // A frame that omits resumable (older shape / progress tick before
           // the headers land) keeps the prior verdict instead of resetting it.
+          // The post-transfer `extracting` phase carries resumable:false and is
+          // never paused — its bytes climb 0→100 again over the uncompressed total.
+          const extracting = evt.status === "extracting";
           setDlProgress((prev) => ({
             bytesDownloaded: evt.bytes_downloaded,
             totalBytes: evt.total_bytes,
-            resumable: evt.resumable ?? prev?.resumable ?? false,
-            paused: evt.status === "paused",
+            resumable: extracting ? false : (evt.resumable ?? prev?.resumable ?? false),
+            paused: extracting ? false : evt.status === "paused",
+            extracting,
           }));
         }
       },
@@ -695,17 +713,31 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     const downloading = actionPending && dlProgress;
     const paused = downloading ? dlProgress.paused : false;
     const resumable = downloading ? dlProgress.resumable : false;
+    // Post-transfer ZIP unpack for a multi-file ROM — bytes climb 0→100 again
+    // over the uncompressed total. Not cancellable: the right-side action is a
+    // disabled throbber rather than the cancel X / Pause-Resume chevron.
+    const extracting = downloading ? dlProgress.extracting : false;
 
-    // Fill color shifts from blue to green as download progresses
-    const fillColor = downloading
-      ? `linear-gradient(to right, ${lerpColor(BLUE_LEFT, GREEN_LEFT, t)}, ${lerpColor(BLUE_RIGHT, GREEN_RIGHT, t)})`
-      : "linear-gradient(to right, #1a9fff, #0078d4)";
+    // Fill color shifts from blue to green as download progresses. Extraction
+    // begins right after the transfer hit 100% green, so it keeps the solid
+    // green fill for visual continuity.
+    let fillColor: string;
+    if (extracting) {
+      fillColor = `linear-gradient(to right, rgb(${GREEN_LEFT.join(",")}), rgb(${GREEN_RIGHT.join(",")}))`;
+    } else if (downloading) {
+      fillColor = `linear-gradient(to right, ${lerpColor(BLUE_LEFT, GREEN_LEFT, t)}, ${lerpColor(BLUE_RIGHT, GREEN_RIGHT, t)})`;
+    } else {
+      fillColor = "linear-gradient(to right, #1a9fff, #0078d4)";
+    }
 
     // Pulse color shifts from blue to green with progress; a paused download
     // freezes to a dim amber so the whole group reads as "halted, not running".
+    // Extraction holds the green pulse — it just finished the transfer.
     let pulseColor: string;
     if (paused) {
       pulseColor = "rgba(212,167,44,0.7)";
+    } else if (extracting) {
+      pulseColor = `rgb(${GREEN_LEFT.join(", ")})`;
     } else if (downloading) {
       pulseColor = lerpColor(BLUE_LEFT, GREEN_LEFT, t);
     } else {
@@ -713,7 +745,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
 
     let dlLabel: string;
-    if (paused) {
+    if (extracting) {
+      dlLabel = `Extracting… ${Math.round(t * 100)}%`;
+    } else if (paused) {
       dlLabel = "Paused";
     } else if (downloading) {
       dlLabel = formatProgress(dlProgress.bytesDownloaded, dlProgress.totalBytes);
@@ -723,10 +757,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       dlLabel = "Download";
     }
 
-    // Unfilled portion: darker shade of the current fill color
+    // Unfilled portion: darker shade of the current fill color. Extraction
+    // keeps a dim green base (the transfer just completed green).
     let baseBg: string;
     if (isOffline) {
       baseBg = "linear-gradient(to right, #6b7b8b, #5a6a7a)";
+    } else if (extracting) {
+      baseBg = "linear-gradient(to right, #1a4d1a, #0f3320)";
     } else if (downloading) {
       baseBg = `linear-gradient(to right, ${lerpColor([10, 50, 90], [5, 35, 65], t)}, ${lerpColor([5, 35, 65], [5, 50, 30], t)})`;
     } else {
@@ -782,7 +819,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         title="Cancel download"
         style={{
           ...dropdownArrowStyle,
-          background: "linear-gradient(to right, #0a3a5a, #062a45)",
+          background: "rgba(255, 255, 255, 0.15)",
           color: "#fff",
         }}
         onClick={handleCancelDownload}
@@ -809,9 +846,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         title="Download actions"
         style={{
           ...dropdownArrowStyle,
-          background: paused
-            ? "linear-gradient(to right, #6b5a1f, #4d4015)"
-            : "linear-gradient(to right, #0a3a5a, #062a45)",
+          background: "rgba(255, 255, 255, 0.15)",
           color: "#fff",
         }}
         onClick={(e: MouseEvent) => showDownloadActionsMenu(e, paused)}
@@ -828,9 +863,36 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       </DialogButton>
     );
 
+    // Extraction is not cancellable — the right-side action is a disabled
+    // throbber (same 36px slot, squared-left/rounded-right) so the control reads
+    // "working, can't stop" rather than offering a cancel/pause it can't honour.
+    const extractThrobber = (
+      <DialogButton
+        className="romm-btn-cancel"
+        aria-label="Extracting"
+        title="Extracting"
+        style={{
+          ...dropdownArrowStyle,
+          background: "rgba(255, 255, 255, 0.15)",
+          color: "#fff",
+        }}
+        disabled
+      >
+        <span className={`${appActionButtonClasses?.Throbber || ""} romm-throbber`.trim()} />
+      </DialogButton>
+    );
+
     // Active download: button + a right-side action section. The section is a
-    // flex sub-container so the dropdown-vs-X choice is a clean conditional.
-    // The pulse runs on the container so it spans the whole group.
+    // flex sub-container so the throbber-vs-dropdown-vs-X choice is a clean
+    // conditional. The pulse runs on the container so it spans the whole group.
+    let rightAction: ReactElement;
+    if (extracting) {
+      rightAction = extractThrobber;
+    } else if (resumable) {
+      rightAction = dropdown;
+    } else {
+      rightAction = cancelX;
+    }
     return (
       <Focusable
         ref={containerRef}
@@ -838,7 +900,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         style={{ ...btnContainerStyle, "--romm-pulse-color": pulseColor } as React.CSSProperties}
       >
         {downloadBtn}
-        <div style={{ display: "flex", flexDirection: "row", height: "100%" }}>{resumable ? dropdown : cancelX}</div>
+        <div style={{ display: "flex", flexDirection: "row", height: "100%" }}>{rightAction}</div>
       </Focusable>
     );
   }

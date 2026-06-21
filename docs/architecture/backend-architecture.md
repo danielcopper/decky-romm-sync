@@ -234,7 +234,12 @@ domain functions (`needs_m3u`, `detect_launch_file`) take `m3u_supported`, never
 bundled `.m3u` is left inert on disk, never deleted. When `es_systems.xml` cannot be found the answer defaults to
 `False` (safe: a missing playlist only degrades disc-switching, a wrong one breaks the launch).
 
-Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
+Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected and streamed: `extract_zip`
+copies each member in chunks and reports byte progress through an optional callback, so a multi-file ROM emits
+`download_progress` frames with `status: "extracting"` (`bytes_downloaded`/`total_bytes` over the **uncompressed**
+total, `resumable: false`) after the transfer hits 100%. The frontend reuses the same event — no new event name — to
+switch the download button and QAM queue into the non-cancellable **Extracting…** phase. Single-file downloads never
+emit it.
 
 **Bounded concurrency + reserved-bytes pre-flight**: at most **two** ROMs transfer at once, gated by an
 `asyncio.Semaphore(2)` around the transfer + post-IO critical section. `start_download` enters the queue with status

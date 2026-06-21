@@ -51,8 +51,8 @@ export function hideNativePlaySection(playSectionClass: string) {
 .romm-btn-dropdown:hover, .romm-btn-dropdown.gpfocus {
   filter: brightness(1.3);
 }
-.romm-btn-cancel:hover, .romm-btn-cancel.gpfocus {
-  filter: brightness(1.4);
+.romm-btn-cancel:hover, .romm-btn-cancel.gpfocus, .romm-btn-cancel:focus {
+  background: rgba(255, 255, 255, 0.25) !important;
 }
 [data-romm] .gpfocus {
   outline: 2px solid #1a9fff;

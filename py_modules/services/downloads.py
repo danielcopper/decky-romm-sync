@@ -413,7 +413,10 @@ class DownloadService:
         tmp_zip = target_path + _ZIP_TMP_EXT
         # ZIP-slip protection: adapter validates members resolve within extract_dir
         # AND that extract_dir itself resolves within roms_base.
-        self._download_file_store.extract_zip(tmp_zip, extract_dir, roms_base)
+        rom_name = rom_detail.get("name", file_name)
+        platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
+        extract_cb = self._make_extract_callback(rom_id, rom_name, platform_name, file_name)
+        self._download_file_store.extract_zip(tmp_zip, extract_dir, roms_base, progress_callback=extract_cb)
         self._download_file_store.remove_file(tmp_zip)
         self._download_file_store.decode_url_encoded_names(extract_dir)
         # Whether ES-DE lists .m3u for this system (gates both M3U generation and
@@ -583,6 +586,89 @@ class DownloadService:
                     "bytes_downloaded": downloaded,
                     "total_bytes": total,
                     "resumable": entry.get("resumable", False),
+                },
+            )
+        )
+
+    def _make_extract_callback(self, rom_id, rom_name, platform_name, file_name):
+        """Build a throttled extraction-progress callback for a multi-file ROM.
+
+        Mirrors ``_make_progress_callback`` but for the post-transfer ZIP
+        extraction. ``last_emit`` starts at 0.0 so the FIRST tick emits
+        immediately — the UI switches to the "extracting" phase promptly once
+        the byte transfer finishes. Emits are then throttled to 0.5s and a
+        human-readable log line to ~30s. Unlike the download callback this does
+        NOT poll the cancel/pause token: extraction is not cancellable this
+        iteration. Runs on the executor worker thread, so the queue mutation
+        and emit-scheduling are marshaled to the loop thread via
+        ``call_soon_threadsafe`` (#973).
+        """
+        last_emit = [0.0]  # mutable container for closure
+        last_log = [0.0]
+
+        def extract_callback(extracted, total):
+            now = self._clock.monotonic()
+            if now - last_log[0] >= 30.0:
+                last_log[0] = now
+                self._log_extract_progress(rom_name, extracted, total)
+            if now - last_emit[0] < 0.5 and extracted < total:
+                return
+            last_emit[0] = now
+            progress = extracted / total if total else 0
+            self._loop.call_soon_threadsafe(
+                self._apply_extract_progress,
+                rom_id,
+                rom_name,
+                platform_name,
+                file_name,
+                progress,
+                extracted,
+                total,
+            )
+
+        return extract_callback
+
+    def _log_extract_progress(self, rom_name, extracted, total):
+        """Log a throttled one-line human-readable extraction summary (MB + %)."""
+        mb_done = extracted / (1024 * 1024)
+        mb_total = total / (1024 * 1024) if total else 0
+        pct = (extracted / total * 100) if total else 0
+        self._logger.info(f"Extract progress: {rom_name} — {mb_done:.1f}/{mb_total:.1f} MB ({pct:.0f}%)")
+
+    def _apply_extract_progress(self, rom_id, rom_name, platform_name, file_name, progress, extracted, total):
+        """Update the live queue entry and schedule an ``extracting`` ``download_progress`` emit.
+
+        Runs on the loop thread (marshaled from the executor worker via
+        ``call_soon_threadsafe``). Guarded by ``.get`` — if the entry was evicted
+        between ticks we must not resurrect it or raise KeyError off-thread (#973).
+        Mirrors ``_apply_download_progress`` but flips the entry to the
+        "extracting" phase and reports ``resumable: False`` (extraction is never
+        resumable).
+        """
+        entry = self._download_queue.get(rom_id)
+        if entry is None:
+            return  # evicted mid-extraction — do not resurrect or emit
+        entry.update(
+            {
+                "status": "extracting",
+                "progress": progress,
+                "bytes_downloaded": extracted,
+                "total_bytes": total,
+            }
+        )
+        self._loop.create_task(
+            self._emit(
+                "download_progress",
+                {
+                    "rom_id": rom_id,
+                    "rom_name": rom_name,
+                    "platform_name": platform_name,
+                    "file_name": file_name,
+                    "status": "extracting",
+                    "progress": progress,
+                    "bytes_downloaded": extracted,
+                    "total_bytes": total,
+                    "resumable": False,
                 },
             )
         )

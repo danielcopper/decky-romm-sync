@@ -1339,6 +1339,93 @@ class TestDoDownloadMultiFile:
         assert not extract_dir.exists()
         assert plugin._download_service._download_queue[99]["status"] == "failed"
 
+    @pytest.mark.asyncio
+    async def test_multi_file_emits_extracting_progress(self, plugin, tmp_path):
+        """A multi-file download emits ``download_progress`` ``status:"extracting"``
+        frames after the byte transfer, then ``download_complete`` after.
+
+        Drives the real adapter's streaming extraction through the fake store so
+        the passed extract callback fires per member; the final tick (extracted
+        == total) always bypasses the throttle, so at least one extracting frame
+        lands regardless of the fake clock.
+        """
+        from unittest.mock import patch
+
+        import decky
+        from fakes.fake_download_file_store import FakeDownloadFileStore
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_base = str(tmp_path / "retrodeck" / "roms")
+        target_path = os.path.join(roms_base, "psx", "FF7.zip")
+        tmp_zip = target_path + ".zip.tmp"
+
+        fake = FakeDownloadFileStore()
+        fake.make_dirs(roms_base)
+        # The ZIP the fake "extracts": two members so total > any single member.
+        fake.set_zip_members(tmp_zip, {"disc1.bin": b"\x00" * 600, "disc2.bin": b"\x00" * 400})
+        plugin._download_service._download_file_store = fake
+
+        rom_detail = {
+            "id": 55,
+            "name": "Final Fantasy VII",
+            "fs_name": "FF7.zip",
+            "fs_name_no_ext": "FF7",
+            "platform_slug": "psx",
+            "platform_name": "PlayStation",
+            "has_multiple_files": True,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            # Populate the fake store's virtual filesystem with the tmp zip so
+            # the subsequent extract_zip finds it and drives the callback.
+            fake.files[dest] = b"ZIPDATA"
+
+        _seed_rom(plugin._uow, 55, platform_slug="psx")
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[55] = {
+            "rom_id": 55,
+            "rom_name": "Final Fantasy VII",
+            "platform_name": "PlayStation",
+            "file_name": "FF7.zip",
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+            "resumable": False,
+        }
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(55, rom_detail, target_path, "psx", "FF7.zip")
+
+        # Drain the create_task-scheduled emits marshaled onto the loop.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        progress_calls = [c for c in decky.emit.call_args_list if c[0][0] == "download_progress"]
+        extracting = [c[0][1] for c in progress_calls if c[0][1].get("status") == "extracting"]
+        assert extracting, "expected at least one extracting download_progress frame"
+        frame = extracting[-1]
+        total = 1000
+        assert frame["status"] == "extracting"
+        assert frame["resumable"] is False
+        assert frame["bytes_downloaded"] == total
+        assert frame["total_bytes"] == total
+        assert frame["progress"] == 1.0
+        assert frame["rom_id"] == 55
+        assert frame["file_name"] == "FF7.zip"
+
+        # The queue entry reflects the extracting phase's last tick.
+        # download_complete still fires after extraction.
+        complete = [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
+        assert len(complete) == 1
+        assert plugin._download_service._download_queue[55]["status"] == "completed"
+
 
 class TestDoDownloadBundledM3uPlatformGate:
     """#1111: a RomM-bundled .m3u must not drive launch/collapse on non-m3u systems.

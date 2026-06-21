@@ -211,6 +211,112 @@ class TestExtractZip:
         assert result is None
         assert (tmp_path / "a.bin").read_bytes() == b"x"
 
+    def test_progress_callback_reports_monotonic_to_total(self, adapter, tmp_path):
+        archive = tmp_path / "src.zip"
+        members = {"a.bin": b"A" * 1500, "b.bin": b"B" * 2500}
+        self._make_zip(archive, members)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls: list[tuple[int, int]] = []
+        adapter.extract_zip(str(archive), str(dest), str(tmp_path), progress_callback=lambda e, t: calls.append((e, t)))
+
+        total = sum(len(data) for data in members.values())
+        # Every tick carries the same total.
+        assert all(t == total for _e, t in calls)
+        # extracted is non-decreasing and ends exactly at total.
+        extracted_seq = [e for e, _t in calls]
+        assert extracted_seq == sorted(extracted_seq)
+        assert extracted_seq[-1] == total
+        # Files extracted with identical bytes.
+        assert (dest / "a.bin").read_bytes() == members["a.bin"]
+        assert (dest / "b.bin").read_bytes() == members["b.bin"]
+
+    def test_progress_callback_chunks_large_member(self, adapter, tmp_path):
+        # A member larger than _EXTRACT_CHUNK (1 MiB) yields multiple ticks,
+        # each a chunk-sized step, climbing to the member's full size.
+        archive = tmp_path / "big.zip"
+        big = b"\x00" * (1024 * 1024 + 7)  # 1 MiB + a partial chunk
+        self._make_zip(archive, {"rom.bin": big})
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls: list[tuple[int, int]] = []
+        adapter.extract_zip(str(archive), str(dest), str(tmp_path), progress_callback=lambda e, t: calls.append((e, t)))
+
+        assert len(calls) >= 2  # at least one full chunk + the remainder
+        assert [e for e, _t in calls] == sorted(e for e, _t in calls)
+        assert calls[-1] == (len(big), len(big))
+        assert (dest / "rom.bin").read_bytes() == big
+
+    def test_progress_callback_nested_dirs(self, adapter, tmp_path):
+        archive = tmp_path / "nested.zip"
+        members = {
+            "base.nsp": b"\x01" * 100,
+            "update/upd.nsp": b"\x02" * 200,
+            "dlc/extra.nsp": b"\x03" * 300,
+        }
+        self._make_zip(archive, members)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls: list[tuple[int, int]] = []
+        adapter.extract_zip(str(archive), str(dest), str(tmp_path), progress_callback=lambda e, t: calls.append((e, t)))
+
+        total = sum(len(d) for d in members.values())
+        assert calls[-1] == (total, total)
+        assert (dest / "base.nsp").read_bytes() == members["base.nsp"]
+        assert (dest / "update" / "upd.nsp").read_bytes() == members["update/upd.nsp"]
+        assert (dest / "dlc" / "extra.nsp").read_bytes() == members["dlc/extra.nsp"]
+
+    def test_progress_callback_zip_slip_still_raises(self, adapter, tmp_path):
+        archive = tmp_path / "evil.zip"
+        self._make_zip(archive, {"../escape.txt": b"bad"})
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls: list[tuple[int, int]] = []
+        with pytest.raises(ValueError, match="outside"):
+            adapter.extract_zip(
+                str(archive), str(dest), str(tmp_path), progress_callback=lambda e, t: calls.append((e, t))
+            )
+        # Validation runs BEFORE any write, so the callback never fired.
+        assert calls == []
+        assert not (tmp_path.parent / "escape.txt").exists()
+
+    def test_none_callback_is_back_compatible(self, adapter, tmp_path):
+        # progress_callback=None (the default) extracts byte-identically and
+        # invokes no callback — back-compat with the old extractall.
+        archive = tmp_path / "src.zip"
+        members = {"a.bin": b"AAA", "sub/b.bin": b"BBBB"}
+        self._make_zip(archive, members)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        result = adapter.extract_zip(str(archive), str(dest), str(tmp_path))
+        assert result is None
+        assert (dest / "a.bin").read_bytes() == b"AAA"
+        assert (dest / "sub" / "b.bin").read_bytes() == b"BBBB"
+
+    def test_empty_zip_no_callbacks(self, adapter, tmp_path):
+        archive = tmp_path / "empty.zip"
+        self._make_zip(archive, {})
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls: list[tuple[int, int]] = []
+        adapter.extract_zip(str(archive), str(dest), str(tmp_path), progress_callback=lambda e, t: calls.append((e, t)))
+        # No members → no writes → no progress callbacks.
+        assert calls == []
+
+    def test_zero_byte_member(self, adapter, tmp_path):
+        archive = tmp_path / "mix.zip"
+        members = {"empty.bin": b"", "data.bin": b"X" * 50}
+        self._make_zip(archive, members)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        calls: list[tuple[int, int]] = []
+        adapter.extract_zip(str(archive), str(dest), str(tmp_path), progress_callback=lambda e, t: calls.append((e, t)))
+        # The zero-byte member writes no chunk (no tick); the 50-byte member
+        # produces the final tick at total.
+        assert (dest / "empty.bin").read_bytes() == b""
+        assert (dest / "data.bin").read_bytes() == members["data.bin"]
+        assert calls[-1] == (50, 50)
+
 
 class TestDecodeUrlEncodedNames:
     def test_renames_url_encoded_file(self, adapter, tmp_path):

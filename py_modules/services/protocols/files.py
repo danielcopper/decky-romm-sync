@@ -12,7 +12,10 @@ context offload via ``loop.run_in_executor``.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class CoverArtFileStore(Protocol):
@@ -120,13 +123,24 @@ class DownloadFileStore(Protocol):
         """
         ...
 
-    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> None:
+    def extract_zip(
+        self,
+        archive_path: str,
+        dest_dir: str,
+        safe_root: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> None:
         """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
 
         *safe_root* is the boundary outside of which extraction is
         rejected. Implementations resolve both *dest_dir* and *safe_root*
         via ``os.path.realpath`` and verify that every member resolves
         within *safe_root* before extracting.
+
+        When *progress_callback* is supplied it is invoked with
+        ``(extracted, total)`` uncompressed byte counts as members stream
+        out; with it left ``None`` the extraction is silent and produces
+        byte-identical output.
         """
         ...
 

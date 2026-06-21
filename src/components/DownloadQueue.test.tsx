@@ -400,6 +400,53 @@ describe("DownloadQueue", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // extracting (post-transfer ZIP unpack)
+  // ---------------------------------------------------------------------------
+  describe("extracting", () => {
+    it("renders an extracting item in the active section with the 'Extracting…' caption and the extracted fraction", async () => {
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+        downloads: [
+          makeItem({
+            rom_id: 91,
+            rom_name: "Chrono",
+            status: "extracting",
+            bytes_downloaded: 4200,
+            total_bytes: 10000,
+            resumable: false,
+          }),
+        ],
+      });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      // Caption carries the Extracting marker; the bar reads the 42% fraction.
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Chrono (Genesis) — Extracting…");
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("42");
+    });
+
+    it("offers no Pause / Resume / Cancel control while extracting", async () => {
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+        downloads: [
+          makeItem({
+            rom_id: 92,
+            rom_name: "Trigger",
+            status: "extracting",
+            bytes_downloaded: 5000,
+            total_bytes: 10000,
+            resumable: false,
+          }),
+        ],
+      });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      expect(buttonByText(container, "Pause Trigger")).toBeNull();
+      expect(buttonByText(container, "Resume Trigger")).toBeNull();
+      expect(buttonByText(container, "Cancel Trigger")).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // handleClearCompleted
   // ---------------------------------------------------------------------------
   describe("handleClearCompleted", () => {

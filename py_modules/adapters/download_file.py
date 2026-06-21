@@ -14,8 +14,14 @@ import os
 import shutil
 import urllib.parse
 import zipfile
+from typing import TYPE_CHECKING
 
 from lib.path_safety import safe_path_component
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_EXTRACT_CHUNK = 1024 * 1024
 
 
 class DownloadFileAdapter:
@@ -81,23 +87,50 @@ class DownloadFileAdapter:
             matches.extend(os.path.join(root, filename) for filename in files if filename.endswith(suffixes))
         return matches
 
-    def extract_zip(self, archive_path: str, dest_dir: str, safe_root: str) -> None:
+    def extract_zip(
+        self,
+        archive_path: str,
+        dest_dir: str,
+        safe_root: str,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> None:
         """Extract *archive_path* into *dest_dir* with ZIP-slip protection.
 
         Resolves both *dest_dir* and *safe_root* via ``os.path.realpath``
         and verifies that every ZIP member resolves within both before
-        extracting. Raises ``ValueError`` on any escape attempt.
+        writing any byte. Raises ``ValueError`` on any escape attempt.
+
+        When *progress_callback* is supplied it is invoked with
+        ``(extracted, total)`` uncompressed byte counts after each chunk
+        write — ``total`` is the sum of every member's uncompressed size,
+        ``extracted`` is the running total written so far. With
+        *progress_callback* left ``None`` the extraction is silent and the
+        output files are byte-identical to a plain ``extractall``.
         """
         real_dest = os.path.realpath(dest_dir)
         real_safe = os.path.realpath(safe_root)
         if not (real_dest == real_safe or real_dest.startswith(real_safe + os.sep)):
             raise ValueError(f"Extract directory would be outside safe root: {dest_dir}")
         with zipfile.ZipFile(archive_path, "r") as zf:
-            for member in zf.namelist():
-                member_path = os.path.realpath(os.path.join(real_dest, member))
+            members = zf.infolist()
+            for member in members:
+                member_path = os.path.realpath(os.path.join(real_dest, member.filename))
                 if not (member_path == real_dest or member_path.startswith(real_dest + os.sep)):
-                    raise ValueError(f"ZIP member {member} would extract outside target directory")
-            zf.extractall(real_dest)
+                    raise ValueError(f"ZIP member {member.filename} would extract outside target directory")
+            total = sum(member.file_size for member in members)
+            extracted = 0
+            for member in members:
+                target = os.path.join(real_dest, member.filename)
+                if member.is_dir():
+                    os.makedirs(target, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zf.open(member) as src, open(target, "wb") as dst:
+                    while chunk := src.read(_EXTRACT_CHUNK):
+                        dst.write(chunk)
+                        extracted += len(chunk)
+                        if progress_callback is not None:
+                            progress_callback(extracted, total)
 
     def decode_url_encoded_names(self, directory: str) -> None:
         """Rename URL-encoded files and directories under *directory* in place.
