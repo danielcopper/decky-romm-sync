@@ -701,7 +701,15 @@ class TestSyncPreviewErrorHandling:
         assert plugin._sync_service._pending_delta is None
 
     @pytest.mark.asyncio
-    async def test_cancelled_error_reraises(self, plugin, fake_romm_api):
+    async def test_cancelled_error_returns_canonical_failure(self, plugin, fake_romm_api):
+        """A cancel delivered during sync_preview RETURNS the canonical failure
+        shape — it does NOT re-raise out of the Decky callable (#1035).
+
+        sync_preview is awaited by the frontend; re-raising would leave that
+        promise unsettled. The cooperative cancel must surface as
+        ``{success: False, reason: "cancelled", message: ...}`` and leave
+        sync_state IDLE with no pending delta.
+        """
         import decky
 
         decky.emit.reset_mock()
@@ -710,8 +718,9 @@ class TestSyncPreviewErrorHandling:
         fake_romm_api.list_platforms_side_effect = asyncio.CancelledError("cancelled")
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        with pytest.raises(asyncio.CancelledError):
-            await plugin._sync_service.sync_preview()
+        result = await plugin._sync_service.sync_preview()
+
+        assert result == {"success": False, "reason": "cancelled", "message": "Sync cancelled"}
         assert plugin._sync_service._sync_state == SyncState.IDLE
         assert plugin._sync_service._pending_delta is None
 
@@ -2098,6 +2107,61 @@ class TestDoSyncPerUnitErrors:
         ]
         assert len(error_events) >= 1
         assert plugin._sync_service._sync_state == SyncState.IDLE
+
+    @pytest.mark.asyncio
+    async def test_cancel_mid_unit_fetch_finalizes_gracefully(self, plugin, fake_romm_api):
+        """A cooperative cancel delivered MID per-unit fetch recovers all state (#1035).
+
+        The cancel arrives while ``_sync_one_unit`` is fetching the unit's
+        ROMs (``fetcher._check_cancelling`` raising ``CancelledError`` from
+        inside ``list_roms``) — NOT at an ``is_cancelling()`` checkpoint and
+        NOT during ``build_work_queue``. On the un-fixed code that
+        ``BaseException`` escapes the outer ``except Exception``, leaving
+        sync_state stuck CANCELLING, the SyncRun stuck ``running``, and
+        sync_progress stuck ``running: True`` until a plugin reload.
+
+        The fix routes that mid-fetch CancelledError into the same graceful
+        finalize the checkpoint break uses. This asserts all three recovery
+        post-conditions AND that ``_do_sync_per_unit`` does NOT propagate the
+        CancelledError (contrast with the build_work_queue path, which
+        re-raises).
+        """
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # One live-fetch platform (no last_sync, empty registry) so the unit
+        # takes the real per-unit fetch rather than the incremental-skip path.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        # The per-unit ROM fetch raises CancelledError mid-flight — exactly
+        # how ``fetcher._check_cancelling`` signals a cooperative cancel that
+        # landed after the platform listing but before the unit ack.
+        fake_romm_api.list_roms_side_effect = asyncio.CancelledError("Sync cancelled")
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-mid-fetch-cancel"
+
+        # Must NOT propagate the CancelledError — awaiting returns normally.
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # 1. sync_state restored to IDLE (not stuck CANCELLING).
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+        # 2. The SyncRun row is marked cancelled (not left ``running``).
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-mid-fetch-cancel")
+        assert run is not None
+        assert run.status == "cancelled"
+        assert run.finished_at is not None
+        # 3. The persisted progress snapshot is no longer running.
+        assert plugin._sync_service._orchestrator.get_sync_status()["running"] is False
 
     @pytest.mark.asyncio
     async def test_cancelling_state_before_first_unit_skips_processing(self, plugin, fake_romm_api):

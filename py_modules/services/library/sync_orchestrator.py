@@ -243,9 +243,13 @@ class SyncOrchestrator:
                 "preview_id": preview_id,
             }
         except asyncio.CancelledError:
+            # sync_preview is a Decky callable — the frontend awaits its return.
+            # Re-raising leaves that promise unsettled, so a user-initiated
+            # cancel mid-preview returns the canonical failure shape instead of
+            # propagating the CancelledError out of the callable (#1035).
             box.pending_delta = None
             await self._finish_sync(_SYNC_CANCELLED)
-            raise
+            return {"success": False, "reason": "cancelled", "message": _SYNC_CANCELLED}
         except Exception as e:
             import traceback
 
@@ -446,24 +450,33 @@ class SyncOrchestrator:
             # SyncRun.start — short write UoW for the planned counts.
             await self._loop.run_in_executor(None, self._open_sync_run, run_id, platforms_planned, total_roms_planned)
 
-            for unit_index, unit in enumerate(work_queue):
-                if box.is_cancelling():
-                    cancelled = True
-                    break
+            try:
+                for unit_index, unit in enumerate(work_queue):
+                    if box.is_cancelling():
+                        cancelled = True
+                        break
 
-                applied = await self._sync_one_unit(
-                    unit,
-                    unit_index=unit_index,
-                    total_units=total_units,
-                    synced_rom_ids=synced_rom_ids,
-                    collection_memberships=collection_memberships,
-                    platform_rom_ids=platform_rom_ids,
-                )
-                total_games_applied += applied
+                    applied = await self._sync_one_unit(
+                        unit,
+                        unit_index=unit_index,
+                        total_units=total_units,
+                        synced_rom_ids=synced_rom_ids,
+                        collection_memberships=collection_memberships,
+                        platform_rom_ids=platform_rom_ids,
+                    )
+                    total_games_applied += applied
 
-                if box.is_cancelling():
-                    cancelled = True
-                    break
+                    if box.is_cancelling():
+                        cancelled = True
+                        break
+            except asyncio.CancelledError:
+                # A cooperative cancel delivered mid-fetch (fetcher._check_cancelling
+                # raised inside _sync_one_unit) bypasses the is_cancelling()
+                # checkpoints. Route it into the same graceful finalize the
+                # checkpoint break uses, so the SyncRun is marked cancelled and
+                # sync_state is restored to IDLE instead of wedging until a plugin
+                # reload (#1035).
+                cancelled = True
 
             # Final phase: stale cleanup + Steam collections + sync_complete.
             # Surface a non-terminal finalizing snapshot before the terminal
