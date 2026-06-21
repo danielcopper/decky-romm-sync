@@ -12,7 +12,7 @@ shows:
 - **Platform name** — which system the game belongs to (e.g. "Game Boy Advance")
 - **BIOS status** — whether required BIOS files are present (see [BIOS Management](bios-management.md))
 - **Save sync status** — last sync time, conflict count, and playtime (see [Save Sync](save-sync.md))
-- **Action buttons** — Download, Uninstall, Cancel, or Refresh Metadata depending on state
+- **Action buttons** — Download, Pause/Resume, Uninstall, Cancel, or Refresh Metadata depending on state
 
 ![Game detail page showing the RomM Sync panel for an installed game](../assets/screenshot-game-detail.jpg)
 
@@ -34,6 +34,23 @@ leaves your existing install intact. If the cancel happens to land just as the d
 **Installed** rather than torn down.
 
 Downloaded ROMs are stored in your RetroDECK roms directory (e.g. `~/retrodeck/roms/gba/`).
+
+### Pausing and Resuming a Download
+
+A running download can be **paused** and later **resumed** without losing the progress already transferred. On the game
+detail page, a resumable download shows a chevron next to the progress button — open it and choose **Pause**; the button
+freezes at its current progress and shows **Paused**, and the same menu then offers **Resume**. You can do the same from
+the QAM download queue, where a downloading item gets a **Pause** button and a paused item gets a **Resume** button (a
+paused download stays in the active list, not the finished one).
+
+Resume is only available for **single-file ROMs on a direct connection** — the server has to support resuming a transfer
+from where it left off. Two cases can't resume, so they show only **Cancel** (no Pause/Resume):
+
+- **Multi-file ROMs** (multi-disc or bin/cue titles downloaded as a single ZIP), and
+- **Servers behind Cloudflare** (the Cloudflare Tunnel doesn't honour partial-content requests).
+
+In those cases, cancelling and starting over is the only option — but a fresh download is safe, as cancelling never
+removes an already-installed copy.
 
 ### Multi-Disc and Multi-File Games
 
@@ -95,7 +112,8 @@ available from the RomM Actions menu in the game detail panel.
 
 The **Downloads** page (accessible from the main QAM panel) shows all active and completed downloads:
 
-- Active downloads with progress bars and cancel buttons
+- Active downloads with progress bars, plus pause/resume and cancel buttons (pause/resume only where the download is
+  resumable — see [Pausing and Resuming a Download](#pausing-and-resuming-a-download))
 - Completed, failed, and cancelled downloads with status details
 - **Clear Completed** button to clean up the list
 

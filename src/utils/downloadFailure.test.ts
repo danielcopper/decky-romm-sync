@@ -28,6 +28,7 @@ describe("handleGlobalDownloadFailure", () => {
       progress: 73,
       bytes_downloaded: 730,
       total_bytes: 1000,
+      resumable: true,
     };
     const store: DownloadStoreLike = {
       getDownloadState: vi.fn(() => [prior]),
@@ -47,6 +48,7 @@ describe("handleGlobalDownloadFailure", () => {
       progress: 73,
       bytes_downloaded: 730,
       total_bytes: 1000,
+      resumable: true,
       error: "disk full",
     });
     expect(toast.toast).toHaveBeenCalledOnce();
@@ -74,6 +76,7 @@ describe("handleGlobalDownloadFailure", () => {
       progress: 0,
       bytes_downloaded: 0,
       total_bytes: 0,
+      resumable: false,
       error: "disk full",
     });
   });
@@ -105,6 +108,7 @@ describe("handleGlobalDownloadFailure", () => {
       progress: 50,
       bytes_downloaded: 500,
       total_bytes: 1000,
+      resumable: false,
     };
     const store: DownloadStoreLike = {
       getDownloadState: vi.fn(() => [otherRom]),

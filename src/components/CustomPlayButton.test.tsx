@@ -17,6 +17,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { toaster } from "@decky/api";
+import { showContextMenu } from "@decky/ui";
+import type { ReactElement } from "react";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import * as backend from "../api/backend";
@@ -265,6 +267,164 @@ describe("CustomPlayButton — cancel X on active download (#1049)", () => {
     // backend cancellation frame, not this catch, is what tears the row down.
     expect(backend.cancelDownload).toHaveBeenCalledWith(42);
     expect(await findByLabelText("Cancel download")).toBeInTheDocument();
+  });
+});
+
+describe("CustomPlayButton — pause/resume on active download (#1124)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(showContextMenu).mockReset();
+    vi.mocked(backend.startDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.cancelDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.pauseDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.resumeDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [] });
+  });
+
+  // Drive the button into an active-download render. `resumable` and `status`
+  // come straight off the emitted progress frame, so a single frame puts the
+  // button into the downloading+resumable, downloading+not-resumable, or paused
+  // shape under test.
+  async function renderActive(
+    romId: number,
+    frame: { status: string; resumable?: boolean },
+  ): Promise<ReturnType<typeof render>> {
+    mockCachedDetail({ rom_id: romId, installed: false });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const downloadBtn = await utils.findByText("Download");
+
+    await act(async () => {
+      downloadBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      const event: DownloadProgressEvent = {
+        rom_id: romId,
+        rom_name: "Test ROM",
+        platform_name: "PSX",
+        file_name: "test.chd",
+        status: frame.status,
+        progress: 0.3,
+        bytes_downloaded: 300,
+        total_bytes: 1000,
+        ...(frame.resumable === undefined ? {} : { resumable: frame.resumable }),
+      };
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", event);
+    });
+
+    return utils;
+  }
+
+  // Open the download-actions dropdown and pull the <Menu> element off the
+  // showContextMenu spy, then render it so its MenuItem buttons are clickable.
+  function openMenu(button: HTMLElement): ReturnType<typeof render> {
+    act(() => {
+      button.click();
+    });
+    expect(showContextMenu).toHaveBeenCalled();
+    const calls = vi.mocked(showContextMenu).mock.calls;
+    const menu = calls[calls.length - 1]![0] as ReactElement;
+    return render(menu);
+  }
+
+  it("downloading + resumable renders the actions dropdown (not a bare cancel X) and Pause calls pauseDownload", async () => {
+    const { findByLabelText } = await renderActive(42, { status: "downloading", resumable: true });
+    const dropdownBtn = await findByLabelText("Download actions");
+
+    const { findByText } = openMenu(dropdownBtn);
+    const pauseItem = await findByText("Pause");
+
+    await act(async () => {
+      pauseItem.click();
+      await Promise.resolve();
+    });
+
+    // Non-vacuous: the exact rom_id was paused.
+    expect(backend.pauseDownload).toHaveBeenCalledWith(42);
+  });
+
+  it("downloading + NOT resumable renders the bare cancel X and no actions dropdown", async () => {
+    const { findByLabelText, queryByLabelText } = await renderActive(42, {
+      status: "downloading",
+      resumable: false,
+    });
+    expect(await findByLabelText("Cancel download")).toBeInTheDocument();
+    expect(queryByLabelText("Download actions")).toBeNull();
+  });
+
+  it("a paused frame shows the paused button + a Resume action that calls resumeDownload", async () => {
+    const { findByText, findByLabelText } = await renderActive(42, { status: "paused", resumable: true });
+
+    // The main button surfaces the frozen "Paused" indication.
+    expect(await findByText("Paused")).toBeInTheDocument();
+
+    const dropdownBtn = await findByLabelText("Download actions");
+    const menu = openMenu(dropdownBtn);
+    const resumeItem = await menu.findByText("Resume");
+
+    await act(async () => {
+      resumeItem.click();
+      await Promise.resolve();
+    });
+
+    // Non-vacuous: the exact rom_id was resumed.
+    expect(backend.resumeDownload).toHaveBeenCalledWith(42);
+  });
+
+  it("Cancel from the resumable dropdown still cancels the download", async () => {
+    const { findByLabelText } = await renderActive(42, { status: "downloading", resumable: true });
+    const dropdownBtn = await findByLabelText("Download actions");
+
+    const { findByText } = openMenu(dropdownBtn);
+    const cancelItem = await findByText("Cancel");
+
+    await act(async () => {
+      cancelItem.click();
+      await Promise.resolve();
+    });
+
+    expect(backend.cancelDownload).toHaveBeenCalledWith(42);
+  });
+
+  it("rehydrates a paused download on mount from the queue (survives leaving + returning)", async () => {
+    // No Download click and no live progress frame — the paused state is
+    // recovered purely from getDownloadQueue at mount (#1124 M1). Without this,
+    // a remounted button shows a plain "Download" whose click would restart
+    // from byte 0, discarding the paused partial.
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+      downloads: [
+        {
+          rom_id: 42,
+          rom_name: "Test ROM",
+          platform_name: "PSX",
+          file_name: "test.chd",
+          status: "paused",
+          progress: 0.3,
+          bytes_downloaded: 300,
+          total_bytes: 1000,
+          resumable: true,
+        },
+      ],
+    });
+
+    const { findByText, findByLabelText } = render(<CustomPlayButton appId={100} />);
+
+    // Rehydrated straight into the paused shape — Resume is reachable without
+    // ever showing a fresh "Download" button.
+    expect(await findByText("Paused")).toBeInTheDocument();
+    const dropdownBtn = await findByLabelText("Download actions");
+    const menu = openMenu(dropdownBtn);
+    const resumeItem = await menu.findByText("Resume");
+
+    await act(async () => {
+      resumeItem.click();
+      await Promise.resolve();
+    });
+
+    expect(backend.resumeDownload).toHaveBeenCalledWith(42);
   });
 });
 

@@ -648,6 +648,7 @@ describe("MainPage", () => {
         progress: bytes,
         bytes_downloaded: bytes,
         total_bytes: total,
+        resumable: false,
       };
       setDownloads([item]);
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
@@ -1501,6 +1502,7 @@ describe("MainPage", () => {
             progress: 0,
             bytes_downloaded: 0,
             total_bytes: 1024,
+            resumable: false,
           },
         ]);
         const onNavigate = vi.fn();
@@ -1567,6 +1569,7 @@ describe("MainPage", () => {
           progress: 50,
           bytes_downloaded: 512,
           total_bytes: 1024,
+          resumable: false,
         },
       ]);
       const container = await renderAndTick();
@@ -1585,6 +1588,7 @@ describe("MainPage", () => {
           progress: 0,
           bytes_downloaded: 0,
           total_bytes: 1024,
+          resumable: false,
         },
         {
           rom_id: 2,
@@ -1595,6 +1599,7 @@ describe("MainPage", () => {
           progress: 0,
           bytes_downloaded: 0,
           total_bytes: 1024,
+          resumable: false,
         },
         {
           rom_id: 3,
@@ -1605,6 +1610,7 @@ describe("MainPage", () => {
           progress: 0,
           bytes_downloaded: 0,
           total_bytes: 1024,
+          resumable: false,
         },
       ]);
       const container = await renderAndTick();
@@ -1622,6 +1628,7 @@ describe("MainPage", () => {
           progress: 100,
           bytes_downloaded: 100,
           total_bytes: 100,
+          resumable: false,
         },
         {
           rom_id: 2,
@@ -1632,6 +1639,7 @@ describe("MainPage", () => {
           progress: 0,
           bytes_downloaded: 0,
           total_bytes: 100,
+          resumable: false,
         },
       ]);
       const container = await renderAndTick();
@@ -1649,6 +1657,7 @@ describe("MainPage", () => {
           progress: 25,
           bytes_downloaded: 256,
           total_bytes: 1024,
+          resumable: false,
         },
       ]);
       const container = await renderAndTick();
@@ -1669,6 +1678,7 @@ describe("MainPage", () => {
           progress: 0,
           bytes_downloaded: 0,
           total_bytes: 0,
+          resumable: false,
         },
       ]);
       const container = await renderAndTick();

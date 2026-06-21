@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, FC } from "react";
+import { useState, useEffect, useRef, FC, Fragment } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, Field, ProgressBar } from "@decky/ui";
-import { getDownloadQueue, cancelDownload } from "../api/backend";
+import { getDownloadQueue, cancelDownload, pauseDownload, resumeDownload } from "../api/backend";
 import { getDownloadState, setDownloads } from "../utils/downloadStore";
 import { formatBytes } from "../utils/formatters";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -37,7 +37,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
     (current: DownloadItem[]) =>
     (prev: Set<number>): Set<number> => {
       const restarted = current.filter(
-        (d) => (d.status === "downloading" || d.status === "queued") && prev.has(d.rom_id),
+        (d) => (d.status === "downloading" || d.status === "queued" || d.status === "paused") && prev.has(d.rom_id),
       );
       if (restarted.length === 0) return prev;
       const next = new Set(prev);
@@ -79,6 +79,22 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
     }
   };
 
+  const handlePause = async (romId: number) => {
+    try {
+      await pauseDownload(romId);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleResume = async (romId: number) => {
+    try {
+      await resumeDownload(romId);
+    } catch {
+      // ignore
+    }
+  };
+
   const handleClearCompleted = () => {
     const finishedIds = downloads
       .filter((d) => d.status === "completed" || d.status === "failed" || d.status === "cancelled")
@@ -91,7 +107,9 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
   };
 
   const visible = downloads.filter((d) => !cleared.has(d.rom_id));
-  const active = visible.filter((d) => d.status === "queued" || d.status === "downloading");
+  // Paused downloads stay in the active section — they're not finished, the
+  // partial transfer is held for resume.
+  const active = visible.filter((d) => d.status === "queued" || d.status === "downloading" || d.status === "paused");
   const finished = visible.filter((d) => d.status === "completed" || d.status === "failed" || d.status === "cancelled");
   const hasFinished = downloads.some(
     (d) => !cleared.has(d.rom_id) && (d.status === "completed" || d.status === "failed" || d.status === "cancelled"),
@@ -140,7 +158,7 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
                       data-testid="dl-caption"
                       style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                     >
-                      {item.rom_name} ({item.platform_name})
+                      {item.rom_name} ({item.platform_name}){item.status === "paused" ? " — Paused" : ""}
                     </span>
                     <span data-testid="dl-bytes" style={{ flexShrink: 0 }}>
                       {item.total_bytes > 0
@@ -156,16 +174,42 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
               </PanelSectionRow>
             ))}
             {active.map((item) => (
-              <PanelSectionRow key={`cancel-${item.rom_id}`}>
-                <ButtonItem
-                  layout="below"
-                  onClick={() => {
-                    detach(handleCancel(item.rom_id));
-                  }}
-                >
-                  Cancel {item.rom_name}
-                </ButtonItem>
-              </PanelSectionRow>
+              <Fragment key={`actions-${item.rom_id}`}>
+                {item.status === "downloading" && item.resumable && (
+                  <PanelSectionRow>
+                    <ButtonItem
+                      layout="below"
+                      onClick={() => {
+                        detach(handlePause(item.rom_id));
+                      }}
+                    >
+                      Pause {item.rom_name}
+                    </ButtonItem>
+                  </PanelSectionRow>
+                )}
+                {item.status === "paused" && (
+                  <PanelSectionRow>
+                    <ButtonItem
+                      layout="below"
+                      onClick={() => {
+                        detach(handleResume(item.rom_id));
+                      }}
+                    >
+                      Resume {item.rom_name}
+                    </ButtonItem>
+                  </PanelSectionRow>
+                )}
+                <PanelSectionRow>
+                  <ButtonItem
+                    layout="below"
+                    onClick={() => {
+                      detach(handleCancel(item.rom_id));
+                    }}
+                  >
+                    Cancel {item.rom_name}
+                  </ButtonItem>
+                </PanelSectionRow>
+              </Fragment>
             ))}
 
             {finished.map((item) => (

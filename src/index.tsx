@@ -433,15 +433,19 @@ export default definePlugin(() => {
   const downloadProgressListener = addEventListener<[DownloadProgressEvent]>(
     "download_progress",
     (data: DownloadProgressEvent) => {
+      // Carry the server's resumability verdict from the frame; a frame that
+      // omits it (older shape) keeps the prior value instead of clobbering it.
+      const prev = getDownloadState().find((d) => d.rom_id === data.rom_id);
       updateDownload({
         rom_id: data.rom_id,
         rom_name: data.rom_name,
         platform_name: data.platform_name,
         file_name: data.file_name,
-        status: data.status as "queued" | "downloading" | "completed" | "failed" | "cancelled",
+        status: data.status as "queued" | "downloading" | "completed" | "failed" | "cancelled" | "paused",
         progress: data.progress,
         bytes_downloaded: data.bytes_downloaded,
         total_bytes: data.total_bytes,
+        resumable: data.resumable ?? prev?.resumable ?? false,
       });
     },
   );
@@ -459,6 +463,7 @@ export default definePlugin(() => {
         progress: 1,
         bytes_downloaded: prev?.bytes_downloaded ?? 0,
         total_bytes: prev?.total_bytes ?? 0,
+        resumable: data.resumable ?? prev?.resumable ?? false,
       });
       toaster.toast({
         title: "RomM Sync",

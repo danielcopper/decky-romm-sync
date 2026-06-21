@@ -19,6 +19,9 @@ import {
   getCachedGameDetail,
   startDownload,
   cancelDownload,
+  pauseDownload,
+  resumeDownload,
+  getDownloadQueue,
   removeRom,
   debugLog,
   preLaunchSync,
@@ -63,6 +66,10 @@ async function handleConflicts(conflicts: SyncConflict[]): Promise<"cancel" | "r
 interface DownloadProgress {
   bytesDownloaded: number;
   totalBytes: number;
+  /** Server honoured the Range probe — Pause/Resume is offered. */
+  resumable: boolean;
+  /** True once a paused frame arrives; the transfer is frozen, awaiting Resume. */
+  paused: boolean;
 }
 
 function lerpColor(a: [number, number, number], b: [number, number, number], t: number): string {
@@ -170,6 +177,30 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         } else {
           detach(debugLog(`CustomPlayButton: -> download`));
           setState("download");
+          // Rehydrate an in-flight or paused download on remount. The cached
+          // detail only knows installed-or-not, so without this a paused (or
+          // still-running) download shows a plain "Download" button — and a
+          // click would `start_download` → truncate the partial .tmp → restart
+          // from 0, discarding the paused progress the user expected to resume.
+          // Seed from the live queue so the Pause/Resume state survives
+          // navigating away and back (#1124).
+          try {
+            const queue = await getDownloadQueue();
+            // No post-await `cancelled` guard needed: React 18 no-ops a setState
+            // on an unmounted component, and a remount keeps its own state.
+            const entry = queue.downloads.find((d) => d.rom_id === rid);
+            if (entry && (entry.status === "downloading" || entry.status === "queued" || entry.status === "paused")) {
+              setActionPending(true);
+              setDlProgress({
+                bytesDownloaded: entry.bytes_downloaded,
+                totalBytes: entry.total_bytes,
+                resumable: entry.resumable,
+                paused: entry.status === "paused",
+              });
+            }
+          } catch (e) {
+            logError(`CustomPlayButton: failed to rehydrate download state: ${e}`);
+          }
         }
       } catch (e) {
         logError(`CustomPlayButton init error: ${e}`);
@@ -196,7 +227,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           setActionPending(false);
           setDlProgress(null);
         } else {
-          setDlProgress({ bytesDownloaded: evt.bytes_downloaded, totalBytes: evt.total_bytes });
+          // A frame that omits resumable (older shape / progress tick before
+          // the headers land) keeps the prior verdict instead of resetting it.
+          setDlProgress((prev) => ({
+            bytesDownloaded: evt.bytes_downloaded,
+            totalBytes: evt.total_bytes,
+            resumable: evt.resumable ?? prev?.resumable ?? false,
+            paused: evt.status === "paused",
+          }));
         }
       },
     );
@@ -505,6 +543,22 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     detach(cancelDownload(romId).catch(() => {}));
   };
 
+  // Pause an in-flight (resumable) download. Fire-and-forget: the backend
+  // freezes the transfer and emits a "paused" download_progress frame the
+  // listener reacts to (sets dlProgress.paused). .catch keeps the click safe.
+  const handlePause = () => {
+    if (romId == null) return;
+    detach(pauseDownload(romId).catch(() => {}));
+  };
+
+  // Resume a paused download. Fire-and-forget: the backend re-begins the
+  // transfer from the partial .tmp and emits "downloading" frames the listener
+  // reacts to (clears the paused flag). .catch keeps the click safe.
+  const handleResume = () => {
+    if (romId == null) return;
+    detach(resumeDownload(romId).catch(() => {}));
+  };
+
   const handleUninstall = async () => {
     if (!romId) return;
     detach(debugLog(`CustomPlayButton: uninstalling romId=${romId}`));
@@ -536,6 +590,29 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           }}
         >
           Uninstall
+        </MenuItem>
+      </Menu>,
+      getEventTarget(e),
+    );
+  };
+
+  // Pause/Resume + Cancel menu for a resumable download. When the transfer is
+  // paused the primary entry is Resume; otherwise it's Pause. Cancel is always
+  // offered.
+  const showDownloadActionsMenu = (e: MouseEvent, paused: boolean) => {
+    showContextMenu(
+      <Menu label="Download Actions">
+        {paused ? (
+          <MenuItem key="resume" onClick={handleResume}>
+            Resume
+          </MenuItem>
+        ) : (
+          <MenuItem key="pause" onClick={handlePause}>
+            Pause
+          </MenuItem>
+        )}
+        <MenuItem key="cancel" tone="destructive" onClick={handleCancelDownload}>
+          Cancel
         </MenuItem>
       </Menu>,
       getEventTarget(e),
@@ -613,17 +690,29 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   if (state === "download") {
     const t = dlProgress && dlProgress.totalBytes > 0 ? dlProgress.bytesDownloaded / dlProgress.totalBytes : 0;
     const downloading = actionPending && dlProgress;
+    const paused = downloading ? dlProgress.paused : false;
+    const resumable = downloading ? dlProgress.resumable : false;
 
     // Fill color shifts from blue to green as download progresses
     const fillColor = downloading
       ? `linear-gradient(to right, ${lerpColor(BLUE_LEFT, GREEN_LEFT, t)}, ${lerpColor(BLUE_RIGHT, GREEN_RIGHT, t)})`
       : "linear-gradient(to right, #1a9fff, #0078d4)";
 
-    // Pulse color shifts from blue to green with progress
-    const pulseColor = downloading ? lerpColor(BLUE_LEFT, GREEN_LEFT, t) : "rgba(26,159,255,0.7)";
+    // Pulse color shifts from blue to green with progress; a paused download
+    // freezes to a dim amber so the whole group reads as "halted, not running".
+    let pulseColor: string;
+    if (paused) {
+      pulseColor = "rgba(212,167,44,0.7)";
+    } else if (downloading) {
+      pulseColor = lerpColor(BLUE_LEFT, GREEN_LEFT, t);
+    } else {
+      pulseColor = "rgba(26,159,255,0.7)";
+    }
 
     let dlLabel: string;
-    if (downloading) {
+    if (paused) {
+      dlLabel = "Paused";
+    } else if (downloading) {
       dlLabel = formatProgress(dlProgress.bytesDownloaded, dlProgress.totalBytes);
     } else if (actionPending) {
       dlLabel = "Starting...";
@@ -642,28 +731,25 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
 
     // While a download is actively running, the main button shares the row
-    // with a right-side action section (the cancel X). Square off its right
-    // edge so it butts cleanly against that section; idle/starting keeps the
-    // full pill radius.
+    // with a right-side action section (the cancel X or a Pause/Resume
+    // dropdown). Square off its right edge so it butts cleanly against that
+    // section; idle/starting keeps the full pill radius. The pulse animation
+    // lives on the container (romm-dl-active-group) so it spans the whole
+    // control — button + action — as one cohesive pulsing group.
     const downloadBtn = (
       <DialogButton
-        className={[appActionButtonClasses?.PlayButton, "romm-btn-download", downloading && "romm-dl-active"]
-          .filter(Boolean)
-          .join(" ")}
-        style={
-          {
-            ...mainBtnStyle,
-            borderRadius: downloading ? "2px 0 0 2px" : "2px",
-            background: baseBg,
-            "--romm-pulse-color": pulseColor,
-          } as React.CSSProperties
-        }
+        className={[appActionButtonClasses?.PlayButton, "romm-btn-download"].filter(Boolean).join(" ")}
+        style={{
+          ...mainBtnStyle,
+          borderRadius: downloading ? "2px 0 0 2px" : "2px",
+          background: baseBg,
+        }}
         onClick={() => {
           detach(handleDownload());
         }}
         disabled={actionPending || isOffline}
       >
-        {/* Progress fill bar */}
+        {/* Progress fill bar — kept at its frozen width while paused. */}
         {downloading && (
           <div
             className="romm-dl-fill"
@@ -678,7 +764,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     );
 
     if (!downloading) {
-      // Idle ("Download") or "Starting..." — single full-width button, no X.
+      // Idle ("Download") or "Starting..." — single full-width button, no action.
       return (
         <Focusable ref={containerRef} className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
           {downloadBtn}
@@ -686,34 +772,70 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       );
     }
 
+    const cancelX = (
+      <DialogButton
+        className="romm-btn-cancel"
+        aria-label="Cancel download"
+        title="Cancel download"
+        style={{
+          ...dropdownArrowStyle,
+          background: "linear-gradient(to right, #0a3a5a, #062a45)",
+          color: "#fff",
+        }}
+        onClick={handleCancelDownload}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path
+            d="M1 1L11 11M11 1L1 11"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      </DialogButton>
+    );
+
+    // Resumable downloads (live or paused) get a dropdown chevron whose menu
+    // offers Pause/Resume + Cancel; non-resumable downloads keep the direct
+    // cancel X (the #1122 behavior — multi-file zips and Cloudflare can't
+    // resume, so there's nothing to pause).
+    const dropdown = (
+      <DialogButton
+        className="romm-btn-cancel"
+        aria-label="Download actions"
+        title="Download actions"
+        style={{
+          ...dropdownArrowStyle,
+          background: paused
+            ? "linear-gradient(to right, #6b5a1f, #4d4015)"
+            : "linear-gradient(to right, #0a3a5a, #062a45)",
+          color: "#fff",
+        }}
+        onClick={(e: MouseEvent) => showDownloadActionsMenu(e, paused)}
+      >
+        <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path
+            d="M1 1.5L6 6.5L11 1.5"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </DialogButton>
+    );
+
     // Active download: button + a right-side action section. The section is a
-    // flex sub-container so a second action (Pause, follow-up #1049) can join
-    // next to the X later without restructuring the row.
+    // flex sub-container so the dropdown-vs-X choice is a clean conditional.
+    // The pulse runs on the container so it spans the whole group.
     return (
-      <Focusable ref={containerRef} className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
+      <Focusable
+        ref={containerRef}
+        className={[appActionButtonClasses?.PlayButtonContainer, "romm-dl-active-group"].filter(Boolean).join(" ")}
+        style={{ ...btnContainerStyle, "--romm-pulse-color": pulseColor } as React.CSSProperties}
+      >
         {downloadBtn}
-        <div style={{ display: "flex", flexDirection: "row", height: "100%" }}>
-          <DialogButton
-            className="romm-btn-cancel"
-            aria-label="Cancel download"
-            title="Cancel download"
-            style={{
-              ...dropdownArrowStyle,
-              background: "linear-gradient(to right, #0a3a5a, #062a45)",
-              color: "#fff",
-            }}
-            onClick={handleCancelDownload}
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path
-                d="M1 1L11 11M11 1L1 11"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </DialogButton>
-        </div>
+        <div style={{ display: "flex", flexDirection: "row", height: "100%" }}>{resumable ? dropdown : cancelX}</div>
       </Focusable>
     );
   }

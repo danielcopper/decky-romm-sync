@@ -43,6 +43,7 @@ export function handleGlobalDownloadFailure(
     progress: prev?.progress ?? 0,
     bytes_downloaded: prev?.bytes_downloaded ?? 0,
     total_bytes: prev?.total_bytes ?? 0,
+    resumable: prev?.resumable ?? false,
     error: event.error_message,
   });
   toast.toast({

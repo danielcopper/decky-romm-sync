@@ -74,6 +74,7 @@ function makeItem(overrides: Partial<DownloadItem> = {}): DownloadItem {
     progress: 25,
     bytes_downloaded: 256,
     total_bytes: 1024,
+    resumable: false,
     ...overrides,
   };
 }
@@ -105,6 +106,8 @@ describe("DownloadQueue", () => {
     // Default mount fetch resolves to an empty queue; tests override per case.
     vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [] });
     vi.mocked(backend.cancelDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.pauseDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.resumeDownload).mockResolvedValue({ success: true, message: "" });
   });
 
   afterEach(() => {
@@ -340,6 +343,59 @@ describe("DownloadQueue", () => {
       });
       // Component still rendered normally — the catch swallowed cleanly.
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Cancellable (Genesis)");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // handlePause / handleResume (#1124)
+  // ---------------------------------------------------------------------------
+  describe("pause / resume", () => {
+    it("a downloading + resumable item renders a Pause control that calls pauseDownload(rom_id)", async () => {
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+        downloads: [makeItem({ rom_id: 88, rom_name: "Zelda", status: "downloading", resumable: true })],
+      });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      const pause = buttonByText(container, "Pause Zelda");
+      expect(pause).not.toBeNull();
+      await act(async () => {
+        fireEvent.click(pause!);
+        await Promise.resolve();
+      });
+      expect(backend.pauseDownload).toHaveBeenCalledWith(88);
+    });
+
+    it("a downloading + NOT resumable item renders no Pause control", async () => {
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+        downloads: [makeItem({ rom_id: 89, rom_name: "Metroid", status: "downloading", resumable: false })],
+      });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      expect(buttonByText(container, "Pause Metroid")).toBeNull();
+      // Cancel is still offered for the non-resumable active download.
+      expect(buttonByText(container, "Cancel Metroid")).not.toBeNull();
+    });
+
+    it("a paused item stays in the active section and renders a Resume control that calls resumeDownload(rom_id)", async () => {
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+        downloads: [makeItem({ rom_id: 90, rom_name: "Kirby", status: "paused", resumable: true })],
+      });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      // Still rendered as active (caption present, with the Paused marker).
+      const caption = container.querySelector('[data-testid="dl-caption"]');
+      expect(caption?.textContent).toBe("Kirby (Genesis) — Paused");
+
+      const resume = buttonByText(container, "Resume Kirby");
+      expect(resume).not.toBeNull();
+      await act(async () => {
+        fireEvent.click(resume!);
+        await Promise.resolve();
+      });
+      expect(backend.resumeDownload).toHaveBeenCalledWith(90);
     });
   });
 

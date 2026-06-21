@@ -112,7 +112,8 @@ export function hideNativePlaySection(playSectionClass: string) {
   pointer-events: none;
   z-index: 0;
 }
-.romm-dl-active {
+.romm-dl-active-group {
+  border-radius: 2px;
   animation: romm-dl-pulse 2s ease-in-out infinite;
 }
 .romm-dl-label {

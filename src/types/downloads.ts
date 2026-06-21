@@ -8,10 +8,17 @@ export interface DownloadItem {
   rom_name: string;
   platform_name: string;
   file_name: string;
-  status: "queued" | "downloading" | "completed" | "failed" | "cancelled";
+  status: "queued" | "downloading" | "completed" | "failed" | "cancelled" | "paused";
   progress: number;
   bytes_downloaded: number;
   total_bytes: number;
+  /**
+   * Whether the in-flight transfer can be paused and resumed. True only for
+   * single-file ROMs on a direct connection where the server honoured the
+   * Range probe; false for multi-file (zip) ROMs and servers behind Cloudflare.
+   * The frontend offers Pause/Resume only when this is true.
+   */
+  resumable: boolean;
   error?: string;
 }
 
@@ -24,6 +31,8 @@ export interface DownloadProgressEvent {
   progress: number;
   bytes_downloaded: number;
   total_bytes: number;
+  /** Server's Range-support verdict; carried live once response headers arrive. */
+  resumable?: boolean;
 }
 
 export interface DownloadCompleteEvent {
@@ -39,6 +48,8 @@ export interface DownloadCompleteEvent {
   app_id: number | null;
   /** Full launch command for the just-downloaded ROM (now installed/launchable). */
   launch_options: string;
+  /** Whether the just-finished transfer was resumable (carried for store parity). */
+  resumable?: boolean;
 }
 
 export interface DownloadFailedEvent {
