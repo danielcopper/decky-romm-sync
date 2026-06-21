@@ -8,11 +8,9 @@ per-method ``*_side_effect`` attributes (persistent) — no
 ``run_in_executor`` patching, no ``MagicMock(romm_api)``.
 """
 
-import asyncio
-
 import pytest
 
-from domain.sync_state import SyncState
+from domain.sync_state import SyncCancelled, SyncState
 from domain.work_unit import WorkUnit
 
 
@@ -31,7 +29,10 @@ class TestCheckCancelling:
 
     def test_raises_when_cancelling(self, plugin):
         plugin._sync_service._sync_state = SyncState.CANCELLING
-        with pytest.raises(asyncio.CancelledError):
+        # The cooperative cancel signal is the dedicated ``SyncCancelled``
+        # BaseException — NOT ``asyncio.CancelledError`` — so a cooperative
+        # sync cancel is never conflated with a real asyncio task cancel.
+        with pytest.raises(SyncCancelled):
             plugin._sync_service._fetcher._check_cancelling()
 
     def test_noop_when_running(self, plugin):

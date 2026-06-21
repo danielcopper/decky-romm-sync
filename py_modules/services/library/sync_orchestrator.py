@@ -31,7 +31,7 @@ from domain.sync_diff import (
 )
 from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
-from domain.sync_state import SyncState
+from domain.sync_state import SyncCancelled, SyncState
 from lib.errors import classify_error
 from lib.list_result import ErrorCode
 
@@ -184,7 +184,7 @@ class SyncOrchestrator:
             total_units = len(work_queue)
             for unit_index, unit in enumerate(work_queue, 1):
                 if box.is_cancelling():
-                    raise asyncio.CancelledError(_SYNC_CANCELLED)
+                    raise SyncCancelled(_SYNC_CANCELLED)
                 await self.emit_progress(
                     SyncStage.FETCHING,
                     current=len(all_roms),
@@ -242,11 +242,14 @@ class SyncOrchestrator:
                 "changed_names": [s["name"] for s in changed[:10]],
                 "preview_id": preview_id,
             }
-        except asyncio.CancelledError:
+        except SyncCancelled:
             # sync_preview is a Decky callable — the frontend awaits its return.
             # Re-raising leaves that promise unsettled, so a user-initiated
             # cancel mid-preview returns the canonical failure shape instead of
-            # propagating the CancelledError out of the callable (#1035).
+            # propagating the cooperative cancel out of the callable (#1035).
+            # SyncCancelled is a BaseException (not Exception), so it skips the
+            # generic ``except Exception`` below and lands here as a distinct
+            # cooperative signal — never conflated with a real asyncio cancel.
             box.pending_delta = None
             await self._finish_sync(_SYNC_CANCELLED)
             return {"success": False, "reason": "cancelled", "message": _SYNC_CANCELLED}
@@ -469,13 +472,15 @@ class SyncOrchestrator:
                     if box.is_cancelling():
                         cancelled = True
                         break
-            except asyncio.CancelledError:
+            except SyncCancelled:
                 # A cooperative cancel delivered mid-fetch (fetcher._check_cancelling
-                # raised inside _sync_one_unit) bypasses the is_cancelling()
-                # checkpoints. Route it into the same graceful finalize the
-                # checkpoint break uses, so the SyncRun is marked cancelled and
-                # sync_state is restored to IDLE instead of wedging until a plugin
-                # reload (#1035).
+                # raised SyncCancelled inside _sync_one_unit) bypasses the
+                # is_cancelling() checkpoints. Route it into the same graceful
+                # finalize the checkpoint break uses, so the SyncRun is marked
+                # cancelled and sync_state is restored to IDLE instead of wedging
+                # until a plugin reload (#1035). SyncCancelled is a BaseException,
+                # so a REAL asyncio.CancelledError raised mid-fetch is NOT caught
+                # here — it propagates out, never swallowed into the finalize.
                 cancelled = True
 
             # Final phase: stale cleanup + Steam collections + sync_complete.

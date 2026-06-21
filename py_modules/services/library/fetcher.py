@@ -12,17 +12,17 @@ elsewhere (per applied unit) so a fetch never mutates the cache.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
-from domain.sync_state import SyncState
+from domain.sync_state import SyncCancelled, SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
+    import asyncio
     import logging
     from collections.abc import Awaitable, Callable
 
@@ -367,9 +367,9 @@ class LibraryFetcher:
         return platforms
 
     def _check_cancelling(self):
-        """Raise CancelledError if sync is being cancelled."""
+        """Raise SyncCancelled if sync is being cancelled."""
         if self._sync_state.sync_state == SyncState.CANCELLING:
-            raise asyncio.CancelledError(_SYNC_CANCELLED)
+            raise SyncCancelled(_SYNC_CANCELLED)
 
     # ── Per-unit work queue ──────────────────────────────────────
 
@@ -573,6 +573,13 @@ class LibraryFetcher:
                     limit,
                     offset,
                 )
+            except SyncCancelled:
+                # A cooperative cancel signalled mid-pagination is NOT a fetch
+                # failure — let it reach the orchestrator's ``except SyncCancelled``
+                # untouched, never logged as an error. (In production the signal
+                # is raised by ``_check_cancelling`` above, outside this ``try``;
+                # this guard also covers a cancel raised from within ``list_roms``.)
+                raise
             except Exception:
                 # Re-raise so the orchestrator aborts before the stale-cleanup
                 # pass runs against a partial list. Swallowing here would

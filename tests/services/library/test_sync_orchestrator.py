@@ -702,27 +702,37 @@ class TestSyncPreviewErrorHandling:
 
     @pytest.mark.asyncio
     async def test_cancelled_error_returns_canonical_failure(self, plugin, fake_romm_api):
-        """A cancel delivered during sync_preview RETURNS the canonical failure
+        """A cooperative cancel during sync_preview RETURNS the canonical failure
         shape — it does NOT re-raise out of the Decky callable (#1035).
 
         sync_preview is awaited by the frontend; re-raising would leave that
-        promise unsettled. The cooperative cancel must surface as
-        ``{success: False, reason: "cancelled", message: ...}`` and leave
-        sync_state IDLE with no pending delta.
+        promise unsettled. The cooperative cancel — now the dedicated
+        ``SyncCancelled`` BaseException, matching the production signal raised
+        by ``fetcher._check_cancelling`` and the per-unit checkpoint — must
+        surface as ``{success: False, reason: "cancelled", message: ...}`` and
+        leave sync_state IDLE with no pending delta. ``SyncCancelled`` skips the
+        generic ``except Exception`` and lands in ``except SyncCancelled``.
         """
         import decky
+
+        from domain.sync_state import SyncCancelled
 
         decky.emit.reset_mock()
         _use_fake_romm(plugin, fake_romm_api)
 
-        fake_romm_api.list_platforms_side_effect = asyncio.CancelledError("cancelled")
+        fake_romm_api.list_platforms = MagicMock(side_effect=SyncCancelled("Sync cancelled"))
         plugin.settings["enabled_platforms"] = {"1": True}
+
+        # sync_preview only runs from IDLE — guard against a leaked non-IDLE state.
+        assert plugin._sync_service._sync_state == SyncState.IDLE
 
         result = await plugin._sync_service.sync_preview()
 
         assert result == {"success": False, "reason": "cancelled", "message": "Sync cancelled"}
         assert plugin._sync_service._sync_state == SyncState.IDLE
         assert plugin._sync_service._pending_delta is None
+        # The cooperative signal genuinely originated from the fetch.
+        fake_romm_api.list_platforms.assert_called()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -2113,19 +2123,25 @@ class TestDoSyncPerUnitErrors:
         """A cooperative cancel delivered MID per-unit fetch recovers all state (#1035).
 
         The cancel arrives while ``_sync_one_unit`` is fetching the unit's
-        ROMs (``fetcher._check_cancelling`` raising ``CancelledError`` from
+        ROMs (``fetcher._check_cancelling`` raising ``SyncCancelled`` from
         inside ``list_roms``) — NOT at an ``is_cancelling()`` checkpoint and
-        NOT during ``build_work_queue``. On the un-fixed code that
-        ``BaseException`` escapes the outer ``except Exception``, leaving
-        sync_state stuck CANCELLING, the SyncRun stuck ``running``, and
-        sync_progress stuck ``running: True`` until a plugin reload.
+        NOT during ``build_work_queue``. ``SyncCancelled`` is a
+        ``BaseException`` (like ``asyncio.CancelledError``), so it unwinds
+        through the fetcher's ``except Exception`` re-raise around ``list_roms``
+        untouched and lands in ``_do_sync_per_unit``'s dedicated
+        ``except SyncCancelled``. On the un-fixed code (raising
+        ``asyncio.CancelledError`` and catching it) sonar's S7497 would flag the
+        swallow; the refactor uses a distinct cooperative type so the swallow is
+        scoped to the cooperative signal only.
 
-        The fix routes that mid-fetch CancelledError into the same graceful
+        The handler routes that mid-fetch SyncCancelled into the same graceful
         finalize the checkpoint break uses. This asserts all three recovery
         post-conditions AND that ``_do_sync_per_unit`` does NOT propagate the
-        CancelledError (contrast with the build_work_queue path, which
-        re-raises).
+        cooperative cancel (contrast with the build_work_queue path, which
+        re-raises a real asyncio cancel).
         """
+        from domain.sync_state import SyncCancelled
+
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
@@ -2140,17 +2156,28 @@ class TestDoSyncPerUnitErrors:
         )
         plugin.settings["enabled_platforms"] = {"1": True}
 
-        # The per-unit ROM fetch raises CancelledError mid-flight — exactly
-        # how ``fetcher._check_cancelling`` signals a cooperative cancel that
-        # landed after the platform listing but before the unit ack.
-        fake_romm_api.list_roms_side_effect = asyncio.CancelledError("Sync cancelled")
+        # The per-unit ROM fetch raises SyncCancelled mid-flight — exactly how
+        # ``fetcher._check_cancelling`` now signals a cooperative cancel that
+        # landed after the platform listing but before the unit ack. A tracked
+        # MagicMock (not just ``list_roms_side_effect``) lets us pin that the
+        # signal was raised FROM the per-unit fetch — not bypassed by an early
+        # ``is_cancelling()`` checkpoint or the incremental-skip path, which would
+        # finalize gracefully for the WRONG reason.
+        fake_romm_api.list_roms = MagicMock(side_effect=SyncCancelled("Sync cancelled"))
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._sync_state = SyncState.RUNNING
         plugin._sync_service._current_sync_id = "run-mid-fetch-cancel"
 
-        # Must NOT propagate the CancelledError — awaiting returns normally.
+        # Guard against cross-test state leakage: a stale CANCELLING at entry
+        # would break the unit loop before the fetch and pass for the wrong reason.
+        assert plugin._sync_service._sync_state == SyncState.RUNNING
+
+        # Must NOT propagate the cooperative cancel — awaiting returns normally.
         await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # The cooperative signal genuinely originated from the per-unit fetch.
+        fake_romm_api.list_roms.assert_called()
 
         # 1. sync_state restored to IDLE (not stuck CANCELLING).
         assert plugin._sync_service._sync_state == SyncState.IDLE
@@ -2162,6 +2189,98 @@ class TestDoSyncPerUnitErrors:
         assert run.finished_at is not None
         # 3. The persisted progress snapshot is no longer running.
         assert plugin._sync_service._orchestrator.get_sync_status()["running"] is False
+
+    @pytest.mark.asyncio
+    async def test_real_asyncio_cancel_mid_fetch_is_not_swallowed(self, plugin, fake_romm_api):
+        """A REAL ``asyncio.CancelledError`` mid per-unit fetch PROPAGATES (#1035).
+
+        This is the key safety guard the SyncCancelled split buys: the
+        cooperative cancel signal is now a DISTINCT type (``SyncCancelled``),
+        so the unit-loop ``except SyncCancelled`` does NOT catch a genuine
+        ``asyncio.CancelledError`` (e.g. the sync task being cancelled by the
+        runtime). Were the handler still ``except asyncio.CancelledError`` (the
+        S7497-flagged pre-refactor shape), this real cancel would be swallowed
+        into the graceful finalize and the run wrongly marked ``cancelled`` —
+        masking a real task cancellation.
+
+        The real cancel is injected at the ``list_roms`` layer, unwinds through
+        the fetcher's ``except Exception`` re-raise, skips the unit-loop
+        ``except SyncCancelled`` AND the outer ``except Exception`` (both narrower
+        than ``BaseException``), and propagates straight out of
+        ``_do_sync_per_unit``. The SyncRun is left ``running`` — it is NOT marked
+        cancelled by the cooperative swallow path.
+        """
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        # A genuine asyncio task cancellation lands mid-fetch — NOT the
+        # cooperative SyncCancelled signal. A tracked MagicMock guarantees a
+        # 'DID NOT RAISE' can never be a silent fetch bypass: list_roms.assert_called()
+        # below pins that the real cancel originated from the per-unit fetch.
+        fake_romm_api.list_roms = MagicMock(side_effect=asyncio.CancelledError("real task cancel"))
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-real-cancel"
+
+        # Guard against cross-test state leakage (a stale CANCELLING would break
+        # the loop before the fetch and the cancel would never fire).
+        assert plugin._sync_service._sync_state == SyncState.RUNNING
+
+        # The real cancel must PROPAGATE OUT — the cooperative handler does not
+        # catch it.
+        with pytest.raises(asyncio.CancelledError):
+            await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # The cancel genuinely fired from the per-unit fetch (not a bypass).
+        fake_romm_api.list_roms.assert_called()
+
+        # The run is NOT marked cancelled by the swallow path — a real task
+        # cancel leaves the SyncRun ``running`` (never routed through the
+        # graceful cooperative finalize).
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-real-cancel")
+        assert run is not None
+        assert run.status == "running"
+        assert run.finished_at is None
+
+    @pytest.mark.asyncio
+    async def test_real_asyncio_cancel_mid_preview_is_not_swallowed(self, plugin, fake_romm_api):
+        """A REAL ``asyncio.CancelledError`` mid sync_preview PROPAGATES (#1035).
+
+        Symmetric to the per-unit guard: ``sync_preview``'s
+        ``except SyncCancelled`` catches only the cooperative signal. A genuine
+        ``asyncio.CancelledError`` injected at the fetch layer skips it (and the
+        generic ``except Exception``) and propagates straight out of the
+        callable — it is NOT mapped onto the canonical ``cancelled`` failure
+        dict. The ``finally`` still restores sync_state to IDLE.
+        """
+        _use_fake_romm(plugin, fake_romm_api)
+
+        fake_romm_api.list_platforms = MagicMock(side_effect=asyncio.CancelledError("real task cancel"))
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        # sync_preview only runs from IDLE — guard against a leaked non-IDLE state
+        # that would short-circuit it to "sync_in_progress" before the fetch.
+        assert plugin._sync_service._sync_state == SyncState.IDLE
+
+        with pytest.raises(asyncio.CancelledError):
+            await plugin._sync_service.sync_preview()
+
+        # The cancel genuinely fired from the fetch, not a bypass.
+        fake_romm_api.list_platforms.assert_called()
+
+        # The ``finally`` block always restores IDLE, even on a propagated cancel.
+        assert plugin._sync_service._sync_state == SyncState.IDLE
 
     @pytest.mark.asyncio
     async def test_cancelling_state_before_first_unit_skips_processing(self, plugin, fake_romm_api):
