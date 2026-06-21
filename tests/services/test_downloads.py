@@ -2,6 +2,7 @@ import asyncio
 import os
 import sqlite3
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,8 +21,9 @@ from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from lib.list_result import ErrorCode
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
-from services.downloads import DownloadService, DownloadServiceConfig
+from services.downloads import DownloadService, DownloadServiceConfig, _CancelToken
 from services.library import LibraryService, LibraryServiceConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 
@@ -196,8 +198,13 @@ class TestStartDownload:
 
         assert result["success"] is True
         assert 42 in plugin._download_service._download_queue
-        assert plugin._download_service._download_queue[42]["status"] == "downloading"
+        # The initial status is "queued" (#1053) — the task flips it to
+        # "downloading" only once it acquires the concurrency semaphore.
+        assert plugin._download_service._download_queue[42]["status"] == "queued"
         assert len(_create_task_calls) == 1
+        # The download's required bytes are reserved so a sibling's pre-flight
+        # accounts for the outstanding claim.
+        assert 42 in plugin._download_service._reserved_bytes
 
     @pytest.mark.asyncio
     async def test_rejects_already_downloading(self, plugin):
@@ -2531,7 +2538,8 @@ class TestStartDownloadReDownload:
         result = await plugin.start_download(42)
 
         assert result["success"] is True
-        assert plugin._download_service._download_queue[42]["status"] == "downloading"
+        # Re-download re-enters the queue as "queued" (#1053).
+        assert plugin._download_service._download_queue[42]["status"] == "queued"
 
 
 class TestMaybeGenerateM3uMixedFormats:
@@ -3148,8 +3156,28 @@ class TestMakeProgressCallback:
         }
         fake_clock = FakeClock()
         plugin._download_service._clock = fake_clock
+        # The queue mutation now happens inside the function marshaled onto the
+        # loop thread via call_soon_threadsafe (#973), so run it eagerly to
+        # observe the in-place update; create_task just consumes the coroutine.
         plugin._download_service._loop = MagicMock()
-        plugin._download_service._emit = MagicMock(return_value=None)
+        plugin._download_service._loop.call_soon_threadsafe = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+        plugin._download_service._loop.create_task = lambda coro: coro.close() or MagicMock()
+        call_soon_count = [0]
+        _orig_css = plugin._download_service._loop.call_soon_threadsafe
+
+        def _counting_css(fn, *args, **kwargs):
+            call_soon_count[0] += 1
+            return _orig_css(fn, *args, **kwargs)
+
+        plugin._download_service._loop.call_soon_threadsafe = _counting_css
+
+        def _record_emit(_event, _payload):
+            async def _noop():
+                return None
+
+            return _noop()
+
+        plugin._download_service._emit = _record_emit
 
         cb = plugin._download_service._make_progress_callback(8, "Game", "Plat", "game.bin")
 
@@ -3158,14 +3186,14 @@ class TestMakeProgressCallback:
         # 0.5 AND downloaded < total) returns early. No update.
         cb(100, 1000)
         assert plugin._download_service._download_queue[8]["bytes_downloaded"] == 0
-        assert plugin._download_service._loop.call_soon_threadsafe.call_count == 0
+        assert call_soon_count[0] == 0
 
         # Final call: downloaded == total bypasses the throttle even
         # when no time elapsed — the closure always emits the final
         # completion frame.
         cb(1000, 1000)
         assert plugin._download_service._download_queue[8]["bytes_downloaded"] == 1000
-        assert plugin._download_service._loop.call_soon_threadsafe.call_count == 1
+        assert call_soon_count[0] == 1
 
     def test_progress_callback_handles_zero_total(self, plugin):
         """total == 0 must not divide-by-zero — pct/progress fall back to 0."""
@@ -3211,22 +3239,25 @@ class TestCleanupPartialDownloadFailureInjection:
 
         fake = FakeDownloadFileStore()
         target = "/roms/n64/game.z64"
-        # Stage all three candidate paths so each remove call has
-        # something to act on; mark the .tmp variant as failing.
+        # Stage the two transient candidates plus a pre-existing install at the
+        # bare target. Cleanup must remove only the transients (the .tmp variant
+        # is marked failing) and NEVER the bare target (#1049 data-loss guard).
         fake.files[target + _ZIP_TMP_EXT_LITERAL] = b"junk1"
         fake.files[target + _TMP_EXT_LITERAL] = b"junk2"
-        fake.files[target] = b"junk3"
+        fake.files[target] = b"preexisting install"
         fake.remove_failures.add(target + _TMP_EXT_LITERAL)
         plugin._download_service._download_file_store = fake
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             plugin._download_service._cleanup_partial_download(target, False, "game.z64")
 
-        # The failing path is still in the fake (remove raised); the
-        # other two were successfully removed.
+        # The failing transient is still in the fake (remove raised); the
+        # other transient was successfully removed.
         assert (target + _TMP_EXT_LITERAL) in fake.files
         assert (target + _ZIP_TMP_EXT_LITERAL) not in fake.files
-        assert target not in fake.files
+        # The bare target is NEVER touched — a re-download that fails mid-stream
+        # must not destroy a pre-existing (or just-committed) install.
+        assert target in fake.files
         # Warning mentions the failing path.
         assert any(
             "Cleanup failed for" in rec.message and (target + _TMP_EXT_LITERAL) in rec.message for rec in caplog.records
@@ -3257,6 +3288,821 @@ class TestCleanupPartialDownloadFailureInjection:
         assert any(
             "Cleanup failed for directory" in rec.message and extract_dir in rec.message for rec in caplog.records
         )
+
+
+class TestStartDownloadInProgressLeak:
+    """#1048: an early exception in start_download must release the in-progress flag.
+
+    Before the fix, a raise between ``_download_in_progress.add`` and the
+    create_task block left the ROM stuck "Already downloading" until a plugin
+    reload (SD card unmounted → OSError in make_dirs / disk_free; roms_path()
+    returning None → TypeError in the path join).
+    """
+
+    def _wire(self, plugin, tmp_path):
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_make_dirs_oserror_releases_flag(self, plugin, tmp_path):
+        from unittest.mock import AsyncMock
+
+        self._wire(plugin, tmp_path)
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "fs_size_bytes": 1024,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+        }
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
+
+        def _boom(_path):
+            raise OSError("SD card unmounted")
+
+        plugin._download_service._download_file_store.make_dirs = _boom
+
+        result = await plugin.start_download(42)
+
+        # Canonical failure shape.
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.UNKNOWN.value
+        assert "Failed to start download" in result["message"]
+        # The flag is released — the ROM is not stuck "Already downloading".
+        assert 42 not in plugin._download_service._download_in_progress
+        # A second attempt is not rejected as already-downloading; it fails the
+        # same way (make_dirs still boom) — proving the flag was discarded.
+        result2 = await plugin.start_download(42)
+        assert result2["success"] is False
+        assert "Already downloading" not in result2["message"]
+
+    @pytest.mark.asyncio
+    async def test_disk_free_oserror_releases_flag(self, plugin, tmp_path):
+        from unittest.mock import AsyncMock
+
+        self._wire(plugin, tmp_path)
+        rom_detail = {
+            "id": 43,
+            "name": "Mario",
+            "fs_name": "mario.z64",
+            "fs_size_bytes": 1024,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+        }
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
+
+        def _boom(_path):
+            raise OSError("statvfs failed: SD card gone")
+
+        plugin._download_service._download_file_store.disk_free = _boom
+
+        result = await plugin.start_download(43)
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.UNKNOWN.value
+        assert 43 not in plugin._download_service._download_in_progress
+
+    @pytest.mark.asyncio
+    async def test_roms_path_none_releases_flag(self, plugin, tmp_path):
+        from unittest.mock import AsyncMock
+
+        # roms_path() returns None → the os.path.realpath inside safe_join raises
+        # a TypeError that must be caught and the flag released.
+        paths = FakeRetroDeckPaths(roms="", bios="")
+        paths.roms_path = lambda: None  # type: ignore[method-assign,return-value]
+        plugin._download_service._retrodeck_paths = paths
+        rom_detail = {
+            "id": 44,
+            "name": "DK",
+            "fs_name": "dk.z64",
+            "fs_size_bytes": 1024,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+        }
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
+
+        result = await plugin.start_download(44)
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.UNKNOWN.value
+        assert "Failed to start download" in result["message"]
+        assert 44 not in plugin._download_service._download_in_progress
+
+
+class TestProgressCallbackEvictionSafe:
+    """#973: the progress callback must not KeyError if the entry was evicted.
+
+    The dict mutation now runs on the loop thread via call_soon_threadsafe and
+    is guarded by ``.get`` — an evicted rom_id is a no-op (the entry is neither
+    resurrected nor mutated, and no emit is scheduled), never a KeyError off the
+    executor thread.
+    """
+
+    def _eager_loop(self, plugin):
+        """Make call_soon_threadsafe run its target synchronously so the marshaled
+        ``_apply_progress`` executes in-test; create_task consumes the coroutine.
+        Returns the recorded emit calls list.
+        """
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.call_soon_threadsafe = lambda fn, *a, **k: fn(*a, **k)
+        plugin._download_service._loop.create_task = lambda coro: coro.close() or MagicMock()
+        emit_calls: list[tuple[str, dict[str, Any]]] = []
+
+        def _record_emit(event, payload):
+            emit_calls.append((event, payload))
+
+            async def _noop():
+                return None
+
+            return _noop()
+
+        plugin._download_service._emit = _record_emit
+        return emit_calls
+
+    def test_evicted_entry_progress_tick_is_noop(self, plugin):
+        emit_calls = self._eager_loop(plugin)
+        fake_clock = FakeClock()
+        fake_clock.advance(60)  # clear both throttles
+        plugin._download_service._clock = fake_clock
+
+        # No queue entry for rom_id 99 — the callback's _apply_progress hits the
+        # ``.get`` guard. Before the #973 fix this was ``self._download_queue[99]
+        # .update(...)`` on the worker thread → KeyError.
+        cb = plugin._download_service._make_progress_callback(99, "Ghost", "N64", "ghost.z64")
+        cb(256, 512)  # must NOT raise
+
+        # The entry is not resurrected and no emit was scheduled for it.
+        assert 99 not in plugin._download_service._download_queue
+        assert emit_calls == []
+
+    def test_present_entry_still_updates(self, plugin):
+        """Control: a present entry is still updated + an emit scheduled (the guard
+        only suppresses the evicted case)."""
+        emit_calls = self._eager_loop(plugin)
+        fake_clock = FakeClock()
+        fake_clock.advance(60)
+        plugin._download_service._clock = fake_clock
+        plugin._download_service._download_queue[7] = {
+            "rom_id": 7,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+
+        cb = plugin._download_service._make_progress_callback(7, "Mario", "N64", "mario.z64")
+        cb(512, 1024)
+
+        entry = plugin._download_service._download_queue[7]
+        assert entry["bytes_downloaded"] == 512
+        assert entry["total_bytes"] == 1024
+        assert len(emit_calls) == 1
+        assert emit_calls[0][0] == "download_progress"
+        assert emit_calls[0][1]["rom_id"] == 7
+
+
+class TestDoDownloadRedownloadPreservesExisting:
+    """#1049 scenario 2: a re-download that fails mid-transfer must NOT delete the existing install."""
+
+    @pytest.mark.asyncio
+    async def test_failed_redownload_keeps_preexisting_file(self, plugin, tmp_path):
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+        # A pre-existing, fully-installed ROM at the bare target_path.
+        with open(target_path, "wb") as f:
+            f.write(b"REAL INSTALLED ROM DATA")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        def fake_download(_rom_id, _filename, _dest, _progress_callback=None):
+            raise OSError("network died mid-redownload")
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+
+        # The pre-existing install must SURVIVE — this was the data-loss bug.
+        assert os.path.exists(target_path)
+        with open(target_path, "rb") as f:
+            assert f.read() == b"REAL INSTALLED ROM DATA"
+        assert plugin._download_service._download_queue[42]["status"] == "failed"
+
+
+class TestDoDownloadCancelReconcile:
+    """#1049 scenario 1: a cancel that loses the race to a committed install is
+    surfaced as COMPLETED, never torn down.
+
+    These use a REAL ``run_in_executor`` with a commit that blocks until the test
+    releases it, so the asyncio future-cancellation semantics are faithful: a
+    cancel delivered while awaiting the post-IO future CANCELS that future, so a
+    plain re-await raises ``CancelledError`` (not the value) — which is exactly
+    why the post-IO await must be ``asyncio.shield``-ed. A non-faithful awaitable
+    that returns its value on re-await would green-light the un-shielded bug.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_commit_surfaces_completed_single_file(self, plugin, tmp_path):
+        import threading
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        _seed_rom(plugin._uow, 42)
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+
+        def fake_transfer(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 512)
+
+        # The post-IO commit blocks until released, so the test can deliver the
+        # cancel while the commit is genuinely in-flight (the #1049 race window),
+        # then let the real rename + DB save run to completion.
+        started = threading.Event()
+        release = threading.Event()
+        real_post_io = plugin._download_service._post_download_single_io
+
+        def blocking_post_io(*args):
+            started.set()
+            release.wait(timeout=5)
+            return real_post_io(*args)
+
+        with (
+            patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_transfer),
+            patch.object(plugin._download_service, "_post_download_single_io", side_effect=blocking_post_io),
+        ):
+            task = asyncio.ensure_future(
+                plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+            )
+            while not started.is_set():
+                await asyncio.sleep(0.01)
+            task.cancel()
+            await asyncio.sleep(0)  # let the cancel reach the (shielded) post-IO await
+            release.set()  # let the real commit finish (rename + DB save)
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        # Committed before the cancel landed → surfaced COMPLETED, file kept, row saved.
+        assert plugin._download_service._download_queue[42]["status"] == "completed"
+        assert os.path.exists(target_path)
+        installed = plugin._uow.rom_installs.get(42)
+        assert installed is not None
+        assert installed.file_path == target_path
+        assert [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
+        assert not [c for c in decky.emit.call_args_list if c[0][0] == "download_failed"]
+
+    @pytest.mark.asyncio
+    async def test_cancel_during_commit_keeps_committed_install_multi_file(self, plugin, tmp_path):
+        """The data-loss path: a committed multi-file extract dir must SURVIVE a
+        racing cancel — cleanup would otherwise ``remove_tree`` the live install."""
+        import threading
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "psx"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "game.zip")
+        file_name = "game.zip"
+        # The extract dir the cleanup would target on a (mis-)cancelled multi-file.
+        committed_dir = os.path.join(os.path.dirname(target_path), "game")
+
+        rom_detail = {
+            "id": 77,
+            "name": "Game",
+            "fs_name": "game.zip",
+            "platform_slug": "psx",
+            "platform_name": "PlayStation",
+            "has_multiple_files": True,
+            "files": [{"file_name": "a.bin"}, {"file_name": "b.bin"}],
+        }
+
+        _seed_rom(plugin._uow, 77, platform_slug="psx")
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[77] = {
+            "rom_id": 77,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+
+        def fake_transfer(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(b"PK\x05\x06" + b"\x00" * 18)  # zip-ish bytes; the stubbed post-IO never reads them
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_post_io_multi(rom_id, _detail, tpath, fname, system):
+            # Faithful post-condition of a committed multi-file install: an extract
+            # dir with a launch file + a saved RomInstall row.
+            started.set()
+            release.wait(timeout=5)
+            rom_dir = os.path.join(os.path.dirname(tpath), os.path.splitext(fname)[0])
+            os.makedirs(rom_dir, exist_ok=True)
+            launch_file = os.path.join(rom_dir, "game.m3u")
+            with open(launch_file, "wb") as f:
+                f.write(b"playlist")
+            with plugin._download_service._uow_factory() as uow:
+                uow.rom_installs.save(
+                    RomInstall.mark_installed(
+                        rom_id=rom_id,
+                        file_path=launch_file,
+                        rom_dir=rom_dir,
+                        platform_slug="psx",
+                        system=system,
+                        installed_at="2026-01-01T00:00:00+00:00",
+                    )
+                )
+            return (launch_file, None)
+
+        with (
+            patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_transfer),
+            patch.object(plugin._download_service, "_post_download_multi_io", side_effect=blocking_post_io_multi),
+        ):
+            task = asyncio.ensure_future(
+                plugin._download_service._do_download(77, rom_detail, target_path, "psx", file_name)
+            )
+            while not started.is_set():
+                await asyncio.sleep(0.01)
+            task.cancel()
+            await asyncio.sleep(0)
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        # The committed extract dir + its launch file SURVIVE (data-loss regression).
+        assert os.path.isdir(committed_dir)
+        assert os.path.exists(os.path.join(committed_dir, "game.m3u"))
+        # Surfaced as completed, install row present, download_complete emitted.
+        assert plugin._download_service._download_queue[77]["status"] == "completed"
+        assert plugin._uow.rom_installs.get(77) is not None
+        assert [c for c in decky.emit.call_args_list if c[0][0] == "download_complete"]
+
+
+class TestDoDownloadCancelEmitsEvent:
+    """#1017: a clean cancel must emit a terminal download_progress(cancelled) frame."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_emits_cancelled_progress_event(self, plugin, tmp_path):
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        def fake_download_cancel(_rom_id, _filename, _dest, _progress_callback=None):
+            raise asyncio.CancelledError()
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "downloading",
+            "progress": 0.3,
+            "bytes_downloaded": 300,
+            "total_bytes": 1000,
+        }
+
+        with (
+            patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download_cancel),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+
+        # A terminal cancelled frame reached the frontend (was silent before #1017).
+        cancelled = [
+            c
+            for c in decky.emit.call_args_list
+            if c[0][0] == "download_progress" and c[0][1].get("status") == "cancelled"
+        ]
+        assert len(cancelled) == 1
+        payload = cancelled[0][0][1]
+        assert payload["rom_id"] == 42
+        assert payload["progress"] == pytest.approx(0.3)
+        assert payload["bytes_downloaded"] == 300
+        assert payload["total_bytes"] == 1000
+        assert plugin._download_service._download_queue[42]["status"] == "cancelled"
+
+
+class TestConcurrencyReservation:
+    """#1053: bounded concurrency + reserved-bytes preflight + queued status."""
+
+    def _wire(self, plugin, tmp_path):
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_reservation_blocks_sibling_that_fits_alone(self, plugin, tmp_path):
+        from unittest.mock import AsyncMock
+
+        self._wire(plugin, tmp_path)
+
+        # Each ROM is 400MB (+100MB buffer = 500MB required). Free space is
+        # 900MB: one fits, two do not (1000MB required, but only 900 free once
+        # the first is reserved).
+        file_size = 400 * 1024 * 1024
+
+        def _detail(rom_id):
+            return {
+                "id": rom_id,
+                "name": f"Game {rom_id}",
+                "fs_name": f"game{rom_id}.z64",
+                "fs_size_bytes": file_size,
+                "platform_slug": "n64",
+                "platform_name": "Nintendo 64",
+            }
+
+        plugin._download_service._loop = MagicMock()
+
+        def _close_coro_task(coro):
+            coro.close()
+            return MagicMock()
+
+        plugin._download_service._loop.create_task = _close_coro_task
+        plugin._download_service._download_file_store.disk_free = lambda _path: 900 * 1024 * 1024
+
+        # First download: fits (900 free, needs 500) → reserved.
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=_detail(1))
+        r1 = await plugin.start_download(1)
+        assert r1["success"] is True
+        assert plugin._download_service._reserved_bytes[1] == 500 * 1024 * 1024
+
+        # Second download: 900 free - 500 reserved = 400 < 500 needed → rejected.
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=_detail(2))
+        r2 = await plugin.start_download(2)
+        assert r2["success"] is False
+        assert r2["reason"] == "insufficient_space"
+        assert "disk space" in r2["message"].lower()
+        # The rejected ROM holds no reservation and no in-progress flag.
+        assert 2 not in plugin._download_service._reserved_bytes
+        assert 2 not in plugin._download_service._download_in_progress
+
+    @pytest.mark.asyncio
+    async def test_reservation_released_after_download(self, plugin, tmp_path):
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 512)
+
+        _seed_rom(plugin._uow, 42)
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._reserved_bytes[42] = 999
+        plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "queued", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+
+        assert plugin._download_service._download_queue[42]["status"] == "completed"
+        # The reservation is released in the finally.
+        assert 42 not in plugin._download_service._reserved_bytes
+
+    @pytest.mark.asyncio
+    async def test_third_download_emits_queued_while_two_run(self, plugin, tmp_path):
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+
+        # Hold the semaphore so it is fully locked, forcing the third download to
+        # emit a "queued" frame before it can acquire.
+        sem = plugin._download_service._download_semaphore
+        await sem.acquire()
+        await sem.acquire()
+        assert sem.locked()
+
+        rom_detail = {
+            "id": 3,
+            "name": "Third",
+            "fs_name": "third.z64",
+            "fs_size_bytes": 1000,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+        target_path = str(roms_dir / "third.z64")
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 64)
+
+        _seed_rom(plugin._uow, 3)
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[3] = {"rom_id": 3, "status": "queued", "progress": 0}
+
+        # Run the third download as a task — it must emit "queued" then block on
+        # the semaphore (which we hold).
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            task = asyncio.ensure_future(
+                plugin._download_service._do_download(3, rom_detail, target_path, "n64", "third.z64")
+            )
+            # Let it reach the semaphore wait.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+            # It emitted a queued frame and is still waiting (status queued).
+            queued = [
+                c
+                for c in decky.emit.call_args_list
+                if c[0][0] == "download_progress" and c[0][1].get("status") == "queued"
+            ]
+            assert len(queued) == 1
+            assert queued[0][0][1]["rom_id"] == 3
+            assert plugin._download_service._download_queue[3]["status"] == "queued"
+
+            # Release the semaphore so the third can proceed and finish.
+            sem.release()
+            sem.release()
+            await task
+
+        assert plugin._download_service._download_queue[3]["status"] == "completed"
+
+
+class TestCooperativeCancel:
+    """#144: cooperative cancellation — a per-attempt token the progress
+    callback polls on the executor thread, raising ``CancelledError`` to abort
+    the in-flight HTTP transfer. ``task.cancel()`` alone cannot interrupt the
+    executor worker thread; the token is what really stops the bytes.
+    """
+
+    def test_progress_callback_raises_once_token_cancelled(self, plugin):
+        """The callback runs clean while the token is unset; raises after it flips."""
+        token = _CancelToken()
+        # The queue entry the callback would update if it didn't bail early.
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+        fake_clock = FakeClock()
+        plugin._download_service._clock = fake_clock
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.call_soon_threadsafe = lambda fn, *a, **k: fn(*a, **k)
+        plugin._download_service._loop.create_task = lambda coro: coro.close() or MagicMock()
+
+        def _record_emit(_event, _payload):
+            async def _noop():
+                return None
+
+            return _noop()
+
+        plugin._download_service._emit = _record_emit
+
+        cb = plugin._download_service._make_progress_callback(42, "Zelda", "N64", "zelda.z64", token)
+
+        # Unset token: a normal tick proceeds (no raise). Advance so the
+        # final-frame throttle bypass fires and the queue entry updates.
+        cb(1024, 1024)
+        assert plugin._download_service._download_queue[42]["bytes_downloaded"] == 1024
+
+        # Flip the token; the very next tick aborts the transfer thread.
+        token.cancelled = True
+        with pytest.raises(asyncio.CancelledError):
+            cb(2048, 4096)
+
+    @pytest.mark.asyncio
+    async def test_transfer_loop_aborts_when_token_cancelled_mid_stream(self, plugin, tmp_path):
+        """A real transfer LOOP stops once its token flips — the bytes really halt.
+
+        Models ``download_rom_content`` as a 500-iteration loop calling
+        ``progress_callback`` each tick (faking it as instantaneous is exactly
+        why the original tests missed #144). At tick 3 the token is cancelled;
+        the callback then raises and the loop never reaches 500.
+        """
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        token = _CancelToken()
+        plugin._download_service._cancel_tokens[42] = token
+        captured: list[int] = []
+
+        def fake_transfer(_rom_id, _filename, _dest, progress_callback=None):
+            assert progress_callback is not None  # _do_download always threads a real callback
+            for i in range(1, 500):
+                captured.append(i)
+                if i == 3:
+                    token.cancelled = True
+                # The callback raises CancelledError once the token is set, so
+                # the loop never runs to completion — the transfer aborts.
+                progress_callback(i, 500)
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "downloading", "progress": 0}
+
+        with (
+            patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_transfer),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64", token)
+
+        # The loop stopped near tick 3/4 — nowhere near 500. The transfer
+        # really halted instead of running to completion.
+        assert len(captured) <= 5
+        assert plugin._download_service._download_queue[42]["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_download_sets_token_and_cancels_task(self, plugin):
+        """``cancel_download`` flips the token AND cancels the asyncio task."""
+        loop = asyncio.get_event_loop()
+        token = _CancelToken()
+        plugin._download_service._cancel_tokens[42] = token
+
+        async def _never_ending():
+            await asyncio.Event().wait()
+
+        task = loop.create_task(_never_ending())
+        await asyncio.sleep(0)  # let it start waiting
+        plugin._download_service._download_tasks[42] = task
+
+        result = await plugin.cancel_download(42)
+        assert result["success"] is True
+        # The token is flipped so the executor transfer thread aborts (#144) —
+        # not just the asyncio wrapper.
+        assert token.cancelled is True
+        assert task.cancelled() or task.cancelling()
+
+        # Drain the cancelled task so it doesn't leak as pending.
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    def test_per_attempt_token_isolation(self, plugin):
+        """A zombie's callback (old token) aborts; a fresh download's continues.
+
+        Each callback closes over its OWN token. A re-download installs a NEW
+        token, so the zombie's cancelled token raises while the fresh token's
+        callback runs clean — no parallel-download flicker.
+        """
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+        }
+        fake_clock = FakeClock()
+        plugin._download_service._clock = fake_clock
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.call_soon_threadsafe = lambda fn, *a, **k: fn(*a, **k)
+        plugin._download_service._loop.create_task = lambda coro: coro.close() or MagicMock()
+
+        def _record_emit(_event, _payload):
+            async def _noop():
+                return None
+
+            return _noop()
+
+        plugin._download_service._emit = _record_emit
+
+        old_token = _CancelToken()
+        old_token.cancelled = True  # the cancelled zombie's token
+        new_token = _CancelToken()  # the fresh re-download's token
+
+        cb_old = plugin._download_service._make_progress_callback(42, "Zelda", "N64", "zelda.z64", old_token)
+        cb_new = plugin._download_service._make_progress_callback(42, "Zelda", "N64", "zelda.z64", new_token)
+
+        # The zombie's callback aborts; the fresh download's proceeds.
+        with pytest.raises(asyncio.CancelledError):
+            cb_old(512, 1024)
+        cb_new(1024, 1024)  # no raise
+        assert plugin._download_service._download_queue[42]["bytes_downloaded"] == 1024
 
 
 # Internal constants — re-declared so the test file doesn't reach into

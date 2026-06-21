@@ -106,7 +106,7 @@ the rest are single modules. A service over ~700 LOC is the decomposition signal
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `library/`                | LibraryService façade — fetch ROMs, preview/apply sync, per-unit shortcut delivery, `roms`/`SyncRun` writes + queries (decomposed; see below)                                                                                                                                                                          |
 | `saves/`                  | SaveService aggregate — `.srm` upload/download, conflict detection, slots, versions (decomposed; see below)                                                                                                                                                                                                            |
-| `downloads.py`            | DownloadService — ZIP extraction, M3U, fcntl-locked queue, progress                                                                                                                                                                                                                                                    |
+| `downloads.py`            | DownloadService — ZIP extraction, M3U, progress, bounded-concurrency download queue (Semaphore(2) + reserved-bytes pre-flight); cancel/cleanup never deletes a live install                                                                                                                                            |
 | `firmware.py`             | FirmwareService — BIOS registry, downloads, per-core filtering; `get_firmware_status` ships per-platform `bios_level` (ok/partial/missing via `domain.bios.compute_bios_level`) + `required_count`/`required_downloaded`/`server_count`/`local_count` so the System page reads the decision off the payload (#461)     |
 | `session_lifecycle.py`    | SessionLifecycleService — post-exit orchestration (playtime + post-exit save sync + achievement sync + migration refresh)                                                                                                                                                                                              |
 | `migration.py`            | MigrationService — RetroDECK path-change detection + file migration, save-sort change detection + conflict resolution                                                                                                                                                                                                  |
@@ -223,6 +223,24 @@ GameCube/Wii (Dolphin) are never bin/cue and do not reliably launch from a singl
 arrive as single-file downloads that never reach the extraction path, so they get no playlist.
 
 Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
+
+**Bounded concurrency + reserved-bytes pre-flight**: at most **two** ROMs transfer at once, gated by an
+`asyncio.Semaphore(2)` around the transfer + post-IO critical section. `start_download` enters the queue with status
+**`queued`** and reserves the download's required bytes in `_reserved_bytes[rom_id]`; `_do_download` flips the status to
+`downloading` only once it acquires the semaphore (emitting a `download_progress` `status: "queued"` frame first if it
+has to wait), and releases the reservation in its `finally`. The disk pre-flight accounts for siblings' outstanding
+reservations (`free_space - sum(reserved) < required`) so two concurrent downloads that each fit alone but not together
+can't both pass — the second is rejected with an `insufficient_space` failure.
+
+**Cancel reaches the UI and never destroys a live install**: cancelling a download emits a terminal `download_progress`
+`status: "cancelled"` frame so the frontend resets the button out of its downloading state (the cancel path used to be
+silent). Because executor threads run to completion regardless of cancellation, a cancel that **loses the race** to a
+just-committed install is reconciled (`_reconcile_post_io` awaits the in-flight post-IO future): if the install
+committed, the download is surfaced as **completed** (launch options baked, `download_complete` emitted) rather than
+torn down. `_cleanup_partial_download` removes **only** the transient transfer artifacts (`.zip.tmp` / `.tmp`) and, for
+a multi-file ROM that did **not** commit, the extract dir(s) this download created — it **never** deletes the bare
+`target_path`, so a re-download that fails mid-stream (or a cancel that lost the race) cannot destroy a pre-existing or
+just-committed install.
 
 #### ConnectionService notes
 
