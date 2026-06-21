@@ -541,19 +541,22 @@ class DownloadService:
         self._logger.info(f"Download complete: {rom_name} -> {final_path}")
 
     async def _reconcile_post_io(self, post_io_future):
-        """After a cancel, wait for an in-flight post-IO commit and report whether
+        """After a cancel, settle an in-flight post-IO commit and report whether
         the install committed. Executor threads run to completion regardless of
-        cancellation, so awaiting the future here lets a race-committed install be
-        honored instead of torn down. Returns (final_path, committed: bool).
+        cancellation, so letting the future settle here lets a race-committed
+        install be honored instead of torn down. Returns (final_path, committed).
         """
         if post_io_future is None:
             return (None, False)  # cancel landed before the post-IO phase started
-        try:
-            final_path, post_io_error = await post_io_future
-        except asyncio.CancelledError:
-            return (None, False)  # executor work was cancelled before it ran — nothing committed
-        except Exception:
-            return (None, False)  # commit failed its invariant
+        # Let the (shielded) executor future settle WITHOUT awaiting it directly:
+        # ``asyncio.wait`` reports completion through the future's own state, so a
+        # cancelled or failed commit is inspected here, never swallowed — the
+        # caller's ``except asyncio.CancelledError`` keeps ownership of the re-raise.
+        await asyncio.wait({post_io_future})
+        if post_io_future.cancelled() or post_io_future.exception() is not None:
+            # Executor work was cancelled before it ran, or the commit raised.
+            return (None, False)
+        final_path, post_io_error = post_io_future.result()
         if post_io_error is None and final_path is not None:
             return (final_path, True)
         return (None, False)
