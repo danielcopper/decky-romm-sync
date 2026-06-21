@@ -8,7 +8,6 @@ from unittest import mock
 
 import pytest
 
-from adapters import es_de_config as es_de_config_mod
 from adapters.es_de_config import CoreResolver
 
 # conftest.py patches decky before this import.
@@ -18,11 +17,12 @@ from main import Plugin  # noqa: F401
 _TEST_LOGGER = logging.getLogger("test_es_de")
 
 
-def _make_resolver() -> CoreResolver:
+def _make_resolver(user_home: str = "/nonexistent/home") -> CoreResolver:
     plugin_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return CoreResolver(
         plugin_dir=plugin_dir,
         logger=_TEST_LOGGER,
+        user_home=user_home,
     )
 
 
@@ -60,29 +60,68 @@ def _write_temp_xml(content):
     return path
 
 
+def _es_systems_path(files_dir, *, flavor: str) -> str:
+    """Build the ``es_systems.xml`` path for *flavor* (``linux``/``unix``) under
+    a flatpak app ``files`` dir."""
+    return os.path.join(
+        files_dir,
+        "retrodeck",
+        "components",
+        "es-de",
+        "share",
+        "es-de",
+        "resources",
+        "systems",
+        flavor,
+        "es_systems.xml",
+    )
+
+
+def _user_files_dir(user_home):
+    """The per-user flatpak app ``files`` dir for the RetroDECK app under *user_home*."""
+    return (
+        user_home / ".local" / "share" / "flatpak" / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files"
+    )
+
+
 class TestFindEsSystemsXml:
-    @mock.patch("adapters.es_de_config.os.path.exists")
-    def test_finds_xml_in_linux_path(self, mock_exists):
-        mock_exists.return_value = True
-        result = CoreResolver.find_es_systems_xml()
+    @pytest.fixture(autouse=True)
+    def _isolate_system_root(self, tmp_path):
+        """Point the shared system flatpak root at a non-existent tmp location so
+        tests only see files placed under the per-user root."""
+        with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(tmp_path / "nonexistent_system_root")):
+            yield
+
+    def test_finds_xml_in_linux_path(self, tmp_path):
+        files_dir = _user_files_dir(tmp_path)
+        linux_path = _es_systems_path(str(files_dir), flavor="linux")
+        os.makedirs(os.path.dirname(linux_path))
+        with open(linux_path, "w") as f:
+            f.write(SAMPLE_ES_SYSTEMS_XML)
+
+        resolver = _make_resolver(user_home=str(tmp_path))
+        result = resolver.find_es_systems_xml()
+        assert result == linux_path
         assert result is not None
-        assert result == es_de_config_mod._ES_SYSTEMS_CANDIDATES[0]
         assert "linux" in result
 
-    @mock.patch("adapters.es_de_config.os.path.exists")
-    def test_falls_back_to_unix_path(self, mock_exists):
-        # linux/ doesn't exist, unix/ does
-        mock_exists.side_effect = [False, True]
-        result = CoreResolver.find_es_systems_xml()
+    def test_falls_back_to_unix_path(self, tmp_path):
+        # Only unix/ exists under the per-user root.
+        files_dir = _user_files_dir(tmp_path)
+        unix_path = _es_systems_path(str(files_dir), flavor="unix")
+        os.makedirs(os.path.dirname(unix_path))
+        with open(unix_path, "w") as f:
+            f.write(SAMPLE_ES_SYSTEMS_XML)
+
+        resolver = _make_resolver(user_home=str(tmp_path))
+        result = resolver.find_es_systems_xml()
+        assert result == unix_path
         assert result is not None
-        assert result == es_de_config_mod._ES_SYSTEMS_CANDIDATES[1]
         assert "unix" in result
 
-    @mock.patch("adapters.es_de_config.os.path.exists")
-    def test_returns_none_when_not_found(self, mock_exists):
-        mock_exists.return_value = False
-        result = CoreResolver.find_es_systems_xml()
-        assert result is None
+    def test_returns_none_when_not_found(self, tmp_path):
+        resolver = _make_resolver(user_home=str(tmp_path))
+        assert resolver.find_es_systems_xml() is None
 
 
 class TestParseEsSystems:
@@ -397,6 +436,89 @@ class TestGetAvailableCores:
         ):
             result = resolver.get_available_cores("unknown_system")
         assert result == []
+
+
+# An es_systems.xml excerpt carrying <extension> lists: psx WITH .m3u (disc
+# system), switch WITHOUT .m3u (Switch's emulator can't read a playlist).
+EXTENSION_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>psx</name>
+    <fullname>Sony PlayStation</fullname>
+    <extension>.cue .CUE .chd .CHD .m3u .M3U</extension>
+    <command label="SwanStation">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/swanstation_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>switch</name>
+    <fullname>Nintendo Switch</fullname>
+    <extension>.nsp .NSP .xci .XCI</extension>
+    <command label="Yuzu">%EMULATOR_YUZU% %ROM%</command>
+  </system>
+</systemList>
+"""
+
+
+class TestSystemSupportsM3u:
+    """``system_supports_m3u`` reads ES-DE's own ``<extension>`` list."""
+
+    def test_psx_supports_m3u(self, resolver):
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.system_supports_m3u("psx") is True
+        finally:
+            os.unlink(path)
+
+    def test_switch_does_not_support_m3u(self, resolver):
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.system_supports_m3u("switch") is False
+        finally:
+            os.unlink(path)
+
+    def test_unknown_system_returns_false(self, resolver):
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.system_supports_m3u("totally_unknown") is False
+        finally:
+            os.unlink(path)
+
+    def test_default_safe_false_when_es_systems_absent(self, resolver):
+        """es_systems.xml cannot be found → default-safe False (no playlist)."""
+        with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=None):
+            assert resolver.system_supports_m3u("psx") is False
+
+    def test_extension_match_is_case_insensitive(self, resolver):
+        """A system whose list carries only uppercase ``.M3U`` still matches."""
+        xml = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>segacd</name>
+    <extension>.CUE .CHD .M3U</extension>
+    <command label="GX">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/genesis_plus_gx_libretro.so %ROM%</command>
+  </system>
+</systemList>
+"""
+        path = _write_temp_xml(xml)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.system_supports_m3u("segacd") is True
+        finally:
+            os.unlink(path)
+
+    def test_extensions_parsed_into_system_entry(self, resolver):
+        """The parser captures ``<extension>`` tokens (lowercased) per system."""
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            parsed = resolver.parse_es_systems(path)
+        finally:
+            os.unlink(path)
+        assert parsed["psx"]["extensions"] == {".cue", ".chd", ".m3u"}
+        assert parsed["switch"]["extensions"] == {".nsp", ".xci"}
 
 
 class TestMtimeInvalidation:

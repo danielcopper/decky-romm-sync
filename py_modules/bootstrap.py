@@ -97,6 +97,7 @@ if TYPE_CHECKING:
         SgdbArtworkCache,
         Sleeper,
         SteamConfigStore,
+        SystemM3uSupportFn,
         UnitOfWorkFactory,
         UuidGen,
     )
@@ -156,6 +157,7 @@ class CallbackBundle:
     get_save_layout: RetroArchSaveLayoutProvider
     get_core_name: CoreNameProviderFn
     platform_core_reader: PlatformCoreReader
+    m3u_support: SystemM3uSupportFn
     settings_persister: SettingsPersister
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
@@ -291,6 +293,7 @@ def bootstrap(
     core_resolver = CoreResolver(
         plugin_dir=plugin_dir,
         logger=logger,
+        user_home=user_home,
     )
 
     # SystemClock is dependency-free; construct it here so the single shared
@@ -365,6 +368,7 @@ def bootstrap(
         get_save_layout=retroarch_config.get_save_layout,
         get_core_name=retroarch_core_info.get_corename,
         platform_core_reader=platform_core_reader,
+        m3u_support=core_resolver.system_supports_m3u,
         settings_persister=settings_persister,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
@@ -549,6 +553,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             sleeper=cfg.runtime.sleeper,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             active_core=active_core_resolver,
+            m3u_support=cfg.callbacks.m3u_support,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )

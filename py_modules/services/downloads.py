@@ -42,6 +42,7 @@ if TYPE_CHECKING:
         RetroDeckPaths,
         RommRomReader,
         Sleeper,
+        SystemM3uSupportFn,
         SystemResolver,
         UnitOfWorkFactory,
     )
@@ -96,6 +97,7 @@ class DownloadServiceConfig:
     sleeper: Sleeper
     retrodeck_paths: RetroDeckPaths
     active_core: ActiveCoreReader
+    m3u_support: SystemM3uSupportFn
     uow_factory: UnitOfWorkFactory
 
 
@@ -113,6 +115,7 @@ class DownloadService:
         self._sleeper = config.sleeper
         self._retrodeck_paths = config.retrodeck_paths
         self._active_core = config.active_core
+        self._m3u_support = config.m3u_support
         self._uow_factory = config.uow_factory
 
         # Owned state
@@ -413,10 +416,13 @@ class DownloadService:
         self._download_file_store.extract_zip(tmp_zip, extract_dir, roms_base)
         self._download_file_store.remove_file(tmp_zip)
         self._download_file_store.decode_url_encoded_names(extract_dir)
+        # Whether ES-DE lists .m3u for this system (gates both M3U generation and
+        # launch-file selection so a RomM-bundled .m3u is ignored on Switch/Xbox).
+        m3u_supported = self._m3u_support(system)
         # Auto-generate M3U if missing and multiple disc files exist
-        self._maybe_generate_m3u_io(extract_dir, rom_detail)
+        self._maybe_generate_m3u_io(extract_dir, rom_detail, m3u_supported)
         # Detect launch file: prefer M3U > CUE > largest file
-        launch_file = self._collect_and_detect_launch_file(extract_dir)
+        launch_file = self._collect_and_detect_launch_file(extract_dir, m3u_supported)
         # ES-DE collapses a multi-file dir into one game entry only when the
         # dir is named after the launch file *including* the extension. The
         # launch file is only known after extraction (the M3U may be
@@ -860,14 +866,19 @@ class DownloadService:
                 del self._control_tokens[rom_id]
             self._prune_download_queue()
 
-    def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict[str, Any]) -> None:
+    def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict[str, Any], m3u_supported: bool) -> None:
         """Auto-generate a game-named M3U playlist when one is warranted (see ``needs_m3u``).
 
-        Writes ``<fs_name_no_ext>.m3u`` when no M3U already exists and the disc
-        files warrant one: multi-disc ROMs (any of cue/chd/iso) for disc
-        switching, or a single-disc bin/cue ROM so the extract dir collapses to
-        a game-named entry in ES-DE.
+        Writes ``<fs_name_no_ext>.m3u`` when the platform supports ``.m3u``, no
+        M3U already exists, and the disc files warrant one: multi-disc ROMs (any
+        of cue/chd/iso) for disc switching, or a single-disc bin/cue ROM so the
+        extract dir collapses to a game-named entry in ES-DE. When the platform
+        does not support ``.m3u`` (per ES-DE's ``es_systems.xml``), no playlist
+        is generated.
         """
+        if not m3u_supported:
+            return
+
         all_files = self._download_file_store.scan_files_with_sizes(extract_dir)
         # Check if an M3U already exists (search recursively)
         if any(path.lower().endswith(".m3u") for path, _size in all_files):
@@ -880,7 +891,7 @@ class DownloadService:
             if path.lower().endswith((".cue", ".chd", ".iso"))
         ]
 
-        if not needs_m3u(disc_files):
+        if not needs_m3u(disc_files, m3u_supported):
             return
 
         rom_name = rom_detail.get("fs_name_no_ext", rom_detail.get("name", "playlist"))
@@ -888,10 +899,14 @@ class DownloadService:
         self._download_file_store.write_text_atomic(m3u_path, build_m3u_content(disc_files))
         self._logger.info(f"Auto-generated M3U playlist: {m3u_path}")
 
-    def _collect_and_detect_launch_file(self, extract_dir: str) -> str:
-        """Find the best launch file in an extracted multi-file ROM directory."""
+    def _collect_and_detect_launch_file(self, extract_dir: str, m3u_supported: bool) -> str:
+        """Find the best launch file in an extracted multi-file ROM directory.
+
+        *m3u_supported* gates whether a ``.m3u`` (including a RomM-bundled one)
+        may be chosen as the launch file — see ``detect_launch_file``.
+        """
         all_files = self._download_file_store.scan_files_with_sizes(extract_dir)
-        result = detect_launch_file(all_files)
+        result = detect_launch_file(all_files, m3u_supported)
         return result if result is not None else extract_dir
 
     def _cleanup_partial_download(self, target_path, has_multiple, file_name, final_path=None):

@@ -24,34 +24,18 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from adapters.flatpak_install import flatpak_app_files_dirs
 from domain.retroarch_core_info import parse_core_info
 
 if TYPE_CHECKING:
     import logging
 
+# RetroArch's cores tree sits under the RetroDECK flatpak's files dir.
+_CORES_SUFFIX = os.path.join("retrodeck", "components", "retroarch", "rd_extras", "cores")
+
 
 class RetroArchCoreInfoAdapter:
     """Adapter for reading RetroArch per-core .info metadata files."""
-
-    _SYSTEM_CORES_DIR = (
-        "/var/lib/flatpak/app/net.retrodeck.retrodeck/current/active"
-        "/files/retrodeck/components/retroarch/rd_extras/cores"
-    )
-    _USER_CORES_SUFFIX = os.path.join(
-        ".local",
-        "share",
-        "flatpak",
-        "app",
-        "net.retrodeck.retrodeck",
-        "current",
-        "active",
-        "files",
-        "retrodeck",
-        "components",
-        "retroarch",
-        "rd_extras",
-        "cores",
-    )
 
     def __init__(self, *, user_home: str, logger: logging.Logger) -> None:
         self._user_home = user_home
@@ -59,10 +43,7 @@ class RetroArchCoreInfoAdapter:
         self._cache: dict[str, dict[str, str] | None] = {}
 
     def _candidate_dirs(self) -> list[str]:
-        return [
-            self._SYSTEM_CORES_DIR,
-            os.path.join(self._user_home, self._USER_CORES_SUFFIX),
-        ]
+        return [os.path.join(files_dir, _CORES_SUFFIX) for files_dir in flatpak_app_files_dirs(self._user_home)]
 
     def get_core_info(self, core_so: str) -> dict[str, str] | None:
         """Return the parsed .info dict for the given core, or ``None``.

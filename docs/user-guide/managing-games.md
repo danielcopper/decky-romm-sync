@@ -54,23 +54,33 @@ removes an already-installed copy.
 
 ### Multi-Disc and Multi-File Games
 
-Multi-disc games (e.g. multi-disc PS1 titles) are downloaded as a single ZIP from RomM, extracted automatically, and an
-M3U playlist file is used for disc switching. This is handled transparently — just download and play.
+Some games ship as more than one file — multi-disc PS1 titles, a base game plus updates and DLC, a BIN+CUE pair. RomM
+downloads these as a single ZIP, which the plugin extracts automatically. You just download and play; the layout is
+handled for you.
 
-The game's folder is named after a game-named M3U playlist (e.g. `Final Fantasy VII (USA).m3u/`) so that ES-DE collapses
-it into a single game entry instead of showing a folder plus loose disc files. This applies to:
+The plugin gives the extracted game its own folder and names that folder after the real **launch file** (including the
+extension, e.g. `Final Fantasy VII (USA).m3u/` or `Halo 3 (USA).iso/`) so that ES-DE collapses it into a single game
+entry instead of showing a folder plus loose files.
 
-- **Multi-disc** ROMs (two or more disc files — any of `.cue`, `.chd`, `.iso`): the M3U is generated for disc switching.
-- **Single-disc bin/cue** ROMs (one `.cue`): a game-named M3U is generated too, because the `.cue` itself is often
-  generically named (`disc1.cue`, `track01.cue`) and would otherwise produce a `disc1.cue/` folder. bin/cue systems
-  (PS1/PS2/Saturn/Sega CD/PC Engine CD, etc.) play cleanly from the playlist.
+**Disc switching only applies to systems whose emulator supports it.** For the disc-swapping consoles — PS1, Saturn,
+Sega CD, PC Engine CD, Dreamcast, GameCube, Wii, and the like — a game-named `.m3u` playlist is generated so you can
+flip between discs in-game, and the folder is named after that playlist. The plugin decides this by reading ES-DE's own
+per-system supported-extension list, so a game only ever gets an `.m3u` on a system where ES-DE (and the emulator behind
+it) actually understands one.
 
-Single-disc `.chd`/`.iso` titles download as a single file (no folder), so they need no playlist.
+**Cartridge and folder systems get no playlist.** Switch (`.nsp`), Xbox 360 (`.iso`), and other systems with no disc
+concept collapse to their real game file instead — the folder is named after the cartridge/disc image (`<Game>.nsp/`,
+`<Game>.iso/`) and the game launches straight from it. RomM bundles a generic `.m3u` into every multi-file ZIP, but the
+plugin ignores it on these systems rather than launching from a file the emulator can't read.
+
+Single-file titles (most `.chd`/`.iso` games on disc-image systems) download as a bare file with no folder, so they need
+no playlist either way.
 
 !!! note "Known limitation"
 
-    Games installed **before** this version keep their old folder layout (named without the extension), so ES-DE still
-    shows them as a folder plus loose disc files. Re-download the game to get the single clean ES-DE entry.
+    Games installed **before** this version keep their old folder layout, so ES-DE may still show them as a folder plus
+    loose files — or, on cartridge systems, as a stray `.m3u`. The fix only affects new downloads; re-download the game
+    to get the single clean ES-DE entry.
 
 ## Uninstalling ROMs
 

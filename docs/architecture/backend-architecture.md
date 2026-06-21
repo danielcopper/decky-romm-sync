@@ -217,10 +217,22 @@ Existing installs from before this feature keep their old folder layout until re
 **M3U generation rule** (`needs_m3u` in `domain/rom_files.py`): a game-named `<fs_name_no_ext>.m3u` is auto-generated
 (when no `.m3u` already exists) for **multi-disc** ROMs — two or more disc files of any kind (`.cue`/`.chd`/`.iso`) — so
 the emulator can switch discs, **and** for **single-disc bin/cue** ROMs — exactly one `.cue` — so the extract dir is
-renamed after a game-named playlist rather than a generically-named cue (`disc1.cue/`). The single-disc branch is scoped
-strictly to `.cue`: bin/cue systems (PS1/PS2/Saturn/Sega CD/PC Engine CD, etc.) are M3U-friendly, whereas iso-based
-GameCube/Wii (Dolphin) are never bin/cue and do not reliably launch from a single-entry M3U. Single-disc `.chd`/`.iso`
-arrive as single-file downloads that never reach the extraction path, so they get no playlist.
+renamed after a game-named playlist rather than a generically-named cue (`disc1.cue/`). Single-disc `.chd`/`.iso` arrive
+as single-file downloads that never reach the extraction path, so they get no playlist.
+
+**M3U is platform-gated on ES-DE's own extension list** ([ADR-0013](../adr/0013-platform-gated-m3u-via-es-systems.md)).
+The file-count rule above only runs when the ROM's system actually supports `.m3u`. RomM bundles a platform-blind `.m3u`
+into the ZIP for **every** multi-file game, including cartridge systems (Switch `.nsp`, Xbox 360 `.iso`) whose emulators
+have no playlist concept — so an extension-only heuristic wrongly produced a `<Game>.m3u/` folder that never collapsed.
+The plugin now asks whether ES-DE lists `.m3u` as a supported extension for that system, read from the same
+`es_systems.xml` ES-DE uses to decide directory-collapse, via `CoreResolver.system_supports_m3u(system)` exposed through
+the `SystemM3uSupportFn` Protocol (`services/protocols/`) and threaded into `DownloadService` from bootstrap. When the
+answer is `False`, no `.m3u` is generated **and** the bundled one is never chosen as the launch file
+(`detect_launch_file` skips its `.m3u` preference), so selection falls through to the real game file and the folder is
+named `<Game>.nsp/` / `<Game>.iso/` instead. The capability crosses the service/domain seam as a plain `bool` — the
+domain functions (`needs_m3u`, `detect_launch_file`) take `m3u_supported`, never a system name or an adapter. The
+bundled `.m3u` is left inert on disk, never deleted. When `es_systems.xml` cannot be found the answer defaults to
+`False` (safe: a missing playlist only degrades disc-switching, a wrong one breaks the launch).
 
 Filesystem writes go through `DownloadFileAdapter`. ZIP extraction is ZIP-slip protected.
 

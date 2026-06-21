@@ -83,6 +83,19 @@ class CoreInfoProvider(Protocol):
     def reset_cache(self) -> None: ...
 
 
+class SystemM3uSupportFn(Protocol):
+    """Return whether ES-DE lists ``.m3u`` as a supported extension for a system.
+
+    Backed by ES-DE's own per-system ``<extension>`` list in ``es_systems.xml``
+    — the same file ES-DE consults to decide directory-collapse — so a service
+    can gate ``.m3u`` generation and launch-file selection on whether the
+    platform's emulator can actually read a playlist. Default-safe: ``False``
+    for an unknown system or when ``es_systems.xml`` cannot be found.
+    """
+
+    def __call__(self, system_name: str) -> bool: ...
+
+
 class PlatformCoreReader(Protocol):
     """Read seam for the plugin-owned per-platform core selection.
 

@@ -67,6 +67,7 @@ from services.protocols.paths import (
     RetroArchCoreInfoReader,
     RetroArchSaveLayoutProvider,
     RetroDeckPaths,
+    SystemM3uSupportFn,
     SystemResolver,
 )
 from services.protocols.persistence import (
@@ -169,6 +170,7 @@ __all__ = [
     "SteamConfigStore",
     "SteamGridDbApi",
     "SyncRunRepository",
+    "SystemM3uSupportFn",
     "SystemResolver",
     "UnitOfWork",
     "UnitOfWorkFactory",

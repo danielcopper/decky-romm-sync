@@ -16,21 +16,24 @@ import os
 import re
 from typing import TYPE_CHECKING, Any
 
+from adapters.flatpak_install import flatpak_app_files_dirs
+
 if TYPE_CHECKING:
     import logging
 
 _CORE_SO_RE = re.compile(r"%CORE_RETROARCH%/([\w-]+_libretro)\.so")
 
-_FLATPAK_SYSTEMS_DIR = (
-    "/var/lib/flatpak/app/net.retrodeck.retrodeck/current/active"
-    "/files/retrodeck/components/es-de/share/es-de/resources/systems"
+# es_systems.xml lives under the RetroDECK flatpak's files tree. Prefer linux/
+# (RetroDECK-customized, more complete), then unix/ as fallback — WITHIN each
+# install root.
+_ES_SYSTEMS_SUFFIXES = (
+    os.path.join(
+        "retrodeck", "components", "es-de", "share", "es-de", "resources", "systems", "linux", "es_systems.xml"
+    ),
+    os.path.join(
+        "retrodeck", "components", "es-de", "share", "es-de", "resources", "systems", "unix", "es_systems.xml"
+    ),
 )
-
-# Prefer linux/ (RetroDECK-customized, more complete), then unix/ as fallback.
-_ES_SYSTEMS_CANDIDATES = [
-    _FLATPAK_SYSTEMS_DIR + "/linux/es_systems.xml",
-    _FLATPAK_SYSTEMS_DIR + "/unix/es_systems.xml",
-]
 
 
 # ---------------------------------------------------------------------------
@@ -56,9 +59,11 @@ class CoreResolver:
         self,
         plugin_dir: str,
         logger: logging.Logger,
+        user_home: str,
     ) -> None:
         self._plugin_dir = plugin_dir
         self._logger = logger
+        self._user_home = user_home
         self._es_systems_cache: dict[str, Any] | None = None
         self._es_systems_mtime: float | None = None
         self._es_systems_path: str | None = None
@@ -149,21 +154,35 @@ class CoreResolver:
         self._logger.debug("es_de_config: get_available_cores(%s) -> no cores found", system_name)
         return []
 
-    # -- static helpers (no instance state needed) ---------------------------
+    def system_supports_m3u(self, system_name: str) -> bool:
+        """True iff ES-DE lists ``.m3u`` as a supported extension for *system_name*.
 
-    @staticmethod
-    def find_es_systems_xml():
+        Reads the same ``es_systems.xml`` ES-DE uses to decide directory-collapse,
+        so the answer can never disagree with ES-DE. Returns ``False`` when the
+        system is unknown or ``es_systems.xml`` cannot be found (default-safe: a
+        missing playlist only degrades; a wrong one breaks the launch).
+        """
+        es_systems = self._load_es_systems()
+        system_info = es_systems.get(system_name)
+        if not system_info:
+            return False
+        return ".m3u" in system_info.get("extensions", set())
+
+    # -- helpers -------------------------------------------------------------
+
+    def find_es_systems_xml(self) -> str | None:
         """Locate es_systems.xml inside the RetroDECK flatpak installation.
 
-        Uses the flatpak 'active' symlink to find the current version.
-        Searches linux/ first (RetroDECK-customized), then unix/ as fallback.
-        Works on SteamOS, Bazzite, and other Linux distros with flatpak.
-
-        Returns the path or None.
+        Probes each flatpak install root (system, then per-user) and, within
+        each, searches linux/ first (RetroDECK-customized) then unix/ as
+        fallback. Works on SteamOS, Bazzite, and other Linux distros with
+        flatpak. Returns the path or ``None``.
         """
-        for path in _ES_SYSTEMS_CANDIDATES:
-            if os.path.exists(path):
-                return path
+        for files_dir in flatpak_app_files_dirs(self._user_home):
+            for suffix in _ES_SYSTEMS_SUFFIXES:
+                path = os.path.join(files_dir, suffix)
+                if os.path.exists(path):
+                    return path
         return None
 
     @staticmethod
@@ -180,6 +199,7 @@ class CoreResolver:
                 "default_label": None,
                 "cores": {},
                 "label_to_core": {},
+                "extensions": set(),
             }
         elif name == "command":
             state["current_label"] = attrs.get("label", "")
@@ -188,6 +208,16 @@ class CoreResolver:
     def _handle_es_system_name(sys, text):
         """Handle </name> inside a <system> element."""
         sys["name"] = text
+
+    @staticmethod
+    def _handle_es_extension_end(sys, text):
+        """Handle </extension> inside a <system> — capture supported extensions.
+
+        The element text is a whitespace-separated list (e.g.
+        ``.nsp .NSP .xci``). Tokens are lowercased so membership checks are
+        case-insensitive against ES-DE's mixed-case lists.
+        """
+        sys["extensions"].update(token.lower() for token in text.split())
 
     @staticmethod
     def _handle_es_command_end(state, sys, text):
@@ -213,6 +243,7 @@ class CoreResolver:
                 "default_label": sys["default_label"],
                 "cores": sys["cores"],
                 "label_to_core": sys["label_to_core"],
+                "extensions": sys["extensions"],
             }
         state["current_system"] = None
 
@@ -225,6 +256,8 @@ class CoreResolver:
 
         if path == ["systemList", "system", "name"] and sys is not None:
             CoreResolver._handle_es_system_name(sys, text)
+        elif path == ["systemList", "system", "extension"] and sys is not None:
+            CoreResolver._handle_es_extension_end(sys, text)
         elif path == ["systemList", "system", "command"] and sys is not None:
             CoreResolver._handle_es_command_end(state, sys, text)
         elif name == "system":
@@ -241,7 +274,8 @@ class CoreResolver:
 
         Returns: ``{system_name: {"default_core": str | None, "default_label":
         str | None, "cores": {core_so: label}, "label_to_core": {label:
-        core_so}}}``.
+        core_so}, "extensions": set[str]}}``. ``extensions`` holds the
+        lowercased ``<extension>`` tokens ES-DE uses to decide directory-collapse.
 
         Returns empty dict if file can't be parsed or fails structural validation.
         """

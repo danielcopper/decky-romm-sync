@@ -72,6 +72,9 @@ def plugin():
     p._http_adapter = MagicMock()
     p._romm_api = MagicMock()
     p._resolve_system = MagicMock(side_effect=lambda slug, fs_slug=None: fs_slug or slug)
+    # Default platform m3u-support for the DownloadService ``m3u_support`` seam.
+    # Tests that simulate a non-m3u platform (Switch/Xbox 360) flip this to False.
+    p._m3u_supported = True
 
     import decky
 
@@ -131,6 +134,9 @@ def plugin():
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
             active_core=p._active_core,
+            # Default-True so the existing M3U/launch-file tests are unaffected;
+            # a test that exercises a non-m3u platform repoints this seam.
+            m3u_support=lambda system_name: p._m3u_supported,
             uow_factory=FakeUnitOfWorkFactory(p._uow),
         ),
     )
@@ -502,21 +508,21 @@ class TestDetectLaunchFile:
         (tmp_path / "disc1.cue").write_text("cue data")
         (tmp_path / "disc1.bin").write_bytes(b"\x00" * 1000)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".m3u")
 
     def test_falls_back_to_cue(self, plugin, tmp_path):
         (tmp_path / "disc1.cue").write_text("cue data")
         (tmp_path / "disc1.bin").write_bytes(b"\x00" * 1000)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".cue")
 
     def test_falls_back_to_largest(self, plugin, tmp_path):
         (tmp_path / "small.bin").write_bytes(b"\x00" * 100)
         (tmp_path / "large.bin").write_bytes(b"\x00" * 10000)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith("large.bin")
 
     def test_wiiu_rpx_in_code_subdir(self, plugin, tmp_path):
@@ -526,26 +532,26 @@ class TestDetectLaunchFile:
         (tmp_path / "meta" / "meta.xml").parent.mkdir()
         (tmp_path / "meta" / "meta.xml").write_text("<xml/>")
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".rpx")
 
     def test_wiiu_disc_image(self, plugin, tmp_path):
         (tmp_path / "game.wux").write_bytes(b"\x00" * 1000)
         (tmp_path / "readme.txt").write_text("info")
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".wux")
 
     def test_wiiu_wud_format(self, plugin, tmp_path):
         (tmp_path / "game.wud").write_bytes(b"\x00" * 1000)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".wud")
 
     def test_wiiu_wua_format(self, plugin, tmp_path):
         (tmp_path / "game.wua").write_bytes(b"\x00" * 1000)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".wua")
 
     def test_ps3_eboot_bin(self, plugin, tmp_path):
@@ -554,21 +560,21 @@ class TestDetectLaunchFile:
         (usrdir / "EBOOT.BIN").write_bytes(b"\x00" * 500)
         (tmp_path / "PS3_GAME" / "PARAM.SFO").write_bytes(b"\x00" * 100)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith("EBOOT.BIN")
 
     def test_3ds_prefers_3ds_over_cia(self, plugin, tmp_path):
         (tmp_path / "game.3ds").write_bytes(b"\x00" * 500)
         (tmp_path / "game.cia").write_bytes(b"\x00" * 500)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".3ds")
 
     def test_3ds_falls_back_to_cia(self, plugin, tmp_path):
         (tmp_path / "game.cia").write_bytes(b"\x00" * 500)
         (tmp_path / "game.cxi").write_bytes(b"\x00" * 500)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".cia")
 
     def test_m3u_still_preferred_over_platform_specific(self, plugin, tmp_path):
@@ -578,8 +584,29 @@ class TestDetectLaunchFile:
         code_dir.mkdir()
         (code_dir / "game.rpx").write_bytes(b"\x00" * 500)
 
-        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path))
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), True)
         assert result.endswith(".m3u")
+
+    def test_bundled_m3u_ignored_when_platform_unsupported(self, plugin, tmp_path):
+        """#1111: a RomM-bundled .m3u must NOT be chosen on a non-m3u platform.
+
+        With ``m3u_supported=False`` the .m3u is skipped and selection falls
+        through to the real game file (here the .nsp, picked as largest).
+        """
+        (tmp_path / "Zelda.m3u").write_text("Zelda.nsp")
+        (tmp_path / "Zelda.nsp").write_bytes(b"\x00" * 5000)
+
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), False)
+        assert result.endswith(".nsp")
+
+    def test_bundled_m3u_ignored_unsupported_falls_back_to_cue(self, plugin, tmp_path):
+        """When unsupported, a bundled .m3u is ignored and a .cue is preferred next."""
+        (tmp_path / "game.m3u").write_text("disc1.cue")
+        (tmp_path / "disc1.cue").write_text("cue data")
+        (tmp_path / "disc1.bin").write_bytes(b"\x00" * 1000)
+
+        result = plugin._download_service._collect_and_detect_launch_file(str(tmp_path), False)
+        assert result.endswith(".cue")
 
 
 class TestDiskSpaceMultiFile:
@@ -776,7 +803,7 @@ class TestMaybeGenerateM3u:
         (tmp_path / "Game - Disc 2.bin").write_bytes(b"\x00" * 1000)
 
         rom_detail = {"fs_name_no_ext": "Final Fantasy VII", "name": "Final Fantasy VII"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         m3u_path = tmp_path / "Final Fantasy VII.m3u"
         assert m3u_path.exists()
@@ -792,7 +819,7 @@ class TestMaybeGenerateM3u:
         (tmp_path / "Game (Disc 2).chd").write_bytes(b"\x00" * 100)
 
         rom_detail = {"fs_name_no_ext": "Game", "name": "Game"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         m3u_path = tmp_path / "Game.m3u"
         assert m3u_path.exists()
@@ -806,7 +833,7 @@ class TestMaybeGenerateM3u:
         (tmp_path / "disc2.cue").write_text("cue 2")
 
         rom_detail = {"fs_name_no_ext": "Game"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         # Only the original M3U should exist, unchanged
         assert (tmp_path / "existing.m3u").read_text() == "original content"
@@ -818,7 +845,7 @@ class TestMaybeGenerateM3u:
         (tmp_path / "disc1.bin").write_bytes(b"\x00" * 1000)
 
         rom_detail = {"fs_name_no_ext": "Metal Gear Solid"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         m3u = tmp_path / "Metal Gear Solid.m3u"
         assert m3u.exists()
@@ -829,7 +856,7 @@ class TestMaybeGenerateM3u:
         (tmp_path / "game.chd").write_bytes(b"\x00" * 1000)
 
         rom_detail = {"fs_name_no_ext": "Game"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         assert not (tmp_path / "Game.m3u").exists()
 
@@ -838,7 +865,7 @@ class TestMaybeGenerateM3u:
         (tmp_path / "game.iso").write_bytes(b"\x00" * 1000)
 
         rom_detail = {"fs_name_no_ext": "Game"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         assert not (tmp_path / "Game.m3u").exists()
 
@@ -848,9 +875,20 @@ class TestMaybeGenerateM3u:
         (tmp_path / "d2.chd").write_bytes(b"\x00" * 100)
 
         rom_detail = {"name": "My Game"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         assert (tmp_path / "My Game.m3u").exists()
+
+    def test_skips_generation_when_platform_unsupported(self, plugin, tmp_path):
+        """#1111: no M3U is generated when the platform does not support .m3u,
+        even for a multi-disc layout that would otherwise warrant one."""
+        (tmp_path / "Game - Disc 1.cue").write_text("cue 1")
+        (tmp_path / "Game - Disc 2.cue").write_text("cue 2")
+
+        rom_detail = {"fs_name_no_ext": "Game", "name": "Game"}
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, False)
+
+        assert not (tmp_path / "Game.m3u").exists()
 
 
 class TestDoDownloadSingleFile:
@@ -1300,6 +1338,145 @@ class TestDoDownloadMultiFile:
         # Failure path keyed on the multi-file gate → extract dir torn down.
         assert not extract_dir.exists()
         assert plugin._download_service._download_queue[99]["status"] == "failed"
+
+
+class TestDoDownloadBundledM3uPlatformGate:
+    """#1111: a RomM-bundled .m3u must not drive launch/collapse on non-m3u systems.
+
+    RomM zips a platform-blind ``.m3u`` into every multi-file game. On a system
+    whose emulator can't read a playlist (Switch, Xbox 360), ES-DE does not list
+    ``.m3u`` as a supported extension, so the ``<Game>.m3u/`` folder never
+    collapses and the launch points at an unusable file. The fix gates both the
+    launch-file pick and the collapse-dir name on ``m3u_support(system)``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_bundled_m3u_ignored_on_non_m3u_platform(self, plugin, tmp_path):
+        """Switch ZIP with a bundled .m3u + real .nsp, m3u unsupported → launch
+        is the .nsp and the collapse dir is ``<Game>.nsp/``, NOT ``<Game>.m3u/``."""
+        import zipfile as zf
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+        # Switch does not list .m3u in ES-DE's es_systems.xml.
+        plugin._m3u_supported = False
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "switch"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "Zelda.nsp")
+
+        # RomM ships a bundled platform-blind .m3u alongside the real .nsp.
+        zip_content_path = tmp_path / "source.zip"
+        with zf.ZipFile(str(zip_content_path), "w") as z:
+            z.writestr("Zelda.m3u", "Zelda.nsp\n")
+            z.writestr("Zelda.nsp", b"\x00" * 5000)
+        zip_bytes = zip_content_path.read_bytes()
+
+        rom_detail = {
+            "id": 111,
+            "name": "Zelda",
+            "fs_name": "Zelda.nsp",
+            "fs_name_no_ext": "Zelda",
+            "platform_slug": "switch",
+            "platform_name": "Nintendo Switch",
+            "has_multiple_files": True,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            with open(dest, "wb") as f:
+                f.write(zip_bytes)
+
+        _seed_rom(plugin._uow, 111, platform_slug="switch")
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[111] = {"rom_id": 111, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(111, rom_detail, target_path, "switch", "Zelda.nsp")
+
+        # Collapse dir is named after the real launch file, not the bundled m3u.
+        nsp_dir = roms_dir / "Zelda.nsp"
+        assert nsp_dir.is_dir()
+        assert not (roms_dir / "Zelda.m3u").exists()
+        # The bundled .m3u is left inert on disk (no destructive op), but is NOT
+        # the launch file.
+        installed = plugin._uow.rom_installs.get(111)
+        assert installed is not None
+        assert installed.rom_dir == str(nsp_dir)
+        assert installed.file_path == str(nsp_dir / "Zelda.nsp")
+        assert (nsp_dir / "Zelda.m3u").exists()
+        assert plugin._download_service._download_queue[111]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_disc_platform_still_generates_and_uses_m3u(self, plugin, tmp_path):
+        """Mirror positive: a disc system (m3u supported) still generates/keeps
+        the m3u and names the collapse dir ``<Game>.m3u/``."""
+        import zipfile as zf
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+        # psx lists .m3u in ES-DE's es_systems.xml.
+        plugin._m3u_supported = True
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "psx"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "FF7.zip")
+
+        zip_content_path = tmp_path / "source.zip"
+        with zf.ZipFile(str(zip_content_path), "w") as z:
+            z.writestr("disc1.cue", "FILE disc1.bin BINARY")
+            z.writestr("disc1.bin", b"\x00" * 100)
+            z.writestr("disc2.cue", "FILE disc2.bin BINARY")
+            z.writestr("disc2.bin", b"\x00" * 100)
+        zip_bytes = zip_content_path.read_bytes()
+
+        rom_detail = {
+            "id": 112,
+            "name": "Final Fantasy VII",
+            "fs_name": "FF7.zip",
+            "fs_name_no_ext": "FF7",
+            "platform_slug": "psx",
+            "platform_name": "PlayStation",
+            "has_multiple_files": True,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            with open(dest, "wb") as f:
+                f.write(zip_bytes)
+
+        _seed_rom(plugin._uow, 112, platform_slug="psx")
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[112] = {"rom_id": 112, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(112, rom_detail, target_path, "psx", "FF7.zip")
+
+        m3u_dir = roms_dir / "FF7.m3u"
+        assert m3u_dir.is_dir()
+        installed = plugin._uow.rom_installs.get(112)
+        assert installed is not None
+        assert installed.rom_dir == str(m3u_dir)
+        assert installed.file_path == str(m3u_dir / "FF7.m3u")
+        assert plugin._download_service._download_queue[112]["status"] == "completed"
 
 
 class TestEsDeCollapseRename:
@@ -2550,7 +2727,7 @@ class TestMaybeGenerateM3uMixedFormats:
         (tmp_path / "disc2.chd").write_bytes(b"\x00" * 100)
 
         rom_detail = {"fs_name_no_ext": "Mixed Game", "name": "Mixed Game"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         m3u_path = tmp_path / "Mixed Game.m3u"
         assert m3u_path.exists()
@@ -2575,7 +2752,7 @@ class TestMaybeGenerateM3uSpecialCharacters:
             (tmp_path / name).write_text("cue data")
 
         rom_detail = {"fs_name_no_ext": "Game", "name": "Game"}
-        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail)
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
 
         m3u_path = tmp_path / "Game.m3u"
         assert m3u_path.exists()

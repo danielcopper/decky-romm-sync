@@ -963,6 +963,7 @@ class TestMainStartupOrdering:
                 get_save_layout=MagicMock(),
                 get_core_name=MagicMock(),
                 platform_core_reader=MagicMock(),
+                m3u_support=MagicMock(),
                 settings_persister=MagicMock(),
                 log_debug=MagicMock(),
                 plugin_metadata=MagicMock(),

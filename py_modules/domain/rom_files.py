@@ -10,8 +10,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-_DISC_EXTENSIONS = (".cue", ".chd", ".iso")
-
 
 def is_multi_file_download(rom_detail: dict[str, Any]) -> bool:
     """Decide whether RomM will serve this ROM as a ZIP that must be extracted.
@@ -41,23 +39,31 @@ def is_multi_file_download(rom_detail: dict[str, Any]) -> bool:
     return len(files) > 1 or bool(rom_detail.get("has_multiple_files", False))
 
 
-def needs_m3u(disc_files: list[str]) -> bool:
+def needs_m3u(disc_files: list[str], m3u_supported: bool) -> bool:
     """Return True if an M3U playlist should be generated.
 
-    An M3U is generated for **multi-disc** ROMs (2 or more disc files of any
-    kind — cue/chd/iso — so the emulator can switch discs) and for
+    Gated first on *m3u_supported* — whether the platform's emulator can read a
+    playlist at all (per ES-DE's own ``es_systems.xml`` extension list). When the
+    platform does not support ``.m3u`` this returns ``False`` unconditionally, so
+    no playlist is created for a system whose launch would break on one.
+
+    When supported, an M3U is generated for **multi-disc** ROMs (2 or more disc
+    files of any kind — cue/chd/iso — so the emulator can switch discs) and for
     **single-disc bin/cue** ROMs (exactly one ``.cue`` — so the extract dir can
-    be named after a game-named playlist for ES-DE collapse; bin/cue systems
-    are M3U-friendly, unlike iso-based GameCube/Wii). Single-disc chd/iso get no
-    M3U: they arrive as single-file downloads that never reach this path, and
-    iso-based titles do not reliably launch from a single-entry M3U.
+    be named after a game-named playlist for ES-DE collapse). Single-disc chd/iso
+    get no M3U: they arrive as single-file downloads that never reach this path.
 
     Parameters
     ----------
     disc_files:
         Relative paths of disc files (.cue, .chd, .iso) found in the
         extraction directory. Must already exclude any existing .m3u files.
+    m3u_supported:
+        Whether the target platform supports ``.m3u`` (ES-DE lists it as a
+        supported extension for the system).
     """
+    if not m3u_supported:
+        return False
     return len(disc_files) >= 2 or (len(disc_files) == 1 and disc_files[0].lower().endswith(".cue"))
 
 
@@ -79,11 +85,13 @@ def build_m3u_content(disc_files: list[str]) -> str:
     return "\n".join(sorted_files) + "\n"
 
 
-def detect_launch_file(files: list[tuple[str, int]]) -> str | None:
+def detect_launch_file(files: list[tuple[str, int]], m3u_supported: bool) -> str | None:
     """Pick the best launch file from a list of (path, size) tuples.
 
     Priority order:
-    1. M3U playlist
+    1. M3U playlist — only when *m3u_supported* (platform-gated; otherwise a
+       RomM-bundled ``.m3u`` is skipped so selection falls through to the real
+       game file)
     2. CUE sheet
     3. WiiU: .rpx (loadiine format in code/ subdirectory)
     4. WiiU disc images: .wud, .wux, .wua
@@ -96,6 +104,10 @@ def detect_launch_file(files: list[tuple[str, int]]) -> str | None:
     files:
         List of (absolute_path, size_in_bytes) tuples to consider.
         If empty, returns None.
+    m3u_supported:
+        Whether the target platform supports ``.m3u`` (ES-DE lists it as a
+        supported extension for the system). When ``False``, a ``.m3u`` is never
+        chosen as the launch file.
 
     Returns
     -------
@@ -107,8 +119,8 @@ def detect_launch_file(files: list[tuple[str, int]]) -> str | None:
 
     paths = [path for path, _size in files]
 
-    # Prefer M3U > CUE
-    for ext in (".m3u", ".cue"):
+    # Prefer M3U > CUE — but only honor .m3u on platforms that support it.
+    for ext in (".m3u", ".cue") if m3u_supported else (".cue",):
         matches = [p for p in paths if p.lower().endswith(ext)]
         if matches:
             return matches[0]

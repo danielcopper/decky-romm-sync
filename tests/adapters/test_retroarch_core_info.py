@@ -21,22 +21,25 @@ _SNES9X_INFO = (
 )
 
 
+_CORES_SUFFIX_PARTS = (
+    "retrodeck",
+    "components",
+    "retroarch",
+    "rd_extras",
+    "cores",
+)
+
+
 def _user_cores_dir(user_home: Path) -> Path:
     return (
-        user_home
-        / ".local"
-        / "share"
-        / "flatpak"
-        / "app"
-        / "net.retrodeck.retrodeck"
-        / "current"
-        / "active"
-        / "files"
-        / "retrodeck"
-        / "components"
-        / "retroarch"
-        / "rd_extras"
-        / "cores"
+        user_home / ".local" / "share" / "flatpak" / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files"
+    ).joinpath(*_CORES_SUFFIX_PARTS)
+
+
+def _system_cores_dir(system_root: Path) -> Path:
+    """The system-root cores dir derived from a fabricated ``SYSTEM_FLATPAK_ROOT``."""
+    return (system_root / "app" / "net.retrodeck.retrodeck" / "current" / "active" / "files").joinpath(
+        *_CORES_SUFFIX_PARTS
     )
 
 
@@ -46,14 +49,15 @@ def _make_adapter(user_home: Path) -> RetroArchCoreInfoAdapter:
 
 @pytest.fixture(autouse=True)
 def _isolate_system_dir():
-    """Point the system-wide candidate path at a non-existent location so
+    """Point the shared system flatpak root at a non-existent location so
     tests only see files placed under ``tmp_path``.
 
-    The adapter's default _SYSTEM_CORES_DIR is the Flatpak system install
-    which may or may not exist on the developer machine. Pinning it to a
-    non-existent path per test keeps results deterministic.
+    The real ``SYSTEM_FLATPAK_ROOT`` is the Flatpak system install which may or
+    may not exist on the developer machine. Pinning it to a non-existent path
+    per test keeps results deterministic. Tests that exercise the system
+    candidate repoint it at a fabricated tmp tree.
     """
-    with patch.object(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", "/nonexistent/system/cores"):
+    with patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", "/nonexistent/system/root"):
         yield
 
 
@@ -148,9 +152,10 @@ class TestCandidatePathFallback:
 
     def test_first_candidate_used_when_present(self, tmp_path, monkeypatch):
         """If the first candidate dir has the file, the second isn't consulted."""
-        # Repoint the first candidate to a tmp-based "system" dir we can populate.
-        system_cores = tmp_path / "system_cores"
-        system_cores.mkdir()
+        # Fabricate a system-root flatpak tree we can populate.
+        system_root = tmp_path / "system_root"
+        system_cores = _system_cores_dir(system_root)
+        system_cores.mkdir(parents=True)
         (system_cores / "snes9x_libretro.info").write_text('corename = "FromSystem"\n')
 
         # Put a different corename at the user-level path so we can tell them apart.
@@ -158,7 +163,7 @@ class TestCandidatePathFallback:
         user_cores.mkdir(parents=True)
         (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
 
-        monkeypatch.setattr(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", str(system_cores))
+        monkeypatch.setattr("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root))
         adapter = _make_adapter(tmp_path)
         assert adapter.get_corename("snes9x_libretro") == "FromSystem"
 
@@ -167,15 +172,16 @@ class TestOsErrorHandling:
     def test_permission_error_continues_to_next_candidate(self, tmp_path, monkeypatch, caplog):
         """PermissionError on first candidate is logged and skipped; adapter
         tries the next candidate."""
-        system_cores = tmp_path / "system_cores"
-        system_cores.mkdir()
+        system_root = tmp_path / "system_root"
+        system_cores = _system_cores_dir(system_root)
+        system_cores.mkdir(parents=True)
         (system_cores / "snes9x_libretro.info").write_text('corename = "FromSystem"\n')
 
         user_cores = _user_cores_dir(tmp_path)
         user_cores.mkdir(parents=True)
         (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
 
-        monkeypatch.setattr(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", str(system_cores))
+        monkeypatch.setattr("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root))
 
         real_open = open
 
@@ -205,9 +211,10 @@ class TestOsErrorHandling:
     def test_unicode_decode_error_logs_and_tries_next_candidate(self, tmp_path, monkeypatch, caplog):
         """First candidate has non-UTF-8 bytes — adapter logs a warning and
         falls through to the second candidate."""
-        # Repoint the system candidate to a tmp-based dir we can populate
-        system_cores = tmp_path / "system_cores"
-        system_cores.mkdir()
+        # Fabricate the system candidate tree we can populate
+        system_root = tmp_path / "system_root"
+        system_cores = _system_cores_dir(system_root)
+        system_cores.mkdir(parents=True)
         # Non-UTF-8 bytes — reading with encoding="utf-8" must raise UnicodeDecodeError
         (system_cores / "snes9x_libretro.info").write_bytes(b"\xff\xfe\x00corename")
 
@@ -216,7 +223,7 @@ class TestOsErrorHandling:
         user_cores.mkdir(parents=True)
         (user_cores / "snes9x_libretro.info").write_text('corename = "FromUser"\n')
 
-        monkeypatch.setattr(RetroArchCoreInfoAdapter, "_SYSTEM_CORES_DIR", str(system_cores))
+        monkeypatch.setattr("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(system_root))
 
         with caplog.at_level(logging.WARNING):
             adapter = _make_adapter(tmp_path)

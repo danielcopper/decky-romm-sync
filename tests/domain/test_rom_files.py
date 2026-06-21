@@ -92,36 +92,44 @@ class TestIsMultiFileDownload:
 
 class TestNeedsM3u:
     def test_two_disc_files_returns_true(self):
-        assert needs_m3u(["disc1.cue", "disc2.cue"]) is True
+        assert needs_m3u(["disc1.cue", "disc2.cue"], m3u_supported=True) is True
 
     def test_three_disc_files_returns_true(self):
-        assert needs_m3u(["disc1.chd", "disc2.chd", "disc3.chd"]) is True
+        assert needs_m3u(["disc1.chd", "disc2.chd", "disc3.chd"], m3u_supported=True) is True
 
     def test_empty_list_returns_false(self):
-        assert needs_m3u([]) is False
+        assert needs_m3u([], m3u_supported=True) is False
 
     def test_single_cue_returns_true(self):
         # Single-disc bin/cue: M3U so the extract dir gets a game-named playlist.
-        assert needs_m3u(["disc1.cue"]) is True
+        assert needs_m3u(["disc1.cue"], m3u_supported=True) is True
 
     def test_single_cue_case_insensitive_returns_true(self):
-        assert needs_m3u(["Game.CUE"]) is True
+        assert needs_m3u(["Game.CUE"], m3u_supported=True) is True
 
     def test_single_chd_returns_false(self):
         # Single-disc chd is a single-file download; iso/chd are out of scope.
-        assert needs_m3u(["game.chd"]) is False
+        assert needs_m3u(["game.chd"], m3u_supported=True) is False
 
     def test_single_iso_returns_false(self):
-        assert needs_m3u(["game.iso"]) is False
+        assert needs_m3u(["game.iso"], m3u_supported=True) is False
 
     def test_boundary_exactly_two(self):
-        assert needs_m3u(["a.iso", "b.iso"]) is True
+        assert needs_m3u(["a.iso", "b.iso"], m3u_supported=True) is True
 
     def test_two_chd_returns_true(self):
-        assert needs_m3u(["disc1.chd", "disc2.chd"]) is True
+        assert needs_m3u(["disc1.chd", "disc2.chd"], m3u_supported=True) is True
 
     def test_mixed_two_or_more_returns_true(self):
-        assert needs_m3u(["disc1.cue", "disc2.chd"]) is True
+        assert needs_m3u(["disc1.cue", "disc2.chd"], m3u_supported=True) is True
+
+    def test_unsupported_platform_always_false(self):
+        # #1111: when the platform does not support .m3u, nothing warrants one —
+        # not multi-cue, not multi-iso, not single-cue.
+        assert needs_m3u(["disc1.cue", "disc2.cue"], m3u_supported=False) is False
+        assert needs_m3u(["a.iso", "b.iso"], m3u_supported=False) is False
+        assert needs_m3u(["disc1.cue"], m3u_supported=False) is False
+        assert needs_m3u([], m3u_supported=False) is False
 
 
 class TestBuildM3uContent:
@@ -171,14 +179,14 @@ class TestBuildM3uContent:
 
 class TestDetectLaunchFile:
     def test_empty_list_returns_none(self):
-        assert detect_launch_file([]) is None
+        assert detect_launch_file([], m3u_supported=True) is None
 
     def test_prefers_m3u_over_cue(self, tmp_path):
         m3u = str(tmp_path / "game.m3u")
         cue = str(tmp_path / "disc1.cue")
         open(m3u, "w").close()
         open(cue, "w").close()
-        result = detect_launch_file(_with_sizes([m3u, cue]))
+        result = detect_launch_file(_with_sizes([m3u, cue]), m3u_supported=True)
         assert result == m3u
 
     def test_prefers_cue_over_bin(self, tmp_path):
@@ -187,14 +195,14 @@ class TestDetectLaunchFile:
         open(cue, "w").close()
         with open(binf, "wb") as f:
             f.write(b"\x00" * 1000)
-        result = detect_launch_file(_with_sizes([cue, binf]))
+        result = detect_launch_file(_with_sizes([cue, binf]), m3u_supported=True)
         assert result == cue
 
     def test_rpx_returned_when_no_m3u_or_cue(self, tmp_path):
         rpx = str(tmp_path / "code" / "game.rpx")
         os.makedirs(os.path.dirname(rpx))
         open(rpx, "w").close()
-        result = detect_launch_file(_with_sizes([rpx]))
+        result = detect_launch_file(_with_sizes([rpx]), m3u_supported=True)
         assert result == rpx
 
     def test_m3u_beats_rpx(self, tmp_path):
@@ -203,7 +211,7 @@ class TestDetectLaunchFile:
         os.makedirs(os.path.dirname(rpx))
         open(m3u, "w").close()
         open(rpx, "w").close()
-        result = detect_launch_file(_with_sizes([m3u, rpx]))
+        result = detect_launch_file(_with_sizes([m3u, rpx]), m3u_supported=True)
         assert result == m3u
 
     def test_wux_disc_image(self, tmp_path):
@@ -212,21 +220,21 @@ class TestDetectLaunchFile:
         with open(wux, "wb") as f:
             f.write(b"\x00" * 1000)
         open(txt, "w").close()
-        result = detect_launch_file(_with_sizes([wux, txt]))
+        result = detect_launch_file(_with_sizes([wux, txt]), m3u_supported=True)
         assert result == wux
 
     def test_wud_disc_image(self, tmp_path):
         wud = str(tmp_path / "game.wud")
         with open(wud, "wb") as f:
             f.write(b"\x00" * 1000)
-        result = detect_launch_file(_with_sizes([wud]))
+        result = detect_launch_file(_with_sizes([wud]), m3u_supported=True)
         assert result == wud
 
     def test_wua_disc_image(self, tmp_path):
         wua = str(tmp_path / "game.wua")
         with open(wua, "wb") as f:
             f.write(b"\x00" * 1000)
-        result = detect_launch_file(_with_sizes([wua]))
+        result = detect_launch_file(_with_sizes([wua]), m3u_supported=True)
         assert result == wua
 
     def test_eboot_bin_ps3(self, tmp_path):
@@ -234,7 +242,7 @@ class TestDetectLaunchFile:
         os.makedirs(os.path.dirname(eboot))
         with open(eboot, "wb") as f:
             f.write(b"\x00" * 500)
-        result = detect_launch_file(_with_sizes([eboot]))
+        result = detect_launch_file(_with_sizes([eboot]), m3u_supported=True)
         assert result == eboot
 
     def test_3ds_preferred_over_cia(self, tmp_path):
@@ -244,7 +252,7 @@ class TestDetectLaunchFile:
             f.write(b"\x00" * 100)
         with open(cia, "wb") as f:
             f.write(b"\x00" * 100)
-        result = detect_launch_file(_with_sizes([rom_3ds, cia]))
+        result = detect_launch_file(_with_sizes([rom_3ds, cia]), m3u_supported=True)
         assert result == rom_3ds
 
     def test_cia_preferred_over_cxi(self, tmp_path):
@@ -254,7 +262,7 @@ class TestDetectLaunchFile:
             f.write(b"\x00" * 100)
         with open(cxi, "wb") as f:
             f.write(b"\x00" * 100)
-        result = detect_launch_file(_with_sizes([cia, cxi]))
+        result = detect_launch_file(_with_sizes([cia, cxi]), m3u_supported=True)
         assert result == cia
 
     def test_falls_back_to_largest_file(self, tmp_path):
@@ -264,20 +272,40 @@ class TestDetectLaunchFile:
             f.write(b"\x00" * 100)
         with open(large, "wb") as f:
             f.write(b"\x00" * 10000)
-        result = detect_launch_file(_with_sizes([small, large]))
+        result = detect_launch_file(_with_sizes([small, large]), m3u_supported=True)
         assert result == large
 
     def test_single_file_returned_directly(self, tmp_path):
         f = str(tmp_path / "game.z64")
         with open(f, "wb") as fh:
             fh.write(b"\x00" * 100)
-        assert detect_launch_file(_with_sizes([f])) == f
+        assert detect_launch_file(_with_sizes([f]), m3u_supported=True) == f
 
     def test_case_insensitive_extension_matching(self, tmp_path):
         m3u = str(tmp_path / "GAME.M3U")
         open(m3u, "w").close()
-        result = detect_launch_file(_with_sizes([m3u]))
+        result = detect_launch_file(_with_sizes([m3u]), m3u_supported=True)
         assert result == m3u
+
+    def test_bundled_m3u_skipped_when_unsupported_picks_cue(self, tmp_path):
+        # #1111: with m3u unsupported a bundled .m3u is ignored; the .cue wins.
+        m3u = str(tmp_path / "game.m3u")
+        cue = str(tmp_path / "disc1.cue")
+        open(m3u, "w").close()
+        open(cue, "w").close()
+        result = detect_launch_file(_with_sizes([m3u, cue]), m3u_supported=False)
+        assert result == cue
+
+    def test_bundled_m3u_skipped_when_unsupported_falls_to_largest(self, tmp_path):
+        # No cue/platform-specific file: the .m3u is skipped and the real game
+        # file (largest) is chosen instead of the playlist.
+        m3u = str(tmp_path / "game.m3u")
+        nsp = str(tmp_path / "game.nsp")
+        open(m3u, "w").close()
+        with open(nsp, "wb") as f:
+            f.write(b"\x00" * 5000)
+        result = detect_launch_file(_with_sizes([m3u, nsp]), m3u_supported=False)
+        assert result == nsp
 
 
 class TestEsDeCollapseRename:

@@ -97,6 +97,7 @@ def _make_testable_plugin():
         _core_info: Any
         _platform_core_reader: Any
         _active_core: Any
+        _m3u_supported: Any
 
     instance = TestablePlugin()
     instance._migration_service = MagicMock()
