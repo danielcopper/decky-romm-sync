@@ -60,9 +60,13 @@ depends = ["build"]
 raw = true
 run = """
 DEST="$HOME/homebrew/plugins/decky-romm-sync"
-if [ -d "$DEST" ] && [ "$(stat -c '%U' "$DEST")" != "$USER" ]; then
-  sudo chown -R "$USER:$USER" "$DEST"
-fi
+# Decky's root plugin_loader can re-own individual files inside the plugin dir
+# (e.g. plugin.json) while the dir itself stays user-owned. A guard that checks
+# only the dir's owner then skips the chown, and the rsync/cp below hits
+# "permission denied" on the root-owned file. Always chown recursively when the
+# dir exists; the dev task's `sudo -v` keeps the password cached, so it costs no
+# extra prompt.
+[ -d "$DEST" ] && sudo chown -R "$USER:$USER" "$DEST"
 mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules"
 rsync -a --delete dist/ "$DEST/dist/"
 rsync -a --delete bin/ "$DEST/bin/"
