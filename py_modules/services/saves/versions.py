@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot, slot_query_param
@@ -177,7 +178,7 @@ class VersionsService:
             if s.get("id") != tracked_id and save_in_slot(s, slot)
         ]
 
-        versions.sort(key=lambda v: v["updated_at"], reverse=True)
+        versions.sort(key=lambda v: parse_iso_to_epoch(v["updated_at"]) or 0.0, reverse=True)
         return {"status": "ok", "versions": versions}
 
     def _rollback_to_version_io(
@@ -394,18 +395,23 @@ class VersionsService:
             # _rollback_to_version_io rather than rolling back cross-slot.
             server_saves = [s for s in server_saves if save_in_slot(s, slot)]
 
-            result = await self._loop.run_in_executor(
-                None,
-                self._rollback_to_version_io,
-                rom_id,
-                save_state,
-                device_id,
-                core_so,
-                save_id,
-                info,
-                server_saves,
-            )
-
-            await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+            try:
+                result = await self._loop.run_in_executor(
+                    None,
+                    self._rollback_to_version_io,
+                    rom_id,
+                    save_state,
+                    device_id,
+                    core_so,
+                    save_id,
+                    info,
+                    server_saves,
+                )
+            finally:
+                # The pre-flight ``do_sync_rom_saves`` already performed real
+                # uploads/downloads whose baselines/tracked-ids live only in the
+                # in-memory aggregate; persist them regardless of how the switch
+                # ends, or the next sync mis-classifies (#1012).
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
 
             return result

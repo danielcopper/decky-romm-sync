@@ -367,6 +367,36 @@ class TestGetSaveSetupInfo:
         assert slot_names == {"default", "desktop"}
 
     @pytest.mark.asyncio
+    async def test_latest_updated_at_uses_epoch_not_lexical_order(self, tmp_path):
+        """#1014: a slot's latest_updated_at is the truly-newest instant.
+
+        With mixed ISO shapes (trailing ``Z`` vs explicit offset) a raw
+        ``max()`` over the strings returns the lexically-greatest value, which
+        can be an EARLIER instant. The slot's latest_updated_at must reflect
+        chronological order, so the value compared by epoch but returned as the
+        original ISO string.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+
+        # Both saves in one slot. The truly-newest instant is 12:00Z (12:00 UTC);
+        # the 13:00+02:00 string is lexically greater but is 11:00 UTC (older).
+        fake.saves[1] = _server_save(save_id=1, slot="default", updated_at="2024-01-01T12:00:00Z")
+        fake.saves[2] = _server_save(
+            save_id=2, slot="default", filename="pokemon.srm", updated_at="2024-01-01T13:00:00+02:00"
+        )
+
+        result = await svc.get_save_setup_info(42)
+
+        assert len(result["server_slots"]) == 1
+        slot = result["server_slots"][0]
+        assert slot["slot"] == "default"
+        # Epoch-newest ISO string, NOT the lexically-greatest "...13:00:00+02:00".
+        assert slot["latest_updated_at"] == "2024-01-01T12:00:00Z"
+
+    @pytest.mark.asyncio
     async def test_server_error_recommends_server_unreachable_not_auto_confirm(self, tmp_path):
         """Server API failure MUST NOT be misread as "server has no saves".
 

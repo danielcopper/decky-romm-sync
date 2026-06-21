@@ -145,6 +145,33 @@ class TestListFileVersions:
         assert versions[1]["id"] == 30
 
     @pytest.mark.asyncio
+    async def test_sorted_by_epoch_not_lexically(self, tmp_path):
+        """#1014: versions are ordered chronologically, not by raw string compare.
+
+        RomM has emitted mixed ISO shapes across versions (trailing ``Z`` vs
+        explicit offset). A raw lexical reverse-sort puts the lexically-greater
+        ``+02:00`` string first even though it represents an EARLIER instant —
+        so the user could roll back to the wrong version. Ordering by epoch
+        fixes it.
+        """
+        svc, fake = make_service(tmp_path)
+
+        # id=200 is truly newest: 12:00Z == 12:00 UTC.
+        fake.saves[200] = _server_save(save_id=200, rom_id=42, slot="default", updated_at="2024-01-01T12:00:00Z")
+        # id=300 is truly OLDER: 13:00+02:00 == 11:00 UTC, but its string is
+        # lexically GREATER than "2024-01-01T12:00:00Z" — a raw sort ranks it first.
+        fake.saves[300] = _server_save(save_id=300, rom_id=42, slot="default", updated_at="2024-01-01T13:00:00+02:00")
+        self._setup_state(svc, tracked_id=None)
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert result["status"] == "ok"
+        ids_in_order = [v["id"] for v in result["versions"]]
+        # Epoch order: 12:00 UTC (200) before 11:00 UTC (300). A lexical sort
+        # would yield [300, 200] — the bug.
+        assert ids_in_order == [200, 300]
+
+    @pytest.mark.asyncio
     async def test_empty_when_no_older_versions(self, tmp_path):
         """Returns empty list when there are no versions other than the tracked one."""
         svc, fake = make_service(tmp_path)
@@ -802,6 +829,53 @@ class TestRollbackToVersion:
         # State updated
         file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.tracked_save_id == 50
+
+    @pytest.mark.asyncio
+    async def test_preflight_state_persisted_when_switch_raises(self, tmp_path):
+        """#1012: a raising switch still persists the pre-flight's state mutations.
+
+        The pre-flight ``do_sync_rom_saves`` performs REAL uploads/downloads
+        whose baselines/tracked-ids live only in the in-memory aggregate. If the
+        destructive switch (``_rollback_to_version_io``) raises, the exception
+        must propagate AND the persist must still run — otherwise the next sync
+        re-uploads as new or raises a false conflict. The try/finally guarantees
+        the write regardless of how the switch ends.
+        """
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = self._tracked_save(100)
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        # rollback_to_version is delegated to the VersionsService sub-service,
+        # which owns _write_save_state and _rollback_to_version_io.
+        versions = svc._versions
+
+        # Spy on the persist so the finally-branch write is observable. Make the
+        # switch raise AFTER the clean pre-flight to model the #1012 hazard.
+        original_write = versions._write_save_state
+        write_calls: list[int] = []
+
+        def spy_write(rom_id, save_state):
+            write_calls.append(rom_id)
+            return original_write(rom_id, save_state)
+
+        def raising_io(*args, **kwargs):
+            raise RuntimeError("switch I/O exploded")
+
+        versions._write_save_state = spy_write  # type: ignore[method-assign]
+        versions._rollback_to_version_io = raising_io  # type: ignore[method-assign]
+
+        try:
+            with pytest.raises(RuntimeError, match="switch I/O exploded"):
+                await svc.rollback_to_version(42, "default", 50)
+        finally:
+            versions._write_save_state = original_write  # type: ignore[method-assign]
+
+        # Non-vacuous: the persist actually fired for rom 42 despite the raise.
+        assert 42 in write_calls
 
     @pytest.mark.asyncio
     async def test_rollback_to_already_tracked_save_is_idempotent(self, tmp_path):

@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
+from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot, slot_query_param
@@ -144,7 +145,11 @@ class SetupWizard:
 
         server_slots = []
         for slot_key, saves in slots_map.items():
-            latest = max((s.get("updated_at", "") for s in saves), default=None)
+            latest = max(
+                (s.get("updated_at", "") for s in saves),
+                key=lambda u: parse_iso_to_epoch(u) or 0.0,
+                default=None,
+            )
             server_slots.append(
                 {
                     "slot": slot_key,
