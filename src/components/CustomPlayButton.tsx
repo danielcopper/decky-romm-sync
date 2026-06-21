@@ -144,6 +144,32 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     };
   }, []);
 
+  // Rehydrate an in-flight or paused download on remount. The cached detail
+  // only knows installed-or-not, so without this a paused (or still-running)
+  // download shows a plain "Download" button — and a click would `start_download`
+  // → truncate the partial .tmp → restart from 0, discarding the paused progress
+  // the user expected to resume. Seed from the live queue so the Pause/Resume
+  // state survives navigating away and back (#1124).
+  const rehydrateInflightDownload = async (rid: number): Promise<void> => {
+    try {
+      const queue = await getDownloadQueue();
+      // No post-await `cancelled` guard needed: React 18 no-ops a setState on an
+      // unmounted component, and a remount keeps its own state.
+      const entry = queue.downloads.find((d) => d.rom_id === rid);
+      if (entry && (entry.status === "downloading" || entry.status === "queued" || entry.status === "paused")) {
+        setActionPending(true);
+        setDlProgress({
+          bytesDownloaded: entry.bytes_downloaded,
+          totalBytes: entry.total_bytes,
+          resumable: entry.resumable,
+          paused: entry.status === "paused",
+        });
+      }
+    } catch (e) {
+      logError(`CustomPlayButton: failed to rehydrate download state: ${e}`);
+    }
+  };
+
   // Initial load: determine ROM status from cache (instant, no network calls)
   useEffect(() => {
     let cancelled = false;
@@ -177,30 +203,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         } else {
           detach(debugLog(`CustomPlayButton: -> download`));
           setState("download");
-          // Rehydrate an in-flight or paused download on remount. The cached
-          // detail only knows installed-or-not, so without this a paused (or
-          // still-running) download shows a plain "Download" button — and a
-          // click would `start_download` → truncate the partial .tmp → restart
-          // from 0, discarding the paused progress the user expected to resume.
-          // Seed from the live queue so the Pause/Resume state survives
-          // navigating away and back (#1124).
-          try {
-            const queue = await getDownloadQueue();
-            // No post-await `cancelled` guard needed: React 18 no-ops a setState
-            // on an unmounted component, and a remount keeps its own state.
-            const entry = queue.downloads.find((d) => d.rom_id === rid);
-            if (entry && (entry.status === "downloading" || entry.status === "queued" || entry.status === "paused")) {
-              setActionPending(true);
-              setDlProgress({
-                bytesDownloaded: entry.bytes_downloaded,
-                totalBytes: entry.total_bytes,
-                resumable: entry.resumable,
-                paused: entry.status === "paused",
-              });
-            }
-          } catch (e) {
-            logError(`CustomPlayButton: failed to rehydrate download state: ${e}`);
-          }
+          await rehydrateInflightDownload(rid);
         }
       } catch (e) {
         logError(`CustomPlayButton init error: ${e}`);

@@ -518,10 +518,7 @@ class DownloadService:
             now = self._clock.monotonic()
             if now - last_log[0] >= 30.0:
                 last_log[0] = now
-                mb_dl = downloaded / (1024 * 1024)
-                mb_total = total / (1024 * 1024) if total else 0
-                pct = (downloaded / total * 100) if total else 0
-                self._logger.info(f"Download progress: {rom_name} — {mb_dl:.1f}/{mb_total:.1f} MB ({pct:.0f}%)")
+                self._log_download_progress(rom_name, downloaded, total)
             if now - last_emit[0] < 0.5 and downloaded < total:
                 return
             last_emit[0] = now
@@ -529,39 +526,60 @@ class DownloadService:
 
             # This callback runs on a ``run_in_executor`` worker thread. Both the
             # queue-dict mutation and the emit-scheduling must happen on the loop
-            # thread, guarded by ``.get`` — if the entry was evicted between ticks
-            # we must not resurrect it or raise KeyError off-thread (#973).
-            def _apply_progress() -> None:
-                entry = self._download_queue.get(rom_id)
-                if entry is None:
-                    return  # evicted mid-download — do not resurrect or emit
-                entry.update(
-                    {
-                        "progress": progress,
-                        "bytes_downloaded": downloaded,
-                        "total_bytes": total,
-                    }
-                )
-                self._loop.create_task(
-                    self._emit(
-                        "download_progress",
-                        {
-                            "rom_id": rom_id,
-                            "rom_name": rom_name,
-                            "platform_name": platform_name,
-                            "file_name": file_name,
-                            "status": "downloading",
-                            "progress": progress,
-                            "bytes_downloaded": downloaded,
-                            "total_bytes": total,
-                            "resumable": entry.get("resumable", False),
-                        },
-                    )
-                )
-
-            self._loop.call_soon_threadsafe(_apply_progress)
+            # thread, so marshal them across via ``call_soon_threadsafe`` (#973).
+            self._loop.call_soon_threadsafe(
+                self._apply_download_progress,
+                rom_id,
+                rom_name,
+                platform_name,
+                file_name,
+                progress,
+                downloaded,
+                total,
+            )
 
         return progress_callback
+
+    def _log_download_progress(self, rom_name, downloaded, total):
+        """Log a throttled one-line human-readable progress summary (MB + %)."""
+        mb_dl = downloaded / (1024 * 1024)
+        mb_total = total / (1024 * 1024) if total else 0
+        pct = (downloaded / total * 100) if total else 0
+        self._logger.info(f"Download progress: {rom_name} — {mb_dl:.1f}/{mb_total:.1f} MB ({pct:.0f}%)")
+
+    def _apply_download_progress(self, rom_id, rom_name, platform_name, file_name, progress, downloaded, total):
+        """Update the live queue entry and schedule a ``download_progress`` emit.
+
+        Runs on the loop thread (marshaled from the executor worker via
+        ``call_soon_threadsafe``). Guarded by ``.get`` — if the entry was evicted
+        between ticks we must not resurrect it or raise KeyError off-thread (#973).
+        """
+        entry = self._download_queue.get(rom_id)
+        if entry is None:
+            return  # evicted mid-download — do not resurrect or emit
+        entry.update(
+            {
+                "progress": progress,
+                "bytes_downloaded": downloaded,
+                "total_bytes": total,
+            }
+        )
+        self._loop.create_task(
+            self._emit(
+                "download_progress",
+                {
+                    "rom_id": rom_id,
+                    "rom_name": rom_name,
+                    "platform_name": platform_name,
+                    "file_name": file_name,
+                    "status": "downloading",
+                    "progress": progress,
+                    "bytes_downloaded": downloaded,
+                    "total_bytes": total,
+                    "resumable": entry.get("resumable", False),
+                },
+            )
+        )
 
     async def _finalize_download_complete(self, rom_id, rom_detail, final_path, rom_name, platform_name):
         """Mark the queue entry completed and emit ``download_complete``.

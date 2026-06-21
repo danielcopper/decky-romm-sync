@@ -3407,8 +3407,8 @@ class TestProgressCallbackEvictionSafe:
 
     def _eager_loop(self, plugin):
         """Make call_soon_threadsafe run its target synchronously so the marshaled
-        ``_apply_progress`` executes in-test; create_task consumes the coroutine.
-        Returns the recorded emit calls list.
+        ``_apply_download_progress`` executes in-test; create_task consumes the
+        coroutine. Returns the recorded emit calls list.
         """
         plugin._download_service._loop = MagicMock()
         plugin._download_service._loop.call_soon_threadsafe = lambda fn, *a, **k: fn(*a, **k)
@@ -3432,8 +3432,8 @@ class TestProgressCallbackEvictionSafe:
         fake_clock.advance(60)  # clear both throttles
         plugin._download_service._clock = fake_clock
 
-        # No queue entry for rom_id 99 — the callback's _apply_progress hits the
-        # ``.get`` guard. Before the #973 fix this was ``self._download_queue[99]
+        # No queue entry for rom_id 99 — the callback's _apply_download_progress
+        # hits the ``.get`` guard. Before the #973 fix this was ``self._download_queue[99]
         # .update(...)`` on the worker thread → KeyError.
         cb = plugin._download_service._make_progress_callback(99, "Ghost", "N64", "ghost.z64")
         cb(256, 512)  # must NOT raise
